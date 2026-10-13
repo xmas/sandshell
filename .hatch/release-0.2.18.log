@@ -1,0 +1,15 @@
+==> Setting MARKETING_VERSION to 0.2.18
+==> Building Release (this can take a minute)…
+==> Building DMG
+hdiutil: WARNING: 'hdiutil create -volname -format -size ...' is deprecated. Please use 'diskutil image create from/blank --volumeName --format -size ...' instead.
+hdiutil: WARNING: 'hdiutil attach ...' is deprecated. Please use 'diskutil image attach ...' instead.
+hdiutil: WARNING: 'hdiutil convert -format ...' is deprecated. Please use 'diskutil image create from --format ...' instead.
+    dist/Sandshell-0.2.18.dmg (8.0M)
+    Sandshell-latest.dmg -> dist/Sandshell-0.2.18.dmg
+==> Uploading Sandshell-0.2.18.dmg to Drive
+
+✅ Released Sandshell 0.2.18
+   DMG:    https://drive.google.com/file/d/1H24VqhatTUDJyF6yH-5A8ZJbKD0Hs_Jw/view
+   Folder: https://drive.google.com/drive/folders/1TDO_iVfaobA3tYiF8JM_1NA_DBpEANjl
+
+Reminder: commit the project.yml version bump when ready.

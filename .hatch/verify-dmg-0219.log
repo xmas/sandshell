@@ -1,0 +1,24 @@
+hdiutil: WARNING: 'hdiutil attach -readonly -nobrowse -mountpoint ...' is deprecated. Please use 'diskutil image attach --readOnly --mountOptions nobrowse --mountPoint ...' instead.
+/tmp/sshdmg.l1ib:
+total 88
+drwx------@ 10 xmas  staff    408 Oct  8 14:41 .
+drwxrwxrwt  52 root  wheel   1664 Oct  8 14:41 ..
+-rw-r--r--@  1 xmas  staff  10244 Oct  8 14:41 .DS_Store
+drwxr-xr-x@  3 xmas  staff    102 Oct  8 14:40 .background
+lrwxr-xr-x@  1 xmas  staff     13 Oct  8 14:40 Applications -> /Applications
+-rw-r--r--@  1 xmas  staff   1085 Oct  8 14:40 Read Me First.txt
+-rw-r--r--@  1 xmas  staff  10828 Oct  8 14:40 Release Notes.txt
+-rwxr-xr-x@  1 xmas  staff   4317 Oct  8 14:40 Sandshell Setup.command
+drwxr-xr-x@  3 xmas  staff    102 Oct  8 14:40 Sandshell.app
+lrwxr-xr-x@  1 xmas  staff     43 Oct  8 14:40 Terminal.app -> /System/Applications/Utilities/Terminal.app
+
+/tmp/sshdmg.l1ib/.background:
+total 72
+drwxr-xr-x@  3 xmas  staff    102 Oct  8 14:40 .
+drwx------@ 10 xmas  staff    408 Oct  8 14:41 ..
+-rw-r--r--@  1 xmas  staff  34653 Oct  8 14:40 background.png
+DS_Store bytes: 10244
+0.2.19
+hdiutil: WARNING: 'hdiutil detach -force ...' is deprecated. Please use 'diskutil eject force ...' instead.
+"disk4" ejected.
+ls: /Volumes/Sandshell*: No such file or directory

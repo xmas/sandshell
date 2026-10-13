@@ -1,0 +1,276 @@
+/* ============================================================
+   Docker Partnership Decks — Colors & Type
+   ============================================================
+   Colors are anchored to Docker's brand palette:
+   - Ocean Blue   #2560ff   (primary)
+   - Light Blue   #d9e5fc   (surface tint)
+   - Deep Blue    #00153c   (dark surfaces, billboard headers)
+   - Off Black    #0f121b   (text, dark surfaces)
+   - Grey (text)  #6c7e9d
+   - Grey (shape) #f9fafb
+   Extended blues #003db5 → #aac4f8 are used **only** for
+   diagrams and graphs (never for UI chrome).
+
+   Typography follows the deck system's "sans-serif, bold,
+   left-aligned, billboard-size" convention. The primary family
+   is IBM Plex Sans (variable, wdth + wght), Docker's brand sans.
+   JetBrains Mono is used for numbers / code.
+   ============================================================ */
+
+/* IBM Plex Sans — variable, full weight + width range */
+@font-face {
+  font-family: "IBM Plex Sans";
+  src: url("fonts/IBMPlexSans-VariableFont_wdth_wght.ttf") format("truetype-variations"),
+       url("fonts/IBMPlexSans-VariableFont_wdth_wght.ttf") format("truetype");
+  font-weight: 100 700;
+  font-stretch: 85% 100%;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "IBM Plex Sans";
+  src: url("fonts/IBMPlexSans-Italic-VariableFont_wdth_wght.ttf") format("truetype-variations"),
+       url("fonts/IBMPlexSans-Italic-VariableFont_wdth_wght.ttf") format("truetype");
+  font-weight: 100 700;
+  font-stretch: 85% 100%;
+  font-style: italic;
+  font-display: swap;
+}
+
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+:root {
+  /* ── Brand: Docker blues ──────────────────────────────── */
+  --docker-ocean:     #2560ff;   /* Ocean Blue · primary, logo, CTAs */
+  --docker-ocean-700: #1f53e0;   /* hover / press */
+  --docker-ocean-800: #1845c2;
+  --docker-light:     #d9e5fc;   /* Light Blue · soft surface tint */
+  --docker-deep:      #00153c;   /* Deep Blue · dark billboard bg */
+  --docker-offblack:  #0f121b;   /* Off Black · billboard / dark fills */
+  --docker-grey-text: #6c7e9d;   /* Grey for text · slate body */
+  --docker-grey-shape:#f9fafb;   /* Grey for shapes · subtle surfaces */
+
+  /* Extended blues — diagrams & graphs only */
+  --blue-700: #003db5;
+  --blue-600: #0d4df2;
+  --blue-400: #4b83f1;
+  --blue-300: #7ba4f4;
+  --blue-200: #aac4f8;
+
+  /* legacy aliases (kept so existing slides don't break) */
+  --docker-sky:       var(--blue-200);
+  --docker-moby:      var(--blue-600);
+  --docker-charcoal:  var(--docker-offblack);
+
+  /* ── Neutrals ─────────────────────────────────────────── */
+  --ink-0:   #ffffff;
+  --ink-50:  #f7f8fa;
+  --ink-100: #eceef2;
+  --ink-200: #d9dde4;
+  --ink-300: #b6bcc7;
+  --ink-400: #8a92a0;
+  --ink-500: #5b6170;
+  --ink-600: #3d414c;
+  --ink-700: #262930;
+  --ink-800: #17191e;
+  --ink-900: #0b0c10;
+
+  /* ── Semantic accents (sparingly) ─────────────────────── */
+  --accent-red:         #ff7575;   /* alerts, warnings, vulnerabilities */
+  --accent-red-light:   #fff5f5;
+  --accent-green:       #2d9568;   /* Scout brand · security & approvals */
+  --accent-green-light: #ebf9ee;
+  --accent-violet:      #9860ff;   /* DBC brand · callouts, graphs, diagrams */
+  --accent-violet-light:#efe0ff;
+
+  /* legacy aliases (kept so existing decks don't break) */
+  --accent-savings: var(--accent-green);
+  --accent-warn:    #f5a524;
+  --accent-danger:  var(--accent-red);
+  --accent-cite:    #7d8597;
+
+  /* ── Foreground / background tokens ───────────────────── */
+  --fg-1: var(--ink-900);      /* primary text */
+  --fg-2: var(--ink-600);      /* secondary text */
+  --fg-3: var(--ink-400);      /* tertiary / captions */
+  --fg-inv: var(--ink-0);
+  --bg-1: var(--ink-0);        /* page */
+  --bg-2: var(--ink-50);       /* subtle surface */
+  --bg-3: var(--ink-100);      /* stronger surface */
+  --bg-dark: var(--docker-deep);
+  --bg-brand: var(--docker-ocean);
+
+  /* ── Border & divider ─────────────────────────────────── */
+  --rule-1: rgba(23, 25, 30, 0.08);
+  --rule-2: rgba(23, 25, 30, 0.16);
+  --rule-on-dark: rgba(255, 255, 255, 0.14);
+
+  /* ── Type families ────────────────────────────────────── */
+  --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system,
+               "Segoe UI", Roboto, Arial, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular,
+               Menlo, Consolas, monospace;
+
+  /* ── Type scale (slide-first, 1920×1080) ──────────────── */
+  /* Numbers: "often set larger than the text that describes them" */
+  --t-billboard: clamp(64px, 7.5vw, 128px);  /* opener headers */
+  --t-display:   clamp(48px, 5.2vw, 88px);   /* section titles */
+  --t-h1:        clamp(36px, 3.4vw, 60px);   /* slide titles */
+  --t-h2:        clamp(28px, 2.4vw, 42px);
+  --t-h3:        22px;
+  --t-body-lg:   22px;
+  --t-body:      18px;
+  --t-caption:   14px;
+  --t-stat:      clamp(56px, 6vw, 96px);     /* number callouts */
+  --t-stat-xl:   clamp(88px, 9vw, 152px);    /* $39M-size heroes */
+
+  --lh-tight:   1.04;
+  --lh-snug:    1.18;
+  --lh-body:    1.45;
+  --lh-loose:   1.6;
+  --ls-tight:   -0.02em;
+  --ls-display: -0.035em;
+
+  /* ── Spacing scale ────────────────────────────────────── */
+  --sp-0:   0;
+  --sp-1:   4px;
+  --sp-2:   8px;
+  --sp-3:   12px;
+  --sp-4:   16px;
+  --sp-5:   24px;
+  --sp-6:   32px;
+  --sp-7:   48px;
+  --sp-8:   64px;
+  --sp-9:   96px;
+  --sp-10: 128px;
+
+  /* ── Radius ───────────────────────────────────────────── */
+  --r-xs: 2px;
+  --r-sm: 4px;
+  --r-md: 6px;
+  --r-lg: 10px;
+  --r-xl: 16px;
+  --r-pill: 999px;
+
+  /* ── Shadows (understated — docs are flat) ────────────── */
+  --shadow-1: 0 1px 2px rgba(0, 8, 77, 0.06),
+              0 1px 1px rgba(0, 8, 77, 0.04);
+  --shadow-2: 0 4px 12px rgba(0, 8, 77, 0.08),
+              0 1px 2px rgba(0, 8, 77, 0.04);
+  --shadow-3: 0 12px 32px rgba(0, 8, 77, 0.12),
+              0 2px 6px rgba(0, 8, 77, 0.06);
+  --ring-focus: 0 0 0 3px rgba(29, 99, 237, 0.32);
+
+  /* ── Motion ───────────────────────────────────────────── */
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --dur-fast: 120ms;
+  --dur-base: 200ms;
+  --dur-slow: 360ms;
+}
+
+/* ============================================================
+   Semantic typography — drop-in base styles
+   ============================================================ */
+
+html, body {
+  font-family: var(--font-sans);
+  color: var(--fg-1);
+  background: var(--bg-1);
+  font-feature-settings: "ss01", "cv11";
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+.billboard,
+.t-billboard {
+  font-family: var(--font-sans);
+  font-weight: 700;
+  font-size: var(--t-billboard);
+  line-height: var(--lh-tight);
+  letter-spacing: var(--ls-display);
+  text-wrap: balance;
+}
+
+.display,
+.t-display {
+  font-weight: 700;
+  font-size: var(--t-display);
+  line-height: var(--lh-tight);
+  letter-spacing: var(--ls-display);
+  text-wrap: balance;
+}
+
+h1, .t-h1 {
+  font-weight: 700;
+  font-size: var(--t-h1);
+  line-height: var(--lh-snug);
+  letter-spacing: var(--ls-tight);
+  text-wrap: balance;
+  margin: 0;
+}
+
+h2, .t-h2 {
+  font-weight: 700;
+  font-size: var(--t-h2);
+  line-height: var(--lh-snug);
+  letter-spacing: var(--ls-tight);
+  margin: 0;
+}
+
+h3, .t-h3 {
+  font-weight: 600;
+  font-size: var(--t-h3);
+  line-height: 1.3;
+  margin: 0;
+}
+
+p, .t-body {
+  font-size: var(--t-body);
+  line-height: var(--lh-body);
+  color: var(--fg-1);
+  text-wrap: pretty;
+  margin: 0;
+}
+
+.t-body-lg { font-size: var(--t-body-lg); line-height: var(--lh-body); }
+
+.caption, .t-caption {
+  font-size: var(--t-caption);
+  line-height: 1.45;
+  color: var(--fg-3);
+  letter-spacing: 0.01em;
+}
+
+.stat,  .t-stat {
+  font-family: var(--font-sans);
+  font-weight: 700;
+  font-size: var(--t-stat);
+  line-height: 0.95;
+  letter-spacing: -0.04em;
+  font-variant-numeric: tabular-nums lining-nums;
+}
+
+.stat-xl, .t-stat-xl {
+  font-weight: 700;
+  font-size: var(--t-stat-xl);
+  line-height: 0.9;
+  letter-spacing: -0.045em;
+  font-variant-numeric: tabular-nums lining-nums;
+}
+
+.mono, code, .t-mono {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  letter-spacing: -0.005em;
+}
+
+/* Voice conventions */
+.pain-quote        { font-style: italic; color: var(--fg-2); }
+.guarantee         { font-style: italic; color: var(--docker-ocean); }
+.source-citation   { font-size: var(--t-caption); color: var(--accent-cite); letter-spacing: 0.02em; }
+.eyebrow           { font-size: 13px; font-weight: 600; letter-spacing: 0.14em;
+                     text-transform: uppercase; color: var(--docker-ocean); }
+
+/* Utility: accent underline for "villain" phrases */
+.villain           { box-shadow: inset 0 -0.35em 0 rgba(245, 165, 36, 0.35); }

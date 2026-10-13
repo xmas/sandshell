@@ -1,0 +1,7 @@
+⚙️  Generating project...
+⚙️  Writing project...
+Created project at /Users/xmas/Code/xmas-sandshell/Sandshell.xcodeproj
+Details:  No locator class for device extension 'Xcode.Device.CoreDevice', error: Error Domain=DVTPlugInErrorDomain Code=2 "Loading a plug-in failed." UserInfo={DVTPlugInIdentifierErrorKey=com.apple.dt.DVTCoreDeviceCore, DVTPlugInExecutablePathErrorKey=/Applications/Xcode.app/Contents/SharedFrameworks/DVTCoreDeviceCore.framework/DVTCoreDeviceCore, NSLocalizedRecoverySuggestion=The plug-in or one of its prerequisite plug-ins may be missing or damaged and may need to be reinstalled., DVTPlugInDYLDErrorMessageErrorKey=dlopen(/Applications/Xcode.app/Contents/SharedFrameworks/DVTCoreDeviceCore.framework/DVTCoreDeviceCore, 0x0000): Symbol not found: _$s10CoreDevice17DetailedOperationC7metricsSDySSAA12CodableValueOGvg
+2026-09-28 11:17:49.879 xcodebuild[35281:35200903]  iOSSimulator: [SimServiceContext sharedServiceContextForDeveloperDir:error:] returned nil (Error Domain=DVTCoreSimulatorAdditionsErrorDomain Code=3 "CoreSimulator is out of date. Current version (1051.55.0) is older than build version (1171.7.0)." UserInfo={NSLocalizedDescription=CoreSimulator is out of date. Current version (1051.55.0) is older than build version (1171.7.0).}). Simulator device support disabled.
+** BUILD SUCCEEDED **
+build exit: 0

@@ -1,0 +1,76 @@
+name: Sandshell
+options:
+  bundleIdPrefix: com.xmas
+  deploymentTarget:
+    macOS: "14.0"
+  createIntermediateGroups: true
+
+packages:
+  GhosttyKit:
+    url: https://github.com/Lakr233/libghostty-spm.git
+    exactVersion: 1.2.5
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    MARKETING_VERSION: "0.2.19"
+    CURRENT_PROJECT_VERSION: "1"
+    DEVELOPMENT_TEAM: ""
+    CODE_SIGN_STYLE: Automatic
+    ENABLE_HARDENED_RUNTIME: YES
+    # The libghostty surface spawns real subprocesses (sbx exec), so the app
+    # must NOT run inside the App Sandbox.
+    ENABLE_APP_SANDBOX: NO
+
+targets:
+  Sandshell:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sandshell
+    info:
+      path: Sandshell/Resources/Info.plist
+      properties:
+        CFBundleName: Sandshell
+        CFBundleDisplayName: Sandshell
+        CFBundleIconFile: AppIcon
+        CFBundlePackageType: APPL
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        LSMinimumSystemVersion: $(MACOSX_DEPLOYMENT_TARGET)
+        NSHighResolutionCapable: true
+        # Opt out of the macOS 26 (Tahoe) Liquid Glass redesign so the app
+        # renders with the prior (Sequoia) appearance.
+        UIDesignRequiresCompatibility: true
+        # AppKit-driven app: no storyboard, AppDelegate creates the window.
+        NSPrincipalClass: NSApplication
+        CFBundleURLTypes:
+          - CFBundleURLName: com.xmas.sandshell
+            CFBundleURLSchemes:
+              - sandshell
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: All Documents
+            CFBundleTypeRole: Viewer
+            LSHandlerRank: Alternate
+            LSItemContentTypes:
+              - public.item
+              - public.content
+              - public.data
+              - public.text
+              - public.image
+              - public.folder
+    postBuildScripts:
+      - name: Copy sandshell CLI into app bundle
+        script: |
+          mkdir -p "$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/Resources"
+          install -m 755 "$SRCROOT/scripts/sandshell" \
+            "$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/Resources/sandshell"
+        basedOnDependencyAnalysis: false
+    dependencies:
+      - package: GhosttyKit
+        product: GhosttyTerminal
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.xmas.sandshell
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.developer-tools

@@ -1,0 +1,18 @@
+# pr
+{"mergedAt":"2026-09-29T01:13:22Z","sha":"154553f60fa5ef217067a6d3735120bdf1f3a7d6","state":"MERGED"}
+From https://github.com/docker/xmas-sandshell
+ - [deleted]         (none)     -> origin/ship-native-toolbar-v0.2.13
+   bdd694e..154553f  main       -> origin/main
+# branch
+fix/toolbar-identity-blank
+# status
+?? .hatch/
+?? .sbx/
+?? exports/
+# branch commits not in main
+# main head
+154553f Merge pull request #9 from docker/fix/toolbar-identity-blank
+5119b5c chore: release 0.2.16
+94d7284 Claude vitals strip: context gauge, tokens, cost, model/effort pickers, usage totals
+# worktrees
+/Users/xmas/Code/xmas-sandshell 5119b5c [fix/toolbar-identity-blank]

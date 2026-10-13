@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="colors_and_type.css">
+<style> * { box-sizing:border-box; } </style>
+</helmet>
+<div style="width:max-content; min-width:100%; min-height:100vh; box-sizing:border-box; padding:48px; background:#e7e5df; font-family:var(--font-sans);">
+
+  <div style="margin-bottom:34px; max-width:1180px;">
+    <div style="font-size:12px; font-weight:700; letter-spacing:.16em; text-transform:uppercase; color:#1d63ed; margin-bottom:10px;">Sandshell · macOS · 3 styles</div>
+    <div style="font-size:34px; font-weight:700; letter-spacing:-.025em; color:#17191e; line-height:1.05;">One workspace, Projects → Sessions, live agent terminals</div>
+    <div style="font-size:15px; color:#5b6170; margin-top:10px; max-width:800px; line-height:1.5;">Each window is one workspace folder backed by a single <span style="font-family:var(--font-mono); font-size:13.5px; color:#1d63ed;">sbx</span> container. The sidebar is the Projects → Sessions source list you liked — every project carries a “New Session” row and the footer adds a project. Selecting a session shows its Claude Code or Codex terminal, with a live “time spent working”. Three fixed looks: light, a dark sidebar with a light terminal, and full dark.</div>
+  </div>
+
+  <div style="display:flex; gap:56px; align-items:flex-start;" data-row="frames">
+
+    <div style="flex:none; width:1180px;" data-screen-label="Daylight">
+      <div style="display:flex; align-items:baseline; gap:12px; margin-bottom:14px;">
+        <span style="font-size:13px; font-weight:700; letter-spacing:.1em; text-transform:uppercase; color:#17191e;">01 · Daylight</span>
+        <span style="font-size:13px; color:#6c7e9d;">Light &amp; clean · Docker Ocean accent · light terminal</span>
+      </div>
+      <dc-import name="SandshellApp" data="{{ a }}" hint-size="1180px,760px"></dc-import>
+    </div>
+
+    <div style="flex:none; width:1180px;" data-screen-label="Workspace">
+      <div style="display:flex; align-items:baseline; gap:12px; margin-bottom:14px;">
+        <span style="font-size:13px; font-weight:700; letter-spacing:.1em; text-transform:uppercase; color:#17191e;">02 · Workspace</span>
+        <span style="font-size:13px; color:#6c7e9d;">Dark sidebar, light workspace &amp; terminal · Ocean accent</span>
+      </div>
+      <dc-import name="SandshellApp" data="{{ b }}" hint-size="1180px,760px"></dc-import>
+    </div>
+
+    <div style="flex:none; width:1180px;" data-screen-label="Midnight">
+      <div style="display:flex; align-items:baseline; gap:12px; margin-bottom:14px;">
+        <span style="font-size:13px; font-weight:700; letter-spacing:.1em; text-transform:uppercase; color:#17191e;">03 · Midnight</span>
+        <span style="font-size:13px; color:#6c7e9d;">Full dark · warm sand accent — the whale-in-sand</span>
+      </div>
+      <dc-import name="SandshellApp" data="{{ c }}" hint-size="1180px,760px"></dc-import>
+    </div>
+
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  state = {
+    sel:   { a:'s1', b:'s2', c:'s1' },
+    theme: { a:'light', b:'light', c:'dark' },
+    seen:  { a:[], b:[], c:[] },
+  };
+
+  agents = {
+    claude: { label:'Claude', glyph:'✳',   color:'#d97757' },
+    codex:  { label:'Codex',  glyph:'</>', color:'#10a37f' },
+    shell:  { label:'Shell',  glyph:'›_',  color:'#64748b' },
+  };
+
+  statusMeta = {
+    working: { label:'Working', color:'#16a34a' },
+    ready:   { label:'Ready',   color:'#e0962a' },
+  };
+
+  workSecs = { s1:263, s2:41, s3:512, s4:95, s5:1840, s6:0 };
+
+  projectOrder = ['Sandshell','sbx-ui','api-spike','My Work'];
+  projectMeta = {
+    'Sandshell': { ro:false }, 'sbx-ui': { ro:true }, 'api-spike': { ro:false }, 'My Work': { ro:false },
+  };
+
+  sessions = [
+    { id:'s1', name:'wire terminal host into the split view', project:'Sandshell', agent:'claude', status:'working',
+      container:'sandshell', workdir:'~/Sandshell/Sandshell',
+      agentTerm:[
+        { c:'sys',    x:'✻ Claude Code · ~/Sandshell/Sandshell · sonnet' },
+        { c:'sys',    x:'  container: sandshell (running)' },
+        { c:'user',   x:'› wire the terminal host into the split view' },
+        { c:'bullet', x:'● Mounting TerminalStackController in the detail pane and routing sidebar selection to it.' },
+        { c:'bullet', x:'● Read(UI/MainWindowController.swift)' },
+        { c:'tool',   x:'  ⎿ read 142 lines' },
+        { c:'bullet', x:'● Update(UI/MainWindowController.swift)' },
+        { c:'tool',   x:'  ⎿ +18 −3' },
+        { c:'bullet', x:'● Bash(xcodebuild -scheme Sandshell build)' },
+        { c:'ok',     x:'  ⎿ ** BUILD SUCCEEDED **' },
+        { c:'bullet', x:'● Selecting a session now shows its terminal in-window.' },
+      ],
+      shellTerm:[
+        { c:'prompt', x:'agent@sandshell:~/Sandshell/Sandshell$ ls' },
+        { c:'out',    x:'App  Resources  Sbx  Terminal  UI  Workspace' },
+        { c:'prompt', x:'agent@sandshell:~/Sandshell/Sandshell$ sbx ls' },
+        { c:'out',    x:'NAME       AGENT   STATUS   WORKSPACES' },
+        { c:'out',    x:'sandshell  claude  running  ~/Sandshell' },
+      ] },
+
+    { id:'s2', name:'port SbxClient.create to a mount policy', project:'Sandshell', agent:'codex', status:'working',
+      container:'sandshell-codex', workdir:'~/Sandshell/Sandshell',
+      agentTerm:[
+        { c:'sys',    x:'OpenAI Codex · ~/Sandshell/Sandshell' },
+        { c:'sys',    x:'  container: sandshell-codex — building…' },
+        { c:'user',   x:'user' },
+        { c:'out',    x:'  port SbxClient.create to a computed mount set' },
+        { c:'dim',    x:'thinking' },
+        { c:'dim',    x:'  reading MountPolicy.resolved + sbx.rs create…' },
+        { c:'bullet', x:'exec  rg "func create" Sbx/SbxClient.swift' },
+        { c:'tool',   x:'  Sbx/SbxClient.swift:88  func create(workspace:…)' },
+        { c:'out',    x:'codex' },
+        { c:'out',    x:'  Swapping the hardcoded ~/.claude / ~/.codex mounts for policy.resolved(home:root:).' },
+        { c:'dim',    x:'⠙ rebuilding container with 9 mounts…' },
+      ],
+      shellTerm:[
+        { c:'prompt', x:'agent@sandshell:~/Sandshell/Sandshell$ sbx create --agent codex .' },
+        { c:'dim',    x:'creating container sandshell-codex…' },
+        { c:'dim',    x:'⠙ pulling image · applying 9 mounts' },
+      ] },
+
+    { id:'s3', name:'fix the macOS PATH probe', project:'Sandshell', agent:'claude', status:'ready',
+      container:'sandshell', workdir:'~/Sandshell/Sandshell',
+      agentTerm:[
+        { c:'sys',    x:'✻ Claude Code · ~/Sandshell/Sandshell · sonnet' },
+        { c:'sys',    x:'  container: sandshell (stopped) — start to resume' },
+        { c:'user',   x:'› fix the macOS PATH probe' },
+        { c:'bullet', x:'● Probing the login shell PATH once at launch and setenv-ing it on the process.' },
+        { c:'bullet', x:'● Update(Sbx/PathFixer.swift)' },
+        { c:'tool',   x:'  ⎿ +24 −6' },
+        { c:'ok',     x:'● sbx, docker and brew now resolve in GUI-launched runs.' },
+      ],
+      shellTerm:[
+        { c:'prompt', x:'agent@sandshell:~$ echo $PATH' },
+        { c:'out',    x:'/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin' },
+        { c:'prompt', x:'agent@sandshell:~$ which sbx' },
+        { c:'out',    x:'/opt/homebrew/bin/sbx' },
+      ] },
+
+    { id:'s4', name:'trace how sbx exec builds the command', project:'sbx-ui', agent:'codex', status:'ready',
+      container:'sbx-ui', workdir:'~/Sandshell/sbx-ui',
+      agentTerm:[
+        { c:'sys',    x:'OpenAI Codex · ~/Sandshell/sbx-ui  (read-only)' },
+        { c:'user',   x:'user' },
+        { c:'out',    x:'  trace how sbx exec builds the launch command' },
+        { c:'dim',    x:'thinking' },
+        { c:'bullet', x:'exec  rg "sbx exec" src-tauri/src/sbx.rs' },
+        { c:'tool',   x:'  sbx.rs:212  fn sbx_exec_command(...)' },
+        { c:'out',    x:'codex' },
+        { c:'out',    x:'  It runs: sbx exec -it <name> env … bash -c "<setup>; exec <agent>".' },
+      ],
+      shellTerm:[
+        { c:'prompt', x:'agent@sbx-ui:~/Sandshell/sbx-ui$ rg -n fix_macos_path src-tauri/src' },
+        { c:'out',    x:'src-tauri/src/sbx.rs:64:fn fix_macos_path() {' },
+      ] },
+
+    { id:'s5', name:'sketch the /sandboxes endpoint', project:'api-spike', agent:'claude', status:'ready',
+      container:'api-spike', workdir:'~/Sandshell/api-spike',
+      agentTerm:[
+        { c:'sys',    x:'✻ Claude Code · ~/Sandshell/api-spike · sonnet' },
+        { c:'sys',    x:'  container: api-spike (running)' },
+        { c:'user',   x:'› sketch the /sandboxes endpoint' },
+        { c:'bullet', x:'● Adding GET /sandboxes that shells out to `sbx ls --json`.' },
+        { c:'bullet', x:'● Write(api/sandboxes.ts)' },
+        { c:'tool',   x:'  ⎿ +46 −0' },
+        { c:'bullet', x:'● Should it include stopped sandboxes too, or only running?' },
+      ],
+      shellTerm:[
+        { c:'prompt', x:'agent@api-spike:~/Sandshell/api-spike$ npm run dev' },
+        { c:'out',    x:'listening on http://localhost:8787' },
+      ] },
+
+    { id:'s6', name:'scratch shell', project:'My Work', agent:'shell', status:'ready',
+      container:'my-work', workdir:'~/Sandshell/My Work',
+      agentTerm:[
+        { c:'prompt', x:'agent@my-work:~/Sandshell/My Work$ uname -a' },
+        { c:'out',    x:'Linux sandbox 6.10 #1 SMP x86_64 GNU/Linux' },
+      ],
+      shellTerm:[
+        { c:'prompt', x:'agent@my-work:~/Sandshell/My Work$ uname -a' },
+        { c:'out',    x:'Linux sandbox 6.10 #1 SMP x86_64 GNU/Linux' },
+      ] },
+  ];
+
+  themeBase = {
+    light: { bg:'#eef0f4', panel:'#ffffff', sidebar:'#ffffff', sidebarfg:'#1a1d24', sidebarmuted:'#8b91a0', sidebarhover:'#f2f3f7',
+             text:'#1a1d24', text2:'#5b6170', text3:'#9aa1ad', border:'#e7e9ef', hover:'#f4f5f8', sel:'#e7eefe',
+             accent:'#1d63ed', accentfg:'#ffffff',
+             termbg:'#f7f8fb', termtext:'#1f2430', termdim:'#9098a6', termaccent:'#1d63ed', termgreen:'#1a7f4b', termred:'#c0392b' },
+    dark:  { bg:'#0c0d11', panel:'#0c0d11', sidebar:'#0f1116', sidebarfg:'#e6e8ee', sidebarmuted:'#7a8190', sidebarhover:'rgba(255,255,255,.06)',
+             text:'#e6e8ee', text2:'#9aa1ad', text3:'#6b7280', border:'rgba(255,255,255,.08)', hover:'rgba(255,255,255,.05)', sel:'rgba(79,139,255,.18)',
+             accent:'#4f8bff', accentfg:'#ffffff',
+             termbg:'#15171d', termtext:'#cdd3dc', termdim:'#6b7480', termaccent:'#6ea0ff', termgreen:'#46c08a', termred:'#ff7b72' },
+  };
+
+  themes = {
+    a: { light:{}, dark:{} },
+    b: { light:{ sidebar:'#1b1822', sidebarfg:'#d8d4e0', sidebarmuted:'#8b8498', sidebarhover:'rgba(255,255,255,.08)' },
+         dark:{ sidebar:'#141019' } },
+    c: { light:{ accent:'#cf8a24', accentfg:'#ffffff', sel:'#fbeed6', termaccent:'#cf8a24' },
+         dark:{ accent:'#f0b148', accentfg:'#241803', sel:'rgba(240,177,72,.16)', termaccent:'#f0b148', termgreen:'#7bd88f' } },
+  };
+
+  themeVars(pal) { return Object.keys(pal).map(k => '--' + k + ':' + pal[k]).join(';'); }
+  hexA(hex, a) {
+    const h = hex.replace('#',''); if (h.length !== 6) return hex;
+    return 'rgba(' + parseInt(h.slice(0,2),16) + ',' + parseInt(h.slice(2,4),16) + ',' + parseInt(h.slice(4,6),16) + ',' + a + ')';
+  }
+
+  pick(v, id) {
+    this.setState(s => ({
+      sel: { ...s.sel, [v]: id },
+      seen: { ...s.seen, [v]: s.seen[v].includes(id) ? s.seen[v] : [...s.seen[v], id] },
+    }));
+  }
+  componentDidMount() { this.mountedAt = Date.now(); this.timer = setInterval(() => this.forceUpdate(), 1000); }
+  componentWillUnmount() { if (this.timer) clearInterval(this.timer); }
+  elapsed() { return Math.floor((Date.now() - (this.mountedAt || Date.now())) / 1000); }
+  fmt(s) { if (s < 60) return s + 's'; const m = Math.floor(s / 60), r = s % 60; if (m < 60) return r ? m + 'm ' + r + 's' : m + 'm'; const h = Math.floor(m / 60), mm = m % 60; return h + 'h ' + (mm < 10 ? '0' : '') + mm + 'm'; }
+  fmtCoarse(s) { if (s < 60) return s + 's'; const m = Math.floor(s / 60); if (m < 60) return m + 'm'; const h = Math.floor(m / 60); return h + 'h ' + (m % 60) + 'm'; }
+  timeTextFor(id, status, agent) {
+    const base = this.workSecs[id] || 0;
+    const working = status === 'working';
+    if (agent === 'shell' || (!base && !working)) return '';
+    return working ? this.fmt(base + this.elapsed()) : this.fmtCoarse(base);
+  }
+
+  decorate(v) {
+    const sel = this.state.sel[v];
+    const theme = this.state.theme[v];
+    const pal = { ...this.themeBase[theme], ...(this.themes[v][theme] || {}) };
+    const seen = this.state.seen[v] || [];
+    const darkSidebar = !!(this.themes[v][theme] && this.themes[v][theme].sidebar) || theme === 'dark';
+    const byId = {}; this.sessions.forEach(s => byId[s.id] = s);
+
+    const projects = this.projectOrder.map(name => {
+      const list = this.sessions.filter(s => s.project === name);
+      return {
+        name,
+        tagText: this.projectMeta[name].ro ? 'ro' : String(list.length),
+        sessions: list.map(s => ({
+          name: s.name,
+          agentMeta: this.agents[s.agent], statusMeta: this.statusMeta[s.status],
+          isWorking: s.status === 'working',
+          showReadyDot: s.status === 'ready' && !(seen.includes(s.id) || s.id === sel),
+          timeText: this.timeTextFor(s.id, s.status, s.agent),
+          rowBg: s.id === sel ? 'var(--sidebarsel)' : 'transparent',
+          onPick: () => this.pick(v, s.id),
+        })),
+      };
+    });
+
+    const raw = byId[sel];
+    const ag = this.agents[raw.agent];
+    const tc = { sys:pal.termdim, user:pal.termtext, bullet:pal.termaccent, tool:pal.termdim, ok:pal.termgreen, err:pal.termred, out:pal.termtext, dim:pal.termdim, prompt:pal.termaccent };
+    const isShellView = raw.agent === 'shell';
+    const term = raw.agentTerm.map(l => ({ x: l.x, color: tc[l.c] || pal.termtext, w: (l.c === 'user' || l.c === 'bullet' || l.c === 'prompt') ? 600 : 400 }));
+    const boxedPrompt = !isShellView;
+
+    const active = {
+      name: raw.name, agentMeta: ag, statusMeta: this.statusMeta[raw.status],
+      isWorking: raw.status === 'working', isReady: raw.status !== 'working',
+      timeText: this.timeTextFor(raw.id, raw.status, raw.agent),
+      container: raw.container, workdir: raw.workdir,
+      termTitle: (isShellView ? 'bash' : ag.label.toLowerCase()) + ' — ' + raw.container,
+      term, boxedPrompt, caretPrompt: !boxedPrompt,
+      promptLabel: raw.agent === 'codex' ? 'Send a message to Codex…' : 'Reply to Claude…',
+    };
+
+    return {
+      vars: this.themeVars(pal) + ';--sidebarsel:' + (darkSidebar ? this.hexA('#ffffff', .10) : pal.sel),
+      projects, active,
+    };
+  }
+
+  renderVals() {
+    return { a: this.decorate('a'), b: this.decorate('b'), c: this.decorate('c') };
+  }
+}
+</script>
+</body>
+</html>

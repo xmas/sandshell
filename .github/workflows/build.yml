@@ -1,0 +1,38 @@
+name: Build
+
+on:
+  push:
+    branches: ["**"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_16.3.app
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Resolve packages
+        run: |
+          xcodebuild -resolvePackageDependencies \
+            -project Sandshell.xcodeproj -scheme Sandshell \
+            -clonedSourcePackagesDirPath build/SourcePackages
+
+      - name: Build
+        run: |
+          xcodebuild \
+            -project Sandshell.xcodeproj \
+            -scheme Sandshell \
+            -configuration Debug \
+            -derivedDataPath build \
+            -clonedSourcePackagesDirPath build/SourcePackages \
+            -destination 'platform=macOS,arch=arm64' \
+            build

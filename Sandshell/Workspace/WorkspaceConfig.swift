@@ -1,0 +1,112 @@
+import Foundation
+
+/// Durable, workspace-scoped configuration persisted at
+/// `<root>/.sandshell/config.json`: the mount policy, MCP set, primary agent,
+/// and whether the user has confirmed the mount setup yet. Unlike `state.json`
+/// (volatile, git-ignored) this is durable and tracked. See GA plan §5.
+struct WorkspaceConfig: Codable {
+    var schemaVersion: Int
+    var policy: MountPolicy
+    var mcpServers: [String]
+    var mcpURL: URL
+    var primaryAgent: AgentKind
+    /// Set once the user has reviewed/confirmed mounts in the mount-config UI.
+    /// Drives whether that UI is shown on opening the workspace.
+    var configured: Bool
+    /// Auto-archive debounce/interval in seconds (consumed in Phase 7).
+    var archiveInterval: TimeInterval
+    /// Per-root appearance/terminal preferences. `nil` means this root has never
+    /// customized its look and should inherit the global default (`ThemeDefaults`).
+    var theme: ThemePreferences?
+    /// Kit references applied to this workspace's sandboxes (`sbx create --kit`).
+    var kits: [String]
+    /// Which template tag sandboxes are created from (see `ImageChannel`).
+    var imageChannel: ImageChannel
+    /// `-t` reference when `imageChannel == .custom`.
+    var customImage: String
+    /// `claude --model` id for this workspace's Claude sessions; `nil` = Claude's default.
+    var claudeModel: String?
+    /// `claude --effort` level for this workspace's Claude sessions; `nil` = Claude's default.
+    var claudeEffort: String?
+
+    static let defaultArchiveInterval: TimeInterval = 1800   // 30 min
+
+    init(policy: MountPolicy,
+         mcpServers: [String] = [],
+         mcpURL: URL = Workspace.defaultMCPURL,
+         primaryAgent: AgentKind = .claude,
+         configured: Bool = false,
+         archiveInterval: TimeInterval = WorkspaceConfig.defaultArchiveInterval,
+         theme: ThemePreferences? = nil,
+         kits: [String] = [],
+         imageChannel: ImageChannel = .stable,
+         customImage: String = "",
+         claudeModel: String? = nil,
+         claudeEffort: String? = nil,
+         schemaVersion: Int = 1) {
+        self.schemaVersion = schemaVersion
+        self.policy = policy
+        self.mcpServers = mcpServers
+        self.mcpURL = mcpURL
+        self.primaryAgent = primaryAgent
+        self.configured = configured
+        self.archiveInterval = archiveInterval
+        self.theme = theme
+        self.kits = kits
+        self.imageChannel = imageChannel
+        self.customImage = customImage
+        self.claudeModel = claudeModel
+        self.claudeEffort = claudeEffort
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case schemaVersion, policy, mcpServers, mcpURL, primaryAgent, configured, archiveInterval, theme, kits
+        case imageChannel, customImage, claudeModel, claudeEffort
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        schemaVersion = try c.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? 1
+        policy = try c.decode(MountPolicy.self, forKey: .policy)
+        mcpServers = try c.decodeIfPresent([String].self, forKey: .mcpServers) ?? []
+        mcpURL = try c.decodeIfPresent(URL.self, forKey: .mcpURL) ?? Workspace.defaultMCPURL
+        primaryAgent = try c.decodeIfPresent(AgentKind.self, forKey: .primaryAgent) ?? .claude
+        configured = try c.decodeIfPresent(Bool.self, forKey: .configured) ?? false
+        archiveInterval = try c.decodeIfPresent(TimeInterval.self, forKey: .archiveInterval)
+            ?? WorkspaceConfig.defaultArchiveInterval
+        theme = try c.decodeIfPresent(ThemePreferences.self, forKey: .theme)
+        kits = try c.decodeIfPresent([String].self, forKey: .kits) ?? []
+        imageChannel = try c.decodeIfPresent(ImageChannel.self, forKey: .imageChannel) ?? .stable
+        customImage = try c.decodeIfPresent(String.self, forKey: .customImage) ?? ""
+        claudeModel = try c.decodeIfPresent(String.self, forKey: .claudeModel)
+        claudeEffort = try c.decodeIfPresent(String.self, forKey: .claudeEffort)
+    }
+
+    // MARK: - Persistence
+
+    static func url(root: URL) -> URL {
+        WorkspaceState.controlDir(root: root).appendingPathComponent("config.json")
+    }
+
+    /// Load persisted config, or `nil` if none exists yet.
+    static func load(root: URL) throws -> WorkspaceConfig? {
+        let url = url(root: root)
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        return try JSONDecoder().decode(WorkspaceConfig.self, from: Data(contentsOf: url))
+    }
+
+    /// Load the config or build a default one seeded from `home` — and, for a
+    /// root that has never been configured, with the registry's default kits.
+    static func loadOrDefault(root: URL, home: URL) -> WorkspaceConfig {
+        (try? load(root: root)) ?? WorkspaceConfig(policy: .makeDefault(home: home), kits: KitStore.defaultRefs)
+    }
+
+    /// Atomically write to `<root>/.sandshell/config.json`.
+    func save(root: URL) throws {
+        try FileManager.default.createDirectory(
+            at: WorkspaceState.controlDir(root: root), withIntermediateDirectories: true)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try encoder.encode(self).write(to: Self.url(root: root), options: .atomic)
+    }
+}

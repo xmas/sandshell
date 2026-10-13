@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="../colors_and_type.css">
+<style> * { box-sizing:border-box; } </style>
+</helmet>
+<div style="width:max-content; min-width:100%; min-height:100vh; box-sizing:border-box; padding:48px; background:#e7e5df; font-family:var(--font-sans);">
+
+  <div style="margin-bottom:34px; max-width:1180px;">
+    <div style="font-size:12px; font-weight:700; letter-spacing:.16em; text-transform:uppercase; color:#4f46e5; margin-bottom:10px;">Agent Sandbox · for everyone · 3 friendly styles</div>
+    <div style="font-size:34px; font-weight:700; letter-spacing:-.025em; color:#17191e; line-height:1.05;">Less terminal, more teammate</div>
+    <div style="font-size:15px; color:#5b6170; margin-top:10px; max-width:780px; line-height:1.5;">Your agents work on real tasks — drafting, cleaning data, reconciling, summarizing. Each window keeps the collapsible project sidebar you liked, leads with plain-language activity and steps, and tucks the raw run log one click away. Every style has a working light / dark toggle (top-right); style 02 is the Slack-style dark sidebar with a light workspace. Click any session to switch.</div>
+  </div>
+
+  <div style="display:flex; gap:56px; align-items:flex-start;" data-row="frames">
+
+    <div style="flex:none; width:1180px;" data-screen-label="A Daylight">
+      <div style="display:flex; align-items:baseline; gap:12px; margin-bottom:14px;">
+        <span style="font-size:13px; font-weight:700; letter-spacing:.1em; text-transform:uppercase; color:#17191e;">01 · Daylight</span>
+        <span style="font-size:13px; color:#6c7e9d;">Friendly &amp; soft · collapsible sidebar · activity-first · light / dark toggle</span>
+      </div>
+      <dc-import name="OfficeApp" data="{{ a }}" hint-size="1180px,760px"></dc-import>
+    </div>
+
+    <div style="flex:none; width:1180px;" data-screen-label="B Slack-style">
+      <div style="display:flex; align-items:baseline; gap:12px; margin-bottom:14px;">
+        <span style="font-size:13px; font-weight:700; letter-spacing:.1em; text-transform:uppercase; color:#17191e;">02 · Workspace</span>
+        <span style="font-size:13px; color:#6c7e9d;">Slack-style — dark sidebar, light workspace &amp; light run log · light / dark toggle</span>
+      </div>
+      <dc-import name="OfficeApp" data="{{ b }}" hint-size="1180px,760px"></dc-import>
+    </div>
+
+    <div style="flex:none; width:1180px;" data-screen-label="C Breeze">
+      <div style="display:flex; align-items:baseline; gap:12px; margin-bottom:14px;">
+        <span style="font-size:13px; font-weight:700; letter-spacing:.1em; text-transform:uppercase; color:#17191e;">03 · Breeze</span>
+        <span style="font-size:13px; color:#6c7e9d;">Calm &amp; roomy · teal accent · shown in dark mode · light / dark toggle</span>
+      </div>
+      <dc-import name="OfficeApp" data="{{ c }}" hint-size="1180px,760px"></dc-import>
+    </div>
+
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  state = {
+    sel:   { a:'launch', b:'crm', c:'invoices' },
+    view:  { a:'activity', b:'activity', c:'log' },
+    theme: { a:'light', b:'light', c:'dark' },
+  };
+
+  agents = {
+    claude: { label:'Claude', glyph:'✳', color:'#d97757' },
+    codex:  { label:'Codex', glyph:'⬡', color:'#10a37f' },
+  };
+
+  statusMeta = {
+    running: { label:'Working on it',    color:'#16a34a', live:true },
+    waiting: { label:'Needs your input', color:'#d97706' },
+    error:   { label:'Needs a look',     color:'#dc2626' },
+    done:    { label:'All done',         color:'#2563eb' },
+    unread:  { label:'New activity',     color:'#7c3aed' },
+    idle:    { label:'Paused',           color:'#6b7280' },
+  };
+
+  projectOrder = ['Marketing','Sales Ops','People','Finance'];
+  projectMeta = {
+    'Marketing':  { color:'#ec4899' },
+    'Sales Ops':  { color:'#2563eb' },
+    'People':     { color:'#16a34a' },
+    'Finance':    { color:'#d97706' },
+  };
+
+  sessions = [
+    { id:'launch', title:'Drafting the launch announcement', project:'Marketing', agent:'claude', status:'running', updated:'now',
+      summary:'Writing a first draft of the product launch announcement from your brief and last quarter\u2019s best-performing emails.',
+      steps:[
+        { title:'Read the launch brief', detail:'brief.docx · 4 pages', done:true },
+        { title:'Pulled your 5 best past announcements', detail:'ranked by open rate', done:true },
+        { title:'Drafting the announcement', detail:'about 320 words', done:false },
+      ],
+      chat:[
+        { role:'user',  text:'Draft a launch announcement for the new dashboard. Warm, not too salesy, under 300 words.' },
+        { role:'agent', text:'On it. I\u2019m matching the tone to your three best-performing emails and leading with the customer benefit. First draft coming up.' },
+        { role:'user',  text:'Great — work in the time-savings angle.' },
+        { role:'agent', text:'Added a line on saving teams about 3 hours a week. Polishing the closing call-to-action now.' },
+      ],
+      log:[
+        { t:'cmd', x:'$ assistant draft --type announcement --brief brief.docx' },
+        { t:'out', x:'loaded brief.docx (4 pages)' },
+        { t:'out', x:'fetched 5 reference emails (sorted by open rate)' },
+        { t:'info',x:'drafting… 318 words' },
+      ] },
+
+    { id:'competitor', title:'Summarized competitor pricing', project:'Marketing', agent:'codex', status:'done', updated:'2h',
+      summary:'Pulled pricing from 6 competitor sites and summarized how our plans compare on a single page.',
+      steps:[
+        { title:'Collected 6 pricing pages', detail:'', done:true },
+        { title:'Normalized to per-seat pricing', detail:'', done:true },
+        { title:'Wrote the comparison', detail:'one-pager', done:true },
+      ],
+      chat:[
+        { role:'user',  text:'How does our pricing compare to the main competitors?' },
+        { role:'agent', text:'We\u2019re mid-market: cheaper than two, pricier than three, and the only one with a free tier. Details are in a one-pager — want me to turn it into slides?' },
+      ],
+      log:[
+        { t:'cmd', x:'$ assistant compare-pricing --vendors 6' },
+        { t:'out', x:'collected 6 pricing pages' },
+        { t:'out', x:'wrote comparison.md' },
+      ] },
+
+    { id:'crm', title:'Cleaning up the CRM export', project:'Sales Ops', agent:'codex', status:'waiting', updated:'5m',
+      summary:'Standardizing 2,431 rows from the CRM export — fixing company names, removing duplicates, and flagging anything unclear.',
+      steps:[
+        { title:'Loaded the CRM export', detail:'2,431 rows', done:true },
+        { title:'Standardized company names', detail:'312 fixes', done:true },
+        { title:'Found 18 possible duplicates', detail:'waiting for your call', done:false },
+      ],
+      chat:[
+        { role:'user',  text:'Clean up this CRM export — fix the company names and remove duplicates.' },
+        { role:'agent', text:'First pass done: 312 names standardized. I found 18 likely duplicate companies, but they\u2019re not exact matches. Want me to merge them, or leave them for you to review?' },
+      ],
+      log:[
+        { t:'cmd', x:'$ assistant tidy crm_export.csv' },
+        { t:'out', x:'2,431 rows loaded' },
+        { t:'out', x:'standardized 312 company names' },
+        { t:'info',x:'18 fuzzy duplicate groups — awaiting confirmation' },
+      ] },
+
+    { id:'pipeline', title:'Weekly pipeline digest', project:'Sales Ops', agent:'claude', status:'unread', updated:'1h',
+      summary:'Your weekly pipeline digest is ready — what moved, what\u2019s stuck, and where to focus this week.',
+      steps:[
+        { title:'Synced deals from the CRM', detail:'84 open', done:true },
+        { title:'Compared to last week', detail:'', done:true },
+        { title:'Wrote the digest', detail:'ready to read', done:true },
+      ],
+      chat:[
+        { role:'user',  text:'Send me a weekly pipeline summary every Monday.' },
+        { role:'agent', text:'Here\u2019s this week: pipeline is up 12%, 3 deals slipped to next month, and 2 large ones need exec sign-off. The full digest is ready to read or forward.' },
+      ],
+      log:[
+        { t:'cmd', x:'$ assistant digest pipeline --weekly' },
+        { t:'out', x:'synced 84 open deals' },
+        { t:'out', x:'pipeline +12% vs last week' },
+      ] },
+
+    { id:'candidates', title:'Summarizing candidate feedback', project:'People', agent:'claude', status:'running', updated:'now',
+      summary:'Reading interview feedback from 9 interviewers and pulling out the themes for tomorrow\u2019s hiring panel.',
+      steps:[
+        { title:'Collected 9 feedback forms', detail:'', done:true },
+        { title:'Grouping feedback by theme', detail:'in progress', done:false },
+      ],
+      chat:[
+        { role:'user',  text:'Summarize the interview feedback for the panel tomorrow.' },
+        { role:'agent', text:'Reading all 9 write-ups now. Early themes: strong on communication, mixed on system design. I\u2019ll have a clean summary with quotes ready shortly.' },
+      ],
+      log:[
+        { t:'cmd', x:'$ assistant summarize feedback/*.md' },
+        { t:'out', x:'loaded 9 feedback forms' },
+        { t:'info',x:'clustering themes…' },
+      ] },
+
+    { id:'invoices', title:'Reconciling March invoices', project:'Finance', agent:'codex', status:'error', updated:'20m',
+      summary:'Matching March invoices against the bank statement — most line up, but a few don\u2019t and need a second look.',
+      steps:[
+        { title:'Imported 142 invoices', detail:'March', done:true },
+        { title:'Matched against the statement', detail:'137 of 142', done:true },
+        { title:'5 invoices don\u2019t match', detail:'needs a look', done:false },
+      ],
+      chat:[
+        { role:'user',  text:'Reconcile the March invoices with the bank statement.' },
+        { role:'agent', text:'137 of 142 matched cleanly. 5 don\u2019t line up — 3 look like timing differences, 2 may be missing receipts. I\u2019ve listed them with my best guess. Can you confirm before I finalize?' },
+      ],
+      log:[
+        { t:'cmd', x:'$ assistant reconcile march/*.pdf --against statement.csv' },
+        { t:'out', x:'imported 142 invoices' },
+        { t:'out', x:'matched 137 / 142' },
+        { t:'err', x:'5 unmatched — see review list' },
+      ] },
+  ];
+
+  themeBase = {
+    light: { bg:'#eef0f4', panel:'#ffffff', sidebar:'#ffffff', sidebarfg:'#1a1d24', sidebarmuted:'#8b91a0', sidebarhover:'#f2f3f7',
+             text:'#1a1d24', text2:'#5b6170', text3:'#9aa1ad', border:'#e7e9ef', hover:'#f4f5f8', sel:'#eef1fd',
+             accent:'#4f46e5', accentfg:'#ffffff', termbg:'#f6f7fa', termfg:'#374151',
+             logcmd:'#111827', logout:'#6b7280', logerr:'#dc2626', loginfo:'#4f46e5',
+             bubbleuserbg:'#eef1fd', bubbleuserc:'#1a1d24', bubbleagentbg:'#f7f8fb', bubbleagentc:'#1a1d24', bubbleborder:'#e7e9ef' },
+    dark:  { bg:'#0c0d11', panel:'#0c0d11', sidebar:'#0f1116', sidebarfg:'#e6e8ee', sidebarmuted:'#7a8190', sidebarhover:'rgba(255,255,255,.06)',
+             text:'#e6e8ee', text2:'#9aa1ad', text3:'#6b7280', border:'rgba(255,255,255,.08)', hover:'rgba(255,255,255,.05)', sel:'rgba(124,123,245,.16)',
+             accent:'#7c7bf5', accentfg:'#ffffff', termbg:'#08090d', termfg:'#cfd3da',
+             logcmd:'#e6edf3', logout:'#8b949e', logerr:'#ff7b72', loginfo:'#9d9cf8',
+             bubbleuserbg:'rgba(255,255,255,.07)', bubbleuserc:'#e6e8ee', bubbleagentbg:'rgba(124,123,245,.12)', bubbleagentc:'#e6e8ee', bubbleborder:'rgba(255,255,255,.08)' },
+  };
+
+  themes = {
+    a: { light:{}, dark:{} },
+    // Slack-style: dark sidebar even in light mode, green accent, light run log
+    b: { light:{ sidebar:'#1b1822', sidebarfg:'#d6d1e0', sidebarmuted:'#8b8498', sidebarhover:'rgba(255,255,255,.07)',
+                 accent:'#2f9d6e', accentfg:'#ffffff', sel:'#eaf5ef', loginfo:'#2f9d6e',
+                 bubbleuserbg:'#eaf5ef', bubbleagentbg:'#f6f7f9' },
+         dark:{ sidebar:'#141019', accent:'#34b27f', loginfo:'#34b27f', sel:'rgba(52,178,127,.16)' } },
+    // Breeze: teal accent, slightly tinted light bg
+    c: { light:{ bg:'#e9eef0', accent:'#0d9488', accentfg:'#ffffff', sel:'#dcf2ef', loginfo:'#0d9488', bubbleuserbg:'#dcf2ef', bubbleagentbg:'#f3f8f8' },
+         dark:{ accent:'#2dd4bf', accentfg:'#06302b', sel:'rgba(45,212,191,.15)', loginfo:'#2dd4bf', bubbleagentbg:'rgba(45,212,191,.10)' } },
+  };
+
+  themeVars(pal) { return Object.keys(pal).map(k => '--' + k + ':' + pal[k]).join(';'); }
+  hexA(hex, a) {
+    const h = hex.replace('#',''); if (h.length !== 6) return hex;
+    return 'rgba(' + parseInt(h.slice(0,2),16) + ',' + parseInt(h.slice(2,4),16) + ',' + parseInt(h.slice(4,6),16) + ',' + a + ')';
+  }
+
+  pick(v, id) { this.setState(s => ({ sel: { ...s.sel, [v]: id } })); }
+  setView(v, mode) { this.setState(s => ({ view: { ...s.view, [v]: mode } })); }
+  toggleTheme(v) { this.setState(s => ({ theme: { ...s.theme, [v]: s.theme[v] === 'light' ? 'dark' : 'light' } })); }
+
+  decorate(v) {
+    const sel = this.state.sel[v];
+    const mode = this.state.view[v];
+    const theme = this.state.theme[v];
+    const pal = { ...this.themeBase[theme], ...(this.themes[v][theme] || {}) };
+    const byId = {}; this.sessions.forEach(s => byId[s.id] = s);
+
+    const projects = this.projectOrder.map(name => {
+      const list = this.sessions.filter(s => s.project === name);
+      return {
+        name, count: list.length, color: this.projectMeta[name].color,
+        sessions: list.map(s => ({
+          id: s.id, title: s.title, updated: s.updated, tag: this.projectMeta[s.project].color,
+          agentMeta: this.agents[s.agent], statusMeta: this.statusMeta[s.status],
+          statusPulse: s.status === 'running' ? 'animation:ptpulse 1.8s infinite;' : '',
+          rowBg: s.id === sel ? 'var(--sidebarsel, var(--sel))' : 'transparent',
+          onPick: () => this.pick(v, s.id),
+        })),
+      };
+    }).filter(p => p.sessions.length);
+
+    const raw = byId[sel];
+    const ag = this.agents[raw.agent];
+    const active = {
+      title: raw.title, project: raw.project, agentMeta: ag, statusMeta: this.statusMeta[raw.status],
+      statusPulse: raw.status === 'running' ? 'animation:ptpulse 1.8s infinite;' : '',
+      summary: raw.summary,
+      steps: raw.steps.map(st => ({
+        title: st.title, detail: st.detail,
+        icon: st.done ? '✓' : '',
+        iconBg: st.done ? 'var(--accent)' : 'transparent',
+        iconC: st.done ? 'var(--accentfg)' : 'var(--text3)',
+        iconBorder: st.done ? '0' : '1.5px solid var(--border)',
+        titleC: st.done ? 'var(--text)' : 'var(--text)',
+      })),
+      chat: raw.chat.map(m => {
+        const isUser = m.role === 'user';
+        return {
+          text: m.text, isUser,
+          dir: isUser ? 'row-reverse' : 'row',
+          align: isUser ? 'flex-end' : 'flex-start',
+          avatarGlyph: isUser ? 'DS' : ag.glyph,
+          avatarBg: isUser ? 'var(--text3)' : ag.color,
+          bubbleBg: isUser ? 'var(--bubbleuserbg)' : 'var(--bubbleagentbg)',
+          bubbleC: isUser ? 'var(--bubbleuserc)' : 'var(--bubbleagentc)',
+          bubbleBorder: 'var(--bubbleborder)',
+        };
+      }),
+      log: raw.log.map(l => ({ x: l.x, color: pal['log' + l.t], w: l.t === 'cmd' ? 600 : 400 })),
+    };
+
+    const accentTab = 'var(--accent)';
+    return {
+      vars: this.themeVars(pal) + ';--sidebarsel:' + (this.themes[v][theme] && this.themes[v][theme].sidebar ? this.hexA('#ffffff', .10) : pal.sel),
+      appLabel: 'Sandbox',
+      projects, active,
+      isActivity: mode === 'activity', isLog: mode === 'log',
+      onActivity: () => this.setView(v, 'activity'),
+      onLog: () => this.setView(v, 'log'),
+      onToggleTheme: () => this.toggleTheme(v),
+      themeGlyph: theme === 'light' ? '☾' : '☀',
+      tabActivityBg: mode === 'activity' ? accentTab : 'transparent',
+      tabActivityC: mode === 'activity' ? 'var(--accentfg)' : 'var(--text2)',
+      tabLogBg: mode === 'log' ? accentTab : 'transparent',
+      tabLogC: mode === 'log' ? 'var(--accentfg)' : 'var(--text2)',
+    };
+  }
+
+  renderVals() {
+    return { a: this.decorate('a'), b: this.decorate('b'), c: this.decorate('c') };
+  }
+}
+</script>
+</body>
+</html>

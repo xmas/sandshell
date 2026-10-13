@@ -1,0 +1,69 @@
+# which
+# launchd
+2411	0	com.docker.hatch-mcp
+com.docker.hatch-mcp.plist
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.docker.hatch-mcp</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/xmas/bin/hatch-mcp</string>
+        <string>--transport</string>
+        <string>http</string>
+        <string>--host</string>
+        <string>127.0.0.1</string>
+        <string>--port</string>
+        <string>31337</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+
+    <!-- launchd starts with a minimal PATH; add Homebrew so hatch-mcp finds its deps -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/hatch-mcp.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/hatch-mcp.err.log</string>
+</dict>
+</plist># procs
+# code dirs
+/Users/xmas/Code/docker-ms-share/hatch-kit-mac
+/Users/xmas/Code/docker-ms-share/hatch-kit-win
+/Users/xmas/Code/mcp-gateway-enterprise/.hatch
+/Users/xmas/Code/sandboxes/.hatch
+/Users/xmas/Code/xmas-sandshell/.hatch
+/Users/xmas/Code/msdgc/.hatch
+/Users/xmas/Code/governor-lib/.hatch
+/Users/xmas/Code/cedar-sbx/.hatch
+/Users/xmas/Code/hatch
+/Users/xmas/Code/hatch/hatch-catalog.yaml
+/Users/xmas/Code/hatch/.hatch
+/Users/xmas/Code/parallax/.hatch
+/Users/xmas/Code/HATCH-MCP-LAUNCHD-SETUP.md
+/Users/xmas/Code/xmas-kits/hatch-kit
+/Users/xmas/Code/xmas-creator/.hatch
+/Users/xmas/Code/mcp-skills/.hatch
+# brew/cargo
+# kit readme
+README.md
+files
+spec.yaml
+7:## Installing hatch-mcp is NOT part of this kit
+9:**The kit does not (and cannot) install the `hatch-mcp` binary. Installing
+19:  **git** operations — unauthenticated `curl` to its release URLs gets 404.
+26:## Installing hatch-mcp on the Mac (one-time, outside the kit)
+29:gh release download -R docker/hatch -p hatch-mcp-darwin-arm64 -O /usr/local/bin/hatch-mcp
+78:`nc` is not installed in the sandbox image — probe over HTTP instead (any

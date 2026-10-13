@@ -1,0 +1,12 @@
+# push
+To https://github.com/docker/xmas-sandshell.git
+   65007c4..db5416f  fix/toolbar-identity-blank -> fix/toolbar-identity-blank
+# pr edit
+https://github.com/docker/xmas-sandshell/pull/9
+# pr state
+{"commits":16,"mergeStateStatus":"UNKNOWN","mergeable":"UNKNOWN","url":"https://github.com/docker/xmas-sandshell/pull/9"}
+# repo merge methods
+{"delete_branch":false,"merge":true,"rebase":true,"squash":true}
+# how #7 merged
+bdd694eb37a8cd03486f09db3e89be07b6a2e5a2
+bdd694e parents=531baf5

@@ -1,0 +1,29 @@
+schemaVersion: "1"
+kind: mixin
+name: git-signing-key
+displayName: Git signing key pin
+description: >-
+  Companion to git-ssh-sign. Pins user.signingKey to the SSH key registered as
+  a signing key on GitHub account "xmas", so commits show Verified. Without it,
+  git-ssh-sign picks the agent's first key whenever gh can't authenticate
+  (no github secret is stored, because pushes stay on the host).
+
+commands:
+  startup:
+    - user: "1000"
+      description: "Pin git user.signingKey and write allowed_signers"
+      command:
+        - sh
+        - -c
+        - |
+          set -eu
+          K='ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILOs7eFFK6QOihCqSGQKLUpdqOcl01ktaINOqvmIzaQG'
+          git config --global user.signingKey "key::$K"
+          mkdir -p /home/agent/.config/git
+          email=$(git config user.email || echo rowan.christmas@docker.com)
+          printf '%s %s\nrowanxmas@gmail.com %s\n' "$email" "$K" "$K" > /home/agent/.config/git/allowed_signers
+
+memory: |
+  Git commits are signed with the pinned SSH key (SHA256:fECOGqrMoqVyv9rIzP4cdbjm4xmJeOARXeAkY2KGK3s),
+  the one registered for signing on GitHub account xmas. The private key stays on the
+  host; signing goes through the forwarded SSH agent. Do not push; the user pushes.

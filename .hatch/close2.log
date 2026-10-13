@@ -1,0 +1,112 @@
+Switched to branch 'main'
+Your branch is behind 'origin/main' by 17 commits, and can be fast-forwarded.
+  (use "git pull" to update your local branch)
+Updating bdd694e..154553f
+Fast-forward
+ .agents/skills/beads/SKILL.md                      |  80 ++
+ .agents/skills/beads/agents/openai.yaml            |   4 +
+ .beads/.gitignore                                  |  77 ++
+ .beads/README.md                                   |  81 ++
+ .beads/config.yaml                                 |  68 ++
+ .beads/hooks/post-checkout                         |  33 +
+ .beads/hooks/post-merge                            |  33 +
+ .beads/hooks/pre-commit                            |  33 +
+ .beads/hooks/pre-push                              |  33 +
+ .beads/hooks/prepare-commit-msg                    |  33 +
+ .beads/interactions.jsonl                          |  12 +
+ .beads/metadata.json                               |   7 +
+ .claude/settings.json                              |  15 +
+ .codex/config.toml                                 |   2 +
+ .codex/hooks.json                                  |  51 ++
+ .gitignore                                         |   6 +
+ AGENTS.md                                          | 128 +++
+ CHANGELOG.md                                       |  31 +
+ CLAUDE.md                                          | 190 +++--
+ Sandshell/App/AppDelegate.swift                    |   2 +
+ Sandshell/App/Committed.swift                      |  51 ++
+ Sandshell/App/MainMenu.swift                       |  46 +
+ Sandshell/Sbx/ClaudeSessionStatus.swift            | 238 ++++++
+ Sandshell/Sbx/KitHub.swift                         | 100 +++
+ Sandshell/Sbx/KitStartup.swift                     | 309 +++++++
+ Sandshell/Sbx/KitStore.swift                       |  69 ++
+ Sandshell/Sbx/Models.swift                         | 102 ++-
+ Sandshell/Sbx/RootFolderStore.swift                |  54 ++
+ Sandshell/Sbx/SbxClient.swift                      |  26 +
+ Sandshell/Sbx/Workspace.swift                      |   8 +
+ Sandshell/Sbx/WorkspaceController+KitStartup.swift | 133 +++
+ Sandshell/Sbx/WorkspaceController.swift            | 236 ++++--
+ Sandshell/Terminal/SbxCommand.swift                |  41 +-
+ Sandshell/Terminal/TerminalSession.swift           |   5 +-
+ Sandshell/Theme/ThemeController.swift              |   6 +-
+ Sandshell/UI/ClaudeStatsDetailView.swift           | 433 ++++++++++
+ Sandshell/UI/ClaudeStatsView.swift                 | 269 ++++++
+ Sandshell/UI/FirstRunView.swift                    |  35 +-
+ Sandshell/UI/InspectorView.swift                   |  19 +-
+ Sandshell/UI/KitConfigView.swift                   | 346 +++++++-
+ Sandshell/UI/KitStartupBannerView.swift            | 213 +++++
+ Sandshell/UI/MCPConfigView.swift                   |   2 +-
+ Sandshell/UI/MainWindowController.swift            | 132 ++-
+ Sandshell/UI/MountConfigView.swift                 |  24 +-
+ Sandshell/UI/OpenFoldersView.swift                 | 296 +++++--
+ Sandshell/UI/Settings/SandboxesPane.swift          |   2 +-
+ Sandshell/UI/Settings/SettingsPanes.swift          | 146 ++--
+ Sandshell/UI/SidebarOutlineController.swift        | 943 ++++++++-------------
+ Sandshell/UI/StatusDebugWindow.swift               |  60 ++
+ Sandshell/UI/TerminalStackController.swift         | 182 +++-
+ Sandshell/Workspace/ClaudeUsageStore.swift         | 492 +++++++++++
+ Sandshell/Workspace/HistoryCache.swift             |   2 +-
+ Sandshell/Workspace/TranscriptReader.swift         |  35 +-
+ Sandshell/Workspace/WorkspaceConfig.swift          |  26 +-
+ Sandshell/Workspace/WorkspaceState.swift           |  47 +-
+ project.yml                                        |   2 +-
+ scripts/make-dmg.sh                                |  11 +-
+ scripts/run-ui-tests.sh                            | 161 ++++
+ tests/ui/00_launch_and_status.applescript          |  18 +
+ tests/ui/01_menu_structure.applescript             |  31 +
+ .../ui/02_new_session_via_apple_event.applescript  |  47 +
+ .../ui/03_settings_sandboxes_lifecycle.applescript |  54 ++
+ tests/ui/README.md                                 |  95 +++
+ tests/ui/lib/Helpers.applescript                   | 146 ++++
+ 64 files changed, 5683 insertions(+), 929 deletions(-)
+ create mode 100644 .agents/skills/beads/SKILL.md
+ create mode 100644 .agents/skills/beads/agents/openai.yaml
+ create mode 100644 .beads/.gitignore
+ create mode 100644 .beads/README.md
+ create mode 100644 .beads/config.yaml
+ create mode 100755 .beads/hooks/post-checkout
+ create mode 100755 .beads/hooks/post-merge
+ create mode 100755 .beads/hooks/pre-commit
+ create mode 100755 .beads/hooks/pre-push
+ create mode 100755 .beads/hooks/prepare-commit-msg
+ create mode 100644 .beads/interactions.jsonl
+ create mode 100644 .beads/metadata.json
+ create mode 100644 .claude/settings.json
+ create mode 100644 .codex/config.toml
+ create mode 100644 .codex/hooks.json
+ create mode 100644 AGENTS.md
+ create mode 100644 Sandshell/App/Committed.swift
+ create mode 100644 Sandshell/Sbx/ClaudeSessionStatus.swift
+ create mode 100644 Sandshell/Sbx/KitHub.swift
+ create mode 100644 Sandshell/Sbx/KitStartup.swift
+ create mode 100644 Sandshell/Sbx/WorkspaceController+KitStartup.swift
+ create mode 100644 Sandshell/UI/ClaudeStatsDetailView.swift
+ create mode 100644 Sandshell/UI/ClaudeStatsView.swift
+ create mode 100644 Sandshell/UI/KitStartupBannerView.swift
+ create mode 100644 Sandshell/Workspace/ClaudeUsageStore.swift
+ create mode 100755 scripts/run-ui-tests.sh
+ create mode 100644 tests/ui/00_launch_and_status.applescript
+ create mode 100644 tests/ui/01_menu_structure.applescript
+ create mode 100644 tests/ui/02_new_session_via_apple_event.applescript
+ create mode 100644 tests/ui/03_settings_sandboxes_lifecycle.applescript
+ create mode 100644 tests/ui/README.md
+ create mode 100644 tests/ui/lib/Helpers.applescript
+Deleted branch fix/toolbar-identity-blank (was 5119b5c).
+To https://github.com/docker/xmas-sandshell.git
+ - [deleted]         fix/toolbar-identity-blank
+exit=0
+# now
+main
+154553f Merge pull request #9 from docker/fix/toolbar-identity-blank
+?? .hatch/
+?? .sbx/
+?? exports/

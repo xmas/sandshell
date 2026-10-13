@@ -1,0 +1,31 @@
+# XcodeGen output (regenerate with `xcodegen generate`)
+*.xcodeproj
+
+# Build output
+build/
+build-release/
+build-uitests/
+dist/
+Sandshell-latest.dmg
+download.html
+DerivedData/
+.swiftpm/
+*.xcuserstate
+
+# SPM
+.build/
+
+# macOS
+.DS_Store
+.tmp-home/
+
+# Workspace runtime artifacts (created when this repo folder is opened as a
+# Sandshell workspace during dev — not source).
+.sandshell/
+/My Work/
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+*.db
+.beads-credential-key
+.beads/proxieddb/

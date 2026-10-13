@@ -1,0 +1,68 @@
+#!/bin/bash
+# sandshell — open Sandshell with a workspace and optional extra mounts.
+#
+# Usage:
+#   sandshell                          # workspace = current directory
+#   sandshell /path/to/project         # explicit workspace
+#   sandshell /project /data           # /data as extra read-only mount
+#   sandshell /project /ro -w /rw      # /ro read-only, /rw read-write
+#   sandshell /project -w /data        # /data as read-write mount
+#
+# Install:
+#   ln -sf "$(pwd)/scripts/sandshell" /usr/local/bin/sandshell
+set -e
+
+urlencode() {
+    python3 -c "import urllib.parse, sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$1"
+}
+
+workspace=""
+ro_mounts=()
+rw_mounts=()
+write_mode=0
+first=1
+
+for arg in "$@"; do
+    case "$arg" in
+        -w|--write-folders)
+            write_mode=1 ;;
+        -*)
+            echo "sandshell: unknown flag: $arg" >&2; exit 1 ;;
+        *)
+            if [ "$first" = "1" ]; then
+                workspace="$arg"
+                first=0
+            elif [ "$write_mode" = "1" ]; then
+                rw_mounts+=("$arg")
+            else
+                ro_mounts+=("$arg")
+            fi ;;
+    esac
+done
+
+[ -z "$workspace" ] && workspace="$(pwd)"
+
+workspace="$(cd "$workspace" 2>/dev/null && pwd)" || {
+    echo "sandshell: not a directory: $workspace" >&2
+    exit 1
+}
+
+url="sandshell://open?workspace=$(urlencode "$workspace")"
+
+for m in "${ro_mounts[@]}"; do
+    abs="$(cd "$m" 2>/dev/null && pwd)" || {
+        echo "sandshell: not a directory: $m" >&2
+        exit 1
+    }
+    url="${url}&ro=$(urlencode "$abs")"
+done
+
+for m in "${rw_mounts[@]}"; do
+    abs="$(cd "$m" 2>/dev/null && pwd)" || {
+        echo "sandshell: not a directory: $m" >&2
+        exit 1
+    }
+    url="${url}&rw=$(urlencode "$abs")"
+done
+
+exec open "$url"

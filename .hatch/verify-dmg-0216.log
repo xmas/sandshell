@@ -1,0 +1,20 @@
+-rw-r--r--@ 1 xmas  staff  8278684 Sep 28 08:11 dist/Sandshell-0.2.16.dmg
+mounted at: /Volumes/Sandshell
+total 88
+drwx------@ 10 xmas  staff    408 Sep 28 08:11 .
+drwxr-xr-x   5 root  wheel    160 Sep 28 08:12 ..
+-rw-r--r--@  1 xmas  staff  10244 Sep 28 08:11 .DS_Store
+drwxr-xr-x@  3 xmas  staff    102 Sep 28 08:11 .background
+lrwxr-xr-x@  1 xmas  staff     13 Sep 28 08:11 Applications -> /Applications
+-rw-r--r--@  1 xmas  staff   1085 Sep 28 08:11 Read Me First.txt
+-rw-r--r--@  1 xmas  staff  10582 Sep 28 08:11 Release Notes.txt
+-rwxr-xr-x@  1 xmas  staff   4317 Sep 28 08:11 Sandshell Setup.command
+drwxr-xr-x@  3 xmas  staff    102 Sep 28 08:11 Sandshell.app
+lrwxr-xr-x@  1 xmas  staff     43 Sep 28 08:11 Terminal.app -> /System/Applications/Utilities/Terminal.app
+--- .background:
+total 72
+drwxr-xr-x@  3 xmas  staff    102 Sep 28 08:11 .
+drwx------@ 10 xmas  staff    408 Sep 28 08:11 ..
+-rw-r--r--@  1 xmas  staff  34653 Sep 28 08:11 background.png
+--- app version:
+0.2.16

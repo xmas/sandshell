@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "xmas_sandshell",
+  "project_id": "7b4b7a0b-bd34-4c8b-921f-806cb887331f"
+}

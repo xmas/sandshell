@@ -1,0 +1,56 @@
+# fetch
+# origin/main
+bdd694e Native toolbar, debug construction tape, folder fix + v0.2.13 (#7)
+531baf5 feat: paste clipboard images into terminal as file paths
+1a45c7b chore: bump version to 0.2.6
+# ahead/behind main
+0	14
+# gh auth
+github.com
+  ✓ Logged in to github.com account xmas (keyring)
+  - Active account: true
+  - Git operations protocol: ssh
+# prs
+9	Fix toolbar identity going blank (badge/title/subtitle)	fix/toolbar-identity-blank	OPEN	2026-08-04T20:05:17Z
+8	Fix stale 'surgical .claude mount' comments	fix/mount-comments-stale-surgical	OPEN	2026-08-04T05:33:24Z
+7	Native toolbar, debug construction tape, folder fix + v0.2.13	ship-native-toolbar-v0.2.13	MERGED	2026-08-04T04:14:41Z
+6	docs: plan Parallax ACP integration	jfrey:parallax-integration	DRAFT	2026-07-15T21:07:30Z
+5	feat: make Sidebar vibrancy slider control jewel-tone vividness	fix/sidebar-vibrancy-slider	CLOSED	2026-06-27T19:37:27Z
+# remote branches
+  origin/HEAD -> origin/main
+  origin/docs/sync-to-code
+  origin/feat/custom-color-picker
+  origin/feat/drag-file-into-terminal
+  origin/feat/shell-in-agent-sandbox-and-codex-history
+  origin/fix/mount-comments-stale-surgical
+  origin/fix/sidebar-vibrancy-slider
+  origin/fix/toolbar-identity-blank
+  origin/main
+  origin/phase-0-2-workspace
+  origin/ship-native-toolbar-v0.2.13
+# hatch source
+BUILD.bazel
+Cargo.lock
+Cargo.toml
+Cross.toml
+MODULE.bazel
+MODULE.bazel.lock
+Makefile
+README.md
+benches
+book.toml
+crates
+cross
+docs
+examples
+hatch-catalog.yaml
+lychee.toml
+rust-toolchain.toml
+rustqual-findings.json
+rustqual.toml
+scripts
+test_launch
+test_launch.rs
+tests
+theme
+origin	git@github.com:docker/hatch.git (fetch)

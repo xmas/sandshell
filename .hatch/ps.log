@@ -1,0 +1,12 @@
+Thu Oct  8 14:39:10 PDT 2026
+80550 /bin/bash -c cd /Users/xmas/Code/xmas-sandshell && export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$HOME/bin:$PATH" && scripts/release.sh 0.2.19 > .hatch/release-0.2.19.log 2>&1
+80551 /bin/bash scripts/release.sh 0.2.19
+80559 /Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild -project Sandshell.xcodeproj -scheme Sandshell -configuration Release -derivedDataPath build-release -destination platform=macOS,arch=arm64 build
+---
+ls: unrecognized option `--time-style=full-iso'
+usage: ls [-@ABCFGHILOPRSTUWXabcdefghiklmnopqrstuvwxy1%,] [--color=when] [-D format] [file ...]
+build-release
+dist
+Sandshell-0.2.7.dmg
+Sandshell-0.2.8.dmg
+Sandshell-0.2.9.dmg

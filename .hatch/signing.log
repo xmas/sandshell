@@ -1,0 +1,16 @@
+# git signing config
+file:/Users/xmas/.gitconfig	user.signingkey ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILOs7eFFK6QOihCqSGQKLUpdqOcl01ktaINOqvmIzaQG
+file:/Users/xmas/.gitconfig	gpg.format ssh
+file:/Users/xmas/.gitconfig	gpg.ssh.program /Applications/1Password.app/Contents/MacOS/op-ssh-sign
+file:/Users/xmas/.gitconfig	gpg.ssh.allowedsignersfile /Users/xmas/.config/git/allowed_signers
+file:/Users/xmas/.gitconfig	commit.gpgsign true
+file:/Users/xmas/.gitconfig	tag.gpgsign true
+# agent keys
+The agent has no identities.
+# ssh keys on disk
+/Users/xmas/.ssh/backup-domain-controller-HY7roKe.pub
+# allowed signers
+/Users/xmas/.config/git/allowed_signers
+# branch protection main
+{"message":"Branch not protected","documentation_url":"https://docs.github.com/rest/branches/branch-protection#get-branch-protection","status":"404"}gh: Branch not protected (HTTP 404)
+Signed Commits
