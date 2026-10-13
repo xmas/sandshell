@@ -319,6 +319,8 @@ struct GeneralPaneView: View {
                         .textFieldStyle(.roundedBorder)
                         .font(.system(size: 11, design: .monospaced))
                         .onSubmit { controller.setImageChannel(.custom, customImage: customImage) }
+                        // Also commit when Settings closes without Return being pressed.
+                        .onDisappear { controller.setImageChannel(imageChannel, customImage: customImage) }
                 }
                 if let t = controller.workspace.templateImage(for: controller.primaryAgent) {
                     Text("sbx create -t \(t)").font(.system(size: 10.5, design: .monospaced)).foregroundStyle(.tertiary)

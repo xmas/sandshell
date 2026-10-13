@@ -540,7 +540,16 @@ final class WorkspaceController: ObservableObject {
     /// any drives a container rebuild, since all are fixed at `sbx create`.
     func configSignature(mounts: [MountSpec], kits: [String]) -> String {
         mountSignature(mounts) + "\n--kits--\n" + kits.joined(separator: "\n")
-            + "\n--image--\n" + (workspace.imageChannel == .stable ? "" : "\(workspace.imageChannel.rawValue):\(workspace.customImage)")
+            + "\n--image--\n" + imageSignature
+    }
+
+    /// Base-image part of the signature. Empty whenever sbx's default image is
+    /// used — including Custom with a blank field — so picking a channel that
+    /// resolves to the same image doesn't prompt a pointless rebuild.
+    private var imageSignature: String {
+        let channel = workspace.imageChannel
+        if channel == .stable || (channel == .custom && workspace.customImage.isEmpty) { return "" }
+        return "\(channel.rawValue):\(workspace.customImage)"
     }
 
     // MARK: - Base image channel
