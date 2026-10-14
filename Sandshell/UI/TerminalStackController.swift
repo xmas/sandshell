@@ -731,6 +731,14 @@ final class TerminalStackController: NSViewController {
     /// Restart the active session from the header/toolbar.
     @objc func headerRestartClicked() { restartClicked() }
 
+    /// Toolbar: show the active Claude session as a native chat, or back as a
+    /// terminal. Same conversation either way (resumed in the new surface).
+    @objc func toggleChatClicked() {
+        guard let id = activeSessionID, let session = controller.session(id: id),
+              session.agent == .claude else { return }
+        controller.setChat(id, !session.isChat)
+    }
+
     /// Show the terminal for `id`, hide the rest and the status. Never re-parents.
     private func showActive(_ id: UUID) {
         for (sid, terminal) in terminals {
@@ -1334,8 +1342,21 @@ private final class AppearanceReactiveView: NSView {
 }
 
 extension TerminalStackController: NSToolbarItemValidation {
-    /// Reveal/stop/restart are actionable only when a session is active.
+    /// Reveal/stop/restart are actionable only when a session is active; the
+    /// Chat/Terminal toggle only for Claude sessions, and it shows the mode you'd
+    /// switch *to*.
     func validateToolbarItem(_ item: NSToolbarItem) -> Bool {
-        activeSessionID != nil
+        guard item.action == #selector(toggleChatClicked) else { return activeSessionID != nil }
+        let session = activeSessionID.flatMap { controller.session(id: $0) }
+        let isChat = session?.isChat ?? false
+        let label = isChat ? "Show as Terminal" : "Show as Chat"
+        if item.label != label {
+            item.label = label
+            item.paletteLabel = "Chat / Terminal"
+            item.toolTip = label
+            item.image = NSImage(systemSymbolName: isChat ? "terminal" : "bubble.left.and.text.bubble.right",
+                                 accessibilityDescription: label)
+        }
+        return session?.agent == .claude
     }
 }

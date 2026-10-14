@@ -202,7 +202,16 @@ final class ChatSession: ObservableObject {
                     notice("Stopped: \(reason)", isError: false)
                 }
             } catch {
-                notice(error.localizedDescription, isError: true)
+                // The agent often streams the same failure as its reply first
+                // ("Failed to refresh…" then "Internal error: Failed to refresh…");
+                // only add the notice when it says something new.
+                let message = error.localizedDescription
+                if case .agentText(_, let said)? = items.last,
+                   message.hasSuffix(said.trimmingCharacters(in: .whitespacesAndNewlines)) {
+                    // already shown as the reply
+                } else {
+                    notice(message, isError: true)
+                }
             }
             if case .running = phase { phase = .ready }
         }

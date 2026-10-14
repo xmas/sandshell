@@ -211,7 +211,9 @@ final class MainWindowController: NSWindowController {
 
         // Identifier is versioned so an item-set change discards the stale
         // autosaved arrangement (which otherwise pins items to old positions).
-        let toolbar = NSToolbar(identifier: "MainWindowToolbar.v2")
+        // Bump the version when default items change: autosaved configurations
+        // would otherwise hide new items (v3 added the Chat/Terminal toggle).
+        let toolbar = NSToolbar(identifier: "MainWindowToolbar.v3")
         toolbar.delegate = self
         toolbar.allowsUserCustomization = true
         toolbar.autosavesConfiguration = true
@@ -420,6 +422,7 @@ private extension NSToolbarItem.Identifier {
     static let revealFolder   = NSToolbarItem.Identifier("revealFolder")
     static let stopSession    = NSToolbarItem.Identifier("stopSession")
     static let restartSession = NSToolbarItem.Identifier("restartSession")
+    static let chatToggle     = NSToolbarItem.Identifier("chatToggle")
 }
 
 extension MainWindowController: NSToolbarDelegate {
@@ -428,11 +431,11 @@ extension MainWindowController: NSToolbarDelegate {
         // bezeled button that renders as a glass capsule (and can hold a focus
         // ring) on macOS 26+/SDK 27 builds.
         [.sidebarToggle, .identity, .flexibleSpace, .sessionStatus,
-         .revealFolder, .stopSession, .restartSession]
+         .chatToggle, .revealFolder, .stopSession, .restartSession]
     }
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [.sidebarToggle, .identity, .sessionStatus,
+        [.sidebarToggle, .identity, .sessionStatus, .chatToggle,
          .revealFolder, .stopSession, .restartSession, .flexibleSpace, .space]
     }
 
@@ -486,6 +489,10 @@ extension MainWindowController: NSToolbarDelegate {
             spec = ("stop", "Stop", #selector(TerminalStackController.stopClicked))
         case .restartSession:
             spec = ("arrow.clockwise", "Restart", #selector(TerminalStackController.headerRestartClicked))
+        case .chatToggle:
+            // Icon/label flip with the active session (see validateToolbarItem).
+            spec = ("bubble.left.and.text.bubble.right", "Show as Chat",
+                    #selector(TerminalStackController.toggleChatClicked))
         default:
             spec = nil
         }
