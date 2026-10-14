@@ -26,13 +26,17 @@ read the log back — same pattern as running `xcodebuild` from the sandbox
 with an Accessibility tree like any other. Two things make it testable
 without fighting that:
 
-1. **A minimal built-in Apple Event test bridge** (`AppDelegate.swift`,
-   `testEventClass 'Shll'`): `«event Shllstat»` returns JSON describing every
-   window and session (agent, workdir, running/live state, unread flag, work
-   time); `«event Shllnews»` does the equivalent of ⌘N (new session in the
-   current context) and returns the same JSON. This lets the suite verify the
-   real `sbx create` → container → terminal pipeline actually worked, by
-   polling JSON state, instead of trying to read terminal pixel content.
+1. **A minimal built-in test bridge** (DEBUG, `UITestHeadless` in
+   `App/SelfTest.swift`): the runner passes `-SandshellUITestBridge <dir>`
+   and the tests write a command to `<dir>/request` — `stat` returns JSON
+   describing every window (sidebar order, build state, empty-state text) and
+   session (agent, workdir, running/live state, unread flag, work time);
+   `news` does the equivalent of ⌘N; `open <url>` handles a `sandshell://`
+   URL — and read the JSON back from `<dir>/response`. It's files rather than
+   the app's `'Shll'` Apple Events (still there for `scripts/sandshell`)
+   because each fresh ad-hoc-signed test build would need its own Automation
+   approval — a dialog. This lets the suite verify the real `sbx create` →
+   container → terminal pipeline by polling state instead of reading pixels.
 2. **A handful of `.accessibilityIdentifier(...)` tags** added to
    `SandboxesPane.swift` and `InspectorView.swift` so the Settings ▸ Sandboxes
    lifecycle test (Stop/Run/Delete) can address specific rows/buttons
@@ -43,47 +47,60 @@ by title, since menu titles are already stable, real UI.
 
 ## Safety model — read this before changing the suite
 
-These tests drive **the one running Sandshell process** with no per-PID
-disambiguation (System Events addresses processes by bundle id / name). That
-only works if there's exactly one instance running, so:
+The suite runs **beside** your own Sandshell, without taking focus:
 
-- The runner **refuses to start if Sandshell is already running** (your
-  interactive session), unless you pass `--force-quit`. Never assume it's
-  safe to steal focus from a live session.
-- It creates a brand-new, uniquely-named temp folder and opens it as an
-  *additional* window via the `sandshell://open?workspace=…` URL handler —
-  this never touches your real folders/roots, and every test targets that
-  window by its title (the temp folder's basename) before doing anything.
+- The runner builds the Debug app with its own bundle id
+  (`com.xmas.sandshell.uitest`), so the test instance has separate
+  UserDefaults (no restored windows or layouts) and System
+  Events address it by that id — never your `com.xmas.sandshell`. It refuses
+  an app carrying the release bundle id.
+- It launches the binary with `-SandshellUITestHeadless YES` (DEBUG only, see
+  `UITestHeadless` in `App/SelfTest.swift`): the app never activates, skips
+  the notification-permission prompt and update check, and keeps every window
+  — sheets included — transparent, click-through and behind other apps.
+- Tests only use the bridge, AX reads and AX actions (`perform action
+  "AXPress"`, never `click`, `frontmost` or keystrokes), so nothing moves the
+  mouse or steals keyboard input.
+- The test workspace is a fresh temp folder configured as a plain-shell
+  workspace (fast to create; never starts an agent with your account). It's
+  opened with a `sandshell://open` URL handed to the test instance through the
+  bridge (`open sandshell://…` would go to whichever app LaunchServices picks).
 - The Settings ▸ Sandboxes lifecycle test only ever touches a sandbox named
-  `sandshell-uitest-<pid>` that the runner itself created via `sbx create`
-  before launching the app — it looks up that one row by
-  `AXIdentifier == "sandbox-row-<name>"` and never interacts with any other
-  row, so real sandboxes in the list are left alone.
-- Cleanup (`trap ... EXIT` in the runner) removes the throwaway sandbox and
-  temp folder and quits the test instance, whether the run passed or failed,
-  and sweeps any `sandshell-uitest-*` sandbox left over from a prior crashed
-  run as a safety net.
+  `sandshell-uitest-<pid>` that the runner created (on its own temp folder)
+  before launching the app, by `AXIdentifier == "sandbox-row-<name>"`.
+- Cleanup (`trap … EXIT`) kills the test instance, removes every
+  `sandshell-uitest-*` sandbox (the lifecycle one, the test workspace's, and
+  any left by a crashed run) and both temp folders, deletes the test bundle's
+  defaults, and unregisters the test app from LaunchServices so
+  `sandshell://` links keep opening your installed app.
 
-If you add a test that needs to touch something persistent (a real root, a
-real sandbox), stop and reconsider — it almost certainly means the fixture
-setup belongs in the runner instead.
+Nothing in a run needs a click: the instance is an `AutomatedRun` (no
+Keychain read, no notification prompt, alerts answer themselves, rebuilds
+only for `/tmp` workspaces), and no Apple Events go to the test build. The
+shell running the suite needs Accessibility access (for System Events' AX
+reads) once, like any UI automation.
 
 ## Test files
 
 | File | What it checks |
 |---|---|
-| `00_launch_and_status.applescript` | App launches; `'stat'` Apple Event round-trips valid JSON with ≥1 window. Cheapest possible "is this build alive" signal — run first. |
-| `01_menu_structure.applescript` | Menu bar + File menu still have the expected top-level items. Read-only. |
-| `02_new_session_via_apple_event.applescript` | Sends `'news'`, polls `'stat'` until a new session appears in the test workspace window and is reported `isLive`. Exercises the real `sbx create` + terminal pipeline. |
-| `03_settings_sandboxes_lifecycle.applescript` | Opens Settings ▸ Sandboxes, Stops → Runs → Deletes the throwaway sandbox, confirming each state change in the UI. Skipped if the runner couldn't create the throwaway sandbox. |
+| `00_launch_and_status.applescript` | App launches; `stat` round-trips valid JSON; the `sandshell://open` URL opened the test window. |
+| `02_new_session_while_building.applescript` | Runs right after the window opens: the sidebar empty state shows the sandbox build progress (or "No sessions yet"), `news` adds a session immediately even mid-build, the session goes live (real `sbx create` + terminal), and the placeholder is gone afterwards. Runs before 01 so it catches the build. |
+| `01_menu_structure.applescript` | Menu bar + File menu have the expected items. Read-only. |
+| `03_flat_session_order.applescript` | A second session lands at the top of the flat list, and the sidebar rows (`sidebarSessionIDs`) match the controller's session order. |
+| `04_settings_sandboxes_lifecycle.applescript` | Settings ▸ Sandboxes: Stop → Run → Delete of the throwaway sandbox, confirming each state change in the UI. Skipped if the runner couldn't create it. |
 
-`lib/Helpers.applescript` holds the shared handlers (Apple Event bridge calls,
+The `stat` JSON's per-window entries carry `sessions` (in sidebar order),
+`sidebarSessionIDs`, `isBuilding`, `activity` and `emptyState` (the sidebar
+placeholder's text, or null) for these checks.
+
+`lib/Helpers.applescript` (compiled by the runner to `lib/Helpers.scpt`, since `load script` only takes compiled scripts) holds the shared handlers (bridge calls,
 JSON field extraction via `python3`, and recursive accessibility-tree search
 by `AXIdentifier`/name) — loaded with `load script` from each test file.
 
 ## Extending the suite
 
-- New AppleScript files just need to sort after `03_...` and follow the
+- New AppleScript files need a `run_test` line in the runner and follow the
   `on run argv` / `return "PASS: ..."` / `error "..."` convention the runner
   expects (nonzero exit + stderr message = fail, zero exit = pass).
 - If a new flow needs to disambiguate rows/buttons that repeat (another list

@@ -1,47 +1,72 @@
--- Exercises the real sbx pipeline end-to-end: focuses the dedicated test
--- workspace window (opened by run-ui-tests.sh via the sandshell:// URL
--- handler, so it never touches any of the user's real folders), sends the
--- 'news' Apple Event (equivalent of ⌘N — "New Session" in the current
--- context), then polls the 'stat' JSON until a new session appears and is
--- reported live. A pass here means `sbx create`, the container, and the
--- embedded terminal all actually work — not just that the UI drew correctly.
+-- Runs straight after the runner opens a brand-new workspace, while its
+-- sandbox is still being created:
+--   1. the sidebar's empty state shows the build progress (or "No sessions
+--      yet" if the build already finished),
+--   2. 'news' (⌘N) creates a session immediately — session creation is never
+--      gated on the build — and it goes live once the sandbox is up,
+--   3. after the build, the empty-state placeholder is gone.
+-- A pass means `sbx create`, the container and the embedded terminal all work.
 --
 -- argv: {bundleID, windowTitle}
 on run argv
 	set bundleID to item 1 of argv
 	set windowTitle to item 2 of argv
 	set thisDir to do shell script "dirname " & quoted form of (POSIX path of (path to me))
-	set Helpers to load script POSIX file (thisDir & "/lib/Helpers.applescript")
-
+	set Helpers to load script POSIX file (thisDir & "/lib/Helpers.scpt")
 	tell Helpers to waitUntilRunning(bundleID, 20)
-	set proc to Helpers's appProcess(bundleID)
 
-	-- 'news' operates on whichever window is key, so make the test workspace
-	-- window frontmost first rather than trusting whatever last had focus.
-	tell application "System Events"
-		set frontmost of proc to true
-		set targetWindow to first window of proc whose title is windowTitle or title starts with (windowTitle & " — ")
-		perform action "AXRaise" of targetWindow
-	end tell
-	delay 0.5
+	set beforeCount to Helpers's windowGet(bundleID, windowTitle, "len(w['sessions'])") as integer
+	if beforeCount is not 0 then error "expected a fresh workspace with no sessions, found " & beforeCount
 
-	set beforeJSON to Helpers's shllStatus(bundleID)
-	set beforeCount to Helpers's jsonGet(beforeJSON, "len([w for w in d['windows'] if w['title'].split(' — ')[0] == '" & windowTitle & "'][0]['sessions'])") as integer
-
-	Helpers's shllNewSession(bundleID)
-
-	set afterCount to beforeCount
-	set deadline to (current date) + 45
+	-- 1. Empty state: build progress while building, else "No sessions yet".
+	set sawBuilding to false
+	set deadline to (current date) + 10
 	repeat
-		set afterJSON to Helpers's shllStatus(bundleID)
-		set afterCount to Helpers's jsonGet(afterJSON, "len([w for w in d['windows'] if w['title'].split(' — ')[0] == '" & windowTitle & "'][0]['sessions'])") as integer
-		if afterCount > beforeCount then exit repeat
-		if (current date) > deadline then error "new session never appeared within 45s (had " & beforeCount & ", still " & afterCount & ")"
+		set building to Helpers's windowGet(bundleID, windowTitle, "w['isBuilding']")
+		set placeholder to Helpers's windowGet(bundleID, windowTitle, "w['emptyState']")
+		if building is "True" then
+			set activity to Helpers's windowGet(bundleID, windowTitle, "w['activity']")
+			if activity is not "None" and placeholder is not activity then error "while building, the empty state should show the build progress \"" & activity & "\", got \"" & placeholder & "\""
+			if activity is not "None" then
+				set sawBuilding to true
+				exit repeat
+			end if
+		else if placeholder is "No sessions yet" then
+			exit repeat
+		end if
+		if (current date) > deadline then error "empty state never showed build progress or \"No sessions yet\" (last: " & placeholder & ")"
+		delay 0.3
+	end repeat
+
+	-- 2. New Session right away (possibly mid-build).
+	set buildingAtNew to Helpers's windowGet(bundleID, windowTitle, "w['isBuilding']")
+	Helpers's shllNewSession(bundleID)
+	set deadline to (current date) + 10
+	repeat
+		if (Helpers's windowGet(bundleID, windowTitle, "len(w['sessions'])") as integer) > 0 then exit repeat
+		if (current date) > deadline then error "New Session did not add a session within 10s (building: " & buildingAtNew & ")"
+		delay 0.3
+	end repeat
+
+	set deadline to (current date) + 240
+	repeat
+		if Helpers's windowGet(bundleID, windowTitle, "w['sessions'][0]['isLive']") is "True" then exit repeat
+		if (current date) > deadline then error "session never went live within 240s — sbx create or the terminal launch failed"
 		delay 1
 	end repeat
 
-	set isLive to Helpers's jsonGet(afterJSON, "[w for w in d['windows'] if w['title'].split(' — ')[0] == '" & windowTitle & "'][0]['sessions'][-1]['isLive']")
-	if isLive is not "True" then error "new session was created but isLive=" & isLive & " — the terminal/agent likely failed to start"
+	-- 3. Placeholder gone once the build is over and a session exists.
+	set deadline to (current date) + 60
+	repeat
+		if Helpers's windowGet(bundleID, windowTitle, "w['isBuilding']") is "False" then exit repeat
+		if (current date) > deadline then error "sandbox still building 60s after the session went live"
+		delay 1
+	end repeat
+	set placeholder to Helpers's windowGet(bundleID, windowTitle, "w['emptyState']")
+	if placeholder is not "None" then error "empty state still showing \"" & placeholder & "\" with a live session"
 
-	return "PASS: 02_new_session_via_apple_event — sbx create + terminal launch succeeded (sessions " & beforeCount & " → " & afterCount & ")"
+	set summary to "build overlay not observed (sandbox came up first)"
+	if sawBuilding then set summary to "build overlay shown"
+	if buildingAtNew is "True" then set summary to summary & "; New Session issued mid-build"
+	return "PASS: 02_new_session_while_building — " & summary & "; session went live"
 end run

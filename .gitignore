@@ -30,3 +30,6 @@ DerivedData/
 .beads-credential-key
 .beads/proxieddb/
 build-dev/
+
+# Compiled UI-test helpers (scripts/run-ui-tests.sh)
+tests/ui/lib/Helpers.scpt

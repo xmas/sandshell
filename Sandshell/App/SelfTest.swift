@@ -5,17 +5,35 @@ import SwiftUI
 /// `-SandshellUITestHeadless YES` (scripts/run-ui-tests.sh): keep every window
 /// — including sheets opened later — transparent, click-through and behind
 /// other apps, so the suite never covers or takes input from the user's apps.
+/// With `-SandshellUITestBridge <dir>` the suite drives the app through files
+/// rather than Apple Events (each fresh test build would need an Automation
+/// approval): it writes `<dir>/request` ("stat", "news" or "open <url>"); the
+/// app answers in `<dir>/response` and removes the request.
 @MainActor
 enum UITestHeadless {
     static var enabled: Bool { UserDefaults.standard.bool(forKey: "SandshellUITestHeadless") }
     private static var seen = Set<ObjectIdentifier>()
     private static var timer: Timer?
+    private static let bridge = UserDefaults.standard.string(forKey: "SandshellUITestBridge")
+        .map { URL(fileURLWithPath: $0, isDirectory: true) }
 
     static func start() {
         hideNewWindows()
         timer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { _ in
-            MainActor.assumeIsolated { hideNewWindows() }
+            MainActor.assumeIsolated {
+                hideNewWindows()
+                serveBridge()
+            }
         }
+    }
+
+    private static func serveBridge() {
+        guard let dir = bridge, let app = NSApp.delegate as? AppDelegate else { return }
+        let request = dir.appendingPathComponent("request")
+        guard let command = try? String(contentsOf: request, encoding: .utf8) else { return }
+        try? FileManager.default.removeItem(at: request)
+        let reply = app.uiTestCommand(command.trimmingCharacters(in: .whitespacesAndNewlines))
+        try? reply.write(to: dir.appendingPathComponent("response"), atomically: true, encoding: .utf8)
     }
 
     private static func hideNewWindows() {

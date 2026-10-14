@@ -218,6 +218,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         reply.setParam(NSAppleEventDescriptor(string: scriptStatusJSON()), forKeyword: 0x2D2D2D2D)
     }
 
+    #if DEBUG
+    /// The UI-test bridge's commands (see `UITestHeadless`): the 'Shll' Apple
+    /// Events' operations, plus opening a `sandshell://` URL.
+    @MainActor func uiTestCommand(_ command: String) -> String {
+        if command.hasPrefix("open "), let url = URL(string: String(command.dropFirst(5))) {
+            openFromURL(url)
+        } else if command == "news" {
+            activeController?.newSession()
+        } else if command != "stat" {
+            return #"{"error": "unknown command"}"#
+        }
+        return scriptStatusJSON()
+    }
+    #endif
+
     @MainActor private func scriptStatusJSON() -> String {
         let status = AppScriptStatus(
             windowCount: windows.count,

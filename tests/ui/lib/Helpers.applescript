@@ -5,26 +5,30 @@
 
 use scripting additions
 
--- MARK: Apple Event bridge ('Shll' class; see AppDelegate.swift testEventClass)
+-- MARK: Test bridge
 --
--- Sandshell registers two raw Apple Event handlers purely for test automation:
---   'Shll'/'stat' — returns JSON describing every window + session (name, agent,
---                   workdir, running/live state, unread flag, elapsed work time).
---   'Shll'/'news' — creates a new session in the frontmost window's current
---                   folder/agent context (same as ⌘N), then returns the same
---                   status JSON.
--- Both are addressed with raw `«event Shllstat»` / `«event Shllnews»` syntax
--- since there's no .sdef — Sandshell isn't a scriptable application in the
--- traditional sense, just one with a couple of test hooks wired in.
+-- The headless test instance (scripts/run-ui-tests.sh) is driven through files
+-- in $SANDSHELL_UITEST_BRIDGE rather than Apple Events — every fresh test build
+-- would otherwise need an Automation approval. See UITestHeadless in
+-- Sandshell/App/SelfTest.swift. Commands mirror the 'Shll' Apple Events:
+--   stat        — JSON describing every window + session (sidebar order, build
+--                 state, empty-state text, live/unread state, work time).
+--   news        — new session in the active window (same as ⌘N), then stat.
+--   open <url>  — handle a sandshell:// URL, then stat.
+-- (`bundleID` arguments are kept for System Events lookups.)
+
+on bridge(command)
+	set dir to system attribute "SANDSHELL_UITEST_BRIDGE"
+	if dir is "" then error "SANDSHELL_UITEST_BRIDGE is not set — run via scripts/run-ui-tests.sh"
+	return do shell script "d=" & quoted form of dir & "; rm -f \"$d/response\"; printf %s " & quoted form of command & " > \"$d/request.tmp\" && mv \"$d/request.tmp\" \"$d/request\"; i=0; while [ ! -f \"$d/response\" ]; do i=$((i+1)); [ $i -gt 300 ] && { echo 'test bridge: no response in 30s' >&2; exit 1; }; sleep 0.1; done; cat \"$d/response\""
+end bridge
 
 on shllStatus(bundleID)
-	tell application id bundleID to «event Shllstat»
-	return result as text
+	return my bridge("stat")
 end shllStatus
 
 on shllNewSession(bundleID)
-	tell application id bundleID to «event Shllnews»
-	return result as text
+	return my bridge("news")
 end shllNewSession
 
 -- MARK: Process lookup
@@ -135,12 +139,27 @@ end identifierExists
 
 on clickIdentifier(containerRef, ident, timeoutSeconds)
 	set el to my waitForIdentifier(containerRef, ident, timeoutSeconds)
-	tell application "System Events" to click el
+	-- AXPress, not `click`: no synthetic mouse event, so it works on the
+	-- headless (transparent, click-through, background) test instance.
+	tell application "System Events" to perform action "AXPress" of el
 	return el
 end clickIdentifier
 
 on clickLabel(containerRef, label, timeoutSeconds)
 	set el to my waitForLabel(containerRef, label, timeoutSeconds)
-	tell application "System Events" to click el
+	tell application "System Events" to perform action "AXPress" of el
 	return el
 end clickLabel
+
+-- MARK: Test-window status
+
+-- Python expression for the test window's entry in the status JSON.
+on testWindowExpr(windowTitle)
+	return "[w for w in d['windows'] if w['title'].split(' — ')[0] == '" & windowTitle & "'][0]"
+end testWindowExpr
+
+-- Evaluate a Python expression over `w`, the test window's status entry.
+on windowGet(bundleID, windowTitle, pyExpr)
+	set statusJSON to my shllStatus(bundleID)
+	return my jsonGet(statusJSON, "(lambda w: " & pyExpr & ")(" & my testWindowExpr(windowTitle) & ")")
+end windowGet
