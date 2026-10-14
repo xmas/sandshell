@@ -686,8 +686,31 @@ final class WorkspaceController: ObservableObject {
 
     /// Shared create/attach/rebuild core for an agent's container. `force`
     /// rebuilds even when the mounts are unchanged.
+    /// In-flight bring-ups by container name. Opening a workspace (startup
+    /// `ensureContainer`) and launching its selected session
+    /// (`ensureContainerReady`) both bring the same container up at once; without
+    /// this each saw "no sandbox" and ran its own `sbx create`.
+    private var bringUps: [String: Task<Void, Error>] = [:]
+
+    /// Bring a container up, joining one already in flight for it. A forced
+    /// rebuild waits for the in-flight one, then runs its own.
     private func bringUpContainer(for agent: AgentKind, onMismatch: MismatchAction,
                                   force: Bool = false) async throws {
+        let name = containerName(for: agent)
+        if let inflight = bringUps[name] {
+            if !force { return try await inflight.value }
+            _ = try? await inflight.value
+        }
+        let task = Task { @MainActor in
+            try await self.performBringUp(for: agent, onMismatch: onMismatch, force: force)
+        }
+        bringUps[name] = task
+        defer { if bringUps[name] == task { bringUps[name] = nil } }
+        try await task.value
+    }
+
+    private func performBringUp(for agent: AgentKind, onMismatch: MismatchAction,
+                                force: Bool) async throws {
         // Mirror host MCP configs and OAuth tokens into the bind-mounted claude
         // config dir before the container starts (ported from sbx-ui projects.rs).
         let homeURL = home
