@@ -200,6 +200,10 @@ enum MainMenu {
         windowMenu.addItem(withTitle: "Zoom",
                            action: #selector(NSWindow.performZoom(_:)), keyEquivalent: "")
         windowMenu.addItem(.separator())
+        let backgroundTasks = windowMenu.addItem(withTitle: "Background Tasks",
+                                                 action: #selector(AppDelegate.showBackgroundTasks(_:)), keyEquivalent: "b")
+        backgroundTasks.keyEquivalentModifierMask = [.command, .option]
+        windowMenu.addItem(.separator())
         let prevTab = windowMenu.addItem(withTitle: "Show Previous Tab",
                                          action: #selector(NSWindow.selectPreviousTab(_:)), keyEquivalent: "\t")
         prevTab.keyEquivalentModifierMask = [.control, .shift]

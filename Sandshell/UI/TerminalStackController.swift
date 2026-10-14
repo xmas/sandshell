@@ -1,6 +1,7 @@
 import AppKit
 import Combine
 import GhosttyTerminal
+import SwiftUI
 
 @MainActor
 private final class TerminalRuntimeController {
@@ -258,7 +259,18 @@ final class SessionSurfaces {
         isSessionVisible: { [unowned self] id in NSApp.isActive && self.isShown(id) },
         onTerminalDidExit: { [unowned self] id in self.onTerminalExit(id) })
 
-    init(controller: WorkspaceController) { self.controller = controller }
+    /// Background tasks of every running Claude session in this window.
+    lazy var backgroundTasks = BackgroundTaskMonitor(
+        controller: controller,
+        isAlive: { [unowned self] id in
+            self.chats[id] != nil || (self.terminals[id] != nil && !self.runtime.isExited(id))
+        },
+        isVisible: { [unowned self] id in NSApp.isActive && self.isShown(id) })
+
+    init(controller: WorkspaceController) {
+        self.controller = controller
+        backgroundTasks.start()
+    }
 }
 
 /// One pane of the detail area: shows a single session (terminal or chat)
@@ -343,6 +355,9 @@ final class TerminalStackController: NSViewController {
     private let titleLine = NSView()
     /// Claude model/effort choosers + context/tokens/cost, trailing edge of the title strip.
     private let claudeStats = ClaudeStatsView()
+    /// "2 running" — the session's background tasks; opens their list.
+    private let backgroundPill = NSButton()
+    private var backgroundPopover: NSPopover?
     // Kit startup banner (failed / warning / still installing), above the frame.
     private let kitBanner = KitStartupBannerView()
     private var frameTopNoBanner: NSLayoutConstraint?
@@ -436,6 +451,7 @@ final class TerminalStackController: NSViewController {
         surface.isHidden = false
         activeSessionID = nil
         titleLabel.stringValue = "Files — \(title)"
+        backgroundPill.isHidden = true
         claudeStats.isHidden = true
         claudeStatsCollapsed.isActive = true
         frameView.isHidden = false
@@ -590,6 +606,19 @@ final class TerminalStackController: NSViewController {
         claudeStats.onModelPicked = { [weak self] id in self?.modelPicked(id) }
         claudeStats.onEffortPicked = { [weak self] level in self?.effortPicked(level) }
         titleStrip.addSubview(claudeStats)
+        backgroundPill.translatesAutoresizingMaskIntoConstraints = false
+        backgroundPill.bezelStyle = .inline
+        backgroundPill.controlSize = .small
+        backgroundPill.font = .systemFont(ofSize: 11, weight: .medium)
+        backgroundPill.image = NSImage(systemSymbolName: "square.stack.3d.up",
+                                       accessibilityDescription: "Background tasks")?
+            .withSymbolConfiguration(.init(pointSize: 10, weight: .medium))
+        backgroundPill.imagePosition = .imageLeading
+        backgroundPill.target = self
+        backgroundPill.action = #selector(showBackgroundTasks)
+        backgroundPill.setAccessibilityIdentifier("background-tasks-pill")
+        backgroundPill.isHidden = true
+        titleStrip.addSubview(backgroundPill)
         closePaneButton.translatesAutoresizingMaskIntoConstraints = false
         closePaneButton.isBordered = false
         closePaneButton.image = NSImage(systemSymbolName: "xmark", accessibilityDescription: "Close Pane")?
@@ -668,6 +697,9 @@ final class TerminalStackController: NSViewController {
             claudeStats.trailingAnchor.constraint(equalTo: closePaneButton.leadingAnchor, constant: -8),
             claudeStats.centerYAnchor.constraint(equalTo: titleStrip.centerYAnchor),
             claudeStats.leadingAnchor.constraint(greaterThanOrEqualTo: titleLabel.trailingAnchor, constant: 12),
+            backgroundPill.trailingAnchor.constraint(equalTo: claudeStats.leadingAnchor, constant: -8),
+            backgroundPill.centerYAnchor.constraint(equalTo: titleStrip.centerYAnchor),
+            backgroundPill.leadingAnchor.constraint(greaterThanOrEqualTo: titleLabel.trailingAnchor, constant: 12),
             titleLine.leadingAnchor.constraint(equalTo: titleStrip.leadingAnchor),
             titleLine.trailingAnchor.constraint(equalTo: titleStrip.trailingAnchor),
             titleLine.bottomAnchor.constraint(equalTo: titleStrip.bottomAnchor),
@@ -721,6 +753,15 @@ final class TerminalStackController: NSViewController {
         // (`@Committed` publishes after the store, so reading the controller here
         // sees the new findings.)
         controller.$kitStartup.dropFirst().sink { [weak self] _ in self?.updateKitBanner() }
+            .store(in: &cancellables)
+        controller.$backgroundTasks.dropFirst().sink { [weak self] _ in self?.updateBackgroundPill() }
+            .store(in: &cancellables)
+        // A tapped "background task finished" notification opens the list.
+        NotificationCenter.default.publisher(for: NotificationManager.showBackgroundTasks)
+            .sink { [weak self] note in
+                guard let self, let id = note.object as? UUID, id == self.activeSessionID else { return }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { self.showBackgroundTasks() }
+            }
             .store(in: &cancellables)
         controller.$kitDrift.dropFirst().sink { [weak self] _ in self?.updateKitBanner() }
             .store(in: &cancellables)
@@ -963,6 +1004,7 @@ final class TerminalStackController: NSViewController {
         let program = session.agent == .shell ? "bash" : session.agent.rawValue
         titleLabel.stringValue = "\(program) — \(container)" + (session.isChat ? " · chat (ACP)" : "")
         updateClaudeStats(session.id)
+        updateBackgroundPill()
         onChromeChange?(Chrome(agent: session.agent, title: session.name,
                                subtitle: "\(container) · \(shortHome(session.workdir))"))
     }
@@ -977,6 +1019,39 @@ final class TerminalStackController: NSViewController {
         guard session.agent == .claude, !session.isChat else { return }
         claudeStats.update(status: controller.claudeStatus(id), defaultModel: controller.claudeModel,
                            defaultEffort: controller.claudeEffort)
+    }
+
+    /// Shown while the session has background tasks running, or finished ones
+    /// from the last half hour; green while anything runs.
+    private func updateBackgroundPill() {
+        guard let id = activeSessionID else { backgroundPill.isHidden = true; return }
+        let tasks = controller.backgroundTasks(id)
+        let running = tasks.filter(\.isRunning).count
+        let recent = tasks.filter {
+            !$0.isRunning && !$0.orphaned && Date().timeIntervalSince($0.finishedAt ?? $0.startedAt) < 1800
+        }.count
+        backgroundPill.isHidden = running == 0 && recent == 0
+        let color: NSColor = running > 0 ? .hex("16a34a") : .secondaryLabelColor
+        backgroundPill.attributedTitle = NSAttributedString(
+            string: running > 0 ? "\(running) running" : "\(recent) done",
+            attributes: [.foregroundColor: color, .font: NSFont.systemFont(ofSize: 11, weight: .medium)])
+        backgroundPill.contentTintColor = color
+        backgroundPill.toolTip = running > 0
+            ? "\(running) background task\(running == 1 ? "" : "s") running — click for details"
+            : "Background tasks finished recently — click for details"
+    }
+
+    @objc func showBackgroundTasks() {
+        guard let id = activeSessionID, view.window != nil else { return }
+        if let open = backgroundPopover, open.isShown { open.close(); return }
+        let list = BackgroundTasksView(controller: controller, sessionIDs: { [id] },
+                                       loadOutput: { [controller] sid, task in await controller.backgroundOutput(sid, task) })
+        let popover = NSPopover()
+        popover.behavior = .transient
+        popover.contentViewController = NSHostingController(rootView: list.frame(width: 420, height: 380))
+        let anchor: NSView = backgroundPill.isHidden ? titleStrip : backgroundPill
+        popover.show(relativeTo: anchor.bounds, of: anchor, preferredEdge: .maxY)
+        backgroundPopover = popover
     }
 
     /// Model chooser: persist for the workspace; offer to restart a live Claude

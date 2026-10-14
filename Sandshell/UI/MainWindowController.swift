@@ -335,6 +335,23 @@ final class MainWindowController: NSWindowController {
     func focusPreviousPane() { detail?.focusAdjacent(-1) }
     func equalizePanes() { detail?.equalize() }
 
+    private var backgroundTasksPanel: BackgroundTasksWindowController?
+
+    /// Window ▸ Background Tasks: every session's background work in this window.
+    func showBackgroundTasks() {
+        guard let workspace else { return }
+        if backgroundTasksPanel == nil {
+            backgroundTasksPanel = BackgroundTasksWindowController(
+                controller: workspace, title: root.lastPathComponent,
+                loadOutput: { [workspace] sid, task in await workspace.backgroundOutput(sid, task) },
+                onSelectSession: { [weak self] id in
+                    self?.workspace?.selection = .session(id)
+                    self?.window?.makeKeyAndOrderFront(nil)
+                })
+        }
+        backgroundTasksPanel?.showWindow(nil)
+    }
+
     /// New Claude chat seeded with text/files (Services, Shortcuts); `send`
     /// submits it as soon as the agent is ready.
     func newChat(draft: String, urls: [URL], send: Bool) {
@@ -465,7 +482,8 @@ final class MainWindowController: NSWindowController {
                 isLive: rt?.isLive ?? false,
                 isUnread: rt?.isUnread ?? false,
                 workSeconds: rt?.liveWorkSeconds() ?? 0,
-                transcriptID: session.transcriptID)
+                transcriptID: session.transcriptID,
+                backgroundRunning: workspace?.runningBackgroundTasks(session.id) ?? 0)
         } ?? []
         return WindowScriptStatus(
             root: root.path,

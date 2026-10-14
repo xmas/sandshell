@@ -88,6 +88,7 @@ enum SelfTest {
         case "chat": await chat(window)
         case "building": await building(window)
         case "alerts": alerts()
+        case "background": await background(window)
         case "files": await files(window)
         case "files-relaunch": await filesRelaunch(window)
         case "kits": await kits(window)
@@ -863,6 +864,57 @@ enum SelfTest {
         } else {
             check(false, "past result for 'restore': \(store2.results.map(\.title))")
         }
+    }
+
+    // MARK: Background tasks
+
+    /// A real Claude chat starts a background command; Sandshell must list it
+    /// as running, see it finish (the callback), and show it in the list.
+    private static func background(_ window: MainWindowController) async {
+        guard let tree = window.paneTree, let ws = window.workspaceController else { return log("no window") }
+        guard let s = ws.newChatInCurrentContext() else { return log("no folder to start a chat in") }
+        func chat() -> ChatSession? { tree.surfaces.chats[s.id]?.session }
+        check(await until(600) { chat()?.phase == .ready }, "chat reaches ready")
+        guard let chat = chat() else { return }
+        chat.send(text: "Use the Bash tool with run_in_background set to true to run exactly: "
+                  + "sleep 20; echo sandshell-bg-done — then reply with just the word STARTED. "
+                  + "Do not wait for the command or check on it.", attachments: [])
+        _ = await until(120) { chat.permission != nil || !ws.backgroundTasks(s.id).isEmpty }
+        if let p = chat.permission {
+            chat.answerPermission(p, optionID: (p.options.first { $0.kind == "allow_once" } ?? p.options.first)?.id)
+        }
+        check(await until(120) { ws.runningBackgroundTasks(s.id) == 1 }, "the background command shows as running")
+        let task = ws.backgroundTasks(s.id).first
+        log("task: \(task?.kind.rawValue ?? "-") “\(task?.title ?? "-")” detail=\(task?.detail ?? "-") output=\(task?.outputPath ?? "-")")
+        check(task?.kind == .shell && (task?.detail ?? "").contains("sleep 20"), "it's the shell command Claude launched")
+        await wait(1.5)
+        snapshot(window, "background-running")
+        if let task, let text = await ws.backgroundOutput(s.id, task) {
+            log("output so far: \(text.trimmingCharacters(in: .whitespacesAndNewlines).prefix(80))")
+        }
+
+        check(await until(120) { ws.backgroundTasks(s.id).first?.state == .completed },
+              "it's seen finishing (\(ws.backgroundTasks(s.id).first?.summary ?? "no summary"))")
+        log("finished after \(Int(ws.backgroundTasks(s.id).first?.duration() ?? 0))s: \(ws.backgroundTasks(s.id).first?.summary ?? "-")")
+        if let task = ws.backgroundTasks(s.id).first, let text = await ws.backgroundOutput(s.id, task) {
+            check(text.contains("sandshell-bg-done"), "its output can be read back from the sandbox")
+        }
+
+        // The list, as the popover and Window ▸ Background Tasks render it.
+        let list = BackgroundTasksView(controller: ws, sessionIDs: { [s.id] })
+        let host = NSHostingView(rootView: list.frame(width: 420, height: 300))
+        host.frame = NSRect(x: 0, y: 0, width: 420, height: 300)
+        host.appearance = NSAppearance(named: .aqua)
+        host.layoutSubtreeIfNeeded()
+        await wait(0.5)
+        if let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) {
+            host.cacheDisplay(in: host.bounds, to: rep)
+            try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: out + "/background-list.png"))
+            log("snapshot background-list.png")
+        }
+        window.showBackgroundTasks()
+        await wait(0.5)
+        check(NSApp.windows.contains { $0.title.hasPrefix("Background Tasks") && $0.isVisible }, "Window ▸ Background Tasks opens")
     }
 }
 #endif

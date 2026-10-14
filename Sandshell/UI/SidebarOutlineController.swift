@@ -443,6 +443,12 @@ final class SidebarListController: NSViewController {
         // working↔ready transition (session started/finished work) is the one
         // case that re-sorts the list; every other tick updates rows in place so
         // nothing jumps around while it's just ticking a timer or clearing a dot.
+        // Rows say how many background tasks their session has running.
+        controller.$backgroundTasks.dropFirst().sink { [weak self] tasks in
+            guard let self else { return }
+            for id in Set(tasks.keys).union(self.backgroundCounts.keys) { self.updateSessionRow(id) }
+            self.backgroundCounts = tasks.mapValues { $0.filter(\.isRunning).count }
+        }.store(in: &cancellables)
         controller.$runtimes.dropFirst().sink { [weak self] runtimes in
             self?.runtimesChanged(runtimes)
         }.store(in: &cancellables)
@@ -538,10 +544,13 @@ final class SidebarListController: NSViewController {
 
     /// Update a session row's runtime bits *in place* (no cell rebuild), so the
     /// working sweep animates continuously instead of restarting each poll.
+    private var backgroundCounts: [UUID: Int] = [:]
+
     private func updateSessionRow(_ id: UUID) {
         guard !reloading, let row = displayedSessionIDs.firstIndex(of: id),
               let cell = outline.view(atColumn: 0, row: row, makeIfNecessary: false) as? SessionCellView
         else { return }   // off-screen rows reconfigure fresh when they reappear
+        cell.backgroundRunning = controller.runningBackgroundTasks(id)
         cell.updateRuntime(controller.runtime(id), unread: controller.runtime(id)?.isUnread ?? false)
     }
 
@@ -1125,7 +1134,8 @@ extension SidebarListController: NSTableViewDelegate {
                 unread: controller.runtime(id)?.isUnread ?? false,
                 active: isActive(id),
                 theme: sidebarTheme,
-                workdirName: workdirName(for: session))
+                workdirName: workdirName(for: session),
+                backgroundCount: controller.runningBackgroundTasks(id))
         }
         return cell
     }
@@ -1425,14 +1435,18 @@ final class SessionCellView: NSTableCellView {
     /// `workdirName` (nil for the root folder) shows as a subtitle segment so
     /// sessions still read their working directory now that there are no
     /// folder rows to group them under.
+    /// Background tasks (subagents, background commands) the session has running.
+    var backgroundRunning = 0
+
     func configure(_ session: Session, runtime: SessionRuntime?, unread: Bool, active: Bool,
-                   theme: ThemeColors, workdirName: String?) {
+                   theme: ThemeColors, workdirName: String?, backgroundCount: Int = 0) {
         agentLabel = session.agent.displayName
         self.workdirName = workdirName
         accent = theme.accent
         fg = theme.sidebarFg
         badge.configure(session.agent)
         nameLabel.stringValue = session.name
+        backgroundRunning = backgroundCount
         setActive(active)
         subLabel.textColor = theme.sidebarMuted
         timeLabel.textColor = theme.sidebarMuted
@@ -1475,6 +1489,7 @@ final class SessionCellView: NSTableCellView {
             statusDot.isHidden = true
             timeLabel.isHidden = true
         }
+        if backgroundRunning > 0 { parts.append("\(backgroundRunning) in background") }
         subLabel.stringValue = parts.joined(separator: " · ")
     }
 

@@ -47,6 +47,38 @@ final class NotificationManager: NSObject {
         UNUserNotificationCenter.current().add(request)
     }
 
+    /// Posted (object: session UUID) when a background-task notification is
+    /// tapped: the pane showing that session opens its task list.
+    static let showBackgroundTasks = Notification.Name("SandshellShowBackgroundTasks")
+
+    /// A session's background task (subagent, background command, Monitor) finished.
+    func sendBackgroundTaskDone(sessionID: UUID, sessionName: String, task: BackgroundTask) {
+        guard !AutomatedRun.isActive else { return }
+        let content = UNMutableNotificationContent()
+        let what: String
+        switch task.kind {
+        case .agent: what = "Subagent"
+        case .shell: what = "Background command"
+        case .monitor: what = "Monitor"
+        }
+        switch task.state {
+        case .failed: content.title = "\(what) failed — \(task.title)"
+        case .stopped: content.title = "\(what) stopped — \(task.title)"
+        default: content.title = "\(what) finished — \(task.title)"
+        }
+        content.subtitle = sessionName
+        var body: [String] = []
+        if let summary = task.summary, !summary.isEmpty { body.append(summary) }
+        let seconds = task.duration()
+        if seconds >= 1 { body.append(formatWorkTime(seconds)) }
+        content.body = body.joined(separator: " · ")
+        content.sound = .default
+        content.threadIdentifier = sessionID.uuidString
+        content.userInfo = ["sessionID": sessionID.uuidString, "backgroundTask": task.id]
+        UNUserNotificationCenter.current().add(UNNotificationRequest(
+            identifier: "bg-\(sessionID.uuidString)-\(task.id)", content: content, trigger: nil))
+    }
+
     private func shortenHome(_ path: String) -> String {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         if path == home { return "~" }
@@ -72,6 +104,9 @@ extension NotificationManager: @preconcurrency UNUserNotificationCenterDelegate 
         if let raw = info["sessionID"] as? String, let id = UUID(uuidString: raw) {
             NSApp.activate(ignoringOtherApps: true)
             onSessionTap?(id)
+            if info["backgroundTask"] != nil {
+                NotificationCenter.default.post(name: Self.showBackgroundTasks, object: id)
+            }
         }
         handler()
     }

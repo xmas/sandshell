@@ -33,6 +33,8 @@ struct SessionScriptStatus: Encodable {
     var isUnread: Bool
     var workSeconds: TimeInterval
     var transcriptID: String?
+    /// Background tasks (subagents, background commands, Monitors) running.
+    var backgroundRunning: Int = 0
 }
 
 @main
@@ -564,6 +566,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     case let c where opt && ["[", "{", "“", "”"].contains(c): app.focusPreviousPane(nil); return true
                     case let c where opt && ["]", "}", "‘", "’"].contains(c): app.focusNextPane(nil); return true
                     case "=" where ctrl: app.equalizePanes(nil); return true
+                    case "∫": app.showBackgroundTasks(nil); return true
+                    case "b" where opt: app.showBackgroundTasks(nil); return true
                     case "O": app.openQuickly(nil); return true
                     case "o" where shift: app.openQuickly(nil); return true
                     case "n" where ctrl: app.newChat(nil); return true
@@ -637,6 +641,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @MainActor @objc func focusNextPane(_ sender: Any?) { activeController?.focusNextPane() }
     @MainActor @objc func focusPreviousPane(_ sender: Any?) { activeController?.focusPreviousPane() }
     @MainActor @objc func equalizePanes(_ sender: Any?) { activeController?.equalizePanes() }
+
+    /// ⌥⌘B — every session's background tasks in the active window.
+    @MainActor @objc func showBackgroundTasks(_ sender: Any?) { activeController?.showBackgroundTasks() }
 
     /// ⌥⌘0 — the Files pane (tree + editor) for the active session's folder.
     @MainActor @objc func toggleFiles(_ sender: Any?) {

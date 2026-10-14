@@ -493,6 +493,7 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
     func teardown() {
         if let m = clickMonitor { NSEvent.removeMonitor(m); clickMonitor = nil }
         panes.forEach { $0.teardown() }
+        surfaces.backgroundTasks.stop()
     }
 
     @discardableResult

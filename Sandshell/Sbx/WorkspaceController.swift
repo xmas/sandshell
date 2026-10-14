@@ -33,6 +33,9 @@ final class WorkspaceController: ObservableObject {
     }
     /// Live per-session status + work-time (from the agent transcript).
     @Committed private(set) var runtimes: [UUID: SessionRuntime] = [:]
+    /// Each Claude session's background tasks (subagents, background shells,
+    /// Monitors), kept current by the window's `BackgroundTaskMonitor`.
+    @Committed private(set) var backgroundTasks: [UUID: [BackgroundTask]] = [:]
     /// Authoritative lifecycle phase per agent container — the single source of
     /// truth for creation, build, running, stopped, and rebuild state.
     @Committed private(set) var containerPhases: [AgentKind: ContainerPhase] = [:]
@@ -1120,6 +1123,30 @@ extension WorkspaceController {
     // MARK: Session runtime (status / work-time)
 
     func runtime(_ id: UUID) -> SessionRuntime? { runtimes[id] }
+
+    func backgroundTasks(_ id: UUID) -> [BackgroundTask] { backgroundTasks[id] ?? [] }
+    func runningBackgroundTasks(_ id: UUID) -> Int { backgroundTasks[id]?.filter(\.isRunning).count ?? 0 }
+
+    /// The tail of a background command's output file, read inside its sandbox.
+    func backgroundOutput(_ sessionID: UUID, _ task: BackgroundTask) async -> String? {
+        guard let path = task.outputPath, let session = session(id: sessionID) else { return nil }
+        let name = containerName(for: session.containerAgentKind)
+        guard let text = try? await SbxClient.shared.readFile(inSandbox: name, path: path) else { return nil }
+        return text.count > 6000 ? "…" + String(text.suffix(6000)) : text
+    }
+
+    /// A background task finished while the user was elsewhere: the row gets
+    /// its unread dot, like a finished turn.
+    func markBackgroundTaskSeenLater(_ id: UUID) {
+        guard selection != .session(id), var rt = runtimes[id], !rt.isUnread else { return }
+        rt.isUnread = true
+        runtimes[id] = rt
+    }
+
+    func setBackgroundTasks(_ id: UUID, _ tasks: [BackgroundTask]) {
+        guard backgroundTasks[id] != tasks else { return }
+        backgroundTasks[id] = tasks.isEmpty ? nil : tasks
+    }
 
     /// Whether a session has a live terminal (set by the detail pane).
     func isLive(_ id: UUID) -> Bool { runtimes[id]?.isLive ?? false }
