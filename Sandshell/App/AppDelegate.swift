@@ -573,6 +573,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         newChat(draft: draft, urls: urls, send: false)
     }
 
+    /// ⌥⌘0 — the Files pane (tree + editor) for the active session's folder.
+    @MainActor @objc func toggleFiles(_ sender: Any?) {
+        activeController?.toggleFiles()
+    }
+
     /// ⌃⌘N — new native Claude chat (ACP) in the current folder.
     @MainActor @objc func newChat(_ sender: Any?) {
         activeController?.newChat()

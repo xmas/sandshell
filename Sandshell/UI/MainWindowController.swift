@@ -10,6 +10,11 @@ final class MainWindowController: NSWindowController {
     private var sidebar: SidebarListController?
     private var themeObserver: AnyCancellable?
     private var sidebarItem: NSSplitViewItem?
+    /// Files pane (tree + editor) on the trailing edge; follows the active session.
+    private var filesPane: FilesPaneController?
+    private var filesItem: NSSplitViewItem?
+    private var selectionObserver: AnyCancellable?
+    private static let filesVisibleKey = "filesPaneVisible"
     private var detail: TerminalStackController?
     private var collapseObservation: NSKeyValueObservation?
     // Native-toolbar identity + live status, updated from the detail controller.
@@ -145,6 +150,24 @@ final class MainWindowController: NSWindowController {
         detailItem.minimumThickness = 420
         split.addSplitViewItem(detailItem)
 
+        let files = FilesPaneController()
+        self.filesPane = files
+        files.onAddToChat = { [weak self] urls in
+            guard let self, case .session(let id)? = self.workspace?.selection else { return }
+            self.detail?.dropFiles(urls, on: id)
+        }
+        let filesItem = NSSplitViewItem(inspectorWithViewController: files)
+        filesItem.minimumThickness = 460
+        filesItem.maximumThickness = 1600
+        filesItem.canCollapse = true
+        filesItem.isCollapsed = !UserDefaults.standard.bool(forKey: Self.filesVisibleKey)
+        self.filesItem = filesItem
+        split.addSplitViewItem(filesItem)
+        // Follow the active session's folder (the workspace root otherwise).
+        selectionObserver = controller.$selection.sink { [weak self] _ in
+            DispatchQueue.main.async { self?.syncFilesRoot() }
+        }
+
         // Keep the detail header's toggle (icon + leading inset for the traffic
         // lights) in sync however the sidebar collapses — button, ⌥1/⌥2, or drag.
         collapseObservation = sidebarItem.observe(\.isCollapsed, options: [.initial, .new]) { [weak detail] item, _ in
@@ -217,7 +240,7 @@ final class MainWindowController: NSWindowController {
         // autosaved arrangement (which otherwise pins items to old positions).
         // Bump the version when default items change: autosaved configurations
         // would otherwise hide new items (v3 added the Chat/Terminal toggle).
-        let toolbar = NSToolbar(identifier: "MainWindowToolbar.v3")
+        let toolbar = NSToolbar(identifier: "MainWindowToolbar.v4")
         toolbar.delegate = self
         toolbar.allowsUserCustomization = true
         toolbar.autosavesConfiguration = true
@@ -308,6 +331,26 @@ final class MainWindowController: NSWindowController {
         item.animator().isCollapsed = collapsed
     }
     func toggleSidebar() { setSidebarCollapsed(!(sidebarItem?.isCollapsed ?? false)) }
+
+    /// View ▸ Show Files (⌥⌘0) / toolbar: the session folder's tree + editor.
+    func toggleFiles() {
+        guard let item = filesItem else { return }
+        let show = item.isCollapsed
+        NSAnimationContext.runAnimationGroup { _ in item.animator().isCollapsed = !show }
+        UserDefaults.standard.set(show, forKey: Self.filesVisibleKey)
+        syncFilesRoot()
+    }
+
+    @objc func toggleFilesFromToolbar() { toggleFiles() }
+
+    private func syncFilesRoot() {
+        guard let workspace, let filesItem, !filesItem.isCollapsed else { return }
+        var folder = workspace.rootURL
+        if case .session(let id) = workspace.selection, let s = workspace.session(id: id) {
+            folder = URL(fileURLWithPath: s.workdir)
+        }
+        filesPane?.setRoot(folder)
+    }
 
     /// ⌘, — open the per-root settings inspector sheet (all settings live there).
     func showSettings() {
@@ -439,6 +482,7 @@ private extension NSToolbarItem.Identifier {
     static let stopSession    = NSToolbarItem.Identifier("stopSession")
     static let restartSession = NSToolbarItem.Identifier("restartSession")
     static let chatToggle     = NSToolbarItem.Identifier("chatToggle")
+    static let filesToggle    = NSToolbarItem.Identifier("filesToggle")
 }
 
 extension MainWindowController: NSToolbarDelegate {
@@ -447,11 +491,11 @@ extension MainWindowController: NSToolbarDelegate {
         // bezeled button that renders as a glass capsule (and can hold a focus
         // ring) on macOS 26+/SDK 27 builds.
         [.sidebarToggle, .identity, .flexibleSpace, .sessionStatus,
-         .chatToggle, .revealFolder, .stopSession, .restartSession]
+         .chatToggle, .revealFolder, .stopSession, .restartSession, .filesToggle]
     }
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [.sidebarToggle, .identity, .sessionStatus, .chatToggle,
+        [.sidebarToggle, .identity, .sessionStatus, .chatToggle, .filesToggle,
          .revealFolder, .stopSession, .restartSession, .flexibleSpace, .space]
     }
 
@@ -486,6 +530,15 @@ extension MainWindowController: NSToolbarDelegate {
             return item
         }
 
+        if itemIdentifier == .filesToggle {
+            let item = NSToolbarItem(itemIdentifier: .filesToggle)
+            item.label = "Files"
+            item.paletteLabel = "Show Files"
+            item.toolTip = "Show Files (⌥⌘0)"
+            item.view = Self.plainToolbarButton(symbol: "sidebar.right", label: "Show Files",
+                                                target: self, action: #selector(toggleFilesFromToolbar))
+            return item
+        }
         if itemIdentifier == .sidebarToggle {
             let item = NSToolbarItem(itemIdentifier: .sidebarToggle)
             item.label = "Sidebar"

@@ -67,6 +67,7 @@ enum MainMenu {
         let openFolder = fileMenu.addItem(withTitle: "Open Folder…",
                                           action: #selector(AppDelegate.openFolder(_:)), keyEquivalent: "n")
         openFolder.keyEquivalentModifierMask = [.command, .option]
+        fileMenu.addItem(withTitle: "Save", action: #selector(FileEditorController.saveDocument(_:)), keyEquivalent: "s")
         fileMenu.addItem(withTitle: "Welcome to Sandshell…",
                          action: #selector(AppDelegate.runFirstLaunchSetup(_:)), keyEquivalent: "")
         fileMenu.addItem(.separator())
@@ -135,6 +136,10 @@ enum MainMenu {
         mainMenu.addItem(viewItem)
         let viewMenu = NSMenu(title: "View")
         viewItem.submenu = viewMenu
+        let showFiles = viewMenu.addItem(withTitle: "Show Files", action: #selector(AppDelegate.toggleFiles(_:)),
+                                         keyEquivalent: "0")
+        showFiles.keyEquivalentModifierMask = [.command, .option]
+        viewMenu.addItem(.separator())
         let hideSidebar = viewMenu.addItem(withTitle: "Hide Sidebar",
                                            action: #selector(AppDelegate.hideSidebar(_:)), keyEquivalent: "1")
         hideSidebar.keyEquivalentModifierMask = [.control]

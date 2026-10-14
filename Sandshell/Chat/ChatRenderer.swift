@@ -11,7 +11,7 @@ extension NSAttributedString.Key {
 /// Which background a paragraph sits on, and where it falls in its block (so
 /// only the block's outer corners are rounded).
 final class BlockStyle: NSObject, @unchecked Sendable {
-    enum Kind { case code, card, user }
+    enum Kind { case code, card, user, added, removed, hunk }
     enum Position { case single, first, middle, last }
     let kind: Kind
     let position: Position
@@ -25,6 +25,17 @@ final class BlockStyle: NSObject, @unchecked Sendable {
         case .code: return NSColor.labelColor.withAlphaComponent(0.055)
         case .card: return NSColor.labelColor.withAlphaComponent(0.04)
         case .user: return NSColor.controlAccentColor.withAlphaComponent(0.11)
+        case .added: return NSColor.systemGreen.withAlphaComponent(0.14)
+        case .removed: return NSColor.systemRed.withAlphaComponent(0.13)
+        case .hunk: return NSColor.systemBlue.withAlphaComponent(0.08)
+        }
+    }
+
+    /// Diff lines span the full width with square corners.
+    var isFullWidth: Bool {
+        switch kind {
+        case .added, .removed, .hunk: return true
+        default: return false
         }
     }
 }
@@ -39,8 +50,9 @@ final class BlockBackgroundFragment: NSTextLayoutFragment {
     private var backgroundRect: CGRect {
         let width = textLayoutManager?.textContainer?.size.width ?? layoutFragmentFrame.maxX
         let inset = textLayoutManager?.textContainer?.lineFragmentPadding ?? 0
-        let x = Self.margin + inset - layoutFragmentFrame.minX
-        return CGRect(x: x, y: 0, width: width - 2 * (Self.margin + inset), height: layoutFragmentFrame.height)
+        let margin = style?.isFullWidth == true ? 0 : Self.margin
+        let x = margin + inset - layoutFragmentFrame.minX
+        return CGRect(x: x, y: 0, width: width - 2 * (margin + inset), height: layoutFragmentFrame.height)
     }
 
     override var renderingSurfaceBounds: CGRect { super.renderingSurfaceBounds.union(backgroundRect) }
@@ -48,7 +60,7 @@ final class BlockBackgroundFragment: NSTextLayoutFragment {
     override func draw(at point: CGPoint, in context: CGContext) {
         if let style {
             let rect = backgroundRect.offsetBy(dx: point.x, dy: point.y)
-            let r = Self.radius
+            let r = style.isFullWidth ? 0 : Self.radius
             let roundTop = style.position == .first || style.position == .single
             let roundBottom = style.position == .last || style.position == .single
             let path = CGMutablePath()
