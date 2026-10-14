@@ -48,7 +48,13 @@ scripts/run-ui-tests.sh --force-quit    # quit running Sandshell first
 scripts/run-ui-tests.sh --keep-open     # leave app open after tests
 ```
 
-Tests live in `tests/ui/`. The runner launches Sandshell via `sandshell://open?workspace=…`, then drives it with `osascript`. Requires `sbx` on PATH.
+Tests live in `tests/ui/`. The runner launches a headless test copy (own bundle id, transparent click-through windows), opens a temp workspace through the file-based test bridge, then drives it with `osascript`. Requires `sbx` on PATH. Settings tests use the bridge's in-app `ax` commands (`App/UITestAX.swift`), so the suite also runs with the screen locked. Details: `tests/ui/README.md`.
+
+### DEBUG self-tests
+
+Scripted end-to-end checks inside the real app (`App/SelfTest.swift`): launch a Debug binary with `-SandshellSelfTest <scenario> -SandshellSelfTestOut <dir> -openWindowRoots '("<workspace>")'`; it drives the window offscreen (transparent, click-through, never activates), writes PASS/FAIL lines to `<dir>/selftest.log` plus snapshots, and quits. Scenarios: `panes`, `pane-buttons`, `files-alone`, `files`, `files-relaunch`, `chat`, `fork`, `follow`, `links`, `open-quickly`, `title-strip`, `building`, `alerts`, `background`, `sandbox-access`, `launch-failure`, `kits`, `agents`, `search` — each documents the workspace fixture it expects. Build a separate bundle id for these (`PRODUCT_BUNDLE_IDENTIFIER=com.xmas.sandshell.dev`, `-derivedDataPath build-dev`) so they don't touch your own app's defaults. Chat scenarios use the signed-in account (a few tiny turns).
+
+**No dialogs during tests**: `Diagnostics/AutomatedRun.swift` is active under `-SandshellSelfTest` / `-SandshellUITestHeadless` — no Keychain or notification prompts, alerts answer themselves, destructive steps only for `/tmp` scratch workspaces.
 
 ## Architecture
 
@@ -57,8 +63,11 @@ Tests live in `tests/ui/`. The runner launches Sandshell via `sandshell://open?w
 ```
 AppDelegate (@main)
   └─ MainWindowController (per workspace root; NSWindow + NSSplitViewController)
-       ├─ SidebarOutlineController   NSOutlineView; folder/session tree
-       └─ TerminalStackController    detail pane; hosts live TerminalSession views
+       ├─ SidebarOutlineController   NSOutlineView; flat session list
+       ├─ PaneTreeController         detail: a split tree of panes, saved per window
+       │    ├─ TerminalStackController   one pane: a session's terminal or chat, or Files
+       │    └─ SessionSurfaces           the window's live terminals + chats, shared by its panes
+       └─ FilesPaneController        trailing inspector: file tree + editor (also usable as a pane)
   └─ WorkspaceController (@MainActor ObservableObject)   central state coordinator
        ├─ Workspace          value type: rootURL, policy, mcpServers, primaryAgent, kits
        ├─ WorkspaceState     persisted: folders, sessions, tree expansion (state.json)
@@ -72,7 +81,25 @@ AppDelegate (@main)
 |------|------|
 | `App/AppDelegate.swift` | `@main`; patches PATH, creates/restores `MainWindowController` windows, handles Apple Events (`Shll`/`stat`, `Shll`/`news`) and URL scheme (`sandshell://open`), global keyboard shortcuts |
 | `UI/MainWindowController.swift` | NSWindow + `NSSplitViewController` (sidebar \| detail); native toolbar; theme observation |
-| `UI/TerminalStackController.swift` | Detail pane; owns and displays live `TerminalSession` views |
+| `UI/PaneTreeController.swift` | Detail area as split panes (⌘D / ⇧⌘D / ⌥⌘W, drag a session onto a pane edge); layout saved per window |
+| `UI/TerminalStackController.swift` | One pane: shows a session's terminal or chat (or a Files surface), its title strip (context chips, Claude readout, pane buttons), launch/failure states. `SessionSurfaces` (same file) holds the window's live sessions |
+| `UI/SessionContextBar.swift` | Title-strip chips: sandbox (access popover), folder, git branch ± lines |
+| `UI/ClaudeStatsView.swift` | Title-strip Claude readout (context gauge, tokens, cost, model/effort choosers); sheds pieces to fit |
+| `UI/BackgroundTasksView.swift` | Background tasks popover / window (⌥⌘B) |
+| `UI/AgentConfigView.swift` | Settings ▸ Agents: custom agents from `kind: sandbox` kits |
+| `Chat/ChatSession.swift` | Native chat session: drives an ACP agent (`sbx exec -i`), folds updates into `ChatItem`s; follows turns another app writes to the same transcript |
+| `Chat/ACPConnection.swift` | JSON-RPC 2.0 over the agent's stdio |
+| `Chat/ChatSessionView.swift`, `ChatTranscriptView.swift`, `ChatComposerView.swift`, `ChatRenderer.swift` | Chat UI: transcript (links, reply hover Copy/Fork), composer (/ commands, @ files), rendering |
+| `Chat/ClaudeTranscriptTail.swift` | Parses lines another client appended to a Claude transcript |
+| `Files/FilesPaneController.swift` | Files surface: `FileTreeController` (tree, git badges, Changed view) beside `FileEditorController` (editor, Markdown preview, Changes/hunks) |
+| `Files/FileNavigation.swift` | Open Quickly (⇧⌘O), Go to Line |
+| `Files/FileModel.swift` | Git status, hunks, file nodes, FSEvents `FileWatcher` |
+| `Sbx/SandboxAccess.swift` | What a sandbox can see of a folder (mount, ro/rw, VM details) for the sandbox chip and Files |
+| `Sbx/AgentProfileStore.swift` | Custom agents registered from `kind: sandbox` kits (name, icon, color, kit ref) |
+| `Sbx/KitDrift.swift` | A sandbox's actual kits vs the workspace config (adopt / ignore) |
+| `Workspace/BackgroundTasks.swift`, `BackgroundTaskMonitor.swift` | Background tasks (subagents, background shells) parsed from Claude transcripts |
+| `Diagnostics/AutomatedRun.swift` | Test-launch mode: nothing waits on a person |
+| `App/SelfTest.swift`, `App/UITestAX.swift` | DEBUG self-test scenarios; UI-test headless mode + file bridge (`ax` commands) |
 | `Sbx/WorkspaceController.swift` | Central `@MainActor` coordinator: container phases, session list, selection, runtimes, MCP state — observed by sidebar, detail, and toolbar |
 | `Sbx/SbxClient.swift` | `actor`; all `sbx` CLI calls via `Process` (async/await). `sbx create` uses a temp file for stderr (not a pipe) to avoid stalling Foundation's FileHandle callback queue |
 | `Sbx/Models.swift` | `Sandbox`, `AgentKind`, `CreateOptions`, `CommandOutput` |
@@ -93,6 +120,9 @@ AppDelegate (@main)
 - **One window per workspace root.** `AppDelegate` manages an array of `MainWindowController` instances. Multiple windows on the same root are allowed (cascaded).
 - **WorkspaceController is the single source of truth.** Container phases, sessions, runtimes, and MCP state all live here; UI observes `@Published` properties.
 - **SbxClient stderr quirk.** `sbx create` spawns a long-lived daemon that inherits pipe fds, so stderr capture uses a temp file to avoid stalling the shared `FileHandle` callback queue.
+- **Chat is the default.** ⌘N and + ▸ New Claude/Codex/Gemini start a chat (ACP adapter in the sandbox via `sbx exec -i`); terminal versions sit under + ▸ In Terminal, and each pane's title strip switches Chat ⇄ Terminal (`Session.isChat`).
+- **Session processes are tagged.** Agents launched in a sandbox carry `SANDSHELL_SESSION`/`SANDSHELL_LAUNCH` env and are reaped on close/restart/quit (`SbxClient.reapSessionProcesses`).
+- **Panes reparent live views.** After moving a libghostty view between panes call `setSurfaceVisible(false)` then `(true)` or it won't draw.
 - **libghostty terminal per session.** Each `TerminalSession` owns a `TerminalController` (one ghostty "app"). Command is set via a temp executable script — never via config-file quoting. Backend must be `.exec` (real PTY).
 - **PATH fix.** `PathFixer.patchProcessPath()` runs at launch; the fixed environment is inherited by libghostty's subprocesses too.
 - **Apple Event scripting API.** The companion CLI (`scripts/sandshell`) queries status as JSON and opens new sessions via custom Apple Events. The `sandshell://open?workspace=…&ro=…&rw=…` URL scheme is also handled in `AppDelegate`.
