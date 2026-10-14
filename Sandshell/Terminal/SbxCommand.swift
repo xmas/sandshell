@@ -65,7 +65,25 @@ enum SbxCommand {
     /// Env pairs passed through `sbx exec ... env K=V ...`. Mirrors
     /// `sbx.rs::sandbox_shell_env`, plus `SBX_MCP_URL` when the workspace has an
     /// MCP gateway configured.
-    private static func envPairs(home: String, mcpURL: URL?, claude: ClaudeOptions?) -> [String] {
+    /// Tags on every session's in-container process (inherited by its children):
+    /// `SANDSHELL_SESSION` (the sidebar session) and `SANDSHELL_LAUNCH` (this
+    /// launch). `reapScript` kills by them, since processes in the sandbox
+    /// outlive the host-side `sbx exec` (quit, crash, restart).
+    struct ProcessTag {
+        let session: UUID
+        let launch = UUID()
+        var pairs: [String] { ["SANDSHELL_SESSION=\(session.uuidString)", "SANDSHELL_LAUNCH=\(launch.uuidString)"] }
+    }
+
+    /// `sh -c` body run via `sbx exec <container>` that TERMs, then KILLs, every
+    /// process whose environment carries `match` (e.g. `SANDSHELL_LAUNCH=<uuid>`).
+    static func reapScript(match: String) -> String {
+        let scan = #"for d in /proc/[0-9]*; do { tr '\0' '\n' < "$d/environ"; } 2>/dev/null | grep -qxF "$M" && kill -SIG "${d#/proc/}" 2>/dev/null; done"#
+        return "M=\(shellQuote(match)); " + scan.replacingOccurrences(of: "SIG", with: "TERM")
+            + "; sleep 1; " + scan.replacingOccurrences(of: "SIG", with: "KILL") + "; true"
+    }
+
+    private static func envPairs(home: String, mcpURL: URL?, claude: ClaudeOptions?, tag: ProcessTag? = nil) -> [String] {
         // NOTE: we deliberately do NOT override HOME. The container's agents are
         // installed under its own home (/home/agent/.local/bin); forcing HOME to
         // the macOS host home made claude look for its install at
@@ -94,6 +112,7 @@ enum SbxCommand {
         if let dir = claude?.statusDir, let sid = claude?.sessionID {
             pairs += ["SANDSHELL_STATUS_DIR=\(dir)", "SANDSHELL_SESSION_ID=\(sid)"]
         }
+        if let tag { pairs += tag.pairs }
         return pairs
     }
 
@@ -131,11 +150,12 @@ enum SbxCommand {
                               home: String,
                               mcpURL: URL?,
                               resumeID: String? = nil,
-                              claude: ClaudeOptions? = nil) -> String {
+                              claude: ClaudeOptions? = nil,
+                              tag: ProcessTag? = nil) -> String {
         // `exec` so the sbx process replaces the shell, keeping signal semantics.
         return "#!/bin/sh\nexec " + launchCommand(
             containerName: containerName, workdir: workdir, agent: agent,
-            sbxPath: sbxPath, home: home, mcpURL: mcpURL, resumeID: resumeID, claude: claude) + "\n"
+            sbxPath: sbxPath, home: home, mcpURL: mcpURL, resumeID: resumeID, claude: claude, tag: tag) + "\n"
     }
 
     /// The `sbx exec …` one-liner the session launches with — also shown in the
@@ -147,7 +167,8 @@ enum SbxCommand {
                               home: String,
                               mcpURL: URL?,
                               resumeID: String? = nil,
-                              claude: ClaudeOptions? = nil) -> String {
+                              claude: ClaudeOptions? = nil,
+                              tag: ProcessTag? = nil) -> String {
         // program(...) already returns a properly-quoted command line (incl. any
         // `--resume <id>`), so it's not re-quoted here.
         let auth = agent == .claude && useProxyAuth(claude?.sbxProxyAuth ?? false) ? " \(proxyAuthSetup)" : ""
@@ -156,7 +177,7 @@ enum SbxCommand {
         if !workdir.isEmpty { parts += ["-w", shellQuote(workdir)] }
         parts.append(shellQuote(containerName))
         parts += ["env", "-u", "MCP_GATEWAY_URL"]
-        parts += envPairs(home: home, mcpURL: mcpURL, claude: claude).map(shellQuote)
+        parts += envPairs(home: home, mcpURL: mcpURL, claude: claude, tag: tag).map(shellQuote)
         parts += ["bash", "-c", shellQuote(bashc)]
         return parts.joined(separator: " ")
     }
@@ -169,11 +190,11 @@ enum SbxCommand {
     /// claude instead of the SDK's bundled copy, so the base-image channel still
     /// decides the Claude Code version.
     static func acpArguments(containerName: String, workdir: String, home: String, mcpURL: URL?,
-                             sbxProxyAuth: Bool = false) -> [String] {
+                             sbxProxyAuth: Bool = false, tag: ProcessTag? = nil) -> [String] {
         var args = ["exec", "-i"]
         if !workdir.isEmpty { args += ["-w", workdir] }
         args += [containerName, "env", "-u", "MCP_GATEWAY_URL"]
-        args += envPairs(home: home, mcpURL: mcpURL, claude: nil)
+        args += envPairs(home: home, mcpURL: mcpURL, claude: nil, tag: tag)
         let auth = useProxyAuth(sbxProxyAuth) ? " " + proxyAuthSetup : ""
         args += ["bash", "-c",
                  #"\#(pathSetup)\#(auth) export CLAUDE_CODE_EXECUTABLE="$(command -v claude)"; exec npx -y \#(claudeACPPackage)"#]

@@ -628,6 +628,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// Sessions' processes in the sandboxes outlive the app unless reaped.
+    func applicationWillTerminate(_ notification: Notification) {
+        for window in windows { window.prepareForQuit() }
+        SbxClient.waitForReaps(timeout: 2)
+    }
+
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         false
     }

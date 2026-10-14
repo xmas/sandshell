@@ -877,6 +877,9 @@ final class TerminalStackController: NSViewController {
             }
             // The session may have been closed while the container came up.
             guard controller.session(id: id) != nil, terminals[id] == nil else { return }
+            // Leftovers from a crash/kill would share this conversation.
+            await SbxClient.reapSessionProcessesAndWait(container: containerName,
+                                                        match: "SANDSHELL_SESSION=\(id.uuidString)")
 
             await runtime.prepareLaunch(id, containerName: containerName)
 
@@ -972,10 +975,13 @@ final class TerminalStackController: NSViewController {
                 resumeID = tid
             }
             Log.info(.workspace, "launching \(current.agent.rawValue) chat in “\(containerName)” at \(current.workdir)\(resumeID.map { " (resume \($0))" } ?? "")")
+            await SbxClient.reapSessionProcessesAndWait(container: containerName,
+                                                        match: "SANDSHELL_SESSION=\(id.uuidString)")
             let proxyAuth = await SbxClient.shared.hasAnthropicSecret(sandbox: containerName)
             let chat = ChatSession(title: current.agent.displayName.capitalized, containerName: containerName,
                                    workdir: current.workdir, home: controller.home.path,
-                                   mcpURL: controller.mcpURL, resumeID: resumeID, sbxProxyAuth: proxyAuth)
+                                   mcpURL: controller.mcpURL, resumeID: resumeID, sbxProxyAuth: proxyAuth,
+                                   sessionID: id)
             chat.onSessionID = { [controller] sid in controller.setTranscriptID(id, sid) }
             chat.onPrompt = { [controller] prompt in controller.autoName(id, from: prompt) }
             chat.onWorkingChange = { [controller] working in

@@ -99,6 +99,7 @@ final class ChatSession: ObservableObject {
     let title: String
     private let resumeID: String?
     private let sbxProxyAuth: Bool
+    private let tag: SbxCommand.ProcessTag
     private let containerName: String
     private let workdir: String
     private let home: String
@@ -108,8 +109,9 @@ final class ChatSession: ObservableObject {
     private var pumpTask: Task<Void, Never>?
 
     init(title: String, containerName: String, workdir: String, home: String, mcpURL: URL?,
-         resumeID: String? = nil, sbxProxyAuth: Bool = false) {
+         resumeID: String? = nil, sbxProxyAuth: Bool = false, sessionID: UUID = UUID()) {
         self.title = title
+        self.tag = SbxCommand.ProcessTag(session: sessionID)
         self.sbxProxyAuth = sbxProxyAuth
         self.resumeID = resumeID
         self.containerName = containerName
@@ -122,7 +124,7 @@ final class ChatSession: ObservableObject {
 
     func start() {
         let args = SbxCommand.acpArguments(containerName: containerName, workdir: workdir, home: home, mcpURL: mcpURL,
-                                           sbxProxyAuth: sbxProxyAuth)
+                                           sbxProxyAuth: sbxProxyAuth, tag: tag)
         let conn = ACPConnection(executable: PathFixer.sbxPath(), arguments: args)
         connection = conn
         do { try conn.start() } catch {
@@ -171,8 +173,11 @@ final class ChatSession: ObservableObject {
 
     func close() {
         pumpTask?.cancel()
+        let wasRunning = connection != nil
         connection?.terminate()
         connection = nil
+        // The adapter exits on stdin EOF; reap anyway (its claude child, tools).
+        if wasRunning { SbxClient.reapSessionProcesses(container: containerName, match: tag.pairs[1]) }
     }
 
     // MARK: User actions

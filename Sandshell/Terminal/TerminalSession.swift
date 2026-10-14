@@ -164,6 +164,8 @@ final class TerminalSession {
 
     private let controller: TerminalController
     private let scriptURL: URL
+    private let containerName: String
+    private let tag: SbxCommand.ProcessTag
     private let theme: ThemeController
     private var themeObserver: AnyCancellable?
     private var cursorObserver: AnyCancellable?
@@ -180,12 +182,15 @@ final class TerminalSession {
          claude: SbxCommand.ClaudeOptions? = nil) {
         self.sessionID = sessionID
         self.theme = theme
+        self.containerName = containerName
+        let tag = SbxCommand.ProcessTag(session: sessionID)
+        self.tag = tag
 
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         let sbxPath = PathFixer.sbxPath()
         let body = SbxCommand.sessionScript(
             containerName: containerName, workdir: workdir, agent: agent,
-            sbxPath: sbxPath, home: home, mcpURL: mcpURL, resumeID: resumeID, claude: claude)
+            sbxPath: sbxPath, home: home, mcpURL: mcpURL, resumeID: resumeID, claude: claude, tag: tag)
 
         let scriptURL = Self.writeScript(body)
         self.scriptURL = scriptURL
@@ -292,8 +297,11 @@ final class TerminalSession {
         return url
     }
 
+    /// Remove the launch script and kill this launch's processes in the
+    /// sandbox (they outlive the host-side `sbx exec` when the PTY closes).
     func cleanup() {
         try? FileManager.default.removeItem(at: scriptURL)
+        SbxClient.reapSessionProcesses(container: containerName, match: tag.pairs[1])
     }
 }
 

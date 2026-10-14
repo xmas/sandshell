@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 
 /// Thin async wrapper around the `sbx` CLI. Each call shells out via `Process`.
 /// Ports the invocations proven in the Tauri app's `sbx.rs`.
@@ -494,6 +495,49 @@ actor SbxClient {
     /// `sbx kit inspect <ref> --json` — metadata for a directory, zip, or OCI kit
     /// reference (pulls the kit for OCI refs, so this can take a few seconds).
     /// Returns nil when the reference can't be inspected.
+    // MARK: - Session process reaping
+
+    /// Kill a session's processes inside its sandbox (by `SbxCommand.ProcessTag`
+    /// env), since they outlive the host-side `sbx exec`. Fire-and-forget from
+    /// sync teardown paths; `waitForReaps` lets app quit give them a moment.
+    nonisolated static func reapSessionProcesses(container: String, match: String) {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: PathFixer.sbxPath())
+        p.arguments = ["exec", container, "sh", "-c", SbxCommand.reapScript(match: match)]
+        p.standardInput = FileHandle.nullDevice
+        p.standardOutput = FileHandle.nullDevice
+        p.standardError = FileHandle.nullDevice
+        do { try p.run() } catch { return }
+        reaps.withLock { $0.append(p) }
+    }
+
+    /// Same, awaited — used before (re)launching a session so leftovers from a
+    /// crash/kill can't share its conversation with the new process.
+    nonisolated static func reapSessionProcessesAndWait(container: String, match: String) async {
+        await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
+            DispatchQueue.global().async {
+                reapSessionProcesses(container: container, match: match)
+                waitForReaps(timeout: 5)
+                done.resume()
+            }
+        }
+    }
+
+    /// Block until in-flight reaps finish or `timeout` passes (app quit).
+    nonisolated static func waitForReaps(timeout: TimeInterval) {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            let running = reaps.withLock { list -> Bool in
+                list.removeAll { !$0.isRunning }
+                return !list.isEmpty
+            }
+            if !running { return }
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+    }
+
+    private static let reaps = Mutex<[Process]>([])
+
     /// Whether sbx holds an Anthropic credential (API key or OAuth) for this
     /// sandbox — global or scoped to it. When it does, sbx's proxy attaches the
     /// real credential to the agent's API requests and refreshes OAuth on the

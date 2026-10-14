@@ -276,6 +276,9 @@ final class MainWindowController: NSWindowController {
         workspace?.newSessionInCurrentContext()
     }
 
+    /// App quit: kill this window's session processes (no windowWillClose then).
+    func prepareForQuit() { detail?.teardown() }
+
     func newChat() {
         workspace?.newChatInCurrentContext()
     }
