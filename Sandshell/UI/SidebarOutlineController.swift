@@ -245,7 +245,7 @@ final class SidebarListController: NSViewController {
         settingsButton.setContentHuggingPriority(.defaultLow, for: .horizontal)
         settingsButton.setContentHuggingPriority(.defaultLow, for: .vertical)
         settingsButton.target = self
-        settingsButton.action = #selector(presentInspector)
+        settingsButton.action = #selector(presentInspector as () -> Void)
 
         terminalButton.translatesAutoresizingMaskIntoConstraints = false
         terminalButton.target = self
@@ -413,6 +413,14 @@ final class SidebarListController: NSViewController {
         applyTheme(sidebarTheme)
         // The sidebar is driven by the folder's profile (icon/color/background);
         // re-theme + re-render the header when it's edited in General.
+        // A pane's "Edit Kits…" / "Edit Mounts…" opens this workspace's settings there.
+        NotificationCenter.default.publisher(for: InspectorView.openRequest)
+            .sink { [weak self] note in
+                guard let self, note.object as? WorkspaceController === self.controller,
+                      let raw = note.userInfo?["pane"] as? String, let pane = InspectorPane(rawValue: raw) else { return }
+                self.presentInspector(pane: pane)
+            }
+            .store(in: &cancellables)
         controller.$rootProfile.dropFirst().sink { [weak self] profile in
             guard let self else { return }
             self.updateHeaderIdentity(profile)
@@ -801,10 +809,12 @@ final class SidebarListController: NSViewController {
     /// Present the per-root settings inspector (gear next to Search, and ⌘,) as a
     /// native macOS sheet — a fixed-size SwiftUI view; Close or Esc dismisses it.
     /// No-op if a sheet is already up (so ⌘, doesn't stack inspectors).
-    @objc func presentInspector() {
+    @objc func presentInspector() { presentInspector(pane: .general) }
+
+    func presentInspector(pane: InspectorPane) {
         guard presentedViewControllers?.isEmpty != false else { return }
         var sheet: NSViewController?
-        let inspector = InspectorView(controller: controller, onClose: { sheet?.dismiss(nil) })
+        let inspector = InspectorView(controller: controller, initialPane: pane, onClose: { sheet?.dismiss(nil) })
         let hosting = NSHostingController(rootView: inspector)
         sheet = hosting
         presentAsSheet(hosting)

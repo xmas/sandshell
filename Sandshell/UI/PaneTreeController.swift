@@ -115,7 +115,7 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
         pane.onSplit = { [weak self, weak pane] edge in
             if let self, let pane { self.split(pane, edge: edge, showing: nil) }
         }
-        pane.onOpenFiles = { [weak self, weak pane] in
+        pane.onOpenFiles = { [weak self, weak pane] changesOnly in
             guard let self, let pane else { return }
             // Files sits beside a session, never in place of one: an empty pane
             // first takes the selected (else most recent) session not on screen.
@@ -126,8 +126,13 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
             let target = pane.shownSession.flatMap { id in
                 self.controller.session(id: id).map { FilesTarget(session: id, folder: $0.workdir) }
             } ?? FilesTarget(session: nil, folder: self.controller.rootURL.path)
-            if let existing = self.panes.first(where: { $0.shownFiles == target }) { return self.focus(existing) }
-            self.split(pane, edge: .trailing, showing: nil, files: target)
+            if let existing = self.panes.first(where: { $0.shownFiles == target }) {
+                self.focus(existing)
+            } else {
+                self.split(pane, edge: .trailing, showing: nil, files: target)
+            }
+            // The branch chip's "Show N Changed Files": just the changes.
+            if changesOnly { self.panes.first { $0.shownFiles == target }?.filesPane?.showChanges() }
         }
         pane.onFilesAddToChat = { [weak self] urls, target in
             guard let self else { return }

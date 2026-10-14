@@ -103,6 +103,9 @@ final class FilesPaneController: NSViewController, NSSplitViewDelegate {
         UserDefaults.standard.set(Double(tree.view.frame.width), forKey: widthKey)
     }
 
+    /// Only the changed files (git), as a flat list.
+    func showChanges() { _ = view; tree.showChanges(true) }
+
     /// Show `folder` (nil = nothing).
     func setRoot(_ folder: URL?, access: SandboxAccess? = nil) {
         _ = view   // make sure children are loaded

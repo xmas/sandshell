@@ -247,6 +247,9 @@ final class SessionSurfaces {
     var chats: [UUID: ChatSessionView] = [:]
     var drafts: [UUID: (text: String, urls: [URL], send: Bool)] = [:]
     var pending: Set<UUID> = []
+    /// Sessions whose sandbox couldn't be brought up, with why: not retried
+    /// until the user says so (a refresh used to relaunch — and fail — forever).
+    var launchFailures: [UUID: String] = [:]
     var searchWindows: [UUID: TerminalSearchWindowController] = [:]
     /// Whether some pane is showing the session (set by the pane tree).
     var isShown: (UUID) -> Bool = { _ in false }
@@ -327,7 +330,7 @@ final class TerminalStackController: NSViewController {
     /// Split this pane (title-strip buttons): a new empty pane on that side.
     var onSplit: ((PaneTreeController.Edge) -> Void)?
     /// Show this pane's session folder (or the workspace) as Files beside it.
-    var onOpenFiles: (() -> Void)?
+    var onOpenFiles: ((_ changesOnly: Bool) -> Void)?
     private let closePaneButton = NSButton()
     private let filesPaneButton = NSButton()
     /// Chat ⇄ Terminal for this pane's session (agents that can chat).
@@ -340,6 +343,11 @@ final class TerminalStackController: NSViewController {
     private let emptyActions = NSStackView()
     private let emptyFilesButton = NSButton(title: "Show Files", target: nil, action: nil)
     private let emptyCloseButton = NSButton(title: "Close Pane", target: nil, action: nil)
+    /// A session that couldn't start: Try Again, and the settings that broke it.
+    private let failureActions = NSStackView()
+    private let retryButton = NSButton(title: "Try Again", target: nil, action: nil)
+    private let editSettingsButton = NSButton(title: "Edit Kits…", target: nil, action: nil)
+    private var editSettingsPane: InspectorPane = .kits
     /// Zero-width the Claude readout while it's hidden so it doesn't squeeze
     /// the title in a narrow pane.
     private lazy var claudeStatsCollapsed = claudeStats.widthAnchor.constraint(equalToConstant: 0)
@@ -529,7 +537,7 @@ final class TerminalStackController: NSViewController {
         frameView.layer?.borderColor = c.border.cgColor
         frameView.layer?.borderWidth = 1
         view.layer?.borderWidth = 0
-        dimOverlay.layer?.backgroundColor = c.termBg.withAlphaComponent(0.4).cgColor
+        dimOverlay.layer?.backgroundColor = c.termBg.withAlphaComponent(0.2).cgColor
         dimOverlay.isHidden = !(showsFocusRing && !isFocused)
     }
 
@@ -559,9 +567,30 @@ final class TerminalStackController: NSViewController {
     }
 
     @objc private func closePaneClicked() { onClosePane?() }
+
+    /// The sandbox wouldn't come up: say why, and offer to fix the settings or retry.
+    private func showLaunchFailure(_ message: String) {
+        showStatus("Couldn't start the sandbox\n\n" + message, busy: false)
+        let lower = message.lowercased()
+        editSettingsPane = lower.contains("kit") ? .kits : lower.contains("mount") ? .mounts : .sandboxes
+        editSettingsButton.title = editSettingsPane == .kits ? "Edit Kits…"
+            : editSettingsPane == .mounts ? "Edit Mounts…" : "Sandbox Settings…"
+        failureActions.isHidden = false
+    }
+
+    @objc private func retryLaunch() {
+        guard let id = shownSession else { return }
+        surfaces.launchFailures[id] = nil
+        refresh()
+    }
+
+    @objc private func editSettingsForFailure() {
+        NotificationCenter.default.post(name: InspectorView.openRequest, object: controller,
+                                        userInfo: ["pane": editSettingsPane.rawValue])
+    }
     @objc private func splitRightClicked() { onSplit?(.trailing) }
     @objc private func splitDownClicked() { onSplit?(.bottom) }
-    @objc private func openFilesClicked() { onOpenFiles?() }
+    @objc private func openFilesClicked() { onOpenFiles?(false) }
 
     @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
 
@@ -656,7 +685,8 @@ final class TerminalStackController: NSViewController {
         titleStrip.addSubview(claudeStats)
         contextBar.translatesAutoresizingMaskIntoConstraints = false
         contextBar.isHidden = true
-        contextBar.onShowFiles = { [weak self] in self?.onOpenFiles?() }
+        contextBar.onShowFiles = { [weak self] in self?.onOpenFiles?(false) }
+        contextBar.onShowChanges = { [weak self] in self?.onOpenFiles?(true) }
         titleStrip.addSubview(contextBar)
         backgroundPill.translatesAutoresizingMaskIntoConstraints = false
         backgroundPill.bezelStyle = .inline
@@ -739,6 +769,15 @@ final class TerminalStackController: NSViewController {
         emptyActions.setViews([emptyFilesButton, emptyCloseButton], in: .leading)
         emptyActions.isHidden = true
         statusStack.addArrangedSubview(emptyActions)
+        for b in [retryButton, editSettingsButton] { b.bezelStyle = .rounded; b.target = self }
+        retryButton.action = #selector(retryLaunch)
+        retryButton.keyEquivalent = "\r"
+        editSettingsButton.action = #selector(editSettingsForFailure)
+        failureActions.orientation = .horizontal
+        failureActions.spacing = 10
+        failureActions.setViews([editSettingsButton, retryButton], in: .leading)
+        failureActions.isHidden = true
+        statusStack.addArrangedSubview(failureActions)
 
         // The session identity + actions now live in the window's native
         // NSToolbar (see MainWindowController); the detail pane is just the framed
@@ -938,10 +977,16 @@ final class TerminalStackController: NSViewController {
             updateKitBanner()
             return
         }
+        if session.isChat, let failure = surfaces.launchFailures[id], chats[id] == nil {
+            return showLaunchFailure(failure)
+        }
         if session.isChat {
             if terminals[id] != nil { dropTerminal(id) }   // switched terminal → chat
             if let chat = chats[id] { showChat(id, chat) } else { launchChat(session) }
             return
+        }
+        if let failure = surfaces.launchFailures[id], terminals[id] == nil, chats[id] == nil {
+            return showLaunchFailure(failure)
         }
         if chats[id] != nil { closeChat(id) }   // switched chat → terminal
         if runtime.isExited(id) {
@@ -959,6 +1004,7 @@ final class TerminalStackController: NSViewController {
         frameView.isHidden = true
         restartButton.isHidden = true
         emptyActions.isHidden = true
+        failureActions.isHidden = true
         statusLabel.stringValue = text
         if busy { spinner.startAnimation(nil) } else { spinner.stopAnimation(nil) }
         updateFocusRing()
@@ -1278,7 +1324,9 @@ final class TerminalStackController: NSViewController {
             let containerName = await controller.ensureContainerReady(for: session.containerAgentKind)
             pending.remove(id)
             guard let containerName else {
-                showStatus(controller.lastError ?? "Failed to start the sandbox.", busy: false)
+                let message = controller.lastError ?? "Failed to start the sandbox."
+                surfaces.launchFailures[id] = message
+                if shownSession == id { showLaunchFailure(message) }
                 return
             }
             // The session may have been closed while the container came up.
@@ -1392,7 +1440,9 @@ final class TerminalStackController: NSViewController {
             let containerName = await controller.ensureContainerReady(for: session.containerAgentKind)
             pending.remove(id)
             guard let containerName else {
-                showStatus(controller.lastError ?? "Failed to start the sandbox.", busy: false)
+                let message = controller.lastError ?? "Failed to start the sandbox."
+                surfaces.launchFailures[id] = message
+                if shownSession == id { showLaunchFailure(message) }
                 return
             }
             guard let current = controller.session(id: id), current.isChat, chats[id] == nil else { return }

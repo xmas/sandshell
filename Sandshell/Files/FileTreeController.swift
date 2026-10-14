@@ -31,6 +31,9 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
     private let filter = NSSearchField()
     private let outline = FileOutlineView()
     private let branchLabel = NSTextField(labelWithString: "")
+    /// Show only changed files (a flat list, git's view), not the tree.
+    private(set) var changedOnly = false
+    private let changedButton = NSButton()
     /// "Sandbox “x” · read-write": these are the sandbox's files too.
     private let sandboxButton = NSButton()
     private var sandboxPopover: NSPopover?
@@ -86,20 +89,35 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
         sandboxButton.action = #selector(showSandboxAccess)
         sandboxButton.setAccessibilityIdentifier("files-sandbox-access")
         sandboxButton.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        // "main · 3 changed": click for the changed files.
+        branchLabel.addGestureRecognizer(NSClickGestureRecognizer(target: self, action: #selector(branchClicked)))
         let footer = NSStackView(views: [sandboxButton, branchLabel])
         footer.orientation = .vertical
         footer.alignment = .leading
         footer.spacing = 3
         updateSandboxLine()
 
-        for v in [filter, scroll, footer] as [NSView] {
+        changedButton.setButtonType(.pushOnPushOff)
+        changedButton.bezelStyle = .accessoryBarAction
+        changedButton.controlSize = .small
+        changedButton.image = NSImage(systemSymbolName: "plusminus.circle", accessibilityDescription: "Changed files")
+        changedButton.imagePosition = .imageOnly
+        changedButton.toolTip = "Show only changed files"
+        changedButton.target = self
+        changedButton.action = #selector(toggleChanged)
+        changedButton.setAccessibilityIdentifier("files-changed-toggle")
+        changedButton.setContentHuggingPriority(.required, for: .horizontal)
+
+        for v in [filter, changedButton, scroll, footer] as [NSView] {
             v.translatesAutoresizingMaskIntoConstraints = false
             root.addSubview(v)
         }
         NSLayoutConstraint.activate([
             filter.topAnchor.constraint(equalTo: root.topAnchor, constant: 8),
             filter.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 8),
-            filter.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -8),
+            filter.trailingAnchor.constraint(equalTo: changedButton.leadingAnchor, constant: -6),
+            changedButton.centerYAnchor.constraint(equalTo: filter.centerYAnchor),
+            changedButton.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -8),
             scroll.topAnchor.constraint(equalTo: filter.bottomAnchor, constant: 6),
             scroll.leadingAnchor.constraint(equalTo: root.leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: root.trailingAnchor),
@@ -148,6 +166,8 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
         filter.stringValue = ""
         filterResults = nil
         searchGroups = nil
+        changedOnly = false
+        changedButton.state = .off
         guard let url else {
             rootNode = nil
             outline.reloadData()
@@ -199,12 +219,53 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
             guard let self, self.root == root else { return }
             if status != self.git {
                 self.git = status
+                if self.changedOnly && self.filter.stringValue.isEmpty { self.showChangedList() }
                 self.outline.reloadData()
                 self.onGitStatus?(status)
             }
             let changed = status.changes.count
+            self.changedButton.title = changed > 0 ? "\(changed)" : ""
+            self.changedButton.imagePosition = changed > 0 ? .imageLeading : .imageOnly
+            self.changedButton.isEnabled = status.repoRoot != nil
+            self.changedButton.toolTip = status.repoRoot == nil ? "Not a git repository"
+                : "Show only changed files (\(changed))"
             self.branchLabel.stringValue = status.repoRoot == nil ? "Not a git repository"
                 : "\(status.branch ?? "detached")" + (changed > 0 ? " · \(changed) changed" : " · clean")
+        }
+    }
+
+    // MARK: Changed files
+
+    /// Toggle the flat "changed files" list (also from the branch chip / footer).
+    func showChanges(_ on: Bool) {
+        _ = view
+        changedOnly = on && git.repoRoot != nil
+        changedButton.state = changedOnly ? .on : .off
+        if changedOnly {
+            filter.stringValue = ""
+            searchGroups = nil
+            showChangedList()
+        } else {
+            filterResults = nil
+        }
+        outline.reloadData()
+        if changedOnly, outline.numberOfRows > 0 { outline.selectRowIndexes([0], byExtendingSelection: false) }
+    }
+
+    @objc private func toggleChanged() { showChanges(changedButton.state == .on) }
+    @objc private func branchClicked() { if !git.changes.isEmpty || changedOnly { showChanges(!changedOnly) } }
+
+    /// The repo's changes under this folder (git reports real paths; the
+    /// folder may be reached through a symlink like /tmp).
+    private func showChangedList() {
+        guard let root else { filterResults = []; return }
+        let real = root.resolvingSymlinksInPath().path
+        filterResults = git.changes.keys.sorted().compactMap { path in
+            let suffix: Substring
+            if path.hasPrefix(root.path + "/") { suffix = path.dropFirst(root.path.count) }
+            else if path.hasPrefix(real + "/") { suffix = path.dropFirst(real.count) }
+            else { return nil }
+            return FileNode(url: URL(fileURLWithPath: root.path + suffix), isDirectory: false)
         }
     }
 
@@ -216,8 +277,8 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
         guard let root else { return }
         let query = filter.stringValue.trimmingCharacters(in: .whitespaces)
         guard !query.isEmpty else {
-            filterResults = nil
             searchGroups = nil
+            if changedOnly { showChangedList() } else { filterResults = nil }
             outline.reloadData()
             return
         }
@@ -363,7 +424,7 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
         guard let node = item as? FileNode else { return nil }
         let cell = outlineView.makeView(withIdentifier: FileCell.id, owner: nil) as? FileCell ?? FileCell()
         let path = node.url.path
-        let change = git.changes[path]
+        let change = git.changes[path] ?? git.changes[node.url.resolvingSymlinksInPath().path]
         let title = filterResults != nil && root != nil
             ? String(path.dropFirst(root!.path.count + 1)) : node.name
         cell.configure(icon: NSWorkspace.shared.icon(forFile: path), title: title, change: change,

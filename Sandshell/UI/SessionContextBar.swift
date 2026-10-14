@@ -7,6 +7,8 @@ import SwiftUI
 @MainActor
 final class SessionContextBar: NSStackView {
     var onShowFiles: (() -> Void)?
+    /// Files beside the pane, showing only the changed files.
+    var onShowChanges: (() -> Void)?
 
     private let sandboxChip = ContextChip(symbol: "shippingbox")
     private let folderChip = ContextChip(symbol: "folder")
@@ -128,7 +130,8 @@ final class SessionContextBar: NSStackView {
         let menu = NSMenu()
         if git.repoRoot != nil {
             let changes = menu.addItem(withTitle: git.changes.isEmpty ? "Show Files" : "Show \(git.changes.count) Changed File\(git.changes.count == 1 ? "" : "s")",
-                                       action: #selector(showFiles), keyEquivalent: "")
+                                       action: git.changes.isEmpty ? #selector(showFiles) : #selector(showChanges),
+                                       keyEquivalent: "")
             changes.target = self
             if git.branch != nil {
                 menu.addItem(withTitle: "Copy Branch Name", action: #selector(copyBranch), keyEquivalent: "").target = self
@@ -141,6 +144,7 @@ final class SessionContextBar: NSStackView {
     }
 
     @objc private func showFiles() { onShowFiles?() }
+    @objc private func showChanges() { onShowChanges?() }
     @objc private func reveal() { if let folder { NSWorkspace.shared.activateFileViewerSelecting([folder]) } }
     @objc private func copyPath() { copy(folder?.path) }
     @objc private func copyBranch() { copy(git.branch) }

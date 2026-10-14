@@ -9,7 +9,17 @@ import SwiftUI
 struct InspectorView: View {
     @ObservedObject var controller: WorkspaceController
     let onClose: () -> Void
-    @State private var pane: InspectorPane = .general
+    @State private var pane: InspectorPane
+
+    init(controller: WorkspaceController, initialPane: InspectorPane = .general, onClose: @escaping () -> Void) {
+        self.controller = controller
+        self.onClose = onClose
+        _pane = State(initialValue: initialPane)
+    }
+
+    /// Post (object: the workspace's controller) to open its settings on a tab
+    /// (userInfo "pane": an `InspectorPane` raw value).
+    static let openRequest = Notification.Name("SandshellOpenSettingsPane")
 
     var body: some View {
         VStack(spacing: 0) {

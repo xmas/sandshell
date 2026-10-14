@@ -92,6 +92,7 @@ enum SelfTest {
         case "pane-buttons": await paneButtons(window)
         case "files-alone": await filesAlone(window)
         case "sandbox-access": await sandboxAccess(window)
+        case "launch-failure": await launchFailure(window)
         case "files": await files(window)
         case "files-relaunch": await filesRelaunch(window)
         case "kits": await kits(window)
@@ -1049,6 +1050,29 @@ enum SelfTest {
                 log("snapshot sandbox-access-popover.png")
             }
         }
+    }
+
+    // MARK: Launch failure
+
+    /// A workspace whose kit doesn't exist: the session says so and offers to
+    /// edit the kits — and doesn't retry `sbx create` on its own.
+    private static func launchFailure(_ window: MainWindowController) async {
+        guard let tree = window.paneTree, let ws = window.workspaceController,
+              let a = ws.orderedSessions.first else { return log("need a session") }
+        ws.selection = .session(a.id)
+        check(await until(120) { tree.surfaces.launchFailures[a.id] != nil }, "the launch fails")
+        log("failure: \(tree.surfaces.launchFailures[a.id] ?? "-")")
+        func creates() -> Int {
+            let log = (try? String(contentsOf: FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent("Library/Logs/Sandshell/Sandshell.log"), encoding: .utf8)) ?? ""
+            let name = ws.containerName(for: a.containerAgentKind)
+            return log.components(separatedBy: "creating “\(name)”").count - 1
+        }
+        let before = creates()
+        await wait(15)
+        check(creates() == before, "no automatic retries (\(creates() - before) more creates in 15 s)")
+        check(tree.surfaces.launchFailures[a.id]?.contains("kit") == true, "the message names the kit problem")
+        snapshot(window, "launch-failure")
     }
 }
 #endif
