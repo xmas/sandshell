@@ -565,6 +565,81 @@ actor SbxClient {
         return try? JSONDecoder().decode(KitInspection.self, from: data)
     }
 
+    /// `sbx inspect <name> --json` — what the sandbox was actually built with
+    /// (notably its kit list, which `sbx ls` doesn't report). Nil when the
+    /// sandbox doesn't exist or the output can't be read.
+    func inspect(_ name: String) async -> SandboxInspection? {
+        guard let out = try? await run(["inspect", name, "--json"], routine: true), out.ok,
+              let json = Self.firstJSONObject(in: out.stdout),
+              let data = json.data(using: .utf8) else { return nil }
+        return try? JSONDecoder().decode(SandboxInspection.self, from: data)
+    }
+
+    /// `sbx kit add <name> <ref>` (experimental): recreates the container with
+    /// `ref` appended to its kit list, keeping kit-owned volumes (agent state).
+    /// sbx refuses — non-zero exit, sandbox left as it was — for sandboxes that
+    /// predate the feature and for kits the recreate can't apply yet (files,
+    /// published ports, credentials…); the caller then rebuilds instead.
+    /// Output goes to temp files rather than pipes for the same reason as
+    /// `createAndPoll`: the recreate (re)starts the sandbox, and a helper that
+    /// inherits a pipe fd would stall Foundation's shared callback queue.
+    func kitAdd(sandbox name: String, ref: String, cwd: String, mcpURL: URL) async throws -> CommandOutput {
+        let args = ["kit", "add", name, ref]
+        Log.info(.sbx, "$ sbx \(args.joined(separator: " "))")
+        let started = Date()
+        let proc = makeProcess(args, env: ["SBX_MCP_URL": mcpURL.absoluteString])
+        proc.currentDirectoryURL = URL(fileURLWithPath: cwd)
+        proc.standardInput = FileHandle.nullDevice
+        let tmp = FileManager.default.temporaryDirectory
+        let outURL = tmp.appendingPathComponent("sbx-kit-add-\(UUID().uuidString).out")
+        let errURL = tmp.appendingPathComponent("sbx-kit-add-\(UUID().uuidString).err")
+        FileManager.default.createFile(atPath: outURL.path, contents: nil)
+        FileManager.default.createFile(atPath: errURL.path, contents: nil)
+        guard let outHandle = try? FileHandle(forWritingTo: outURL),
+              let errHandle = try? FileHandle(forWritingTo: errURL) else {
+            throw SbxError.spawn("could not open output capture for kit add “\(name)”")
+        }
+        proc.standardOutput = outHandle
+        proc.standardError = errHandle
+        defer {
+            try? outHandle.close()
+            try? errHandle.close()
+            try? FileManager.default.removeItem(at: outURL)
+            try? FileManager.default.removeItem(at: errURL)
+        }
+
+        let status: Int32 = try await withCheckedThrowingContinuation { cont in
+            let once = ResumeOnce()
+            proc.terminationHandler = { p in
+                guard once.claim() else { return }
+                cont.resume(returning: p.terminationStatus)
+            }
+            do {
+                try proc.run()
+            } catch {
+                guard once.claim() else { return }
+                cont.resume(throwing: SbxError.spawn("\(sbx) \(args.joined(separator: " ")): \(error)"))
+            }
+            // Backstop: a recreate normally takes seconds; a wedged one shouldn't
+            // leave the rebuild spinner up forever.
+            Task.detached { [weak proc] in
+                try? await Task.sleep(nanoseconds: 300 * 1_000_000_000)
+                guard once.claim() else { return }
+                if proc?.isRunning == true { proc?.terminate() }
+                cont.resume(throwing: SbxError.command("sbx kit add timed out after 300s"))
+            }
+        }
+        let out = Self.clean((try? String(contentsOf: outURL, encoding: .utf8)) ?? "")
+        let err = Self.clean((try? String(contentsOf: errURL, encoding: .utf8)) ?? "")
+        let ms = Int(Date().timeIntervalSince(started) * 1000)
+        if status == 0 {
+            Log.info(.sbx, "→ sbx kit add ok (\(ms)ms)")
+        } else {
+            Log.error(.sbx, "→ sbx kit add exit \(status) (\(ms)ms): \(err.isEmpty ? out : err)")
+        }
+        return CommandOutput(stdout: out, stderr: err, status: status)
+    }
+
     // MARK: - In-sandbox reads
 
     /// Read a file from inside a running sandbox (`sbx exec <name> cat <path>`).

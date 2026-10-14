@@ -99,6 +99,16 @@ struct CreateOptions {
 }
 
 /// Result of running an `sbx` command.
+/// The parts of `sbx inspect <name> --json` Sandshell reads. `kits` lists the
+/// kit references the container was built with, in order, as sbx recorded
+/// them (relative paths made absolute; symlinks and registry refs kept as given).
+struct SandboxInspection: Decodable {
+    var name: String
+    var agent: String?
+    var kits: [String]?
+    var state: String?
+}
+
 struct CommandOutput {
     var stdout: String
     var stderr: String

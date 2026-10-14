@@ -1,5 +1,6 @@
 #if DEBUG
 import AppKit
+import SwiftUI
 
 /// `-SandshellUITestHeadless YES` (scripts/run-ui-tests.sh): keep every window
 /// — including sheets opened later — transparent, click-through and behind
@@ -54,6 +55,7 @@ enum SelfTest {
         case "alerts": alerts()
         case "files": await files(window)
         case "files-relaunch": await filesRelaunch(window)
+        case "kits": await kits(window)
         default: log("unknown self-test \(requested ?? "")")
         }
         log(failures == 0 ? "ALL PASSED" : "\(failures) FAILED")
@@ -370,6 +372,95 @@ enum SelfTest {
         }
         await wait(1.5)
         snapshot(window, "files-relaunch")
+    }
+
+    // MARK: Kits
+
+    /// Kit add + drift against a real sandbox. Needs `-SandshellSelfTestKits
+    /// '("<a>","<b>","<c>","<d>","<e>")'`: five local mixin kit dirs, where the
+    /// workspace config starts with [a], and d declares `files` (which
+    /// `sbx kit add` refuses, forcing the rebuild fallback).
+    private static func kits(_ window: MainWindowController) async {
+        guard let ws = window.workspaceController else { return log("no window") }
+        let refs = UserDefaults.standard.stringArray(forKey: "SandshellSelfTestKits") ?? []
+        guard refs.count == 5 else { return log("need 5 kit dirs in -SandshellSelfTestKits, have \(refs.count)") }
+        let (a, b, c, d, e) = (refs[0], refs[1], refs[2], refs[3], refs[4])
+        let agent = ws.primaryAgent
+        let name = ws.containerName(for: agent)
+        let stateFile = ws.rootURL.appendingPathComponent(".sandshell/state.json")
+        func actualKits() async -> [String] { await SbxClient.shared.inspect(name)?.kits ?? [] }
+        func sandboxID() async -> String? { try? await SbxClient.shared.status(name: name)?.id }
+        func settle() async -> Bool { await until(300) { !ws.busy && !ws.isBuilding } }
+
+        check(await until(300) { ws.containerPhases[agent] == .running && !ws.busy }, "container '\(name)' comes up")
+        check(await actualKits() == [a], "sbx inspect reports the configured kit [a]")
+        ws.refreshKitDrift(for: agent)
+        await wait(3)
+        check(ws.kitDrift[agent] == nil, "no drift right after create")
+
+        // Hand-run `sbx kit add` behind Sandshell's back → drift → adopt.
+        let handB = try? await SbxClient.shared.kitAdd(sandbox: name, ref: b, cwd: ws.rootURL.path, mcpURL: ws.mcpURL)
+        check(handB?.ok == true, "hand-run sbx kit add b succeeds")
+        ws.refreshKitDrift(for: agent)
+        check(await until(30) { ws.kitDrift[agent]?.extra == [b] }, "drift reports b as extra")
+        log("drift: \(String(describing: ws.kitDrift[agent]))")
+        await wait(0.8)
+        snapshot(window, "kits-drift-banner")
+        renderKitsPane(drift: ws.kitDrift[agent], enabled: [a])
+
+        ws.adoptKitDrift(for: agent)
+        check(ws.kits == [a, b], "adopt adds b to the workspace config")
+        await wait(3)
+        check(ws.kitDrift[agent] == nil, "no drift after adopting")
+
+        // Hand-add c → drop on next rebuild (persisted ignore).
+        _ = try? await SbxClient.shared.kitAdd(sandbox: name, ref: c, cwd: ws.rootURL.path, mcpURL: ws.mcpURL)
+        ws.refreshKitDrift(for: agent)
+        check(await until(30) { ws.kitDrift[agent]?.extra == [c] }, "drift reports c as extra")
+        ws.ignoreKitDrift(for: agent)
+        ws.refreshKitDrift(for: agent)
+        await wait(3)
+        check(ws.kitDrift[agent] == nil, "ignored drift stays hidden after a re-check")
+        let stateText = (try? String(contentsOf: stateFile, encoding: .utf8)) ?? ""
+        check(stateText.contains("ignoredKitDrift"), "ignored drift persisted to state.json")
+
+        // Additions only → sbx kit add in place (same sandbox id, nothing rebuilt).
+        let idBefore = await sandboxID()
+        ws.applyKits([a, b, e])
+        check(await settle(), "kit-add apply finishes")
+        let afterAdd = await actualKits()
+        log("kits after apply [a,b,e]: \(afterAdd)")
+        check(afterAdd == [a, b, c, e], "e appended in place; hand-added c still there")
+        check(await sandboxID() == idBefore && idBefore != nil, "same sandbox id → kit add path, not a rebuild")
+        check(ws.containerPhases[agent] == .running, "container running after kit add")
+
+        // A kit sbx refuses to add in place → full rebuild fallback.
+        ws.applyKits([a, b, e, d])
+        check(await settle(), "refused kit add apply finishes")
+        let afterRefusal = await actualKits()
+        log("kits after apply [a,b,e,d]: \(afterRefusal)")
+        check(afterRefusal == [a, b, e, d], "rebuild applied the config's kits (ignored c dropped)")
+        check(await sandboxID() != idBefore, "new sandbox id → fell back to a rebuild")
+        let stateAfter = (try? String(contentsOf: stateFile, encoding: .utf8)) ?? ""
+        check(!stateAfter.contains("ignoredKitDrift"), "ignored drift cleared by the rebuild")
+        ws.refreshKitDrift(for: agent)
+        await wait(3)
+        check(ws.kitDrift[agent] == nil, "no drift after the rebuild")
+        await wait(1)
+        snapshot(window, "kits-final")
+    }
+
+    /// Render the Settings ▸ Kits pane offscreen with a drift section.
+    private static func renderKitsPane(drift: KitDrift?, enabled: [String]) {
+        let view = NSHostingView(rootView: KitConfigView(
+            model: KitConfigModel(enabledRefs: enabled), onRebuild: {},
+            drift: drift, onAdoptDrift: {}, onIgnoreDrift: {}))
+        view.frame = NSRect(x: 0, y: 0, width: InspectorMetrics.paneWidth, height: InspectorMetrics.paneHeight)
+        view.layoutSubtreeIfNeeded()
+        guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
+        view.cacheDisplay(in: view.bounds, to: rep)
+        try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: out + "/kits-pane-drift.png"))
+        log("snapshot kits-pane-drift.png")
     }
 }
 #endif

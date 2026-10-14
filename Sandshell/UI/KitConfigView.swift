@@ -2,8 +2,8 @@ import AppKit
 import SwiftUI
 
 /// Editable kit selection for a workspace: the app-global registry of kits the
-/// user has added, with a checkbox per kit choosing which apply here. Kits are
-/// fixed at `sbx create`, so applying a change rebuilds the sandbox.
+/// user has added, with a checkbox per kit choosing which apply here. Added
+/// kits are applied in place (`sbx kit add`); any other change rebuilds.
 @MainActor
 final class KitConfigModel: ObservableObject {
     @Published var registry: [KitRef]
@@ -25,10 +25,21 @@ final class KitConfigModel: ObservableObject {
     }
 
     var isDirty: Bool { enabled != baseline }
+    /// The pending change only turns kits on — applied with `sbx kit add`, no rebuild.
+    var isAdditionsOnly: Bool { isDirty && enabled.isSuperset(of: baseline) }
     /// Enabled refs in registry order.
     var enabledRefs: [String] { registry.map(\.ref).filter { enabled.contains($0) } }
 
     func revert() { enabled = baseline }
+
+    /// Kits the sandbox already has were adopted into the workspace: show them
+    /// enabled and treat them as applied.
+    func adopt(_ refs: [String]) {
+        registry = KitStore.all
+        for ref in refs where !registry.contains(where: { $0.ref == ref }) { registry.append(KitRef(ref: ref)) }
+        enabled.formUnion(refs)
+        baseline.formUnion(refs)
+    }
     func commitBaseline() { baseline = enabled }
 
     func binding(for ref: String) -> Binding<Bool> {
@@ -121,11 +132,18 @@ struct KitConfigView: View {
     var onRefreshStartup: (() -> Void)? = nil
     /// Force-rebuild the sandbox (the only way a changed kit is loaded).
     var onRebuild: (() -> Void)? = nil
+    /// Kits the sandbox has that the workspace config doesn't (or vice versa).
+    var drift: KitDrift? = nil
+    var onAdoptDrift: (() -> Void)? = nil
+    var onIgnoreDrift: (() -> Void)? = nil
 
     @State private var browsingHub = false
 
     var body: some View {
         Form {
+            if let drift, !drift.isEmpty {
+                driftSection(drift)
+            }
             if let startup, startup.fetchError == nil {
                 startupSection(startup)
             }
@@ -151,7 +169,8 @@ struct KitConfigView: View {
                 Text("Kits")
             } footer: {
                 Text("Kits extend the sandbox agent with extra credentials, network policy, env, "
-                     + "files, and startup steps. They're fixed at creation, so applying a change "
+                     + "files, and startup steps. Turning a kit on adds it to the running sandbox "
+                     + "(sbx kit add) where sbx can; turning one off — or a kit sbx can't add in place — "
                      + "rebuilds the workspace's sandbox(es). ★ marks a default: it is preselected "
                      + "for every new workspace.")
                     .font(.caption).foregroundStyle(.secondary)
@@ -185,7 +204,7 @@ struct KitConfigView: View {
                     HStack {
                         Spacer()
                         Button("Revert", action: onCancel).disabled(!model.isDirty)
-                        Button("Apply & Rebuild") { onConfirm(model.enabledRefs) }
+                        Button(model.isAdditionsOnly ? "Add to Sandbox" : "Apply & Rebuild") { onConfirm(model.enabledRefs) }
                             .disabled(!model.isDirty)
                             .keyboardShortcut(.defaultAction)
                     }
@@ -202,6 +221,53 @@ struct KitConfigView: View {
         .sheet(isPresented: $browsingHub) {
             KitHubBrowserView(isRegistered: { model.isRegistered($0) },
                               onAdd: { model.add(hub: $0) })
+        }
+    }
+
+    // MARK: Kit drift
+
+    @ViewBuilder private func driftSection(_ drift: KitDrift) -> some View {
+        Section {
+            if !drift.extra.isEmpty {
+                driftRows(drift.extra, label: "not in this workspace")
+                HStack {
+                    Text("Added outside Sandshell (e.g. sbx kit add). A rebuild uses this workspace’s kit list and would drop "
+                         + (drift.extra.count == 1 ? "it." : "them."))
+                        .font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                    if let onIgnoreDrift {
+                        Button("Drop on Next Rebuild", action: onIgnoreDrift)
+                            .accessibilityIdentifier("kits-drift-ignore")
+                    }
+                    if let onAdoptDrift {
+                        Button("Adopt into Workspace", action: onAdoptDrift)
+                            .accessibilityIdentifier("kits-drift-adopt")
+                    }
+                }
+            }
+            if !drift.missing.isEmpty {
+                driftRows(drift.missing, label: "missing from the sandbox")
+                HStack {
+                    Text("Rebuild to apply this workspace’s kit list.").font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                    if let onRebuild { Button("Rebuild Sandbox", action: onRebuild) }
+                }
+            }
+        } header: {
+            Text("Sandbox kits differ · \(drift.containerName)")
+        }
+    }
+
+    @ViewBuilder private func driftRows(_ refs: [String], label: String) -> some View {
+        ForEach(refs, id: \.self) { ref in
+            HStack(spacing: 6) {
+                Image(systemName: "shippingbox.fill").foregroundStyle(.blue)
+                Text(KitStartupParser.kitName(forRef: ref)).fontWeight(.medium)
+                Text(label).font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Text(ref).font(.system(size: 10.5, design: .monospaced))
+                    .foregroundStyle(.tertiary).lineLimit(1).truncationMode(.middle)
+            }
         }
     }
 

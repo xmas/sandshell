@@ -50,6 +50,10 @@ final class WorkspaceController: ObservableObject {
     @Committed var kitStartup: [AgentKind: KitStartupStatus] = [:]
     var kitStartupTasks: [AgentKind: Task<Void, Never>] = [:]
     var kitLogWindows: [AgentKind: HostTerminalWindowController] = [:]
+    /// Per agent container: kits it actually has (`sbx inspect`) that differ
+    /// from the workspace config — e.g. one added by hand with `sbx kit add`.
+    /// Absent = in sync, not checked yet, or a rebuild is already pending.
+    @Committed private(set) var kitDrift: [AgentKind: KitDrift] = [:]
 
     let home = FileManager.default.homeDirectoryForCurrentUser
     private var state: WorkspaceState
@@ -483,7 +487,7 @@ final class WorkspaceController: ObservableObject {
                 // A container that (re)started outside our create path (e.g.
                 // Settings ▸ Run) re-runs its startup dispatcher — follow it.
                 if sb?.isRunning == true { refreshKitStartupIfNeeded(for: agent) }
-                else if sb == nil { resetKitStartup(for: agent) }
+                else if sb == nil { resetKitStartup(for: agent); kitDrift[agent] = nil }
             }
         }
     }
@@ -579,24 +583,104 @@ final class WorkspaceController: ObservableObject {
         for agent in agents { rebuildContainer(for: agent, force: true) }
     }
 
-    /// Apply an edited kit set (from the Kits inspector): persist it and rebuild
-    /// every existing container so they pick up the new `--kit` set.
-    func applyKits(_ kits: [String]) {
+    /// Apply an edited kit set (from the Kits inspector) and persist it. When
+    /// the only change is added kits, each container gets them in place via
+    /// `sbx kit add` (falling back to a rebuild where sbx refuses); anything
+    /// else — or `rebuild` — stops and recreates every container.
+    func applyKits(_ kits: [String], rebuild: Bool = false) {
         let cleaned = kits.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
-        workspace.kits = cleaned
-        config.kits = cleaned
+        let previous = resolvedKits()
+        let added = rebuild ? nil : KitDrift.additionsOnly(from: previous, to: cleaned)
+        // `sbx kit add` appends, so keep the config in the container's order —
+        // a later rebuild then composes the kits the same way.
+        let final = added.map { previous + $0 } ?? cleaned
+        workspace.kits = final
+        config.kits = final
         try? config.save(root: workspace.rootURL)
         var agents = Set(containers.keys)
         agents.insert(workspace.primaryAgent)
-        // Force: the user chose "Apply & Rebuild" — also the path for reloading a
-        // kit whose *contents* changed, where the kit ref set (and thus the
-        // create-time signature) is identical and the unchanged-config shortcut
-        // would otherwise just re-attach.
-        for agent in agents { rebuildContainer(for: agent, force: true) }
+        for agent in agents {
+            if let added {
+                runAction { @MainActor in
+                    try await self.serializedBringUp(for: agent, joinInflight: false) {
+                        try await self.performKitAdd(added, previousKits: previous, for: agent)
+                    }
+                }
+            } else {
+                // Force: also the path for reloading a kit whose *contents*
+                // changed, where the kit ref set (and thus the create-time
+                // signature) is identical and the unchanged-config shortcut
+                // would otherwise just re-attach.
+                rebuildContainer(for: agent, force: true)
+            }
+        }
     }
 
     /// Current kit set (for the Kits inspector to edit).
     var kits: [String] { workspace.kits }
+
+    // MARK: - Kit drift
+
+    /// Compare the container's actual kit list (`sbx inspect --json`) with the
+    /// workspace config and publish the difference in `kitDrift`. Only while
+    /// the container is believed in sync: with a create-time change pending
+    /// (declined rebuild prompt), a mismatch is expected and the rebuild settles it.
+    func refreshKitDrift(for agent: AgentKind) {
+        let name = containerName(for: agent)
+        let configured = resolvedKits()
+        let expected = configSignature(mounts: resolvedMounts(), kits: configured)
+        let root = workspace.rootURL
+        Task { @MainActor in
+            guard let actual = await SbxClient.shared.inspect(name)?.kits else { return }
+            guard self.state.appliedMountSignatures[name] == expected, self.resolvedKits() == configured else {
+                self.kitDrift[agent] = nil
+                return
+            }
+            var drift = KitDrift.compute(containerName: name, actual: actual, configured: configured, root: root)
+            let ignored = Set((self.state.ignoredKitDrift[name] ?? []).map { KitDrift.normalize($0, root: root) })
+            drift.extra.removeAll { ignored.contains(KitDrift.normalize($0, root: root)) }
+            let value: KitDrift? = drift.isEmpty ? nil : drift
+            guard value != self.kitDrift[agent] else { return }
+            self.kitDrift[agent] = value
+            if let value {
+                Log.info(.workspace, "kit drift in '\(name)': extra [\(value.extra.joined(separator: ", "))], missing [\(value.missing.joined(separator: ", "))]")
+            }
+        }
+    }
+
+    /// Make a container's extra kits part of the workspace config. The container
+    /// already has them, so it stays as is; the next rebuild keeps them.
+    func adoptKitDrift(for agent: AgentKind) {
+        guard let drift = kitDrift[agent], !drift.extra.isEmpty else { return }
+        let name = drift.containerName
+        let mounts = resolvedMounts()
+        let wasInSync = state.appliedMountSignatures[name] == configSignature(mounts: mounts, kits: resolvedKits())
+        let registered = Set(KitStore.all.map(\.ref))
+        for ref in drift.extra where !registered.contains(ref) {
+            KitStore.add(ref)
+            Task {
+                guard let info = await SbxClient.shared.kitInspect(ref) else { return }
+                KitStore.update(ref, displayName: info.title, summary: info.description)
+            }
+        }
+        let kits = resolvedKits() + drift.extra
+        workspace.kits = kits
+        config.kits = kits
+        try? config.save(root: workspace.rootURL)
+        if wasInSync { recordSignature(configSignature(mounts: mounts, kits: kits), for: name) }
+        Log.info(.workspace, "adopted kit(s) from '\(name)' into the workspace: \(drift.extra.joined(separator: ", "))")
+        kitDrift[agent] = nil
+        refreshKitDrift(for: agent)
+    }
+
+    /// Leave a container's extra kits alone and stop reporting them; the next
+    /// rebuild (which uses the workspace config) drops them.
+    func ignoreKitDrift(for agent: AgentKind) {
+        guard let drift = kitDrift[agent] else { return }
+        state.ignoredKitDrift[drift.containerName, default: []] += drift.extra
+        try? state.save(root: workspace.rootURL)
+        kitDrift[agent] = nil
+    }
 
     /// Update this folder's identity (icon/color/sidebar bg) — persists to the
     /// global registry and republishes so the sidebar re-renders live.
@@ -696,17 +780,70 @@ final class WorkspaceController: ObservableObject {
     /// rebuild waits for the in-flight one, then runs its own.
     private func bringUpContainer(for agent: AgentKind, onMismatch: MismatchAction,
                                   force: Bool = false) async throws {
-        let name = containerName(for: agent)
-        if let inflight = bringUps[name] {
-            if !force { return try await inflight.value }
-            _ = try? await inflight.value
-        }
-        let task = Task { @MainActor in
+        try await serializedBringUp(for: agent, joinInflight: !force) {
             try await self.performBringUp(for: agent, onMismatch: onMismatch, force: force)
         }
+    }
+
+    /// Run `work` as the container's only bring-up. With `joinInflight`, an
+    /// in-flight one is the result; otherwise wait it out, then run `work`.
+    private func serializedBringUp(for agent: AgentKind, joinInflight: Bool,
+                                   _ work: @escaping @MainActor () async throws -> Void) async throws {
+        let name = containerName(for: agent)
+        if let inflight = bringUps[name] {
+            if joinInflight { return try await inflight.value }
+            _ = try? await inflight.value
+        }
+        let task = Task { @MainActor in try await work() }
         bringUps[name] = task
         defer { if bringUps[name] == task { bringUps[name] = nil } }
         try await task.value
+    }
+
+    /// Add kits to an existing container with `sbx kit add`, one ref at a time.
+    /// Falls back to a full rebuild when the container is absent, has other
+    /// create-time changes pending (mounts, image), or sbx refuses a kit.
+    private func performKitAdd(_ refs: [String], previousKits: [String], for agent: AgentKind) async throws {
+        let name = containerName(for: agent)
+        let mounts = resolvedMounts()
+        guard try await SbxClient.shared.status(name: name) != nil,
+              state.appliedMountSignatures[name] == configSignature(mounts: mounts, kits: previousKits) else {
+            return try await performBringUp(for: agent, onMismatch: .rebuild, force: true)
+        }
+        Log.info(.workspace, "adding \(refs.count) kit(s) to '\(name)' with sbx kit add")
+        // "Rebuilding…": the recreate swaps the container, so its sessions end
+        // just as in a rebuild (the detail pane drops their terminals on this prefix).
+        activity = "Rebuilding \(name) — adding \(refs.count == 1 ? "a kit" : "\(refs.count) kits")…"
+        containerPhases[agent] = .rebuilding
+        resetKitStartup(for: agent)
+        kitDrift[agent] = nil
+        for ref in refs {
+            let reason: String
+            do {
+                let out = try await SbxClient.shared.kitAdd(sandbox: name, ref: ref, cwd: workspace.rootURL.path,
+                                                            mcpURL: workspace.mcpURL)
+                if out.ok { continue }
+                reason = out.stderr.isEmpty ? out.stdout : out.stderr
+            } catch {
+                reason = error.localizedDescription
+            }
+            Log.info(.workspace, "sbx kit add \(ref) → '\(name)' not applied (\(reason)); rebuilding instead")
+            return try await performBringUp(for: agent, onMismatch: .rebuild, force: true)
+        }
+        recordSignature(configSignature(mounts: mounts, kits: resolvedKits()), for: name)
+        let sandbox: Sandbox
+        do {
+            sandbox = try await SbxClient.shared.waitUntilRunning(name: name, timeout: 60)
+        } catch {
+            containerPhases[agent] = .failed(error.localizedDescription)
+            throw error
+        }
+        containers[agent] = sandbox
+        containerPhases[agent] = .running
+        refreshKitStartup(for: agent)
+        refreshKitDrift(for: agent)
+        // The swap container's gateway may not carry dynamically loaded servers over.
+        await loadMCPServers(await effectiveMCPServers(), into: name)
     }
 
     private func performBringUp(for agent: AgentKind, onMismatch: MismatchAction,
@@ -740,6 +877,7 @@ final class WorkspaceController: ObservableObject {
                     containers[agent] = existing
                     containerPhases[agent] = existing.isRunning ? .running : .stopped
                     refreshKitStartupIfNeeded(for: agent)
+                    refreshKitDrift(for: agent)
                     return
                 }
                 switch onMismatch {
@@ -747,12 +885,14 @@ final class WorkspaceController: ObservableObject {
                     containers[agent] = existing
                     containerPhases[agent] = existing.isRunning ? .running : .stopped
                     refreshKitStartupIfNeeded(for: agent)
+                    refreshKitDrift(for: agent)
                     return
                 case .prompt:
                     guard await confirmRebuild(name: name, killsRunning: existing.isRunning) else {
                         containers[agent] = existing
                         containerPhases[agent] = existing.isRunning ? .running : .stopped
                         refreshKitStartupIfNeeded(for: agent)
+                        refreshKitDrift(for: agent)
                         return
                     }
                 case .rebuild:
@@ -763,6 +903,7 @@ final class WorkspaceController: ObservableObject {
             activity = "Rebuilding \(name)…"
             containerPhases[agent] = .rebuilding
             resetKitStartup(for: agent)
+            kitDrift[agent] = nil
             do {
                 built = try await SbxClient.shared.rebuild(workspace: workspace, agent: agent, name: name, mounts: mounts, kits: kits)
             } catch {
@@ -781,6 +922,8 @@ final class WorkspaceController: ObservableObject {
                 throw error
             }
         }
+        // A fresh container has exactly the configured kits; nothing left to ignore.
+        state.ignoredKitDrift[name] = nil
         recordSignature(signature, for: name)
         // This root now has a created sandbox — track it (General list + default).
         RootFolderStore.ensureRegistered(workspace.rootURL.path)
@@ -794,6 +937,7 @@ final class WorkspaceController: ObservableObject {
         // (the dispatcher waits on hosts, downloads binaries…) — start following
         // the log now so failures/warnings surface as they happen.
         refreshKitStartup(for: agent)
+        refreshKitDrift(for: agent)
         // Dynamic MCP: attach the user's checked servers to the now-running
         // sandbox via `sbx mcp load` (discovery stays on for everything else).
         await loadMCPServers(mcp, into: name)

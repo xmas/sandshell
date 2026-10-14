@@ -149,24 +149,30 @@ struct WorkspaceState: Codable {
     /// The mount signature last applied to each container, keyed by container
     /// name. A mismatch with the freshly-resolved signature drives a rebuild.
     var appliedMountSignatures: [String: String]
+    /// Kits found in a container but not in the workspace config that the user
+    /// chose to leave for the next rebuild to drop, keyed by container name.
+    /// Cleared when that container is (re)created.
+    var ignoredKitDrift: [String: [String]]
 
     init(schemaVersion: Int = 2,
          folders: [Folder] = [],
          sessions: [Session] = [],
          expandedFolderIDs: [UUID] = [],
          archiveWatermarks: [String: Date] = [:],
-         appliedMountSignatures: [String: String] = [:]) {
+         appliedMountSignatures: [String: String] = [:],
+         ignoredKitDrift: [String: [String]] = [:]) {
         self.schemaVersion = schemaVersion
         self.folders = folders
         self.sessions = sessions
         self.expandedFolderIDs = expandedFolderIDs
         self.archiveWatermarks = archiveWatermarks
         self.appliedMountSignatures = appliedMountSignatures
+        self.ignoredKitDrift = ignoredKitDrift
     }
 
     enum CodingKeys: String, CodingKey {
         case schemaVersion, folders, sessions, expandedFolderIDs
-        case archiveWatermarks, appliedMountSignatures
+        case archiveWatermarks, appliedMountSignatures, ignoredKitDrift
         // Legacy keys (pre-folders model).
         case projects, expandedProjectIDs
     }
@@ -181,6 +187,7 @@ struct WorkspaceState: Codable {
             ?? c.decodeIfPresent([UUID].self, forKey: .expandedProjectIDs) ?? []
         archiveWatermarks = try c.decodeIfPresent([String: Date].self, forKey: .archiveWatermarks) ?? [:]
         appliedMountSignatures = try c.decodeIfPresent([String: String].self, forKey: .appliedMountSignatures) ?? [:]
+        ignoredKitDrift = try c.decodeIfPresent([String: [String]].self, forKey: .ignoredKitDrift) ?? [:]
     }
 
     func encode(to encoder: Encoder) throws {
@@ -191,6 +198,7 @@ struct WorkspaceState: Codable {
         try c.encode(expandedFolderIDs, forKey: .expandedFolderIDs)
         try c.encode(archiveWatermarks, forKey: .archiveWatermarks)
         try c.encode(appliedMountSignatures, forKey: .appliedMountSignatures)
+        if !ignoredKitDrift.isEmpty { try c.encode(ignoredKitDrift, forKey: .ignoredKitDrift) }
     }
 
     // MARK: - Persistence

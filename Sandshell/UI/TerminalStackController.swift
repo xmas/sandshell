@@ -347,7 +347,7 @@ final class TerminalStackController: NSViewController {
     private let kitBanner = KitStartupBannerView()
     private var frameTopNoBanner: NSLayoutConstraint?
     private var frameTopWithBanner: NSLayoutConstraint?
-    /// Banner findings the user dismissed (by `KitStartupStatus.signature`), so
+    /// Banner findings the user dismissed (by `Content.signature`), so
     /// a poll doesn't bring the same banner back but a rebuild's new findings do.
     private var dismissedKitBanners: Set<String> = []
     /// Whether the pane is showing a session (active or exited); the banner then
@@ -641,6 +641,8 @@ final class TerminalStackController: NSViewController {
             self?.dismissedKitBanners.insert(signature)
             self?.updateKitBanner()
         }
+        kitBanner.onAdopt = { [weak self] agent in self?.controller.adoptKitDrift(for: agent) }
+        kitBanner.onIgnoreDrift = { [weak self] agent in self?.controller.ignoreKitDrift(for: agent) }
         container.addSubview(kitBanner)
         let frameTopNoBanner = frameView.topAnchor.constraint(equalTo: container.safeAreaLayoutGuide.topAnchor, constant: 14)
         let frameTopWithBanner = frameView.topAnchor.constraint(equalTo: kitBanner.bottomAnchor, constant: 12)
@@ -719,6 +721,8 @@ final class TerminalStackController: NSViewController {
         // (`@Committed` publishes after the store, so reading the controller here
         // sees the new findings.)
         controller.$kitStartup.dropFirst().sink { [weak self] _ in self?.updateKitBanner() }
+            .store(in: &cancellables)
+        controller.$kitDrift.dropFirst().sink { [weak self] _ in self?.updateKitBanner() }
             .store(in: &cancellables)
         // Live-update the header when runtime state changes (status, name, etc.).
         controller.$runtimes.dropFirst().sink { [weak self] _ in
@@ -816,8 +820,8 @@ final class TerminalStackController: NSViewController {
         let name = controller.containerName(for: agent)
         let alert = NSAlert()
         alert.messageText = "Rebuild “\(name)”?"
-        alert.informativeText = "The sandbox is recreated with the current kits and mounts, which is the only way "
-            + "a changed kit gets loaded. Any session running in it will end. Workspace files are kept."
+        alert.informativeText = "The sandbox is recreated with the current kits and mounts, which reloads every "
+            + "kit’s contents. Any session running in it will end. Workspace files are kept."
         alert.alertStyle = .warning
         alert.addButton(withTitle: "Rebuild")
         alert.addButton(withTitle: "Cancel")
@@ -837,10 +841,14 @@ final class TerminalStackController: NSViewController {
         } else if let fallback = kitBannerFallbackAgent {
             agent = fallback
         }
-        if let agent, let status = controller.kitStartupStatus(for: agent), status.fetchError == nil,
-           !dismissedKitBanners.contains(status.signature) {
+        if let agent, let status = controller.kitStartupStatus(for: agent), status.fetchError == nil {
             let candidate = KitStartupBannerView.Content(agent: agent, status: status)
-            if candidate.isVisible { content = candidate }
+            if candidate.isVisible, !dismissedKitBanners.contains(candidate.signature) { content = candidate }
+        }
+        // Startup problems take the slot first; kit drift shows when there are none.
+        if content == nil, let agent, let drift = controller.kitDrift[agent] {
+            let candidate = KitStartupBannerView.Content(agent: agent, drift: drift)
+            if candidate.isVisible, !dismissedKitBanners.contains(candidate.signature) { content = candidate }
         }
         let show = content != nil
         if let content { kitBanner.configure(content) }

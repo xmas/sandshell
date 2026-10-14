@@ -4,22 +4,85 @@ import AppKit
 /// a kit failed, printed a warning, was skipped after an earlier failure, or is
 /// still installing. Offers "Show Log" (full dispatcher log in a terminal
 /// window) and a dismiss button. Content comes from `KitStartupStatus`.
+/// Otherwise reports kit drift — the container's kits differ from the
+/// workspace config — with Adopt / Drop on Next Rebuild.
 final class KitStartupBannerView: NSView {
     struct Content: Equatable {
         var agent: AgentKind
-        var status: KitStartupStatus
+        var finding: Finding
 
-        enum Tone { case failure, warning, progress }
+        /// What the banner reports: the kit startup run, or a container whose
+        /// kits differ from the workspace config (see `KitDrift`).
+        enum Finding: Equatable {
+            case startup(KitStartupStatus)
+            case drift(KitDrift)
+        }
+
+        enum Tone { case failure, warning, progress, drift }
+
+        init(agent: AgentKind, status: KitStartupStatus) { self.init(agent: agent, finding: .startup(status)) }
+        init(agent: AgentKind, drift: KitDrift) { self.init(agent: agent, finding: .drift(drift)) }
+        init(agent: AgentKind, finding: Finding) {
+            self.agent = agent
+            self.finding = finding
+        }
+
+        /// Identity for dismissal: a dismissed banner stays hidden until this changes.
+        var signature: String {
+            switch finding {
+            case .startup(let status): return status.signature
+            case .drift(let drift): return "drift|" + drift.signature
+            }
+        }
 
         var tone: Tone {
+            guard case .startup(let status) = finding else { return .drift }
             if status.problems.contains(where: { if case .failed = $0.outcome { return true }; return false }) { return .failure }
             if status.hasProblems { return .warning }
             return .progress
         }
 
-        var isVisible: Bool { status.hasProblems || (status.isInProgress && !status.installing.isEmpty) }
+        var isVisible: Bool {
+            switch finding {
+            case .startup(let status): return status.hasProblems || (status.isInProgress && !status.installing.isEmpty)
+            case .drift(let drift): return !drift.isEmpty
+            }
+        }
+
+        var drift: KitDrift? { if case .drift(let d) = finding { return d }; return nil }
 
         var title: String {
+            switch finding {
+            case .startup(let status): return Self.startupTitle(status)
+            case .drift(let drift): return Self.driftTitle(drift)
+            }
+        }
+
+        var detail: String {
+            switch finding {
+            case .drift(let drift):
+                return (drift.extra.isEmpty ? drift.missing : drift.extra).joined(separator: "  ·  ")
+            case .startup(let status):
+                let lines = status.problems.first?.detail ?? []
+                let text = lines.suffix(2).joined(separator: "  ·  ")
+                if status.report?.isAborted == true, status.problems.count > 1 {
+                    return text.isEmpty ? "Later kits were skipped." : text
+                }
+                if status.isInProgress, !status.hasProblems {
+                    return "Tools provided by these kits aren’t available yet."
+                }
+                return text
+            }
+        }
+
+        var hint: String {
+            guard let drift else { return KitStartupBannerView.rebuildHint }
+            if drift.extra.isEmpty { return "Rebuild to apply the workspace’s kit list." }
+            return "Added outside Sandshell (e.g. sbx kit add). A rebuild uses the workspace’s kit list and would drop "
+                + (drift.extra.count == 1 ? "it" : "them") + " — adopt to keep."
+        }
+
+        private static func startupTitle(_ status: KitStartupStatus) -> String {
             let problems = status.problems
             if problems.count > 1 {
                 let list = problems.map { "\($0.name) (\($0.outcome.label))" }.joined(separator: ", ")
@@ -42,26 +105,28 @@ final class KitStartupBannerView: NSView {
             return "Kits still installing in “\(status.containerName)”: \(names)…"
         }
 
-        var detail: String {
-            let lines = status.problems.first?.detail ?? []
-            let text = lines.suffix(2).joined(separator: "  ·  ")
-            if status.report?.isAborted == true, status.problems.count > 1 {
-                return text.isEmpty ? "Later kits were skipped." : text
+        private static func driftTitle(_ drift: KitDrift) -> String {
+            let sandbox = "Sandbox “\(drift.containerName)”"
+            if !drift.extra.isEmpty {
+                let names = drift.extra.map(KitStartupParser.kitName(forRef:)).joined(separator: ", ")
+                let what = drift.extra.count == 1 ? "a kit" : "\(drift.extra.count) kits"
+                return "\(sandbox) has \(what) this workspace doesn’t list: \(names)."
             }
-            if status.isInProgress, !status.hasProblems {
-                return "Tools provided by these kits aren’t available yet."
-            }
-            return text
+            let names = drift.missing.map(KitStartupParser.kitName(forRef:)).joined(separator: ", ")
+            return "\(sandbox) is missing configured kit\(drift.missing.count == 1 ? "" : "s"): \(names)."
         }
     }
 
     var onShowLog: ((AgentKind) -> Void)?
     var onRebuild: ((AgentKind) -> Void)?
     var onDismiss: ((String) -> Void)?
+    var onAdopt: ((AgentKind) -> Void)?
+    var onIgnoreDrift: ((AgentKind) -> Void)?
 
-    /// Kits are baked in at `sbx create`; nothing short of a rebuild picks up a
-    /// changed kit, so every problem banner says so next to its Rebuild button.
-    static let rebuildHint = "Kits are applied when the sandbox is created — rebuilding is the only way to load a kit update."
+    /// A kit's contents are read when the sandbox is (re)created, so a changed
+    /// kit only loads on a rebuild; adding a kit goes through `sbx kit add`
+    /// (Settings ▸ Kits) and doesn't need one.
+    nonisolated static let rebuildHint = "Rebuilding reloads every kit’s contents (the way to pick up a kit update); adding a new kit doesn’t need a rebuild."
 
     private let icon = NSImageView()
     private let spinner = NSProgressIndicator()
@@ -70,6 +135,8 @@ final class KitStartupBannerView: NSView {
     private let hint = NSTextField(wrappingLabelWithString: "")
     private let logButton = NSButton(title: "Show Log", target: nil, action: nil)
     private let rebuildButton = NSButton(title: "Rebuild Sandbox", target: nil, action: nil)
+    private let adoptButton = NSButton(title: "Adopt into Workspace", target: nil, action: nil)
+    private let ignoreButton = NSButton(title: "Drop on Next Rebuild", target: nil, action: nil)
     private let dismissButton = NSButton()
     private var content: Content?
     private var themeColors: ThemeColors?
@@ -101,7 +168,6 @@ final class KitStartupBannerView: NSView {
         hint.textColor = .secondaryLabelColor
         hint.maximumNumberOfLines = 2
         hint.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        hint.stringValue = Self.rebuildHint
         let text = NSStackView(views: [title, detail, hint])
         text.orientation = .vertical
         text.alignment = .leading
@@ -119,6 +185,18 @@ final class KitStartupBannerView: NSView {
         rebuildButton.action = #selector(rebuildClicked)
         rebuildButton.toolTip = "Recreate this sandbox with the current kits and mounts (ends its running sessions)."
         rebuildButton.setAccessibilityIdentifier("kit-startup-rebuild")
+        adoptButton.bezelStyle = .rounded
+        adoptButton.controlSize = .small
+        adoptButton.target = self
+        adoptButton.action = #selector(adoptClicked)
+        adoptButton.toolTip = "Add these kits to the workspace’s kit list. The sandbox already has them, so nothing is rebuilt."
+        adoptButton.setAccessibilityIdentifier("kit-drift-adopt")
+        ignoreButton.bezelStyle = .rounded
+        ignoreButton.controlSize = .small
+        ignoreButton.target = self
+        ignoreButton.action = #selector(ignoreClicked)
+        ignoreButton.toolTip = "Leave these kits in the sandbox for now and stop reporting them; the next rebuild drops them."
+        ignoreButton.setAccessibilityIdentifier("kit-drift-ignore")
         dismissButton.isBordered = false
         dismissButton.image = NSImage(systemSymbolName: "xmark", accessibilityDescription: "Dismiss")
         dismissButton.imagePosition = .imageOnly
@@ -133,7 +211,7 @@ final class KitStartupBannerView: NSView {
         leading.addSubview(icon)
         leading.addSubview(spinner)
 
-        let row = NSStackView(views: [leading, text, logButton, rebuildButton, dismissButton])
+        let row = NSStackView(views: [leading, text, adoptButton, ignoreButton, logButton, rebuildButton, dismissButton])
         row.orientation = .horizontal
         row.alignment = .centerY
         row.spacing = 10
@@ -168,13 +246,23 @@ final class KitStartupBannerView: NSView {
         case .warning:
             icon.image = NSImage(systemSymbolName: "exclamationmark.triangle.fill", accessibilityDescription: "Warning")
             icon.contentTintColor = .systemOrange
+        case .drift:
+            icon.image = NSImage(systemSymbolName: "shippingbox.fill", accessibilityDescription: "Kits differ")
+            icon.contentTintColor = .systemBlue
         case .progress:
             icon.image = nil
         }
         icon.isHidden = content.tone == .progress
         if content.tone == .progress { spinner.startAnimation(nil) } else { spinner.stopAnimation(nil) }
-        // Still installing: nothing to rebuild yet, and no update hint.
-        rebuildButton.isHidden = content.tone == .progress
+        hint.stringValue = content.hint
+        let drift = content.drift
+        let hasExtra = drift.map { !$0.extra.isEmpty } ?? false
+        adoptButton.isHidden = !hasExtra
+        ignoreButton.isHidden = !hasExtra
+        logButton.isHidden = drift != nil
+        // Still installing: nothing to rebuild yet, and no update hint. Extra
+        // kits: rebuilding is exactly what would lose them, so no button.
+        rebuildButton.isHidden = content.tone == .progress || hasExtra
         hint.isHidden = content.tone == .progress
         applyTone()
     }
@@ -190,6 +278,7 @@ final class KitStartupBannerView: NSView {
         switch content?.tone {
         case .failure?: tint = .systemRed
         case .warning?: tint = .systemOrange
+        case .drift?: tint = .systemBlue
         default: tint = themeColors?.text2 ?? .secondaryLabelColor
         }
         layer?.backgroundColor = tint.withAlphaComponent(0.10).cgColor
@@ -206,8 +295,18 @@ final class KitStartupBannerView: NSView {
         onRebuild?(content.agent)
     }
 
+    @objc private func adoptClicked() {
+        guard let content else { return }
+        onAdopt?(content.agent)
+    }
+
+    @objc private func ignoreClicked() {
+        guard let content else { return }
+        onIgnoreDrift?(content.agent)
+    }
+
     @objc private func dismissClicked() {
         guard let content else { return }
-        onDismiss?(content.status.signature)
+        onDismiss?(content.signature)
     }
 }

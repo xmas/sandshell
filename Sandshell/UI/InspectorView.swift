@@ -145,11 +145,13 @@ enum InspectorPane: String, CaseIterable, Identifiable {
 }
 
 /// Kits pane for the inspector: choose which registered kits apply to this
-/// workspace. Kits are fixed at `sbx create`, so applying rebuilds the sandbox.
+/// workspace. Added kits go in with `sbx kit add`; other changes rebuild.
 private struct KitsInspectorPane: View {
     @ObservedObject var controller: WorkspaceController
     @StateObject private var model: KitConfigModel
-    @State private var confirming = false
+    @State private var pending: Pending?
+
+    private enum Pending { case add, rebuild }
 
     init(controller: WorkspaceController) {
         self.controller = controller
@@ -160,21 +162,40 @@ private struct KitsInspectorPane: View {
         let agent = controller.primaryAgent
         KitConfigView(
             model: model,
-            onConfirm: { _ in confirming = true },
+            onConfirm: { _ in pending = model.isAdditionsOnly ? .add : .rebuild },
             onCancel: { model.revert() },
             startup: controller.kitStartupStatus(for: agent),
             onShowLog: { controller.openKitLog(for: agent) },
-            onRefreshStartup: { controller.refreshKitStartup(for: agent) },
-            onRebuild: { confirming = true })
-        .confirmationDialog("Apply kit changes and rebuild?", isPresented: $confirming) {
-            Button("Apply & Rebuild") {
-                controller.applyKits(model.enabledRefs)
+            onRefreshStartup: {
+                controller.refreshKitStartup(for: agent)
+                controller.refreshKitDrift(for: agent)
+            },
+            onRebuild: { pending = .rebuild },
+            drift: controller.kitDrift[agent],
+            onAdoptDrift: {
+                let refs = controller.kitDrift[agent]?.extra ?? []
+                controller.adoptKitDrift(for: agent)
+                model.adopt(refs)
+            },
+            onIgnoreDrift: { controller.ignoreKitDrift(for: agent) })
+        .onAppear { controller.refreshKitDrift(for: agent) }
+        .confirmationDialog(pending == .add ? "Add kits to the sandbox?" : "Apply kit changes and rebuild?",
+                            isPresented: Binding(get: { pending != nil }, set: { if !$0 { pending = nil } }),
+                            presenting: pending) { action in
+            Button(action == .add ? "Add to Sandbox" : "Apply & Rebuild") {
+                controller.applyKits(model.enabledRefs, rebuild: action == .rebuild)
                 model.commitBaseline()
             }
             Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("The workspace’s container(s) will be stopped and recreated with the new kit set, "
-                 + "ending any running sessions. Workspace files are preserved.")
+        } message: { action in
+            if action == .add {
+                Text("Each new kit is added with sbx kit add, which recreates the container with the kit appended "
+                     + "and keeps agent state; running sessions in it end. Where sbx can’t add a kit in place, "
+                     + "the sandbox is rebuilt instead. Workspace files are preserved.")
+            } else {
+                Text("The workspace’s container(s) will be stopped and recreated with the new kit set, "
+                     + "ending any running sessions. Workspace files are preserved.")
+            }
         }
     }
 }
