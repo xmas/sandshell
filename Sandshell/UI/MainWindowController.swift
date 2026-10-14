@@ -274,6 +274,10 @@ final class MainWindowController: NSWindowController {
         workspace?.newSessionInCurrentContext()
     }
 
+    func newChat() {
+        workspace?.newChatInCurrentContext()
+    }
+
     /// Adopt `prefs` as this window's appearance ("Apply to All" from the
     /// per-root inspector). Persists to this root's config and re-themes live.
     func applyTheme(_ prefs: ThemePreferences) {

@@ -1158,7 +1158,7 @@ extension WorkspaceController {
     /// sandbox — e.g. a shell inside the claude/codex container.
     @discardableResult
     func addSession(folderID: UUID, agent: AgentKind, name: String? = nil,
-                    containerAgent: AgentKind? = nil) -> Session? {
+                    containerAgent: AgentKind? = nil, chat: Bool = false) -> Session? {
         guard let folder = folder(id: folderID) else { return nil }
         // Normalize away a no-op override so it doesn't split reuse buckets.
         let override = (containerAgent == agent) ? nil : containerAgent
@@ -1166,7 +1166,7 @@ extension WorkspaceController {
         if name == nil,
            let existing = state.sessions.first(where: {
                $0.folderID == folderID && $0.agent == agent
-                   && $0.containerAgent == override && $0.name == defaultName
+                   && $0.containerAgent == override && $0.name == defaultName && $0.isChat == chat
            }) {
             return existing   // reuse the pristine "New … Session" (no prompts yet)
         }
@@ -1176,7 +1176,8 @@ extension WorkspaceController {
             name: name ?? defaultName,
             order: nextSessionOrder(in: folderID),
             workdir: workdir(for: folder),
-            containerAgent: override)
+            containerAgent: override,
+            isChat: chat)
         state.sessions.append(session)
         saveState()
         return session
@@ -1200,6 +1201,23 @@ extension WorkspaceController {
         setFolder(folderID, expanded: true)
         guard let s = addSession(folderID: folderID, agent: agent,
                                  containerAgent: containerAgent) else { return nil }
+        selection = .session(s.id)
+        return s
+    }
+
+    /// ⌃⌘N: new native Claude chat in the selected session's folder (else the
+    /// first folder), selected right away.
+    @discardableResult
+    func newChatInCurrentContext() -> Session? {
+        let folderID: UUID
+        if case .session(let id) = selection, let s = session(id: id) {
+            folderID = s.folderID
+        } else if let first = folders.first {
+            folderID = first.id
+        } else {
+            return nil
+        }
+        guard let s = addSession(folderID: folderID, agent: .claude, chat: true) else { return nil }
         selection = .session(s.id)
         return s
     }
@@ -1253,6 +1271,15 @@ extension WorkspaceController {
         guard let idx = state.sessions.firstIndex(where: { $0.id == id }),
               state.sessions[idx].transcriptID != transcriptID else { return }
         state.sessions[idx].transcriptID = transcriptID
+        saveState()
+    }
+
+    /// Switch a session between the terminal and the native chat view. The
+    /// detail pane tears down the old surface and resumes the same conversation.
+    func setChat(_ id: UUID, _ chat: Bool) {
+        guard let idx = state.sessions.firstIndex(where: { $0.id == id }),
+              state.sessions[idx].isChat != chat else { return }
+        state.sessions[idx].isChat = chat
         saveState()
     }
 

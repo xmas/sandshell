@@ -629,11 +629,13 @@ final class SidebarListController: NSViewController {
         /// When set (and different from `agent`), attach to that agent's sandbox
         /// — e.g. a shell opened inside the claude/codex container.
         var containerAgent: AgentKind? = nil
+        /// Native chat (ACP) instead of a terminal.
+        var chat = false
     }
 
     @objc private func addSessionFromMenu(_ sender: NSMenuItem) {
         guard let req = sender.representedObject as? NewSessionRequest else { return }
-        addSession(folderID: req.folderID, agent: req.agent, containerAgent: req.containerAgent)
+        addSession(folderID: req.folderID, agent: req.agent, containerAgent: req.containerAgent, chat: req.chat)
     }
 
     /// Header click: Option-click duplicates this window; a plain click pops the
@@ -841,6 +843,8 @@ final class SidebarListController: NSViewController {
             return item
         }
         var items: [NSMenuItem] = []
+        items.append(action("New Claude Chat", AgentKind.claude.menuIcon,
+                            NewSessionRequest(folderID: folderID, agent: .claude, chat: true)))
         for agent in [AgentKind.claude, .codex, .shell] {
             items.append(action("New \(agent.displayName.capitalized)", agent.menuIcon,
                                 NewSessionRequest(folderID: folderID, agent: agent)))
@@ -870,9 +874,10 @@ final class SidebarListController: NSViewController {
         return menu
     }
 
-    private func addSession(folderID: UUID, agent: AgentKind, containerAgent: AgentKind? = nil) {
+    private func addSession(folderID: UUID, agent: AgentKind, containerAgent: AgentKind? = nil,
+                            chat: Bool = false) {
         if let session = controller.addSession(folderID: folderID, agent: agent,
-                                               containerAgent: containerAgent) {
+                                               containerAgent: containerAgent, chat: chat) {
             controller.selection = .session(session.id)
             applySelectionToOutline()
         }
@@ -997,9 +1002,21 @@ final class SidebarListController: NSViewController {
             return menu
         }
         menu.addItem(menuItem("Close Session", #selector(contextCloseSession), object: session.id))
+        if session.agent == .claude {
+            menu.addItem(menuItem(session.isChat ? "Show as Terminal" : "Show as Chat",
+                                  #selector(contextToggleChat), object: session.id))
+        }
         menu.addItem(.separator())
         menu.addItem(dropsSubmenuItem(for: session.folderID))
         return menu
+    }
+
+    /// Same conversation, other surface: the detail pane swaps terminal ⇄ chat
+    /// and resumes the transcript in the new one.
+    @objc private func contextToggleChat(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? UUID, let session = controller.session(id: id) else { return }
+        controller.setChat(id, !session.isChat)
+        controller.selection = .session(id)
     }
 
     private func menuItem(_ title: String, _ action: Selector, object: Any? = nil) -> NSMenuItem {

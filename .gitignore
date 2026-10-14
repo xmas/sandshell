@@ -29,3 +29,4 @@ DerivedData/
 *.db
 .beads-credential-key
 .beads/proxieddb/
+build-dev/

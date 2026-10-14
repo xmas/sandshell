@@ -511,6 +511,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     case "q": NSApp.terminate(nil); return true
                     case ",": app.openSettings(nil); return true
                     case "n" where opt: app.openFolder(nil); return true
+                    case "n" where ctrl: app.newChat(nil); return true
                     case "n" where shift: app.duplicateWindow(nil); return true
                     case "n": app.newSession(nil); return true
                     case "[", "{": app.selectPreviousSession(nil); return true
@@ -545,6 +546,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// ⌘, — open the Settings window.
     @MainActor @objc func openSettings(_ sender: Any?) {
         activeController?.showSettings()
+    }
+
+    /// ⌃⌘N — new native Claude chat (ACP) in the current folder.
+    @MainActor @objc func newChat(_ sender: Any?) {
+        activeController?.newChat()
     }
 
     /// ⌘N — new session in the current project with the same agent.

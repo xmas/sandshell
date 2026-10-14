@@ -68,6 +68,9 @@ struct Session: Identifiable, Codable, Hashable {
     /// every pre-existing session with a synthetic value that preserves its old
     /// visual order, so upgrading never causes a visible jump.
     var createdAt: Date
+    /// Shown as a native chat (ACP) instead of a terminal. Both drive the same
+    /// agent conversation (`transcriptID`), so switching keeps the history.
+    var isChat: Bool
 
     /// The agent whose container this session runs in: the override when present,
     /// otherwise the session's own agent.
@@ -81,7 +84,8 @@ struct Session: Identifiable, Codable, Hashable {
          workdir: String,
          transcriptID: String? = nil,
          createdAt: Date = Date(),
-         containerAgent: AgentKind? = nil) {
+         containerAgent: AgentKind? = nil,
+         isChat: Bool = false) {
         self.id = id
         self.folderID = folderID
         self.agent = agent
@@ -91,10 +95,12 @@ struct Session: Identifiable, Codable, Hashable {
         self.transcriptID = transcriptID
         self.createdAt = createdAt
         self.containerAgent = containerAgent
+        self.isChat = isChat
     }
 
     enum CodingKeys: String, CodingKey {
         case id, folderID, agent, name, order, workdir, transcriptID, createdAt, containerAgent
+        case isChat = "chat"
         case projectID   // legacy key (pre-folders model)
     }
 
@@ -111,6 +117,7 @@ struct Session: Identifiable, Codable, Hashable {
         transcriptID = try c.decodeIfPresent(String.self, forKey: .transcriptID)
         createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt) ?? .distantPast
         containerAgent = try c.decodeIfPresent(AgentKind.self, forKey: .containerAgent)
+        isChat = try c.decodeIfPresent(Bool.self, forKey: .isChat) ?? false
     }
 
     func encode(to encoder: Encoder) throws {
@@ -124,6 +131,7 @@ struct Session: Identifiable, Codable, Hashable {
         try c.encodeIfPresent(transcriptID, forKey: .transcriptID)
         try c.encode(createdAt, forKey: .createdAt)
         try c.encodeIfPresent(containerAgent, forKey: .containerAgent)
+        if isChat { try c.encode(true, forKey: .isChat) }
     }
 }
 

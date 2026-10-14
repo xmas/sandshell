@@ -50,6 +50,9 @@ enum MainMenu {
         fileItem.submenu = fileMenu
         fileMenu.addItem(withTitle: "New Session",
                          action: #selector(AppDelegate.newSession(_:)), keyEquivalent: "n")
+        let newChat = fileMenu.addItem(withTitle: "New Claude Chat",
+                                       action: #selector(AppDelegate.newChat(_:)), keyEquivalent: "n")
+        newChat.keyEquivalentModifierMask = [.command, .control]
         let duplicateWindow = fileMenu.addItem(withTitle: "Duplicate Window",
                                                action: #selector(AppDelegate.duplicateWindow(_:)), keyEquivalent: "n")
         duplicateWindow.keyEquivalentModifierMask = [.command, .shift]

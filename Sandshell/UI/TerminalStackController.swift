@@ -251,6 +251,8 @@ final class TerminalStackController: NSViewController {
         },
         onTerminalDidExit: { [weak self] id in self?.terminalRuntimeDidExit(id) })
     private var terminals: [UUID: TerminalSession] = [:]
+    /// Sessions shown as native chat (ACP) instead of a terminal.
+    private var chats: [UUID: ChatSessionView] = [:]
     private var pending: Set<UUID> = []
     private var cancellables: Set<AnyCancellable> = []
 
@@ -583,6 +585,12 @@ final class TerminalStackController: NSViewController {
             updateKitBanner()
             return
         }
+        if session.isChat {
+            if terminals[id] != nil { dropTerminal(id) }   // switched terminal → chat
+            if let chat = chats[id] { showChat(id, chat) } else { launchChat(session) }
+            return
+        }
+        if chats[id] != nil { closeChat(id) }   // switched chat → terminal
         if runtime.isExited(id) {
             showExited(session)
         } else if terminals[id] != nil {
@@ -597,6 +605,7 @@ final class TerminalStackController: NSViewController {
             terminal.view.isHidden = true
             terminal.view.setSurfaceVisible(false)
         }
+        for chat in chats.values { chat.isHidden = true }
         headerBar.isHidden = true
         frameView.isHidden = true
         restartButton.isHidden = true
@@ -664,6 +673,7 @@ final class TerminalStackController: NSViewController {
             terminal.view.isHidden = true
             terminal.view.setSurfaceVisible(false)
         }
+        for chat in chats.values { chat.isHidden = true }
         headerBar.isHidden = false
         configureHeader(session)
         updateHeaderStatus(session.id)
@@ -678,6 +688,11 @@ final class TerminalStackController: NSViewController {
 
     @objc private func restartClicked() {
         guard let id = activeSessionID, let session = controller.session(id: id) else { return }
+        if session.isChat {
+            closeChat(id)
+            launchChat(session)
+            return
+        }
         runtime.resetExit(id)
         // Drop the dead terminal so launch() builds a fresh one.
         if let terminal = terminals[id] {
@@ -701,6 +716,10 @@ final class TerminalStackController: NSViewController {
 
     /// Stop the active session's agent (terminate the terminal) → restart prompt.
     @objc func stopClicked() {
+        if let id = activeSessionID, let chat = chats[id] {
+            chat.session.cancel()   // stop the running turn; the chat stays open
+            return
+        }
         guard let id = activeSessionID, terminals[id] != nil else { return }
         terminals[id]?.view.removeFromSuperview()
         terminals[id]?.cleanup()
@@ -719,6 +738,7 @@ final class TerminalStackController: NSViewController {
             terminal.view.isHidden = !visible
             terminal.view.setSurfaceVisible(visible)
         }
+        for chat in chats.values { chat.isHidden = true }
         guard terminals[id] != nil, let session = controller.session(id: id) else { return }
         activeSessionID = id
         configureHeader(session)
@@ -738,7 +758,7 @@ final class TerminalStackController: NSViewController {
         headerName.stringValue = session.name
         headerSub.stringValue = "\(container) · \(shortHome(session.workdir))"
         let program = session.agent == .shell ? "bash" : session.agent.rawValue
-        titleLabel.stringValue = "\(program) — \(container)"
+        titleLabel.stringValue = "\(program) — \(container)" + (session.isChat ? " · chat (ACP)" : "")
         updateClaudeStats(session.id)
         onChromeChange?(Chrome(agent: session.agent, title: session.name,
                                subtitle: "\(container) · \(shortHome(session.workdir))"))
@@ -748,8 +768,9 @@ final class TerminalStackController: NSViewController {
     /// status reports arrive, the model falls back to the workspace's choice.
     private func updateClaudeStats(_ id: UUID) {
         guard let session = controller.session(id: id) else { return }
-        claudeStats.isHidden = session.agent != .claude
-        guard session.agent == .claude else { return }
+        // Chat sessions show context/cost in their own footer (from ACP usage).
+        claudeStats.isHidden = session.agent != .claude || session.isChat
+        guard session.agent == .claude, !session.isChat else { return }
         claudeStats.update(status: controller.claudeStatus(id), defaultModel: controller.claudeModel,
                            defaultEffort: controller.claudeEffort)
     }
@@ -906,6 +927,10 @@ final class TerminalStackController: NSViewController {
 
     @discardableResult
     func insertExternalItems(_ urls: [URL]) -> Bool {
+        if let id = activeSessionID, let chat = chats[id], !chat.isHidden {
+            chat.addAttachments(urls: urls)
+            return true
+        }
         guard let context = activeTerminalContext(),
               let text = terminalInput(for: urls, workdir: context.session.workdir),
               !text.isEmpty else { return false }
@@ -913,10 +938,93 @@ final class TerminalStackController: NSViewController {
         return true
     }
 
+    // MARK: Chat sessions
+
+    /// Bring the container up, then start the session's ACP agent and show its
+    /// chat. Resumes the prior conversation when its transcript still exists.
+    private func launchChat(_ session: Session) {
+        let id = session.id
+        guard !pending.contains(id), chats[id] == nil else { return }
+        pending.insert(id)
+        showStatus("Starting \(session.agent.displayName.capitalized) chat…", busy: true)
+        Task { [weak self] in
+            guard let self else { return }
+            let containerName = await controller.ensureContainerReady(for: session.containerAgentKind)
+            pending.remove(id)
+            guard let containerName else {
+                showStatus(controller.lastError ?? "Failed to start the sandbox.", busy: false)
+                return
+            }
+            guard let current = controller.session(id: id), current.isChat, chats[id] == nil else { return }
+            var resumeID: String?
+            if let tid = current.transcriptID,
+               TranscriptReader.transcriptExists(agent: current.agent, workdir: current.workdir,
+                                                 home: controller.home, id: tid) {
+                resumeID = tid
+            }
+            Log.info(.workspace, "launching \(current.agent.rawValue) chat in “\(containerName)” at \(current.workdir)\(resumeID.map { " (resume \($0))" } ?? "")")
+            let chat = ChatSession(title: current.agent.displayName.capitalized, containerName: containerName,
+                                   workdir: current.workdir, home: controller.home.path,
+                                   mcpURL: controller.mcpURL, resumeID: resumeID)
+            chat.onSessionID = { [controller] sid in controller.setTranscriptID(id, sid) }
+            chat.onWorkingChange = { [controller] working in
+                let now = Date()
+                controller.reportActivity(id, working: working, lastWrite: now, at: now)
+            }
+            let view = ChatSessionView(session: chat)
+            view.resolveFileURLs = { [weak self] urls in
+                self?.materializeDroppedURLs(urls, workdir: current.workdir).map { URL(fileURLWithPath: $0) } ?? urls
+            }
+            addTerminalView(view)
+            chats[id] = view
+            controller.setLive(id, true)
+            chat.start()
+            if case .session(id) = controller.selection { showChat(id, view) }
+        }
+    }
+
+    private func showChat(_ id: UUID, _ chat: ChatSessionView) {
+        for terminal in terminals.values {
+            terminal.view.isHidden = true
+            terminal.view.setSurfaceVisible(false)
+        }
+        for (sid, view) in chats { view.isHidden = sid != id }
+        guard let session = controller.session(id: id) else { return }
+        activeSessionID = id
+        configureHeader(session)
+        updateHeaderStatus(id)
+        headerBar.isHidden = false
+        frameView.isHidden = false
+        restartButton.isHidden = true
+        spinner.stopAnimation(nil)
+        statusStack.isHidden = true
+        kitBannerContextActive = true
+        updateKitBanner()
+        chat.focusComposer()
+    }
+
+    private func closeChat(_ id: UUID) {
+        guard let chat = chats.removeValue(forKey: id) else { return }
+        chat.session.close()
+        chat.removeFromSuperview()
+        controller.setLive(id, false)
+    }
+
+    /// Tear down a session's terminal (e.g. when it switches to chat).
+    private func dropTerminal(_ id: UUID) {
+        guard let terminal = terminals.removeValue(forKey: id) else { return }
+        terminal.view.removeFromSuperview()
+        terminal.cleanup()
+        runtime.terminalRemoved(id)
+        searchWindows[id]?.close()
+        searchWindows[id] = nil
+    }
+
     // MARK: Teardown
 
     private func pruneClosed() {
         let existing = Set(controller.orderedSessions.map(\.id))
+        for id in chats.keys where !existing.contains(id) { closeChat(id) }
         for (id, terminal) in terminals where !existing.contains(id) {
             terminal.view.removeFromSuperview()
             terminal.cleanup()
@@ -938,6 +1046,7 @@ final class TerminalStackController: NSViewController {
     }
 
     private func dropAllTerminals() {
+        for id in Array(chats.keys) { closeChat(id) }
         for (id, terminal) in terminals {
             terminal.view.removeFromSuperview()
             terminal.cleanup()
@@ -991,11 +1100,15 @@ extension TerminalStackController {
     }
 
     private func canInsertPasteboard(_ pasteboard: NSPasteboard) -> Bool {
-        activeTerminalContext() != nil && pasteboard.availableType(from: Self.terminalPasteboardTypes) != nil
+        if let id = activeSessionID, chats[id] != nil {
+            return pasteboard.availableType(from: [.fileURL, .tiff, .png]) != nil
+        }
+        return activeTerminalContext() != nil && pasteboard.availableType(from: Self.terminalPasteboardTypes) != nil
     }
 
     @discardableResult
     private func insertPasteboard(_ pasteboard: NSPasteboard) -> Bool {
+        if let id = activeSessionID, let chat = chats[id] { return chat.addAttachments(from: pasteboard) }
         guard let context = activeTerminalContext(),
               let text = terminalInput(from: pasteboard, workdir: context.session.workdir),
               !text.isEmpty else { return false }

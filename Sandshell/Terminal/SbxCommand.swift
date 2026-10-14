@@ -142,6 +142,23 @@ enum SbxCommand {
         return parts.joined(separator: " ")
     }
 
+    /// Pinned ACP adapter for Claude chat sessions (built on the Claude Agent SDK).
+    static let claudeACPPackage = "@agentclientprotocol/claude-agent-acp@0.90.0"
+
+    /// `sbx` argv for a chat session: the ACP adapter over plain stdio (`-i`, no
+    /// TTY). `CLAUDE_CODE_EXECUTABLE` points the adapter at the image's own
+    /// claude instead of the SDK's bundled copy, so the base-image channel still
+    /// decides the Claude Code version.
+    static func acpArguments(containerName: String, workdir: String, home: String, mcpURL: URL?) -> [String] {
+        var args = ["exec", "-i"]
+        if !workdir.isEmpty { args += ["-w", workdir] }
+        args += [containerName, "env", "-u", "MCP_GATEWAY_URL"]
+        args += envPairs(home: home, mcpURL: mcpURL, claude: nil)
+        args += ["bash", "-c",
+                 #"\#(pathSetup) export CLAUDE_CODE_EXECUTABLE="$(command -v claude)"; exec npx -y \#(claudeACPPackage)"#]
+        return args
+    }
+
     /// POSIX single-quote a token. Mirrors sbx.rs `shell_escape`.
     static func shellQuote(_ s: String) -> String {
         let safe = !s.isEmpty && s.unicodeScalars.allSatisfy { sc in
