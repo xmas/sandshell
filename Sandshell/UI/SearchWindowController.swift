@@ -31,8 +31,6 @@ final class SearchWindowController: NSWindowController, NSWindowDelegate {
         w.isReleasedWhenClosed = false
         w.isRestorable = false
         w.minSize = NSSize(width: 640, height: 360)
-        w.center()
-        w.setFrameAutosaveName("SandshellSearchWindow")
         super.init(window: w)
         w.delegate = self
         w.onCancel = { [weak self] in self?.close() }
@@ -40,13 +38,17 @@ final class SearchWindowController: NSWindowController, NSWindowDelegate {
             store: store,
             onOpen: { [weak self] result in self?.open(result) },
             onClose: { [weak self] in self?.close() }))
-        hosting.sizingOptions = []   // keep the window's (autosaved) size, not SwiftUI's ideal
-        w.contentViewController = hosting
-        if !w.setFrameUsingName("SandshellSearchWindow") {
-            w.setContentSize(NSSize(width: 880, height: 560))
-            w.center()
-        }
+        hosting.sizingOptions = []   // keep the window's size, not SwiftUI's ideal
+        w.contentViewController = hosting   // (shrinks the window to the empty view; re-size below)
+        w.setContentSize(NSSize(width: 880, height: 560))
+        w.center()
+        // Restore the last size/position, then keep saving it. (Naming before the
+        // content is set would save — and later restore — the shrunken frame.)
+        _ = w.setFrameUsingName(Self.autosaveName)
+        w.setFrameAutosaveName(Self.autosaveName)
     }
+
+    private static let autosaveName = "SandshellSearchWindow"
 
     @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
 

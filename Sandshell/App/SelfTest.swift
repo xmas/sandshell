@@ -785,6 +785,7 @@ enum SelfTest {
         check(titles() == ["live:Zebra chat", "live:deploy notes", "live:alpha build",
                            "past:Refactor the lexer", "past:Tidy up imports", "past:Fix alpha bug in the parser"],
               "empty query: open sessions in sidebar order, then past newest first; the open chat's own transcript isn't listed twice")
+        log("search window content \(wc.window?.contentView?.frame.size ?? .zero)")
         snapshot(wc.window, "search-all")
 
         check(await settle("alpha"), "query 'alpha' settles")

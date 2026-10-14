@@ -83,7 +83,9 @@ AppDelegate (@main)
 | `Terminal/SbxCommand.swift` | Builds the `sbx exec … env … bash -c '…'` launch script body |
 | `Workspace/WorkspaceState.swift` | Persisted folder+session tree (`state.json`) |
 | `Workspace/WorkspaceConfig.swift` | Persisted workspace config (mounts, theme, MCP, kits) |
-| `Workspace/HistoryStore.swift` | Past conversation history browser |
+| `Workspace/HistoryStore.swift` | Scans past agent conversations under the workspace's mounts (`HistoryCache`: SQLite metadata + ranked substring search) |
+| `Workspace/SearchStore.swift` | Search model: open sessions + past conversations, deduped by transcript id, ranked title > folder > body |
+| `UI/SearchWindowController.swift` | Search window (⇧⌘F; ⌘F is Find): live results select/focus the session, past ones `restoreSession` |
 | `Theme/ThemeController.swift` | Per-window `ThemePreferences` + resolved `ThemeColors` |
 
 ### Key quirks
