@@ -80,7 +80,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// In DEBUG, wash the app/Dock icon red so a locally-built dev instance is
     /// obvious beside an installed (blue) release build. A no-op in release.
-    private func applyDevIconWashIfDebug() {
+    @MainActor private func applyDevIconWashIfDebug() {
 #if DEBUG
         let base = NSImage(named: NSImage.applicationIconName) ?? NSApp.applicationIconImage
         guard let base else { return }
@@ -268,7 +268,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         openWorkspace(workspaceURL)
     }
 
-    /// App menu ▸ Check for Updates… — may trigger Google sign-in.
+    /// App menu ▸ Check for Updates… — compares against the Homebrew cask.
     @MainActor @objc func checkForUpdates(_ sender: Any?) {
         Updater.shared.checkForUpdatesMenu()
     }
@@ -520,11 +520,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     case "q": NSApp.terminate(nil); return true
                     case ",": app.openSettings(nil); return true
                     case "n" where opt: app.openFolder(nil); return true
-                    case "d" where shift, "D": app.splitDown(nil); return true
+                    case "D": app.splitDown(nil); return true
+                    case "d" where shift: app.splitDown(nil); return true
                     case "d": app.splitRight(nil); return true
-                    case "w" where opt, "∑": app.closePane(nil); return true
-                    case "[", "{", "“", "”" where opt: app.focusPreviousPane(nil); return true
-                    case "]", "}", "‘", "’" where opt: app.focusNextPane(nil); return true
+                    // A `where` binds only to the pattern before it, so the ⌥ forms
+                    // test it explicitly (⌘[ / ⌘] without ⌥ switch sessions below).
+                    case "∑": app.closePane(nil); return true
+                    case "w" where opt: app.closePane(nil); return true
+                    case let c where opt && ["[", "{", "“", "”"].contains(c): app.focusPreviousPane(nil); return true
+                    case let c where opt && ["]", "}", "‘", "’"].contains(c): app.focusNextPane(nil); return true
                     case "n" where ctrl: app.newChat(nil); return true
                     case "n" where shift: app.duplicateWindow(nil); return true
                     case "n": app.newSession(nil); return true
