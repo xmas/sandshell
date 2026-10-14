@@ -850,6 +850,9 @@ final class LineNumberRuler: NSRulerView {
         super.init(scrollView: nil, orientation: .verticalRuler)
         clientView = textView
         ruleThickness = 44
+        // Views don't clip by default (macOS 14+); the stock ruler's edge line
+        // ran up through the tab bar and path row.
+        clipsToBounds = true
         NotificationCenter.default.addObserver(self, selector: #selector(redraw), name: NSView.boundsDidChangeNotification, object: nil)
     }
 
@@ -880,6 +883,14 @@ final class LineNumberRuler: NSRulerView {
             if lineStarts[mid] <= offset { lo = mid } else { hi = mid - 1 }
         }
         return lo + 1
+    }
+
+    /// The editor's own background with just the numbers and change bars —
+    /// no stock ruler fill or edge line.
+    override func draw(_ dirtyRect: NSRect) {
+        NSColor.textBackgroundColor.setFill()
+        dirtyRect.intersection(bounds).fill()
+        drawHashMarksAndLabels(in: dirtyRect)
     }
 
     override func drawHashMarksAndLabels(in rect: NSRect) {

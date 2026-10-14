@@ -1034,7 +1034,9 @@ enum SelfTest {
         check(access?.mode == .readWrite, "the session's folder reads as read-write in its sandbox")
         check(access?.sandbox == ws.containerName(for: a.containerAgentKind), "it names the session's sandbox")
         check(access?.hostFileSystem == "APFS", "it knows the Mac side is APFS")
-        await wait(0.5)
+        // A source file: the gutter's numbers and change bars stay inside the text area.
+        files.open(ws.rootURL.appendingPathComponent("src/app.py"))
+        await wait(1.0)
         snapshot(window, "sandbox-access")
         if let access {
             let host = NSHostingView(rootView: SandboxAccessView(access: access))
