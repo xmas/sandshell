@@ -109,8 +109,8 @@ final class SessionContextBar: NSStackView {
         if let open = popover, open.isShown { open.close(); return }
         let p = NSPopover()
         p.behavior = .transient
-        p.contentViewController = NSHostingController(rootView: SandboxAccessView(access: access))
-        p.show(relativeTo: sandboxChip.bounds, of: sandboxChip, preferredEdge: .maxY)
+        p.contentViewController = NSHostingController(rootView: SandboxAccessPopover(access: access))
+        p.show(relativeTo: sandboxChip.bounds, of: sandboxChip, preferredEdge: .maxY)   // NSButton is flipped: maxY is below
         popover = p
     }
 

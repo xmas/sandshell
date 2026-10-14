@@ -71,6 +71,31 @@ final class ImageAttachment: NSTextAttachment {
 /// as files (Finder, Mail, any app), and have Copy / Save / Open in Preview on
 /// their context menu. Everything else is a normal read-only NSTextView.
 final class TranscriptTextView: NSTextView {
+    /// The pointer moved over / left the transcript (view coordinates; nil = left).
+    var onHover: ((NSPoint?) -> Void)?
+    private var hoverArea: NSTrackingArea?
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hoverArea { removeTrackingArea(hoverArea) }
+        let area = NSTrackingArea(rect: .zero, options: [.mouseMoved, .mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+                                  owner: self, userInfo: nil)
+        addTrackingArea(area)
+        hoverArea = area
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        super.mouseMoved(with: event)
+        onHover?(convert(event.locationInWindow, from: nil))
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        super.mouseExited(with: event)
+        // Leaving for the action bar (a subview) isn't leaving the reply.
+        let point = convert(event.locationInWindow, from: nil)
+        if !visibleRect.contains(point) { onHover?(nil) }
+    }
+
     /// The image attachment under `point` (view coordinates), if any.
     private func image(at point: NSPoint) -> ImageAttachment? {
         guard let storage = textStorage, storage.length > 0 else { return nil }

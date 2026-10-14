@@ -23,6 +23,8 @@ final class ChatSessionView: NSView {
     private let modelPopup = NSPopUpButton()
     private let sendButton = NSButton()
     private var bag: Set<AnyCancellable> = []
+    /// History replayed while resuming, shown in one go when it's done.
+    private var heldReplay: [ChatItem]?
 
     /// Maps dropped/pasted file URLs to paths the sandbox can read (files outside
     /// the mounts are copied into the workspace's drops dir by the host).
@@ -42,6 +44,22 @@ final class ChatSessionView: NSView {
     required init?(coder: NSCoder) { fatalError() }
 
     func focusComposer() { composer.focus() }
+
+    #if DEBUG
+    var debugTranscript: ChatTranscriptView { transcript }
+    #endif
+
+    /// A file path in the conversation was clicked.
+    var onOpenFile: ((URL, Int?) -> Void)? {
+        get { transcript.onOpenFile }
+        set { transcript.onOpenFile = newValue }
+    }
+
+    /// A reply's "Fork to New Chat" (the window wires it to the controller).
+    var onFork: ((String) -> Void)? {
+        get { transcript.onFork }
+        set { transcript.onFork = newValue }
+    }
 
     func addAttachments(urls: [URL]) {
         composer.addAttachments(urls: urls)
@@ -88,6 +106,7 @@ final class ChatSessionView: NSView {
         composer.commands = { [weak session] in session?.commands ?? [] }
         composer.onFind = { [weak self] sender in self?.transcript.performFind(sender) }
         composer.fileRoot = session.workdir
+        transcript.workdir = session.workdir
         composer.onEscape = { [weak self] in
             guard let self, case .running = self.session.phase else { return false }
             self.session.cancel()
@@ -159,11 +178,26 @@ final class ChatSessionView: NSView {
 
     private func bind() {
         session.$items.sink { [weak self] items in
-            self?.transcript.update(items)
-            self?.emptyState.isHidden = !items.isEmpty
+            guard let self else { return }
+            self.emptyState.isHidden = !items.isEmpty
+            // Resuming replays the whole history before the session is ready:
+            // draw it once at the end (already at the bottom), not message by
+            // message as a long scroll.
+            if case .starting = self.session.phase, !items.isEmpty {
+                self.heldReplay = items
+                return
+            }
+            self.transcript.update(items)
         }.store(in: &bag)
         session.$permission.sink { [weak self] in self?.showPermission($0) }.store(in: &bag)
-        session.$phase.sink { [weak self] in self?.showPhase($0) }.store(in: &bag)
+        session.$phase.sink { [weak self] phase in
+            guard let self else { return }
+            if case .starting = phase {} else if let held = self.heldReplay {
+                self.heldReplay = nil
+                self.transcript.update(self.session.items.isEmpty ? held : self.session.items)
+            }
+            self.showPhase(phase)
+        }.store(in: &bag)
         session.$usage.sink { [weak self] in self?.showUsage($0) }.store(in: &bag)
         session.$modes.combineLatest(session.$currentMode).sink { [weak self] modes, current in
             self?.fill(self?.modePopup, modes, current)

@@ -134,6 +134,16 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
             // The branch chip's "Show N Changed Files": just the changes.
             if changesOnly { self.panes.first { $0.shownFiles == target }?.filesPane?.showChanges() }
         }
+        pane.onOpenFileInFiles = { [weak self, weak pane] url, line in
+            guard let self, let pane else { return }
+            if url.hasDirectoryPath || (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true {
+                return NSWorkspace.shared.activateFileViewerSelecting([url])
+            }
+            pane.onOpenFiles?(false)
+            guard let session = pane.shownSession,
+                  let files = self.panes.first(where: { $0.shownFiles?.session == session })?.filesPane else { return }
+            if let line { files.editor.open(url, line: line, highlight: "") } else { files.open(url) }
+        }
         pane.onFilesAddToChat = { [weak self] urls, target in
             guard let self else { return }
             if let id = target.session ?? self.selectedSession { self.dropFiles(urls, on: id) }

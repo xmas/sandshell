@@ -150,7 +150,7 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
         if let open = sandboxPopover, open.isShown { open.close(); return }
         let popover = NSPopover()
         popover.behavior = .transient
-        popover.contentViewController = NSHostingController(rootView: SandboxAccessView(access: access))
+        popover.contentViewController = NSHostingController(rootView: SandboxAccessPopover(access: access))
         popover.show(relativeTo: sandboxButton.bounds, of: sandboxButton, preferredEdge: .maxY)
         sandboxPopover = popover
     }

@@ -331,6 +331,8 @@ final class TerminalStackController: NSViewController {
     var onSplit: ((PaneTreeController.Edge) -> Void)?
     /// Show this pane's session folder (or the workspace) as Files beside it.
     var onOpenFiles: ((_ changesOnly: Bool) -> Void)?
+    /// Open a file (from a link in the chat) in the Files pane beside this one.
+    var onOpenFileInFiles: ((URL, Int?) -> Void)?
     private let closePaneButton = NSButton()
     private let filesPaneButton = NSButton()
     /// Chat ⇄ Terminal for this pane's session (agents that can chat).
@@ -1231,7 +1233,7 @@ final class TerminalStackController: NSViewController {
         popover.behavior = .transient
         popover.contentViewController = NSHostingController(rootView: list.frame(width: 420, height: 380))
         let anchor: NSView = backgroundPill.isHidden ? titleStrip : backgroundPill
-        popover.show(relativeTo: anchor.bounds, of: anchor, preferredEdge: .maxY)
+        popover.show(relativeTo: anchor.bounds, of: anchor, preferredEdge: anchor is NSButton ? .maxY : .minY)   // below (buttons are flipped)
         backgroundPopover = popover
     }
 
@@ -1485,6 +1487,11 @@ final class TerminalStackController: NSViewController {
                 }
             }
             let view = ChatSessionView(session: chat)
+            view.onOpenFile = { [weak self] url, line in self?.onOpenFileInFiles?(url, line) }
+            view.onFork = { [weak self] reply in
+                guard let self else { return }
+                if self.controller.forkChat(id, upTo: reply) == nil { NSSound.beep() }
+            }
             view.resolveFileURLs = { [weak self] urls in
                 self?.materializeDroppedURLs(urls, workdir: current.workdir).map { URL(fileURLWithPath: $0) } ?? urls
             }

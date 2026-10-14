@@ -93,6 +93,8 @@ enum SelfTest {
         case "files-alone": await filesAlone(window)
         case "sandbox-access": await sandboxAccess(window)
         case "launch-failure": await launchFailure(window)
+        case "fork": await fork(window)
+        case "links": links()
         case "files": await files(window)
         case "files-relaunch": await filesRelaunch(window)
         case "kits": await kits(window)
@@ -1073,6 +1075,60 @@ enum SelfTest {
         check(creates() == before, "no automatic retries (\(creates() - before) more creates in 15 s)")
         check(tree.surfaces.launchFailures[a.id]?.contains("kit") == true, "the message names the kit problem")
         snapshot(window, "launch-failure")
+    }
+
+    // MARK: Fork
+
+    /// Two replies; hover the first (Copy / Fork bar), fork there: the new chat
+    /// resumes with the first reply and without the second.
+    private static func fork(_ window: MainWindowController) async {
+        guard let tree = window.paneTree, let ws = window.workspaceController else { return log("no window") }
+        guard let s = ws.newChatInCurrentContext() else { return log("no folder to start a chat in") }
+        func chat(_ id: UUID) -> ChatSession? { tree.surfaces.chats[id]?.session }
+        func said(_ c: ChatSession) -> String {
+            c.items.compactMap { if case .agentText(_, let t) = $0 { t } else { nil } }.joined(separator: "\n")
+        }
+        check(await until(600) { chat(s.id)?.phase == .ready }, "chat reaches ready")
+        guard let c = chat(s.id) else { return }
+        c.send(text: "Reply with exactly the word ALPHA-ONE and nothing else.", attachments: [])
+        check(await until(180) { c.phase == .ready && said(c).contains("ALPHA-ONE") }, "first reply")
+        c.send(text: "Reply with exactly the word BETA-TWO and nothing else.", attachments: [])
+        check(await until(180) { c.phase == .ready && said(c).contains("BETA-TWO") }, "second reply")
+
+        if let view = tree.surfaces.chats[s.id] {
+            view.debugTranscript.debugHoverFirstReply()
+            await wait(0.4)
+            check(view.debugTranscript.debugReplyActionsShown, "hovering a reply shows Copy / Fork")
+            snapshot(window, "fork-hover")
+        }
+        let first = c.items.compactMap { if case .agentText(_, let t) = $0 { t } else { nil } }.first { $0.contains("ALPHA-ONE") } ?? "ALPHA-ONE"
+        guard let forked = ws.forkChat(s.id, upTo: first) else { return check(false, "fork created") }
+        check(forked.name.hasPrefix("Fork of"), "fork created (\(forked.name))")
+        check(await until(300) { chat(forked.id)?.phase == .ready }, "the fork resumes as a chat")
+        await wait(1.0)
+        if let f = chat(forked.id) {
+            check(said(f).contains("ALPHA-ONE") && !said(f).contains("BETA-TWO"),
+                  "the fork has the first reply and not the second (\(said(f).prefix(80)))")
+        }
+        snapshot(window, "fork-final")
+    }
+
+    // MARK: Links
+
+    /// Paths that exist (relative or absolute, with :line) and URLs become links.
+    private static func links() {
+        let view = ChatTranscriptView()
+        view.workdir = FileManager.default.currentDirectoryPath
+        view.debugApplyNow([.agentText(id: "a", text:
+            "See Sandshell/Chat/ChatSessionView.swift:12, the docs at https://example.com/x, "
+            + "/usr/bin/git and /no/such/thing.swift.")])
+        let links = view.debugLinks
+        log("links: \(links.map { "\($0.0) → \($0.1)" })")
+        check(links.contains { $0.0 == "Sandshell/Chat/ChatSessionView.swift" && $0.1.hasSuffix("ChatSessionView.swift#L12") },
+              "a relative path with :line links to the file at that line")
+        check(links.contains { $0.0 == "https://example.com/x" }, "a URL is a link")
+        check(links.contains { $0.0 == "/usr/bin/git" }, "an absolute path that exists is a link")
+        check(!links.contains { $0.0.contains("no/such") }, "a path that doesn't exist isn't")
     }
 }
 #endif

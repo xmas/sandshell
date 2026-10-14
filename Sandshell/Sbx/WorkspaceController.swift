@@ -1473,6 +1473,44 @@ extension WorkspaceController {
         return s
     }
 
+    /// Fork a chat at one of its replies: a copy of its Claude transcript up to
+    /// and including the line holding `replyText`, under a new session id, opened
+    /// as a new chat that resumes from there. Nil if the reply can't be found.
+    @discardableResult
+    func forkChat(_ id: UUID, upTo replyText: String) -> Session? {
+        guard let source = session(id: id), source.agent == .claude, let tid = source.transcriptID,
+              let url = TranscriptReader.transcriptURL(agent: .claude, workdir: source.workdir, home: home, id: tid),
+              let text = try? String(contentsOf: url, encoding: .utf8) else { return nil }
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: true)
+        // The reply's last words identify its transcript line (streamed text == stored text).
+        let trimmed = replyText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let needle = String(trimmed.suffix(80))
+        guard !needle.isEmpty, let cut = lines.lastIndex(where: { line in
+            guard line.contains("\"assistant\""),
+                  let obj = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
+                  obj["type"] as? String == "assistant",
+                  let blocks = (obj["message"] as? [String: Any])?["content"] as? [[String: Any]] else { return false }
+            return blocks.contains { ($0["text"] as? String)?.contains(needle) == true }
+        }) else { return nil }
+
+        let newID = UUID().uuidString.lowercased()
+        var out = ""
+        for line in lines[...cut] {
+            guard var obj = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any] else { continue }
+            if obj["sessionId"] != nil { obj["sessionId"] = newID }
+            if let data = try? JSONSerialization.data(withJSONObject: obj, options: [.withoutEscapingSlashes]),
+               let json = String(data: data, encoding: .utf8) { out += json + "\n" }
+        }
+        let forkURL = url.deletingLastPathComponent().appendingPathComponent("\(newID).jsonl")
+        guard (try? out.write(to: forkURL, atomically: true, encoding: .utf8)) != nil,
+              let fork = addSession(folderID: source.folderID, agent: source.agent,
+                                    name: "Fork of \(source.name)", chat: true) else { return nil }
+        setTranscriptID(fork.id, newID)
+        selection = .session(fork.id)
+        Log.info(.workspace, "forked chat “\(source.name)” at \(cut + 1) of \(lines.count) transcript lines → \(newID)")
+        return fork
+    }
+
     /// ⌃⌘N: new native chat (Claude unless another ACP agent is asked for) in
     /// the selected session's folder (else the first folder), selected right
     /// away. The chat runs in that agent's own sandbox.
