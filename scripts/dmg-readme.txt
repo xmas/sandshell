@@ -23,3 +23,9 @@ After setup, you can open any folder in Sandshell from your terminal:
     sandshell ~/my-project            # open a specific folder
     sandshell ~/project ~/data        # with a read-only extra mount
     sandshell ~/project -w ~/writes   # with a read-write extra mount
+
+Prefer Homebrew? It installs Sandshell, the sbx CLI and the `sandshell`
+command in one step, and `brew upgrade` keeps them current:
+
+    brew install --cask docker/tap/sbx xmas/xmas/sandshell
+    sbx login

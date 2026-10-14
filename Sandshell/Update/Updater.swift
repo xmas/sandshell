@@ -1,33 +1,31 @@
 import AppKit
-import CryptoKit
 import Foundation
-import Network
 
-/// In-app updater. Reads the docker.com-shared Google Drive "releases" folder
-/// (domain-restricted, so it authenticates the user via Google OAuth with the
-/// read-only Drive scope), finds the newest `Sandshell-<version>.dmg`, and — if
-/// it's newer than the running build — offers to download it, swap the app
-/// bundle in place, and relaunch.
+/// In-app updater. Sandshell ships through the Homebrew tap `xmas/xmas`
+/// (public repo xmas/homebrew-xmas): the cask `Casks/sandshell.rb` is the
+/// source of truth for the latest version, and its DMGs are GitHub release
+/// assets on that repo (tag `sandshell-v<version>`).
 ///
-/// SETUP (one-time): create a Google **OAuth client ID of type "Desktop app"**
-/// in the GCP project (consent screen → Internal, scope
-/// `…/auth/drive.readonly`) and fill in `clientID`/`clientSecret` below. Desktop
-/// clients support the loopback redirect this uses without registering ports.
+/// The check reads the raw cask rather than the GitHub releases API: the cask
+/// is exactly what `brew upgrade` will install (so we never announce a version
+/// brew can't see yet), the tap repo also hosts other apps' releases (so
+/// "latest release" isn't necessarily ours), and raw.githubusercontent.com has
+/// no API rate limit or auth. The cask's `url` also gives the DMG location for
+/// the non-Homebrew fallback.
+///
+/// If the running app was installed by Homebrew, "update" runs
+/// `brew update && brew upgrade --cask xmas/xmas/sandshell` in Terminal after
+/// Sandshell quits (so Homebrew's records stay in sync). Otherwise it downloads
+/// the DMG, swaps the bundle in place, and relaunches.
 @MainActor
 final class Updater {
     static let shared = Updater()
 
     // MARK: Configuration
-    /// The docker.com-shared releases folder (holds `Sandshell-<version>.dmg`).
-    private let driveFolderID = "1TDO_iVfaobA3tYiF8JM_1NA_DBpEANjl"
-    /// TODO: set these from the Desktop OAuth client created in GCP.
-    private let clientID = "REPLACE_WITH_OAUTH_CLIENT_ID.apps.googleusercontent.com"
-    /// "Desktop app" clients have a client secret that is not actually secret
-    /// (it's shipped in the binary); the loopback+PKCE flow still requires it.
-    private let clientSecret = "REPLACE_WITH_OAUTH_CLIENT_SECRET"
-    private let scope = "https://www.googleapis.com/auth/drive.readonly"
+    static let caskToken = "xmas/xmas/sandshell"
+    static let caskURL = URL(string: "https://raw.githubusercontent.com/xmas/homebrew-xmas/main/Casks/sandshell.rb")!
+    static let upgradeCommand = "brew update && brew upgrade --cask \(caskToken)"
 
-    private var configured: Bool { !clientID.hasPrefix("REPLACE_WITH") }
     private var checking = false
 
     private init() {}
@@ -39,21 +37,13 @@ final class Updater {
 
     // MARK: - Entry points
 
-    /// Silent check on launch: only runs if the user has already authorized
-    /// (never pops a browser unprompted).
+    /// Silent check on launch: only speaks up when an update exists.
     func checkInBackground() {
-        guard configured, Keychain.read(Self.refreshKey) != nil else { return }
         check(userInitiated: false)
     }
 
-    /// Menu "Check for Updates…": may trigger the Google sign-in flow.
+    /// Menu "Check for Updates…".
     func checkForUpdatesMenu() {
-        guard configured else {
-            inform("Updates aren’t configured",
-                   "This build has no Google OAuth client configured, so it can’t reach the "
-                   + "releases folder. See Updater.swift setup notes.")
-            return
-        }
         check(userInitiated: true)
     }
 
@@ -64,18 +54,15 @@ final class Updater {
         Task {
             defer { checking = false }
             do {
-                let token = try await accessToken(interactive: userInitiated)
-                guard let release = try await latestRelease(token: token) else {
-                    if userInitiated { inform("No releases found", "The releases folder has no Sandshell DMGs.") }
+                guard let release = try await latestRelease() else {
+                    if userInitiated { inform("No releases found", "Couldn’t read a version from the Homebrew cask.") }
                     return
                 }
                 if Self.isNewer(release.version, than: currentVersion) {
-                    offer(release, token: token)
+                    offer(release)
                 } else if userInitiated {
                     inform("You’re up to date", "Sandshell \(currentVersion) is the latest version.")
                 }
-            } catch is CancellationError {
-                // user cancelled sign-in — stay quiet
             } catch {
                 Log.error(.app, "update check failed: \(error.localizedDescription)")
                 if userInitiated { inform("Update check failed", error.localizedDescription) }
@@ -85,39 +72,36 @@ final class Updater {
 
     // MARK: - Release discovery
 
-    private struct Release { let version: String; let fileID: String; let name: String }
+    private struct Release { let version: String; let dmgURL: URL? }
 
-    /// List the releases folder and return the highest-versioned DMG.
-    private func latestRelease(token: String) async throws -> Release? {
-        var comps = URLComponents(string: "https://www.googleapis.com/drive/v3/files")!
-        comps.queryItems = [
-            .init(name: "q", value: "'\(driveFolderID)' in parents and trashed=false and mimeType='application/x-apple-diskimage'"),
-            .init(name: "fields", value: "files(id,name)"),
-            .init(name: "pageSize", value: "100"),
-            .init(name: "supportsAllDrives", value: "true"),
-            .init(name: "includeItemsFromAllDrives", value: "true"),
-        ]
-        var req = URLRequest(url: comps.url!)
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+    /// Fetch the tap's cask and read its `version` and (expanded) `url`.
+    private func latestRelease() async throws -> Release? {
+        var req = URLRequest(url: Self.caskURL)
+        req.cachePolicy = .reloadIgnoringLocalCacheData
         let (data, resp) = try await URLSession.shared.data(for: req)
         try Self.check(resp, data)
-        struct List: Decodable { struct F: Decodable { let id: String; let name: String }; let files: [F] }
-        let list = try JSONDecoder().decode(List.self, from: data)
-        return list.files
-            .compactMap { f -> Release? in
-                guard let v = Self.version(fromDMGName: f.name) else { return nil }
-                return Release(version: v, fileID: f.id, name: f.name)
-            }
-            .max { Self.isNewer($1.version, than: $0.version) }
+        return Self.parseCask(String(decoding: data, as: UTF8.self))
+            .map { Release(version: $0.version, dmgURL: $0.dmgURL) }
     }
 
-    /// Parse "Sandshell-1.2.3.dmg" → "1.2.3".
-    static func version(fromDMGName name: String) -> String? {
-        guard name.lowercased().hasSuffix(".dmg") else { return nil }
-        let stem = String(name.dropLast(4))
-        guard let dash = stem.firstIndex(of: "-") else { return nil }
-        let v = String(stem[stem.index(after: dash)...])
-        return v.allSatisfy { $0.isNumber || $0 == "." } && !v.isEmpty ? v : nil
+    /// Pull `version "…"` and `url "…"` (with `#{version}` expanded) from a cask.
+    static func parseCask(_ text: String) -> (version: String, dmgURL: URL?)? {
+        func quoted(_ stanza: String) -> String? {
+            for line in text.split(separator: "\n") {
+                let t = line.trimmingCharacters(in: .whitespaces)
+                guard t.hasPrefix(stanza + " \"") else { continue }
+                let rest = t.dropFirst(stanza.count + 2)
+                guard let end = rest.firstIndex(of: "\"") else { continue }
+                return String(rest[..<end])
+            }
+            return nil
+        }
+        // Only the native app's cask counts: its tags are `sandshell-v…`. (The
+        // same token previously shipped the Tauri app at 0.15.x under `v…` tags.)
+        guard let v = quoted("version"), !v.isEmpty,
+              v.allSatisfy({ $0.isNumber || $0 == "." }),
+              let rawURL = quoted("url"), rawURL.contains("/sandshell-v") else { return nil }
+        return (v, URL(string: rawURL.replacingOccurrences(of: "#{version}", with: v)))
     }
 
     /// Numeric, component-wise semver-ish comparison ("0.10.0" > "0.9.0").
@@ -131,35 +115,94 @@ final class Updater {
         return false
     }
 
+    /// The Caskroom entry if this copy was installed by `brew install --cask`.
+    private var homebrewManaged: Bool {
+        ["/opt/homebrew/Caskroom/sandshell", "/usr/local/Caskroom/sandshell"]
+            .contains { FileManager.default.fileExists(atPath: $0) }
+    }
+
     // MARK: - Offer + install
 
-    private func offer(_ release: Release, token: String) {
+    private func offer(_ release: Release) {
         let alert = NSAlert()
         alert.messageText = "Update available"
-        alert.informativeText = "Sandshell \(release.version) is available (you have \(currentVersion)). "
-            + "Download and install it now? Sandshell will relaunch."
-        alert.addButton(withTitle: "Update Now")
-        alert.addButton(withTitle: "Later")
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-        Task {
-            do {
-                let dmg = try await download(fileID: release.fileID, token: token, name: release.name)
-                try installAndRelaunch(dmgURL: dmg)
-            } catch {
-                Log.error(.app, "update install failed: \(error.localizedDescription)")
-                inform("Update failed", error.localizedDescription)
+        let base = "Sandshell \(release.version) is available (you have \(currentVersion))."
+        if homebrewManaged {
+            alert.informativeText = base + " Sandshell will quit and Terminal will run:\n\n"
+                + Self.upgradeCommand + "\n\nthen reopen it."
+            alert.addButton(withTitle: "Upgrade with Homebrew")
+            alert.addButton(withTitle: "Later")
+            alert.addButton(withTitle: "Copy Command")
+            switch alert.runModal() {
+            case .alertFirstButtonReturn: upgradeWithHomebrew()
+            case .alertThirdButtonReturn:
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(Self.upgradeCommand, forType: .string)
+            default: break
+            }
+        } else {
+            alert.informativeText = base + " Download and install it now? Sandshell will relaunch.\n\n"
+                + "Tip: install with Homebrew (brew install --cask \(Self.caskToken)) "
+                + "to get updates through brew upgrade."
+            alert.addButton(withTitle: "Update Now")
+            alert.addButton(withTitle: "Later")
+            guard alert.runModal() == .alertFirstButtonReturn else { return }
+            guard let url = release.dmgURL else {
+                inform("Update failed", "The cask has no download URL.")
+                return
+            }
+            Task {
+                do {
+                    let dmg = try await download(url)
+                    try installAndRelaunch(dmgURL: dmg)
+                } catch {
+                    Log.error(.app, "update install failed: \(error.localizedDescription)")
+                    inform("Update failed", error.localizedDescription)
+                }
             }
         }
     }
 
-    /// Download the DMG via the authenticated media endpoint.
-    private func download(fileID: String, token: String, name: String) async throws -> URL {
-        let url = URL(string: "https://www.googleapis.com/drive/v3/files/\(fileID)?alt=media&supportsAllDrives=true")!
-        var req = URLRequest(url: url)
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        let (tmp, resp) = try await URLSession.shared.download(for: req)
+    /// Hand off to Terminal: a `.command` script that waits for us to quit,
+    /// runs the brew upgrade, and reopens the app. Then quit.
+    private func upgradeWithHomebrew() {
+        let brew = PathFixer.which("brew") ?? "brew"
+        let pid = ProcessInfo.processInfo.processIdentifier
+        let app = Bundle.main.bundleURL.path
+        let script = """
+        #!/bin/bash
+        echo "Waiting for Sandshell to quit…"
+        while kill -0 \(pid) 2>/dev/null; do sleep 0.3; done
+        "\(brew)" update && "\(brew)" upgrade --cask \(Self.caskToken) && /usr/bin/open "\(app)"
+        """
+        do {
+            let url = FileManager.default.temporaryDirectory
+                .appendingPathComponent("sandshell-upgrade-\(UUID().uuidString).command")
+            try script.write(to: url, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+            let terminal = URL(fileURLWithPath: "/System/Applications/Utilities/Terminal.app")
+            Log.info(.app, "handing update to Homebrew: \(Self.upgradeCommand)")
+            NSWorkspace.shared.open([url], withApplicationAt: terminal,
+                                    configuration: NSWorkspace.OpenConfiguration()) { _, error in
+                Task { @MainActor in
+                    if let error {
+                        Log.error(.app, "could not open Terminal for brew upgrade: \(error.localizedDescription)")
+                        self.inform("Couldn’t open Terminal", "Run this yourself:\n\n\(Self.upgradeCommand)")
+                    } else {
+                        NSApp.terminate(nil)
+                    }
+                }
+            }
+        } catch {
+            inform("Update failed", error.localizedDescription)
+        }
+    }
+
+    /// Download the DMG (public GitHub release asset).
+    private func download(_ url: URL) async throws -> URL {
+        let (tmp, resp) = try await URLSession.shared.download(from: url)
         try Self.check(resp, nil)
-        let dest = FileManager.default.temporaryDirectory.appendingPathComponent(name)
+        let dest = FileManager.default.temporaryDirectory.appendingPathComponent(url.lastPathComponent)
         try? FileManager.default.removeItem(at: dest)
         try FileManager.default.moveItem(at: tmp, to: dest)
         return dest
@@ -212,123 +255,6 @@ final class Updater {
         NSApp.terminate(nil)
     }
 
-    // MARK: - OAuth (PKCE, loopback redirect)
-
-    private static let refreshKey = "google-oauth-refresh-token"
-    private var cachedAccess: (token: String, expiry: Date)?
-
-    /// A valid access token: from cache, refreshed, or (interactive only) via a
-    /// fresh browser sign-in.
-    private func accessToken(interactive: Bool) async throws -> String {
-        if let c = cachedAccess, c.expiry > Date().addingTimeInterval(60) { return c.token }
-        if let refresh = Keychain.read(Self.refreshKey) {
-            if let token = try? await exchangeRefresh(refresh) { return token }
-        }
-        guard interactive else { throw Err("Not signed in.") }
-        return try await signIn()
-    }
-
-    private func exchangeRefresh(_ refresh: String) async throws -> String {
-        let token = try await tokenRequest([
-            "client_id": clientID, "client_secret": clientSecret,
-            "refresh_token": refresh, "grant_type": "refresh_token",
-        ])
-        cache(token); return token.accessToken
-    }
-
-    private func signIn() async throws -> String {
-        let verifier = Self.randomURLSafe(64)
-        let challenge = Self.base64url(Data(SHA256.hash(data: Data(verifier.utf8))))
-        let (port, codeTask) = try await startLoopback()
-        let redirect = "http://127.0.0.1:\(port)"
-
-        var auth = URLComponents(string: "https://accounts.google.com/o/oauth2/v2/auth")!
-        auth.queryItems = [
-            .init(name: "client_id", value: clientID),
-            .init(name: "redirect_uri", value: redirect),
-            .init(name: "response_type", value: "code"),
-            .init(name: "scope", value: scope),
-            .init(name: "code_challenge", value: challenge),
-            .init(name: "code_challenge_method", value: "S256"),
-            .init(name: "access_type", value: "offline"),
-            .init(name: "prompt", value: "consent"),
-        ]
-        NSWorkspace.shared.open(auth.url!)
-
-        let code = try await codeTask.value
-        let token = try await tokenRequest([
-            "client_id": clientID, "client_secret": clientSecret,
-            "code": code, "code_verifier": verifier,
-            "grant_type": "authorization_code", "redirect_uri": redirect,
-        ])
-        if let refresh = token.refreshToken { Keychain.set(Self.refreshKey, refresh) }
-        cache(token)
-        return token.accessToken
-    }
-
-    private struct TokenResponse: Decodable {
-        let accessToken: String; let expiresIn: Int?; let refreshToken: String?
-        enum CodingKeys: String, CodingKey {
-            case accessToken = "access_token", expiresIn = "expires_in", refreshToken = "refresh_token"
-        }
-    }
-
-    private func tokenRequest(_ form: [String: String]) async throws -> TokenResponse {
-        var req = URLRequest(url: URL(string: "https://oauth2.googleapis.com/token")!)
-        req.httpMethod = "POST"
-        req.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-        req.httpBody = form.map { "\($0.key)=\(Self.formEncode($0.value))" }.joined(separator: "&").data(using: .utf8)
-        let (data, resp) = try await URLSession.shared.data(for: req)
-        try Self.check(resp, data)
-        return try JSONDecoder().decode(TokenResponse.self, from: data)
-    }
-
-    private func cache(_ t: TokenResponse) {
-        cachedAccess = (t.accessToken, Date().addingTimeInterval(TimeInterval(t.expiresIn ?? 3000)))
-    }
-
-    /// Start a one-shot loopback HTTP listener; returns the bound port and a task
-    /// that resolves with the OAuth `code` once the browser redirects back.
-    private func startLoopback() async throws -> (UInt16, Task<String, Error>) {
-        let listener = try NWListener(using: .tcp, on: .any)
-        let box = CodeBox()
-        listener.newConnectionHandler = { conn in
-            conn.start(queue: .main)
-            conn.receive(minimumIncompleteLength: 1, maximumLength: 8192) { data, _, _, _ in
-                let request = data.flatMap { String(data: $0, encoding: .utf8) } ?? ""
-                let code = Self.parseCode(fromRequestLine: request)
-                let body = code != nil
-                    ? "Signed in. You can return to Sandshell."
-                    : "Sign-in failed. You can close this window."
-                let http = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: \(body.utf8.count)\r\nConnection: close\r\n\r\n\(body)"
-                conn.send(content: http.data(using: .utf8), completion: .contentProcessed { _ in conn.cancel() })
-                box.resolve(code)
-                listener.cancel()
-            }
-        }
-        listener.start(queue: .main)
-        // Wait for the OS-assigned port.
-        for _ in 0..<50 {
-            if let p = listener.port?.rawValue, p != 0 {
-                return (p, Task { try await box.wait() })
-            }
-            try await Task.sleep(nanoseconds: 20_000_000)
-        }
-        listener.cancel()
-        throw Err("Could not start the sign-in listener.")
-    }
-
-    /// Extract `code` from the HTTP request line "GET /?code=…&… HTTP/1.1".
-    private nonisolated static func parseCode(fromRequestLine request: String) -> String? {
-        guard let line = request.split(separator: "\r\n").first,
-              let pathPart = line.split(separator: " ").dropFirst().first,
-              let q = pathPart.split(separator: "?").dropFirst().first else { return nil }
-        for pair in q.split(separator: "&") where pair.hasPrefix("code=") {
-            return String(pair.dropFirst(5)).removingPercentEncoding
-        }
-        return nil
-    }
-
     // MARK: - Helpers
 
     private struct Err: LocalizedError { let m: String; init(_ m: String) { self.m = m }; var errorDescription: String? { m } }
@@ -350,77 +276,5 @@ final class Updater {
     private func inform(_ title: String, _ body: String) {
         let a = NSAlert(); a.messageText = title; a.informativeText = body
         a.addButton(withTitle: "OK"); a.runModal()
-    }
-
-    private static func randomURLSafe(_ n: Int) -> String {
-        var bytes = [UInt8](repeating: 0, count: n)
-        _ = SecRandomCopyBytes(kSecRandomDefault, n, &bytes)
-        return base64url(Data(bytes))
-    }
-    private static func base64url(_ d: Data) -> String {
-        d.base64EncodedString().replacingOccurrences(of: "+", with: "-")
-            .replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
-    }
-    private static func formEncode(_ s: String) -> String {
-        s.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? s
-    }
-}
-
-/// Thread-safe one-shot holder bridging the listener callback to async/await.
-private final class CodeBox: @unchecked Sendable {
-    private let lock = NSLock()
-    private var code: String??
-    private var cont: CheckedContinuation<String, Error>?
-
-    func resolve(_ value: String?) {
-        lock.lock(); defer { lock.unlock() }
-        if let cont {
-            self.cont = nil
-            if let value { cont.resume(returning: value) }
-            else { cont.resume(throwing: CancellationError()) }
-        } else {
-            code = .some(value)
-        }
-    }
-    func wait() async throws -> String {
-        try await withCheckedThrowingContinuation { c in
-            lock.lock(); defer { lock.unlock() }
-            if let resolved = code {
-                if let v = resolved { c.resume(returning: v) } else { c.resume(throwing: CancellationError()) }
-            } else {
-                cont = c
-            }
-        }
-    }
-}
-
-/// Minimal Keychain wrapper for the OAuth refresh token.
-private enum Keychain {
-    private static let service = "com.xmas.sandshell.oauth"
-
-    static func read(_ account: String) -> String? {
-        let q: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-        ]
-        var out: CFTypeRef?
-        guard SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess,
-              let data = out as? Data else { return nil }
-        return String(data: data, encoding: .utf8)
-    }
-
-    static func set(_ account: String, _ value: String) {
-        let base: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-        ]
-        SecItemDelete(base as CFDictionary)
-        var add = base
-        add[kSecValueData as String] = value.data(using: .utf8)
-        SecItemAdd(add as CFDictionary, nil)
     }
 }
