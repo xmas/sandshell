@@ -30,15 +30,15 @@ fi
 #    upgraded, restart the sandboxd daemon so it runs the new binary.
 if ! command -v sbx >/dev/null 2>&1; then
   echo "→ Installing sbx…"
-  brew install sbx
+  brew install --cask docker/tap/sbx
 else
   echo "→ Checking for an sbx update…"
   brew update >/dev/null 2>&1 || true
-  if [ -n "$(brew outdated sbx 2>/dev/null)" ]; then
+  if [ -n "$(brew outdated --cask docker/tap/sbx 2>/dev/null)" ]; then
     echo "→ Updating sbx ($(sbx version 2>/dev/null | head -1))…"
     daemon_was_running=no
     sbx daemon status >/dev/null 2>&1 && daemon_was_running=yes
-    brew upgrade sbx
+    brew upgrade --cask docker/tap/sbx
     if [ "$daemon_was_running" = yes ]; then
       echo "→ Restarting the sandboxd daemon to pick up the new sbx…"
       sbx daemon stop  >/dev/null 2>&1 || true

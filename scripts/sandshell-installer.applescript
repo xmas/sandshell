@@ -1,13 +1,14 @@
 -- Sandshell first-install assistant.
 -- Compile to an app:  scripts/build-installer.sh  →  "dist/Sandshell Installer.app"
--- Helps a new user install Sandshell from the docker.com Drive releases folder:
+-- Helps a new user install Sandshell from the GitHub releases of the Homebrew tap
+-- (most people should just `brew install --cask xmas/xmas/sandshell` instead):
 -- finds/downloads the DMG, copies the app to /Applications, then hands off to a
 -- Terminal window running the bundled "Sandshell Setup.command" (which removes
 -- the Gatekeeper quarantine, installs/updates the sbx CLI — restarting the
 -- daemon when needed — signs in to sbx, and launches the app).
 
 property appName : "Sandshell"
-property driveFolder : "https://drive.google.com/drive/folders/1TDO_iVfaobA3tYiF8JM_1NA_DBpEANjl"
+property releasesPage : "https://github.com/xmas/homebrew-xmas/releases"
 property installedApp : "/Applications/Sandshell.app"
 property setupTmp : "/tmp/Sandshell Setup.command"
 
@@ -35,7 +36,7 @@ on run
 	end try
 end run
 
--- Find the newest Sandshell DMG in ~/Downloads; if none, open the Drive folder
+-- Find the newest Sandshell DMG in ~/Downloads; if none, open the releases page
 -- and wait for the user to download one.
 on locateDMG()
 	repeat
@@ -46,10 +47,10 @@ on locateDMG()
 		end try
 		if found is not "" then return found
 
-		do shell script "open " & quoted form of driveFolder
+		do shell script "open " & quoted form of releasesPage
 		display dialog "Download the latest " & appName & " disk image (Sandshell-<version>.dmg) into your " & ¬
 			"Downloads folder, then click Continue." & return & return & ¬
-			"The releases folder just opened in your browser — sign in with your docker.com account if asked." ¬
+			"The releases page just opened in your browser — download the DMG from the newest sandshell-v release." ¬
 			buttons {"Quit", "Continue"} default button "Continue" ¬
 			with title appName & " Installer" with icon note
 		if button returned of result is "Quit" then error number -128
