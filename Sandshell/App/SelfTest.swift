@@ -900,6 +900,12 @@ enum SelfTest {
             check(text.contains("sandshell-bg-done"), "its output can be read back from the sandbox")
         }
 
+        // Claude Code wakes the agent with the result; the chat shows its reply.
+        let replied = await until(60) {
+            chat.items.contains { if case .agentText(_, let t) = $0 { t.contains("sandshell-bg-done") || t.contains("exit code 0") } else { false } }
+        }
+        check(replied, "the chat shows Claude's reply to the finished task")
+
         // The list, as the popover and Window ▸ Background Tasks render it.
         let list = BackgroundTasksView(controller: ws, sessionIDs: { [s.id] })
         let host = NSHostingView(rootView: list.frame(width: 420, height: 300))
