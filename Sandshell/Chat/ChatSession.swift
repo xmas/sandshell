@@ -136,6 +136,9 @@ final class ChatSession: ObservableObject {
     /// to show when the agent exits before it ever answered.
     private var launchError: String?
 
+    /// `close()` ran: nothing may start the agent again (a pending catch-up).
+    private var isClosed = false
+
     /// Following the transcript for turns another app writes (Claude only).
     private var follower: Task<Void, Never>?
     private var followURL: URL?
@@ -169,6 +172,8 @@ final class ChatSession: ObservableObject {
     // MARK: Lifecycle
 
     func start() {
+        guard !isClosed else { return }
+        launchError = nil
         if let unavailable {
             notice(unavailable, isError: true)
             phase = .closed("\(title) can’t start — see above.")
@@ -284,6 +289,7 @@ final class ChatSession: ObservableObject {
     }
 
     func close() {
+        isClosed = true
         stopFollowing()
         pumpTask?.cancel()
         let wasRunning = connection != nil
@@ -306,6 +312,7 @@ final class ChatSession: ObservableObject {
             return
         }
         inExternalRun = false
+        sawOwnTurn = true   // however short the turn, the follower skips past it
         items.append(.user(id: UUID(), text: trimmed, attachments: attachments.map(\.displayName)))
         if !trimmed.isEmpty { onPrompt?(trimmed) }
         stopped = false
@@ -353,7 +360,12 @@ final class ChatSession: ObservableObject {
     /// Send `text` as soon as the session is ready (Shortcuts / Services
     /// "send now"); sends immediately if it already is.
     func sendWhenReady(text: String, attachments: [ChatAttachment]) {
-        if phase == .ready { send(text: text, attachments: attachments) } else { queued = (text, attachments) }
+        if phase == .ready { send(text: text, attachments: attachments); return }
+        if let (earlier, files) = queued {
+            queued = ([earlier, text].filter { !$0.isEmpty }.joined(separator: "\n\n"), files + attachments)
+        } else {
+            queued = (text, attachments)
+        }
     }
     private var queued: (String, [ChatAttachment])?
 
@@ -453,7 +465,9 @@ final class ChatSession: ObservableObject {
             ClaudeTranscriptTail.readLines(url, from: offset)
         }).value, phase == .ready, followOffset == offset else { return }
         followOffset = newOffset
-        applyExternal(ClaudeTranscriptTail.parse(text))
+        // Lines our own agent writes (sdk-ts) between turns — background-task
+        // notices and the like — aren't another app's.
+        applyExternal(ClaudeTranscriptTail.parse(text, skippingEntrypoint: "sdk-ts"))
     }
 
     /// Show what another app added, as if it had happened here.
@@ -510,9 +524,10 @@ final class ChatSession: ObservableObject {
         items = []
         phase = .starting
         let container = containerName, match = tag.pairs[1]
-        Task {
+        Task { [weak self] in
             await SbxClient.reapSessionProcessesAndWait(container: container, match: match)
-            start()
+            // Closed meanwhile (Restart, Terminal, deleted): start nothing.
+            self?.start()
         }
     }
 

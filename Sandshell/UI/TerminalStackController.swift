@@ -1567,6 +1567,7 @@ final class TerminalStackController: NSViewController {
         chat.session.close()
         chat.removeFromSuperview()
         controller.setLive(id, false)
+        controller.setStopped(id, nil)   // a stopped chat's reason doesn't follow it to Terminal
     }
 
     /// Tear down a session's terminal (e.g. when it switches to chat).

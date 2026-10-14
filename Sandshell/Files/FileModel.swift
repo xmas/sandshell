@@ -225,7 +225,8 @@ final class FileWatcher: @unchecked Sendable {
         self.onChange = onChange
         let box = Box()
         box.watcher = self
-        var context = FSEventStreamContext(version: 0, info: Unmanaged.passRetained(box).toOpaque(),
+        let retained = Unmanaged.passRetained(box)
+        var context = FSEventStreamContext(version: 0, info: retained.toOpaque(),
                                            retain: nil, release: { info in
                                                if let info { Unmanaged<Box>.fromOpaque(info).release() }
                                            }, copyDescription: nil)
@@ -241,6 +242,8 @@ final class FileWatcher: @unchecked Sendable {
         if let stream {
             FSEventStreamSetDispatchQueue(stream, .main)
             FSEventStreamStart(stream)
+        } else {
+            retained.release()   // no stream to release it
         }
     }
 

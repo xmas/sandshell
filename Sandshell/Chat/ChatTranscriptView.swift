@@ -167,8 +167,9 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
     /// followed by :line(:col).
     private static let pathPattern = try? NSRegularExpression(
         pattern: #"(?<![\w/.~-])((?:~|\.{1,2})?/?(?:[A-Za-z0-9_.@+-]|\\ )+(?:/(?:[A-Za-z0-9_.@+-]|\\ )+)*)(?::(\d+))?(?::\d+)?"#)
-    /// A path in backticks or quotes, where it may contain plain spaces.
-    private static let quotedPattern = try? NSRegularExpression(pattern: #"([`"'])([^`"'\n]{3,300})\1"#)
+    /// A path in double quotes, where it may contain plain spaces (backticks are
+    /// inline code by the time this runs; single quotes pair up across prose).
+    private static let quotedPattern = try? NSRegularExpression(pattern: #""([^"\n]{3,300})""#)
     /// A trailing :line(:col) on a quoted path.
     private static let lineSuffix = try? NSRegularExpression(pattern: #":(\d+)(?::\d+)?$"#)
 
@@ -216,7 +217,7 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
 
         // `My Folder/notes.md` (inline code — the backticks are gone by now),
         // "…/Read Me.txt:12"
-        var spans = (Self.quotedPattern?.matches(in: text, range: whole) ?? []).map { $0.range(at: 2) }
+        var spans = (Self.quotedPattern?.matches(in: text, range: whole) ?? []).map { $0.range(at: 1) }
         out.enumerateAttribute(.inlinePresentationIntent, in: whole) { value, range, _ in
             guard let raw = (value as? NSNumber)?.uintValue,
                   InlinePresentationIntent(rawValue: raw).contains(.code) else { return }
@@ -236,6 +237,7 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
         }
 
         for m in pattern.matches(in: text, range: whole) {
+            guard checked < 400 else { break }
             let r1 = m.range(at: 1)
             let token = trimmed(ns.substring(with: r1))
             guard looksLikePath(token) else { continue }
@@ -250,8 +252,9 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
                   ns.character(at: m.range.location + m.range.length) == 0x20 else { continue }
             let lineEnd = ns.rangeOfCharacter(from: .newlines, range: NSRange(
                 location: r1.location, length: ns.length - r1.location)).location
+            // A few hundred characters is plenty for a path; long lines stay cheap.
             let rest = ns.substring(with: NSRange(location: r1.location,
-                                                  length: (lineEnd == NSNotFound ? ns.length : lineEnd) - r1.location))
+                                                  length: min((lineEnd == NSNotFound ? ns.length : lineEnd) - r1.location, 300)))
             let words = rest.components(separatedBy: " ")
             guard words.count >= 2 else { continue }
             var best: (path: String, length: Int, line: String?)?

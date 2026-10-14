@@ -103,7 +103,7 @@ enum SelfTest {
         case "kits": await kits(window)
         case "agents": await agents(window)
         case "search": await search(window)
-        default: log("unknown self-test \(requested ?? "")")
+        default: check(false, "unknown self-test \(requested ?? "")")
         }
         log(failures == 0 ? "ALL PASSED" : "\(failures) FAILED")
         try? lines.joined(separator: "\n").write(toFile: out + "/selftest.log", atomically: true, encoding: .utf8)
@@ -1221,6 +1221,12 @@ enum SelfTest {
         check(batch.events.count == 4, "parse: prompt, tool use, tool result, reply (got \(batch.events.count))")
         check(batch.events.first == .user("hello there"), "parse: the prompt, not the wrappers")
         check(batch.working == false && batch.entrypoint == "claude-desktop", "parse: turn finished, written by the Claude app")
+        let own = ClaudeTranscriptTail.parse(
+            #"{"type":"user","entrypoint":"sdk-ts","message":{"role":"user","content":"<task-notification>done</task-notification>"}}"#,
+            skippingEntrypoint: "sdk-ts")
+        check(!own.sawConversation, "parse: the chat's own agent's lines (sdk-ts) are skipped")
+        check(TranscriptReader.claudeEncodedDir(for: "/Users/Zoë/a.b c") == "-Users-Zo--a-b-c",
+              "project folder names match Claude Code's (ASCII letters and digits only)")
 
         guard let tree = window.paneTree, let ws = window.workspaceController else { return log("no window") }
         guard let s = ws.newChatInCurrentContext() else { return log("no folder to start a chat in") }
@@ -1238,6 +1244,14 @@ enum SelfTest {
         guard let sid = ws.session(id: s.id)?.transcriptID else { return check(false, "transcript id known") }
         let url = ws.home.appendingPathComponent(
             ".claude/projects/\(TranscriptReader.claudeEncodedDir(for: c.workdir))/\(sid).jsonl")
+        // Claude Code rewrites its trailing cost-state line in place a while after
+        // a turn: append only once the file has been still for a few seconds.
+        var lastSize = ClaudeTranscriptTail.fileSize(url), stillSince = Date()
+        _ = await until(60) {
+            let size = ClaudeTranscriptTail.fileSize(url)
+            if size != lastSize { lastSize = size; stillSince = Date() }
+            return Date().timeIntervalSince(stillSince) >= 6
+        }
         let lines = (try? String(contentsOf: url, encoding: .utf8))?.split(separator: "\n") ?? []
         let last = lines.reversed().lazy.compactMap { line -> String? in
             (try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any])?["uuid"] as? String

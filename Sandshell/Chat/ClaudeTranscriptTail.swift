@@ -22,7 +22,8 @@ struct ClaudeTranscriptTail {
         var entrypoint: String?
     }
 
-    static func parse(_ text: String) -> Batch {
+    /// `skippingEntrypoint`: lines written by that client (the chat's own agent) are ignored.
+    static func parse(_ text: String, skippingEntrypoint skipped: String? = nil) -> Batch {
         var batch = Batch()
         let terminal: Set<String> = ["end_turn", "stop_sequence", "max_tokens"]
         for line in text.split(separator: "\n", omittingEmptySubsequences: true) {
@@ -30,8 +31,10 @@ struct ClaudeTranscriptTail {
                   obj["isSidechain"] as? Bool != true,
                   let type = obj["type"] as? String, type == "user" || type == "assistant",
                   let message = obj["message"] as? [String: Any] else { continue }
+            let entrypoint = obj["entrypoint"] as? String
+            if let skipped, entrypoint == skipped { continue }
             batch.sawConversation = true
-            if let e = obj["entrypoint"] as? String { batch.entrypoint = e }
+            if let entrypoint { batch.entrypoint = entrypoint }
             if type == "assistant" {
                 let stop = message["stop_reason"] as? String
                 batch.working = !(stop.map(terminal.contains) ?? false)

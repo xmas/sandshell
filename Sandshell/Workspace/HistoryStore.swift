@@ -125,7 +125,7 @@ final class HistoryStore: ObservableObject {
         let projects = home.appendingPathComponent(".claude/projects")
         guard let dirs = try? fm.contentsOfDirectory(
             at: projects, includingPropertiesForKeys: nil) else { return [] }
-        let prefixes = roots.map { TranscriptReader.claudeEncodedDir(for: $0) }
+        let prefixes = roots.map { String(TranscriptReader.claudeEncodedDir(for: $0).prefix(200)) }
         return dirs.filter { dir in prefixes.contains { dir.lastPathComponent.hasPrefix($0) } }
             .flatMap { dir -> [(URL, Date)] in
             guard let entries = try? fm.contentsOfDirectory(

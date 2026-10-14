@@ -509,8 +509,17 @@ enum TranscriptReader {
 
     // MARK: - Claude helpers
 
+    /// Claude Code's project folder name for a cwd: every UTF-16 unit outside
+    /// ASCII letters and digits becomes "-" (`replace(/[^a-zA-Z0-9]/g, "-")`).
+    /// Past 200 characters it also truncates and appends a hash, not mirrored
+    /// here: such a folder still starts with this name's first 200 characters.
     static func claudeEncodedDir(for workdir: String) -> String {
-        String(workdir.map { $0.isLetter || $0.isNumber ? $0 : "-" })
+        String(decoding: workdir.utf16.map { unit -> UInt16 in
+            switch unit {
+            case 0x30...0x39, 0x41...0x5A, 0x61...0x7A: return unit
+            default: return 0x2D
+            }
+        }, as: UTF16.self)
     }
 
     private static func extractText(_ content: Any?) -> String? {

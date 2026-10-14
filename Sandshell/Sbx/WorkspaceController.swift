@@ -474,6 +474,7 @@ final class WorkspaceController: ObservableObject {
                 if list.contains(where: { $0.name == name && $0.isRunning }) { return }
                 try? await Task.sleep(for: .seconds(1))
             }
+            throw SbxError.command("“\(name)” didn’t report running within 30 seconds — check `sbx ls`.")
         }
     }
     func stopSandbox(_ name: String) { sandboxAction(name) { _ = try await SbxClient.shared.stop(name) } }
