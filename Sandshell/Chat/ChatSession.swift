@@ -93,6 +93,8 @@ final class ChatSession: ObservableObject {
     var onSessionID: ((String) -> Void)?
     /// Turn started (true) / finished (false), for the sidebar + header status.
     var onWorkingChange: ((Bool) -> Void)?
+    /// Each prompt the user sends (the sidebar names sessions after them).
+    var onPrompt: ((String) -> Void)?
 
     let title: String
     private let resumeID: String?
@@ -177,6 +179,7 @@ final class ChatSession: ObservableObject {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty || !attachments.isEmpty else { return }
         items.append(.user(id: UUID(), text: trimmed, attachments: attachments.map(\.displayName)))
+        if !trimmed.isEmpty { onPrompt?(trimmed) }
 
         var blocks: [JSONValue] = []
         if !trimmed.isEmpty { blocks.append(["type": "text", "text": .string(trimmed)]) }

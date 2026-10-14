@@ -967,6 +967,7 @@ final class TerminalStackController: NSViewController {
                                    workdir: current.workdir, home: controller.home.path,
                                    mcpURL: controller.mcpURL, resumeID: resumeID)
             chat.onSessionID = { [controller] sid in controller.setTranscriptID(id, sid) }
+            chat.onPrompt = { [controller] prompt in controller.autoName(id, from: prompt) }
             chat.onWorkingChange = { [controller] working in
                 let now = Date()
                 controller.reportActivity(id, working: working, lastWrite: now, at: now)
