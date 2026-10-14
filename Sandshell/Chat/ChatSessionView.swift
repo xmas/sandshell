@@ -102,7 +102,14 @@ final class ChatSessionView: NSView {
         footer.orientation = .horizontal
         footer.spacing = 8
 
-        for v in [transcript, permissionBar, composer, footer] as [NSView] {
+        // Permission bar + composer stack: a hidden bar collapses (no blank band).
+        let bottom = NSStackView(views: [permissionBar, composer])
+        bottom.orientation = .vertical
+        bottom.alignment = .width
+        bottom.spacing = 8
+        bottom.detachesHiddenViews = true
+
+        for v in [transcript, bottom, footer] as [NSView] {
             v.translatesAutoresizingMaskIntoConstraints = false
             addSubview(v)
         }
@@ -111,15 +118,11 @@ final class ChatSessionView: NSView {
             transcript.leadingAnchor.constraint(equalTo: leadingAnchor),
             transcript.trailingAnchor.constraint(equalTo: trailingAnchor),
 
-            permissionBar.topAnchor.constraint(equalTo: transcript.bottomAnchor, constant: 6),
-            permissionBar.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
-            permissionBar.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
+            bottom.topAnchor.constraint(equalTo: transcript.bottomAnchor, constant: 6),
+            bottom.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
+            bottom.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
 
-            composer.topAnchor.constraint(equalTo: permissionBar.bottomAnchor, constant: 8),
-            composer.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
-            composer.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
-
-            footer.topAnchor.constraint(equalTo: composer.bottomAnchor, constant: 6),
+            footer.topAnchor.constraint(equalTo: bottom.bottomAnchor, constant: 6),
             footer.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
             footer.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
             footer.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -10),

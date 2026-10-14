@@ -10,6 +10,8 @@ enum ChatItem: Identifiable, Equatable {
     case tool(ToolCall)
     case plan(id: UUID, entries: [PlanEntry])
     case notice(id: UUID, text: String, isError: Bool)
+    /// An image the agent sent as message content.
+    case image(id: UUID, data: Data)
 
     var id: String {
         switch self {
@@ -19,6 +21,7 @@ enum ChatItem: Identifiable, Equatable {
         case .tool(let call): return "tool-\(call.id)"
         case .plan(let id, _): return "plan-\(id)"
         case .notice(let id, _, _): return "notice-\(id)"
+        case .image(let id, _): return "image-\(id)"
         }
     }
 
@@ -29,6 +32,11 @@ enum ChatItem: Identifiable, Equatable {
         var status: String          // pending | in_progress | completed | failed
         var output: String          // text content blocks, joined
         var diffs: [Diff]
+        /// Image content (e.g. a Read of a PNG), decoded.
+        var images: [Data] = []
+        /// What the tool was given — the command, path or pattern — when it
+        /// says more than the title.
+        var input: String = ""
     }
 
     struct Diff: Equatable {
@@ -313,8 +321,14 @@ final class ChatSession: ObservableObject {
             if let t = u["title"]?.string { call.title = t }
             if let k = u["kind"]?.string { call.kind = k }
             if let s = u["status"]?.string { call.status = s }
+            if let raw = u["rawInput"]?.object, let summary = Self.inputSummary(raw) { call.input = summary }
             if let content = u["content"]?.array {
                 call.output = content.compactMap { $0["content"]?["text"]?.string }.joined(separator: "\n")
+                call.images = content.compactMap { block -> Data? in
+                    let inner = block["content"] ?? block
+                    guard inner["type"]?.string == "image", let b64 = inner["data"]?.string else { return nil }
+                    return Data(base64Encoded: b64)
+                }
                 call.diffs = content.filter { $0["type"]?.string == "diff" }.map {
                     .init(path: $0["path"]?.string ?? "", oldText: $0["oldText"]?.string, newText: $0["newText"]?.string ?? "")
                 }
@@ -342,6 +356,11 @@ final class ChatSession: ObservableObject {
     }
 
     private func appendText(_ u: JSONValue, thought: Bool) {
+        if u["content"]?["type"]?.string == "image", let b64 = u["content"]?["data"]?.string,
+           let data = Data(base64Encoded: b64) {
+            items.append(.image(id: UUID(), data: data))
+            return
+        }
         guard let text = u["content"]?["text"]?.string else { return }
         let mid = u["messageId"]?.string ?? "current"
         if let last = items.last {
@@ -354,6 +373,14 @@ final class ChatSession: ObservableObject {
             }
         }
         items.append(thought ? .thought(id: mid, text: text) : .agentText(id: mid, text: text))
+    }
+
+    /// The most telling field of a tool's raw input, for display.
+    private static func inputSummary(_ raw: [String: JSONValue]) -> String? {
+        for key in ["command", "file_path", "path", "pattern", "url", "query", "description"] {
+            if let v = raw[key]?.string, !v.isEmpty { return v }
+        }
+        return nil
     }
 
     private func toolCall(id: String) -> ChatItem.ToolCall? {
