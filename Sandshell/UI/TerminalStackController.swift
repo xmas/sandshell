@@ -1454,8 +1454,10 @@ final class TerminalStackController: NSViewController {
         showStatus("Starting \(session.agent.displayName) chat…", busy: true)
         Task { [weak self] in
             guard let self else { return }
+            // Pending until the chat is registered: a second launch while this
+            // one awaits would start another agent (and orphan one of them).
+            defer { pending.remove(id) }
             let containerName = await controller.ensureContainerReady(for: session.containerAgentKind)
-            pending.remove(id)
             guard let containerName else {
                 let message = controller.lastError ?? "Failed to start the sandbox."
                 surfaces.launchFailures[id] = message

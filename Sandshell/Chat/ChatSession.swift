@@ -83,6 +83,7 @@ final class ChatSession: ObservableObject {
     @Published private(set) var phase: Phase = .starting {
         didSet {
             if (oldValue == .running) != (phase == .running) { onWorkingChange?(phase == .running) }
+            if phase != .starting { isCatchingUp = false }
         }
     }
     @Published private(set) var permission: PendingPermission?
@@ -97,6 +98,8 @@ final class ChatSession: ObservableObject {
     @Published private(set) var commands: [Command] = []
     /// Unrecognized `session/update` kinds seen (spike: what else the adapter sends).
     @Published private(set) var unknownUpdates: Set<String> = []
+    /// Restarting the agent so it sees turns another app added (`.starting` meanwhile).
+    @Published private(set) var isCatchingUp = false
 
     /// The agent's conversation id (the Claude session UUID) once known —
     /// persisted as the sidebar session's `transcriptID`.
@@ -112,7 +115,7 @@ final class ChatSession: ObservableObject {
     /// Set when the chat can't work before it starts (e.g. no credentials for
     /// the agent): shown instead of launching anything.
     private let unavailable: String?
-    private let resumeID: String?
+    private var resumeID: String?
     private let sbxProxyAuth: Bool
     private let tag: SbxCommand.ProcessTag
     private let containerName: String
@@ -129,6 +132,21 @@ final class ChatSession: ObservableObject {
     /// Last `sandshell: …` line our launch script wrote to stderr — the reason
     /// to show when the agent exits before it ever answered.
     private var launchError: String?
+
+    /// Following the transcript for turns another app writes (Claude only).
+    private var follower: Task<Void, Never>?
+    private var followURL: URL?
+    private var followOffset: UInt64 = 0
+    /// Our own turn just ended; its last lines are still landing in the file.
+    private var ownTurnEnded: Date?
+    private var sawOwnTurn = false
+    /// Another app added turns the agent hasn't loaded: reload before sending.
+    private var agentIsBehind = false
+    /// The other app's turn state, and when it last wrote.
+    private var otherWriterWorking = false
+    private var otherWriterLastWrite: Date?
+    /// The transcript's last items came from another app (one "Continued in" notice per run).
+    private var inExternalRun = false
 
     init(title: String, agent: AgentKind = .claude, containerName: String, workdir: String, home: String,
          mcpURL: URL?, resumeID: String? = nil, sbxProxyAuth: Bool = false, sessionID: UUID = UUID(),
@@ -182,6 +200,7 @@ final class ChatSession: ObservableObject {
                 applyConfig(result["configOptions"])
                 if let sid = sessionID { onSessionID?(sid) }
                 phase = .ready
+                startFollowing()
                 if let (text, attachments) = queued {
                     queued = nil
                     send(text: text, attachments: attachments)
@@ -262,6 +281,7 @@ final class ChatSession: ObservableObject {
     }
 
     func close() {
+        stopFollowing()
         pumpTask?.cancel()
         let wasRunning = connection != nil
         connection?.terminate()
@@ -276,6 +296,13 @@ final class ChatSession: ObservableObject {
         guard phase == .ready, let conn = connection, let sid = sessionID else { return }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty || !attachments.isEmpty else { return }
+        if agentIsBehind {
+            // The agent loaded the conversation before another app added to it:
+            // reload so the reply sees those turns (and the transcript stays one line).
+            catchUp(thenSend: (text, attachments))
+            return
+        }
+        inExternalRun = false
         items.append(.user(id: UUID(), text: trimmed, attachments: attachments.map(\.displayName)))
         if !trimmed.isEmpty { onPrompt?(trimmed) }
         stopped = false
@@ -370,6 +397,120 @@ final class ChatSession: ObservableObject {
         guard let conn = connection, let sid = sessionID else { return }
         currentMode = id
         Task { _ = try? await conn.request("session/set_mode", ["sessionId": .string(sid), "modeId": .string(id)]) }
+    }
+
+    // MARK: Following other writers
+
+    /// Another app is mid-turn in this conversation (wrote in the last two
+    /// minutes and hasn't finished): sending now would fork it.
+    var otherAppIsWorking: Bool {
+        otherWriterWorking && (otherWriterLastWrite.map { Date().timeIntervalSince($0) < 120 } ?? false)
+    }
+
+    /// Who else is writing, for messages ("the Claude app").
+    private(set) var otherWriterName = "another app"
+
+    private func startFollowing() {
+        guard agent == .claude, follower == nil, let sid = sessionID else { return }
+        let url = URL(fileURLWithPath: home)
+            .appendingPathComponent(".claude/projects/\(TranscriptReader.claudeEncodedDir(for: workdir))/\(sid).jsonl")
+        followURL = url
+        followOffset = ClaudeTranscriptTail.fileSize(url)
+        ownTurnEnded = nil
+        sawOwnTurn = false
+        follower = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(1))
+                guard let self else { return }
+                await self.followTick()
+            }
+        }
+    }
+
+    private func stopFollowing() {
+        follower?.cancel()
+        follower = nil
+    }
+
+    private func followTick() async {
+        guard let url = followURL else { return }
+        // Our own turns are written to the same file: skip past them, with a
+        // moment after each for its last lines to land.
+        if phase == .running { sawOwnTurn = true; return }
+        if sawOwnTurn { sawOwnTurn = false; ownTurnEnded = Date(); return }
+        if let ended = ownTurnEnded {
+            guard Date().timeIntervalSince(ended) >= 2 else { return }
+            ownTurnEnded = nil
+            followOffset = ClaudeTranscriptTail.fileSize(url)
+            return
+        }
+        guard phase == .ready else { return }
+        let offset = followOffset
+        guard let (text, newOffset) = await Task.detached(priority: .utility, operation: {
+            ClaudeTranscriptTail.readLines(url, from: offset)
+        }).value, phase == .ready, followOffset == offset else { return }
+        followOffset = newOffset
+        applyExternal(ClaudeTranscriptTail.parse(text))
+    }
+
+    /// Show what another app added, as if it had happened here.
+    func applyExternal(_ batch: ClaudeTranscriptTail.Batch) {
+        guard batch.sawConversation else { return }
+        agentIsBehind = true
+        otherWriterLastWrite = Date()
+        if let working = batch.working { otherWriterWorking = working }
+        if let e = batch.entrypoint { otherWriterName = ClaudeTranscriptTail.writerName(e) }
+        guard !batch.events.isEmpty else { return }
+        if !inExternalRun {
+            inExternalRun = true
+            notice("Continued in \(otherWriterName)", isError: false)
+        }
+        for event in batch.events {
+            switch event {
+            case .user(let text):
+                items.append(.user(id: UUID(), text: text, attachments: []))
+            case .text(let mid, let text):
+                let id = "ext-" + mid
+                if case .agentText(id, let t)? = items.last {
+                    items[items.count - 1] = .agentText(id: id, text: t + "\n\n" + text)
+                } else {
+                    items.append(.agentText(id: id, text: text))
+                }
+            case .thought(let mid, let text):
+                items.append(.thought(id: "ext-\(mid)-\(items.count)", text: text))
+            case .toolUse(let call):
+                upsert(.tool(call))
+            case .toolResult(let id, let output, let images, let failed):
+                guard var call = toolCall(id: id) else { continue }
+                call.status = failed ? "failed" : "completed"
+                call.output = output
+                call.images = images
+                upsert(.tool(call))
+            }
+        }
+    }
+
+    /// Restart the agent on the same conversation (`session/load` replays it,
+    /// now with the other app's turns), then send.
+    private func catchUp(thenSend message: (String, [ChatAttachment])) {
+        guard let sid = sessionID else { return }
+        Log.info(.sbx, "chat: \(sid) changed in \(otherWriterName); reloading before sending")
+        agentIsBehind = false
+        inExternalRun = false
+        stopFollowing()
+        queued = message
+        isCatchingUp = true
+        pumpTask?.cancel()
+        connection?.terminate()
+        connection = nil
+        resumeID = sid
+        items = []
+        phase = .starting
+        let container = containerName, match = tag.pairs[1]
+        Task {
+            await SbxClient.reapSessionProcessesAndWait(container: container, match: match)
+            start()
+        }
     }
 
     // MARK: Incoming

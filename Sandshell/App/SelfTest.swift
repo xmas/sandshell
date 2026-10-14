@@ -96,6 +96,7 @@ enum SelfTest {
         case "fork": await fork(window)
         case "links": links()
         case "title-strip": await titleStrip(window)
+        case "follow": await follow(window)
         case "files": await files(window)
         case "files-relaunch": await filesRelaunch(window)
         case "kits": await kits(window)
@@ -1112,6 +1113,91 @@ enum SelfTest {
                   "the fork has the first reply and not the second (\(said(f).prefix(80)))")
         }
         snapshot(window, "fork-final")
+    }
+
+    // MARK: Following another app
+
+    /// A chat whose conversation another app keeps writing: its turns appear
+    /// here, and the next prompt reloads the agent so the reply knows them.
+    /// Uses the signed-in account (two tiny turns).
+    private static func follow(_ window: MainWindowController) async {
+        // The parser on its own: prompts, replies, tools; wrappers and meta skipped.
+        let fixture = [
+            #"{"type":"user","message":{"role":"user","content":"hello there"},"entrypoint":"claude-desktop"}"#,
+            #"{"type":"user","isMeta":true,"message":{"role":"user","content":[{"type":"text","text":"[Image #1]"}]}}"#,
+            #"{"type":"user","message":{"role":"user","content":"<task-notification>x</task-notification>"}}"#,
+            #"{"type":"assistant","message":{"id":"m1","content":[{"type":"thinking","thinking":"","signature":"s"}],"stop_reason":"tool_use"}}"#,
+            #"{"type":"assistant","message":{"id":"m1","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ls -la"}}],"stop_reason":"tool_use"}}"#,
+            #"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"a\nb","is_error":false}]}}"#,
+            #"{"type":"assistant","isSidechain":true,"message":{"id":"m9","content":[{"type":"text","text":"subagent"}]}}"#,
+            #"{"type":"assistant","message":{"id":"m2","content":[{"type":"text","text":"Done."}],"stop_reason":"end_turn"}}"#,
+        ].joined(separator: "\n")
+        let batch = ClaudeTranscriptTail.parse(fixture)
+        log("parsed: \(batch.events)")
+        check(batch.events.count == 4, "parse: prompt, tool use, tool result, reply (got \(batch.events.count))")
+        check(batch.events.first == .user("hello there"), "parse: the prompt, not the wrappers")
+        check(batch.working == false && batch.entrypoint == "claude-desktop", "parse: turn finished, written by the Claude app")
+
+        guard let tree = window.paneTree, let ws = window.workspaceController else { return log("no window") }
+        guard let s = ws.newChatInCurrentContext() else { return log("no folder to start a chat in") }
+        func chat() -> ChatSession? { tree.surfaces.chats[s.id]?.session }
+        func said(_ c: ChatSession) -> String {
+            c.items.compactMap { if case .agentText(_, let t) = $0 { t } else { nil } }.joined(separator: "\n")
+        }
+        check(await until(600) { chat()?.phase == .ready }, "chat reaches ready")
+        guard let c = chat() else { return }
+        c.send(text: "Reply with exactly the word PONG and nothing else.", attachments: [])
+        check(await until(180) { c.phase == .ready && said(c).contains("PONG") }, "first reply")
+        await wait(4)   // past our own turn's grace period
+
+        // Another app continues the conversation in the same transcript.
+        guard let sid = ws.session(id: s.id)?.transcriptID else { return check(false, "transcript id known") }
+        let url = ws.home.appendingPathComponent(
+            ".claude/projects/\(TranscriptReader.claudeEncodedDir(for: c.workdir))/\(sid).jsonl")
+        let lines = (try? String(contentsOf: url, encoding: .utf8))?.split(separator: "\n") ?? []
+        let last = lines.reversed().lazy.compactMap { line -> String? in
+            (try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any])?["uuid"] as? String
+        }.first
+        check(last != nil, "transcript at \(url.path) has turns")
+        let now = ISO8601DateFormatter().string(from: Date())
+        let userID = UUID().uuidString.lowercased(), replyID = UUID().uuidString.lowercased()
+        func line(_ o: [String: Any]) -> String {
+            String(data: try! JSONSerialization.data(withJSONObject: o), encoding: .utf8)! + "\n"
+        }
+        let common: [String: Any] = ["isSidechain": false, "userType": "external", "entrypoint": "claude-desktop",
+                                     "cwd": c.workdir, "sessionId": sid, "version": "2.1.295", "timestamp": now]
+        var user = common
+        user.merge(["parentUuid": last ?? NSNull(), "uuid": userID, "type": "user",
+                    "message": ["role": "user", "content": "Remember this codeword: ZEBRA-42. Reply OK."]]) { $1 }
+        var reply = common
+        reply.merge(["parentUuid": userID, "uuid": replyID, "type": "assistant",
+                     "message": ["id": "msg_selftest_\(replyID.prefix(8))", "type": "message", "role": "assistant",
+                                 "model": "claude-opus-5-5", "content": [["type": "text", "text": "OK, noted."]],
+                                 "stop_reason": "end_turn", "stop_sequence": NSNull(),
+                                 "usage": ["input_tokens": 1, "output_tokens": 3]]]) { $1 }
+        if let fh = try? FileHandle(forWritingTo: url) {
+            // Claude Code may leave its last line (cost-state) without a newline.
+            let endsWithNewline = (try? Data(contentsOf: url))?.last == 0x0A
+            fh.seekToEndOfFile()
+            fh.write(Data(((endsWithNewline ? "" : "\n") + line(user) + line(reply)).utf8))
+            try? fh.close()
+        }
+        check(await until(10) {
+            c.items.contains { if case .user(_, let t, _) = $0 { t.contains("ZEBRA-42") } else { false } }
+                && said(c).contains("OK, noted.")
+        }, "the other app's turn appears in the chat")
+        check(c.items.contains { if case .notice(_, let t, _) = $0 { t == "Continued in the Claude app" } else { false } },
+              "with a 'Continued in the Claude app' notice")
+        check(!c.otherAppIsWorking, "the other app's turn is finished")
+        snapshot(window, "follow-external")
+
+        // Sending now reloads the agent first, so it knows the codeword.
+        c.send(text: "What codeword did I ask you to remember? Reply with just the codeword.", attachments: [])
+        check(c.isCatchingUp, "sending reloads the agent first")
+        check(await until(300) { c.phase == .ready && said(c).contains("ZEBRA-42") && !c.isCatchingUp },
+              "the reply knows the other app's turn (\(said(c).suffix(80)))")
+        check(said(c).contains("PONG"), "the reloaded transcript still has the first reply")
+        snapshot(window, "follow-final")
     }
 
     // MARK: Title strip

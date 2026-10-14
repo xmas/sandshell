@@ -9,6 +9,8 @@ import UniformTypeIdentifiers
 /// agent's commands; `@` opens the workspace's files (inserted as chips).
 final class ChatComposerView: NSView, NSTextViewDelegate {
     var onSubmit: ((String, [ChatAttachment]) -> Void)?
+    /// Asked before sending; false keeps the draft (e.g. while it asks the user).
+    var shouldSubmit: (() -> Bool)?
     /// ⎋ in the composer; return true if handled (e.g. stopped a running turn).
     var onEscape: (() -> Bool)?
     /// Maps a file URL to one the sandbox can read (see ChatSessionView).
@@ -262,7 +264,8 @@ final class ChatComposerView: NSView, NSTextViewDelegate {
         let files = mentioned.map { url in
             ChatAttachment(kind: .file(resolveFileURLs?([url]).first ?? url))
         }
-        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty else { return }
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty,
+              shouldSubmit?() ?? true else { return }
         onSubmit?(text, attachments + files)
         textView.string = ""
         attachments = []

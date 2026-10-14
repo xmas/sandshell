@@ -25,6 +25,10 @@ final class ChatSessionView: NSView {
     private var bag: Set<AnyCancellable> = []
     /// History replayed while resuming, shown in one go when it's done.
     private var heldReplay: [ChatItem]?
+    /// Reloading to catch up with another app: keep the old transcript up meanwhile.
+    private var heldForCatchUp = false
+    /// The user chose to send while another app is mid-turn.
+    private var sendDespiteOtherApp = false
 
     /// Maps dropped/pasted file URLs to paths the sandbox can read (files outside
     /// the mounts are copied into the workspace's drops dir by the host).
@@ -103,6 +107,7 @@ final class ChatSessionView: NSView {
         permissionBar.setAccessibilityIdentifier("chat-permission")
 
         composer.onSubmit = { [weak self] text, attachments in self?.session.send(text: text, attachments: attachments) }
+        composer.shouldSubmit = { [weak self] in self?.confirmSendWhileOtherAppWorks() ?? true }
         composer.commands = { [weak session] in session?.commands ?? [] }
         composer.onFind = { [weak self] sender in self?.transcript.performFind(sender) }
         composer.fileRoot = session.workdir
@@ -179,6 +184,10 @@ final class ChatSessionView: NSView {
     private func bind() {
         session.$items.sink { [weak self] items in
             guard let self else { return }
+            if self.session.isCatchingUp {
+                self.heldForCatchUp = true
+                return
+            }
             self.emptyState.isHidden = !items.isEmpty
             // Resuming replays the whole history before the session is ready:
             // draw it once at the end (already at the bottom), not message by
@@ -194,7 +203,12 @@ final class ChatSessionView: NSView {
             guard let self else { return }
             if case .starting = phase {} else if let held = self.heldReplay {
                 self.heldReplay = nil
+                self.heldForCatchUp = false
                 self.transcript.update(self.session.items.isEmpty ? held : self.session.items)
+            } else if self.heldForCatchUp {
+                self.heldForCatchUp = false
+                self.emptyState.isHidden = !self.session.items.isEmpty
+                self.transcript.update(self.session.items)
             }
             self.showPhase(phase)
         }.store(in: &bag)
@@ -210,7 +224,8 @@ final class ChatSessionView: NSView {
     private func showPhase(_ phase: ChatSession.Phase) {
         switch phase {
         case .starting:
-            statusLabel.stringValue = "Starting \(session.title)…"
+            statusLabel.stringValue = session.isCatchingUp
+                ? "Catching up with \(session.otherWriterName)…" : "Starting \(session.title)…"
             sendButton.title = "Send"; sendButton.isEnabled = false
         case .ready:
             statusLabel.stringValue = "↩ send · ⇧↩ new line"
@@ -269,6 +284,25 @@ final class ChatSessionView: NSView {
     }
 
     // MARK: Actions
+
+    /// Another app is mid-turn in this conversation: sending now forks it. Ask
+    /// first (the draft stays put); "Send Anyway" sends it.
+    private func confirmSendWhileOtherAppWorks() -> Bool {
+        if sendDespiteOtherApp { sendDespiteOtherApp = false; return true }
+        guard session.otherAppIsWorking, let window else { return true }
+        let alert = NSAlert()
+        alert.messageText = "\(session.otherWriterName.prefix(1).uppercased() + session.otherWriterName.dropFirst()) is still working in this conversation"
+        alert.informativeText = "Sending now starts a second line of conversation alongside it, and neither side "
+            + "sees the other’s replies. Wait for it to finish, or send anyway."
+        alert.addButton(withTitle: "Wait")
+        alert.addButton(withTitle: "Send Anyway")
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard let self, response == .alertSecondButtonReturn else { return }
+            self.sendDespiteOtherApp = true
+            self.composer.submitFromButton()
+        }
+        return false
+    }
 
     /// ⎋ stops a running turn (standard Cocoa cancel).
     override func cancelOperation(_ sender: Any?) {
