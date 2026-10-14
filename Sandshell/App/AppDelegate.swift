@@ -13,6 +13,14 @@ struct WindowScriptStatus: Encodable {
     var isKey: Bool
     var selection: String?
     var sessions: [SessionScriptStatus]
+    /// Session ids in the sidebar's row order (after any search filter).
+    var sidebarSessionIDs: [String]
+    /// A container is being built/rebuilt; `activity` is its progress line.
+    var isBuilding: Bool
+    var activity: String?
+    /// The sidebar's empty-state text when shown ("No sessions yet", or the
+    /// build progress line), else nil.
+    var emptyState: String?
 }
 
 struct SessionScriptStatus: Encodable {
@@ -123,6 +131,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             andEventID: Self.newSessionEventID)
 
         NSApp.setActivationPolicy(.regular)
+        AutomatedRun.startAnsweringAlerts()
         // Debug builds get a red wash over the Dock/app icon so a dev build is
         // instantly distinguishable from an installed release (which stays blue).
         applyDevIconWashIfDebug()
@@ -154,6 +163,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if SelfTest.requested != nil {
             // Scripted checks run offscreen without taking focus, then quit.
             if let window = windows.first { Task { await SelfTest.run(window) } }
+            return
+        }
+        if UITestHeadless.enabled {
+            // The AppleScript suite drives this instance over Apple Events and
+            // AX actions while the user keeps working: no activation, no
+            // visible windows, no permission prompts.
+            UITestHeadless.start()
             return
         }
         #endif

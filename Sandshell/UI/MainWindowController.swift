@@ -429,7 +429,11 @@ final class MainWindowController: NSWindowController {
             title: window?.title ?? "",
             isKey: window?.isKeyWindow ?? false,
             selection: selection,
-            sessions: sessions)
+            sessions: sessions,
+            sidebarSessionIDs: sidebar?.displayedSessionIDs.map(\.uuidString) ?? [],
+            isBuilding: workspace?.isBuilding ?? false,
+            activity: workspace?.activity,
+            emptyState: sidebar?.emptyStateText)
     }
 }
 

@@ -203,6 +203,7 @@ final class ChatSession: ObservableObject {
         guard !trimmed.isEmpty || !attachments.isEmpty else { return }
         items.append(.user(id: UUID(), text: trimmed, attachments: attachments.map(\.displayName)))
         if !trimmed.isEmpty { onPrompt?(trimmed) }
+        stopped = false
 
         var blocks: [JSONValue] = []
         if !trimmed.isEmpty { blocks.append(["type": "text", "text": .string(trimmed)]) }
@@ -247,8 +248,15 @@ final class ChatSession: ObservableObject {
     }
     private var queued: (String, [ChatAttachment])?
 
+    /// The user stopped the current turn. The adapter answers the prompt as
+    /// cancelled before it has flushed the text it already had buffered; those
+    /// late chunks are dropped (until the next prompt) instead of streaming in
+    /// under "Stopped: cancelled".
+    private var stopped = false
+
     func cancel() {
         guard case .running = phase, let sid = sessionID else { return }
+        stopped = true
         connection?.notify("session/cancel", ["sessionId": .string(sid)])
         if let p = permission { answerPermission(p, optionID: nil) }
     }
@@ -311,9 +319,9 @@ final class ChatSession: ObservableObject {
     private func apply(_ u: JSONValue) {
         switch u["sessionUpdate"]?.string ?? "" {
         case "agent_message_chunk":
-            appendText(u, thought: false)
+            if !stopped { appendText(u, thought: false) }
         case "agent_thought_chunk":
-            appendText(u, thought: true)
+            if !stopped { appendText(u, thought: true) }
         case "user_message_chunk":
             // Our own prompts are shown when sent (and echoed mid-turn); outside a
             // turn these are a `session/load` history replay.

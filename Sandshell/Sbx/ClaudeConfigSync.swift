@@ -154,6 +154,8 @@ enum ClaudeConfigSync {
     }
 
     private static func keychainCredentials() -> String? {
+        // A test build's fresh ad-hoc signature would raise a Keychain prompt.
+        guard !AutomatedRun.isActive else { return nil }
         let user = ProcessInfo.processInfo.environment["USER"] ?? NSUserName()
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/usr/bin/security")

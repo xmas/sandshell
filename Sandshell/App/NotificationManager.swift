@@ -12,6 +12,7 @@ final class NotificationManager: NSObject {
     var onSessionTap: ((UUID) -> Void)?
 
     func requestPermission() {
+        guard !AutomatedRun.isActive else { return }
         let center = UNUserNotificationCenter.current()
         center.delegate = self
         center.requestAuthorization(options: [.alert, .sound]) { _, _ in }
@@ -26,6 +27,7 @@ final class NotificationManager: NSObject {
                           lastPrompt: String?,
                           workSeconds: TimeInterval,
                           workdir: String) {
+        guard !AutomatedRun.isActive else { return }
         let content = UNMutableNotificationContent()
         content.title = "\(agentName.capitalized) finished — \(sessionName)"
         if let p = lastPrompt?.trimmingCharacters(in: .whitespacesAndNewlines), !p.isEmpty {

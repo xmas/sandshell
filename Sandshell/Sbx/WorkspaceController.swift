@@ -808,6 +808,11 @@ final class WorkspaceController: ObservableObject {
 
     /// Modal confirmation before a rebuild that would kill running sessions.
     private func confirmRebuild(name: String, killsRunning: Bool) async -> Bool {
+        if AutomatedRun.isActive {
+            let ok = AutomatedRun.isScratch(workspace.rootURL)
+            Log.info(.workspace, "automated run: \(ok ? "rebuilding" : "not rebuilding") “\(name)” (mounts changed)")
+            return ok
+        }
         let alert = NSAlert()
         alert.messageText = "Rebuild “\(name)”?"
         alert.informativeText = killsRunning
@@ -1194,6 +1199,7 @@ extension WorkspaceController {
            let existing = state.sessions.first(where: {
                $0.folderID == folderID && $0.agent == agent
                    && $0.containerAgent == override && $0.name == defaultName && $0.isChat == chat
+                   && runtimes[$0.id] == nil   // never launched (shells keep their default name)
            }) {
             return existing   // reuse the pristine "New … Session" (no prompts yet)
         }

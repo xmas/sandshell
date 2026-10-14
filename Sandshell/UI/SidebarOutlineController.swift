@@ -65,7 +65,7 @@ final class SidebarListController: NSViewController {
     /// Sessions in display order — the single source of truth for row↔session
     /// mapping. A row index is simply an index into this array; there is no
     /// per-row identity object (NSTableView addresses rows by integer index).
-    private var displayedSessionIDs: [UUID] = []
+    private(set) var displayedSessionIDs: [UUID] = []
     /// Live filter over `displayedSessionIDs` (session name / agent / folder).
     private var searchQuery: String = ""
 
@@ -268,6 +268,8 @@ final class SidebarListController: NSViewController {
         emptyStateStack.spacing = 8
         emptyStateStack.translatesAutoresizingMaskIntoConstraints = false
         emptyStateStack.isHidden = true
+        emptyStateStack.setAccessibilityIdentifier("sidebar-empty-state")
+        emptyStateLabel.setAccessibilityIdentifier("sidebar-empty-state-label")
         emptyStateStack.addArrangedSubview(emptyStateSpinner)
         emptyStateStack.addArrangedSubview(emptyStateLabel)
 
@@ -457,6 +459,9 @@ final class SidebarListController: NSViewController {
 
     /// Shown in place of the (empty) session list: the container's build
     /// status while one is coming up, else a "no sessions"/"no matches" hint.
+    /// The empty-state placeholder's text while it's showing (scripting status).
+    var emptyStateText: String? { emptyStateStack.isHidden ? nil : emptyStateLabel.stringValue }
+
     private func updateEmptyState() {
         if controller.isBuilding, let activity = controller.activity {
             emptyStateSpinner.isHidden = false
