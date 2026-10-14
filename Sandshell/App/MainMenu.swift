@@ -90,7 +90,45 @@ enum MainMenu {
         editMenu.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
         editMenu.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
         editMenu.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        let pastePlain = editMenu.addItem(withTitle: "Paste and Match Style",
+                                          action: #selector(NSTextView.pasteAsPlainText(_:)), keyEquivalent: "v")
+        pastePlain.keyEquivalentModifierMask = [.command, .option, .shift]
         editMenu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        editMenu.addItem(.separator())
+        // Standard text menus: they route through the responder chain, so the
+        // chat transcript/composer (and any text field) get them for free.
+        editMenu.addItem(submenu("Find", [
+            finderItem("Find…", .showFindInterface, "f"),
+            finderItem("Find Next", .nextMatch, "g"),
+            finderItem("Find Previous", .previousMatch, "g", [.command, .shift]),
+            finderItem("Use Selection for Find", .setSearchString, "e"),
+            NSMenuItem(title: "Jump to Selection", action: #selector(NSResponder.centerSelectionInVisibleArea(_:)),
+                       keyEquivalent: "j"),
+        ]))
+        editMenu.addItem(submenu("Spelling and Grammar", [
+            NSMenuItem(title: "Show Spelling and Grammar", action: #selector(NSText.showGuessPanel(_:)), keyEquivalent: ":"),
+            NSMenuItem(title: "Check Document Now", action: #selector(NSText.checkSpelling(_:)), keyEquivalent: ";"),
+            .separator(),
+            NSMenuItem(title: "Check Spelling While Typing",
+                       action: #selector(NSTextView.toggleContinuousSpellChecking(_:)), keyEquivalent: ""),
+            NSMenuItem(title: "Check Grammar With Spelling",
+                       action: #selector(NSTextView.toggleGrammarChecking(_:)), keyEquivalent: ""),
+        ]))
+        editMenu.addItem(submenu("Substitutions", [
+            NSMenuItem(title: "Show Substitutions", action: #selector(NSTextView.orderFrontSubstitutionsPanel(_:)),
+                       keyEquivalent: ""),
+            .separator(),
+            NSMenuItem(title: "Smart Quotes", action: #selector(NSTextView.toggleAutomaticQuoteSubstitution(_:)),
+                       keyEquivalent: ""),
+            NSMenuItem(title: "Smart Dashes", action: #selector(NSTextView.toggleAutomaticDashSubstitution(_:)),
+                       keyEquivalent: ""),
+            NSMenuItem(title: "Text Replacement", action: #selector(NSTextView.toggleAutomaticTextReplacement(_:)),
+                       keyEquivalent: ""),
+        ]))
+        editMenu.addItem(submenu("Speech", [
+            NSMenuItem(title: "Start Speaking", action: #selector(NSTextView.startSpeaking(_:)), keyEquivalent: ""),
+            NSMenuItem(title: "Stop Speaking", action: #selector(NSTextView.stopSpeaking(_:)), keyEquivalent: ""),
+        ]))
 
         // MARK: View menu
         let viewItem = NSMenuItem()
@@ -199,4 +237,24 @@ final class RecentRootsMenu: NSObject, NSMenuDelegate {
         guard let url = sender.representedObject as? URL else { return }
         (NSApp.delegate as? AppDelegate)?.openWorkspace(url)
     }
+}
+
+// MARK: - Menu helpers
+
+@MainActor private func submenu(_ title: String, _ items: [NSMenuItem]) -> NSMenuItem {
+    let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+    let menu = NSMenu(title: title)
+    items.forEach(menu.addItem)
+    item.submenu = menu
+    return item
+}
+
+/// A standard text-finder menu item (`performTextFinderAction:` with the
+/// action as its tag) — what NSTextView's find bar responds to.
+@MainActor private func finderItem(_ title: String, _ action: NSTextFinder.Action, _ key: String,
+                                   _ modifiers: NSEvent.ModifierFlags = [.command]) -> NSMenuItem {
+    let item = NSMenuItem(title: title, action: #selector(NSResponder.performTextFinderAction(_:)), keyEquivalent: key)
+    item.tag = action.rawValue
+    item.keyEquivalentModifierMask = modifiers
+    return item
 }

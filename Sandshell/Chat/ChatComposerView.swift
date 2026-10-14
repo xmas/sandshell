@@ -54,6 +54,7 @@ final class ChatComposerView: NSView, NSTextViewDelegate {
         textView.setAccessibilityIdentifier("chat-composer")
         textView.placeholder = "Message Claude…   / for commands, @ for files"
         textView.onResign = { [weak self] in self?.completion.hide() }
+        textView.usesFindBar = false
         completion.onAccept = { [weak self] item in self?.accept(item) }
 
         scrollView.documentView = textView
@@ -100,6 +101,12 @@ final class ChatComposerView: NSView, NSTextViewDelegate {
     }
 
     func setEnabled(_ enabled: Bool) { textView.isEditable = enabled }
+
+    /// Where ⌘F/⌘G go while the composer has focus.
+    var onFind: ((Any?) -> Void)? {
+        get { textView.onFind }
+        set { textView.onFind = newValue }
+    }
 
     /// Pre-fill the composer (Services / Shortcuts), caret at the end.
     func setDraft(_ text: String) {
@@ -296,7 +303,17 @@ final class ChatComposerView: NSView, NSTextViewDelegate {
 final class ComposerTextView: NSTextView {
     var onAttach: (([ChatAttachment]) -> Void)?
     var onResign: (() -> Void)?
+    /// Find actions, which should search the transcript rather than the draft.
+    var onFind: ((Any?) -> Void)?
     var placeholder = "" { didSet { needsDisplay = true } }
+
+    override func performTextFinderAction(_ sender: Any?) {
+        // "Use Selection for Find" keeps working on the draft's selection.
+        if (sender as? NSMenuItem)?.tag == NSTextFinder.Action.setSearchString.rawValue || onFind == nil {
+            return super.performTextFinderAction(sender)
+        }
+        onFind?(sender)
+    }
 
     override func resignFirstResponder() -> Bool {
         onResign?()

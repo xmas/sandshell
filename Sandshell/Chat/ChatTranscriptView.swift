@@ -122,6 +122,13 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
         stickToBottom = clip.maxY >= doc.frame.height - 24
     }
 
+    /// Run a find action (⌘F/⌘G…) against the transcript, from anywhere in
+    /// the chat (the composer forwards these).
+    func performFind(_ sender: Any?) {
+        window?.makeFirstResponder(textView)
+        textView.performTextFinderAction(sender)
+    }
+
     // MARK: NSTextViewDelegate
 
     /// "Show more / Show less" links on tool cards and thoughts.

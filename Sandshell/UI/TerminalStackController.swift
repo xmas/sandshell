@@ -985,10 +985,21 @@ final class TerminalStackController: NSViewController {
                                    mcpURL: controller.mcpURL, resumeID: resumeID, sbxProxyAuth: proxyAuth,
                                    sessionID: id)
             chat.onSessionID = { [controller] sid in controller.setTranscriptID(id, sid) }
-            chat.onPrompt = { [controller] prompt in controller.autoName(id, from: prompt) }
+            var lastPrompt: String?
+            chat.onPrompt = { [controller] prompt in
+                lastPrompt = prompt
+                controller.autoName(id, from: prompt)
+            }
             chat.onWorkingChange = { [controller] working in
                 let now = Date()
-                controller.reportActivity(id, working: working, lastWrite: now, at: now)
+                let transition = controller.reportActivity(id, working: working, lastWrite: now, at: now)
+                // Same "finished" notification terminals send, when you're elsewhere.
+                if transition.finishedWork, let s = controller.session(id: id),
+                   !(NSApp.isActive && controller.selection == .session(id)) {
+                    NotificationManager.shared.sendWorkComplete(
+                        sessionID: id, agentName: s.agent.displayName, sessionName: s.name,
+                        lastPrompt: lastPrompt, workSeconds: transition.workSeconds, workdir: s.workdir)
+                }
             }
             let view = ChatSessionView(session: chat)
             view.resolveFileURLs = { [weak self] urls in

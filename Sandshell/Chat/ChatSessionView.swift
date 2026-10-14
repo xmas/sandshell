@@ -81,6 +81,7 @@ final class ChatSessionView: NSView {
 
         composer.onSubmit = { [weak self] text, attachments in self?.session.send(text: text, attachments: attachments) }
         composer.commands = { [weak session] in session?.commands ?? [] }
+        composer.onFind = { [weak self] sender in self?.transcript.performFind(sender) }
         composer.fileRoot = session.workdir
         composer.onEscape = { [weak self] in
             guard let self, case .running = self.session.phase else { return false }
