@@ -2,6 +2,17 @@
 
 A running log of what changed, newest first. Yes, we actually write these.
 
+## v0.2.22 — "Pick Up Where It Left Off"
+- **Chat is the default.** ⌘N and + ▸ New Claude / Codex / Gemini start a chat; the terminal versions live under + ▸ In Terminal. Each pane has its own Chat ⇄ Terminal switch in its title strip, same conversation either way.
+- **A chat follows a conversation that's still going elsewhere.** Open a conversation you're also having in the Claude app (or Claude Code in a terminal) and its new turns show up in Sandshell as they're written, under "Continued in the Claude app". When you reply from Sandshell, Claude reloads the conversation first so it knows what was said there; if the other app is still mid-answer, Sandshell asks before starting a second line of conversation alongside it.
+- **Every pane has buttons**: Files, Split Right, Split Down and Close in its title strip, and an empty pane offers Show Files / Close Pane. Files always opens beside a session, never in its place.
+- **See where a session runs at a glance.** The title strip shows the sandbox (click for what that Linux VM can see and do), the folder, and the git branch with +/- line counts; the Claude readout makes room for them in a narrow pane instead of squeezing them out.
+- **Files knows whose files these are**: the footer says whether the session's sandbox can write to them, a **Changed** toggle lists only the changed files, and Open Quickly highlights its pick properly.
+- **Hover a reply to Copy it or Fork to New Chat** from that point. File paths and links in a conversation are clickable — files open in Files at the line, even with spaces in the name.
+- **Search goes deeper**: it reads up to 2,000 past conversations in this workspace, searches their latest text as well as their opening, and a conversation that was a chat comes back as a chat. The toolbar's Search button now shows up for everyone.
+- **A session that can't start says why** (a kit that's gone, say) with Try Again and Edit Kits…, instead of retrying forever.
+- **Fixes:** the Files inspector's tree could collapse to nothing at its narrowest width; one chat could start two copies of its agent; Settings ▸ Sandboxes ▸ Run now flips to Stop once the sandbox is up; rebuilding a custom agent's sandbox whose kit isn't registered no longer deletes it first; a kit that defines an agent, added under Kits, becomes an agent; chats that stop on a sign-in error say Stopped, not Ready; Open Quickly and @-mentions work in folders under /tmp.
+
 ## v0.2.21 — "Side By Side"
 - **Know what's running in the background.** When Claude sends a subagent off, starts a background command or sets a Monitor, the session's title strip shows "2 running"; click it for each task's elapsed time, latest step and result, and a background command's output read straight from the sandbox. Sidebar rows say "1 in background", **Window ▸ Background Tasks** (⌥⌘B) lists every session's at once, and you get a notification as each one finishes (tap it to jump there). Works for terminal sessions and chats alike.
 - **One Search for everything** (⇧⌘F, or the sidebar's Search button): open sessions and past conversations in this workspace together, ranked by title, folder, then text, with the match highlighted. Arrow keys and Return work; picking an open session focuses the pane it's already in.
