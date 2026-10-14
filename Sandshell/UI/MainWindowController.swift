@@ -164,7 +164,7 @@ final class MainWindowController: NSWindowController {
             self.detail?.dropFiles(urls, on: id)
         }
         let filesItem = NSSplitViewItem(inspectorWithViewController: files)
-        filesItem.minimumThickness = 460
+        filesItem.minimumThickness = 480
         filesItem.maximumThickness = 1600
         filesItem.canCollapse = true
         filesItem.isCollapsed = !UserDefaults.standard.bool(forKey: Self.filesVisibleKey)

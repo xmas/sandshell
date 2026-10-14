@@ -72,7 +72,7 @@ final class FilesPaneController: NSViewController, NSSplitViewDelegate {
 
     override func viewDidLayout() {
         super.viewDidLayout()
-        guard !placedDivider, split.bounds.width > treeMin + editorMin else { return }
+        guard !placedDivider, split.bounds.width >= treeMin + editorMin + split.dividerThickness else { return }
         placedDivider = true
         let saved = CGFloat(UserDefaults.standard.double(forKey: widthKey))
         split.setPosition(clampTree(saved > 0 ? saved : 220), ofDividerAt: 0)
