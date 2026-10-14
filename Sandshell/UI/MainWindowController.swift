@@ -15,7 +15,7 @@ final class MainWindowController: NSWindowController {
     private var filesItem: NSSplitViewItem?
     private var selectionObserver: AnyCancellable?
     private static let filesVisibleKey = "filesPaneVisible"
-    private var detail: TerminalStackController?
+    private var detail: PaneTreeController?
     private var collapseObservation: NSKeyValueObservation?
     // Native-toolbar identity + live status, updated from the detail controller.
     private let toolbarBadge = AgentBadgeView(side: 26, fontSize: 11, radius: 8)
@@ -115,7 +115,7 @@ final class MainWindowController: NSWindowController {
         self.sidebarItem = sidebarItem
         split.addSplitViewItem(sidebarItem)
 
-        let detail = TerminalStackController(controller: controller)
+        let detail = PaneTreeController(controller: controller)
         self.detail = detail
         detail.onToggleSidebar = { [weak self] in self?.toggleSidebar() }
         // Drive the toolbar identity (badge + name/subtitle) from the active
@@ -309,6 +309,21 @@ final class MainWindowController: NSWindowController {
     func newChat() {
         workspace?.newChatInCurrentContext()
     }
+
+    #if DEBUG
+    /// Self-test access (see SelfTest).
+    var paneTree: PaneTreeController? { detail }
+    var workspaceController: WorkspaceController? { workspace }
+    #endif
+
+    // MARK: Panes (View ▸ Split Right / Split Down / Close Pane …)
+
+    func splitRight() { detail?.splitFocused(.trailing) }
+    func splitDown() { detail?.splitFocused(.bottom) }
+    func closePane() { detail?.closeFocused() }
+    func focusNextPane() { detail?.focusAdjacent(1) }
+    func focusPreviousPane() { detail?.focusAdjacent(-1) }
+    func equalizePanes() { detail?.equalize() }
 
     /// New Claude chat seeded with text/files (Services, Shortcuts); `send`
     /// submits it as soon as the agent is ready.

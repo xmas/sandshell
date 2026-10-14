@@ -165,6 +165,8 @@ final class SidebarListController: NSViewController {
         outline.delegate = self
         outline.registerForDraggedTypes([.fileURL])
         outline.setDraggingSourceOperationMask(.copy, forLocal: false)
+        // Sessions drag onto the detail area's panes (split or replace there).
+        outline.setDraggingSourceOperationMask([.move, .copy], forLocal: true)
         outline.target = self
         outline.action = #selector(rowClicked)
         outline.menuProvider = { [weak self] row in self?.contextMenu(forRow: row) }
@@ -1041,6 +1043,14 @@ final class SidebarListController: NSViewController {
 
 extension SidebarListController: NSTableViewDataSource {
     func numberOfRows(in tableView: NSTableView) -> Int { displayedSessionIDs.count }
+
+    /// A session row drags out as a session (onto a pane edge: split there).
+    func tableView(_ tableView: NSTableView, pasteboardWriterForRow row: Int) -> (any NSPasteboardWriting)? {
+        guard row >= 0, row < displayedSessionIDs.count else { return nil }
+        let item = NSPasteboardItem()
+        item.setString(displayedSessionIDs[row].uuidString, forType: .sandshellSession)
+        return item
+    }
 
     /// Files dragged onto a session row attach to that session (chat: as
     /// attachments; terminal: as sandbox-readable paths).

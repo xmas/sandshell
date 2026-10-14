@@ -150,6 +150,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             openWorkspace(fallback)
         }
 
+        #if DEBUG
+        if SelfTest.requested != nil {
+            // Scripted checks run offscreen without taking focus, then quit.
+            if let window = windows.first { Task { await SelfTest.run(window) } }
+            return
+        }
+        #endif
         NSApp.activate(ignoringOtherApps: true)
         installShortcutMonitor()
         Updater.shared.checkInBackground()
@@ -513,6 +520,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     case "q": NSApp.terminate(nil); return true
                     case ",": app.openSettings(nil); return true
                     case "n" where opt: app.openFolder(nil); return true
+                    case "d" where shift, "D": app.splitDown(nil); return true
+                    case "d": app.splitRight(nil); return true
+                    case "w" where opt, "∑": app.closePane(nil); return true
+                    case "[", "{", "“", "”" where opt: app.focusPreviousPane(nil); return true
+                    case "]", "}", "‘", "’" where opt: app.focusNextPane(nil); return true
                     case "n" where ctrl: app.newChat(nil); return true
                     case "n" where shift: app.duplicateWindow(nil); return true
                     case "n": app.newSession(nil); return true
@@ -572,6 +584,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         newChat(draft: draft, urls: urls, send: false)
     }
+
+    // MARK: Panes (View menu)
+
+    @MainActor @objc func splitRight(_ sender: Any?) { activeController?.splitRight() }
+    @MainActor @objc func splitDown(_ sender: Any?) { activeController?.splitDown() }
+    @MainActor @objc func closePane(_ sender: Any?) { activeController?.closePane() }
+    @MainActor @objc func focusNextPane(_ sender: Any?) { activeController?.focusNextPane() }
+    @MainActor @objc func focusPreviousPane(_ sender: Any?) { activeController?.focusPreviousPane() }
+    @MainActor @objc func equalizePanes(_ sender: Any?) { activeController?.equalizePanes() }
 
     /// ⌥⌘0 — the Files pane (tree + editor) for the active session's folder.
     @MainActor @objc func toggleFiles(_ sender: Any?) {

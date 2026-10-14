@@ -235,6 +235,35 @@ private final class TerminalRuntimeController {
 /// Selecting a session lazily brings its agent's container up, then creates and
 /// shows the terminal; other sessions persist hidden in the background. While a
 /// container builds/rebuilds, a centered spinner + status is shown instead.
+
+/// A window's live session surfaces (terminals, chats, launches, drafts and
+/// the activity watcher), shared by its panes — so a session keeps running
+/// when it moves between panes, and each session runs once per window.
+@MainActor
+final class SessionSurfaces {
+    let controller: WorkspaceController
+    var terminals: [UUID: TerminalSession] = [:]
+    var chats: [UUID: ChatSessionView] = [:]
+    var drafts: [UUID: (text: String, urls: [URL], send: Bool)] = [:]
+    var pending: Set<UUID> = []
+    var searchWindows: [UUID: TerminalSearchWindowController] = [:]
+    /// Whether some pane is showing the session (set by the pane tree).
+    var isShown: (UUID) -> Bool = { _ in false }
+    /// A terminal's process exited (routed to the pane showing it).
+    var onTerminalExit: (UUID) -> Void = { _ in }
+
+    fileprivate lazy var runtime = TerminalRuntimeController(
+        controller: controller,
+        isTerminalAlive: { [unowned self] id in self.terminals[id] != nil },
+        isSessionVisible: { [unowned self] id in NSApp.isActive && self.isShown(id) },
+        onTerminalDidExit: { [unowned self] id in self.onTerminalExit(id) })
+
+    init(controller: WorkspaceController) { self.controller = controller }
+}
+
+/// One pane of the detail area: shows a single session (terminal or chat)
+/// from the window's shared `SessionSurfaces`, with its status, restart and
+/// kit banner. `PaneTreeController` arranges several of these in splits.
 @MainActor
 final class TerminalStackController: NSViewController {
     private static let terminalPasteboardTypes: [NSPasteboard.PasteboardType] = [
@@ -242,21 +271,40 @@ final class TerminalStackController: NSViewController {
     ]
 
     private let controller: WorkspaceController
-    private lazy var runtime = TerminalRuntimeController(
-        controller: controller,
-        isTerminalAlive: { [weak self] id in self?.terminals[id] != nil },
-        isSessionVisible: { [weak self] id in
-            guard let self else { return false }
-            return NSApp.isActive && self.controller.selection == .session(id)
-        },
-        onTerminalDidExit: { [weak self] id in self?.terminalRuntimeDidExit(id) })
-    private var terminals: [UUID: TerminalSession] = [:]
+    let surfaces: SessionSurfaces
+    private var runtime: TerminalRuntimeController { surfaces.runtime }
+    private var terminals: [UUID: TerminalSession] {
+        get { surfaces.terminals }
+        set { surfaces.terminals = newValue }
+    }
     /// Sessions shown as native chat (ACP) instead of a terminal.
-    private var chats: [UUID: ChatSessionView] = [:]
+    private var chats: [UUID: ChatSessionView] {
+        get { surfaces.chats }
+        set { surfaces.chats = newValue }
+    }
     /// Drafts for chats still starting (Services, Shortcuts).
-    private var drafts: [UUID: (text: String, urls: [URL], send: Bool)] = [:]
-    private var pending: Set<UUID> = []
+    private var drafts: [UUID: (text: String, urls: [URL], send: Bool)] {
+        get { surfaces.drafts }
+        set { surfaces.drafts = newValue }
+    }
+    private var pending: Set<UUID> {
+        get { surfaces.pending }
+        set { surfaces.pending = newValue }
+    }
     private var cancellables: Set<AnyCancellable> = []
+
+    /// The session this pane shows (the pane tree decides; nil = empty pane).
+    private(set) var shownSession: UUID?
+    /// Focused pane: the one the sidebar selection and toolbar act on.
+    var isFocused = true { didSet { updateFocusRing() } }
+    /// Draw the focus ring only when there's more than one pane.
+    var showsFocusRing = false { didSet { updateFocusRing(); closePaneButton.isHidden = !showsFocusRing } }
+    /// Close this pane (title-strip ✕, shown when split).
+    var onClosePane: (() -> Void)?
+    private let closePaneButton = NSButton()
+    /// Zero-width the Claude readout while it's hidden so it doesn't squeeze
+    /// the title in a narrow pane.
+    private lazy var claudeStatsCollapsed = claudeStats.widthAnchor.constraint(equalToConstant: 0)
 
     private let host = NSView()
     // Session header bar
@@ -311,14 +359,75 @@ final class TerminalStackController: NSViewController {
     /// Local event monitor that intercepts Cmd+V (image paste) and Cmd+F (search).
     private var pasteEventMonitor: Any?
     /// One search window per session; opened by Cmd+F, closed when session ends.
-    private var searchWindows: [UUID: TerminalSearchWindowController] = [:]
+    private var searchWindows: [UUID: TerminalSearchWindowController] {
+        get { surfaces.searchWindows }
+        set { surfaces.searchWindows = newValue }
+    }
 
     private var theme: ThemeColors { controller.theme.colors }
 
-    init(controller: WorkspaceController) {
+    init(controller: WorkspaceController, surfaces: SessionSurfaces) {
         self.controller = controller
+        self.surfaces = surfaces
         super.init(nibName: nil, bundle: nil)
     }
+
+    // MARK: Pane
+
+    /// Show `id` in this pane (nil = empty).
+    func show(_ id: UUID?) {
+        shownSession = id
+        refresh()
+    }
+
+    /// Re-send this pane's identity/status to the window (it became focused).
+    func reemitChrome() {
+        if let id = activeSessionID, id == shownSession, let session = controller.session(id: id) {
+            configureHeader(session)
+            updateHeaderStatus(id)
+        } else {
+            onChromeChange?(nil)
+            onStatusChange?("", false)
+        }
+    }
+
+    private func updateFocusRing() {
+        guard isViewLoaded else { return }
+        let c = controller.theme.colors
+        let ring = showsFocusRing && isFocused
+        frameView.layer?.borderColor = (ring ? NSColor.controlAccentColor : c.border).cgColor
+        frameView.layer?.borderWidth = ring ? 2 : 1
+        // An empty pane has no frame showing: ring the pane itself.
+        view.layer?.borderWidth = ring && frameView.isHidden ? 2 : 0
+        view.layer?.borderColor = NSColor.controlAccentColor.withAlphaComponent(0.7).cgColor
+    }
+
+    /// Hide everything in this pane's host except `keep`.
+    private func hideHostContents(except keep: NSView? = nil) {
+        for v in host.subviews where v !== keep {
+            v.isHidden = true
+            (v as? AppTerminalView)?.setSurfaceVisible(false)
+        }
+    }
+
+    /// Bring a session's view into this pane (it may have been in another).
+    private func adopt(_ view: NSView) {
+        guard view.superview !== host else { return }
+        view.removeFromSuperview()
+        addTerminalView(view)
+        (view as? AppTerminalView)?.setSurfaceVisible(false)   // re-armed visible by the caller
+    }
+
+    /// The pane's views were re-attached to the window (split rebuild): a
+    /// libghostty surface stops drawing until its visibility is re-asserted.
+    func redrawSurface() {
+        guard let id = shownSession, let terminal = terminals[id], terminal.view.superview === host,
+              !terminal.view.isHidden else { return }
+        terminal.view.setSurfaceVisible(false)
+        terminal.view.setSurfaceVisible(true)
+    }
+
+    @objc private func closePaneClicked() { onClosePane?() }
 
     @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
 
@@ -407,9 +516,19 @@ final class TerminalStackController: NSViewController {
         titleStrip.addSubview(titleLine)
         claudeStats.translatesAutoresizingMaskIntoConstraints = false
         claudeStats.isHidden = true
+        claudeStatsCollapsed.isActive = true
         claudeStats.onModelPicked = { [weak self] id in self?.modelPicked(id) }
         claudeStats.onEffortPicked = { [weak self] level in self?.effortPicked(level) }
         titleStrip.addSubview(claudeStats)
+        closePaneButton.translatesAutoresizingMaskIntoConstraints = false
+        closePaneButton.isBordered = false
+        closePaneButton.image = NSImage(systemSymbolName: "xmark", accessibilityDescription: "Close Pane")?
+            .withSymbolConfiguration(.init(pointSize: 10, weight: .semibold))
+        closePaneButton.toolTip = "Close Pane (⌥⌘W)"
+        closePaneButton.target = self
+        closePaneButton.action = #selector(closePaneClicked)
+        closePaneButton.isHidden = true
+        titleStrip.addSubview(closePaneButton)
         frameView.addSubview(titleStrip)
         frameView.addSubview(host)
 
@@ -472,7 +591,9 @@ final class TerminalStackController: NSViewController {
             titleStrip.heightAnchor.constraint(equalToConstant: 30),
             titleLabel.leadingAnchor.constraint(equalTo: titleStrip.leadingAnchor, constant: 14),
             titleLabel.centerYAnchor.constraint(equalTo: titleStrip.centerYAnchor),
-            claudeStats.trailingAnchor.constraint(equalTo: titleStrip.trailingAnchor, constant: -10),
+            closePaneButton.trailingAnchor.constraint(equalTo: titleStrip.trailingAnchor, constant: -10),
+            closePaneButton.centerYAnchor.constraint(equalTo: titleStrip.centerYAnchor),
+            claudeStats.trailingAnchor.constraint(equalTo: closePaneButton.leadingAnchor, constant: -8),
             claudeStats.centerYAnchor.constraint(equalTo: titleStrip.centerYAnchor),
             claudeStats.leadingAnchor.constraint(greaterThanOrEqualTo: titleLabel.trailingAnchor, constant: 12),
             titleLine.leadingAnchor.constraint(equalTo: titleStrip.leadingAnchor),
@@ -513,8 +634,6 @@ final class TerminalStackController: NSViewController {
             guard let self else { return event }
             return self.handleTerminalKeyEquivalent(event)
         }
-        controller.$selection.sink { [weak self] sel in self?.refresh(selection: sel) }
-            .store(in: &cancellables)
         controller.$revision.dropFirst().sink { [weak self] _ in
             self?.pruneClosed(); self?.refresh()
         }.store(in: &cancellables)
@@ -562,6 +681,8 @@ final class TerminalStackController: NSViewController {
         titleLabel.textColor = c.termDim
         claudeStats.applyTheme(c)
         kitBanner.applyTheme(c)
+        closePaneButton.contentTintColor = c.termDim
+        updateFocusRing()
         headerName.textColor = c.text
         sidebarToggle.contentTintColor = c.text2
         for b in [revealButton, stopButton, headerRestartButton] { b.contentTintColor = c.text2 }
@@ -572,13 +693,12 @@ final class TerminalStackController: NSViewController {
     /// Single source of truth for what the detail pane shows.
     /// `selection` may be passed by the `$selection` sink; other callers pass nil
     /// to use the current one.
-    private func refresh(selection: SidebarSelection? = nil) {
+    func refresh() {
         if controller.isBuilding {
             showStatus(controller.activity ?? "Building…", busy: true)
             return
         }
-        let sel = selection ?? controller.selection
-        guard case let .session(id) = sel, let session = controller.session(id: id) else {
+        guard let id = shownSession, let session = controller.session(id: id) else {
             onChromeChange?(nil)   // no session → window title falls back to folder
             onStatusChange?("", false)
             showStatus("Select a session", busy: false)
@@ -603,16 +723,13 @@ final class TerminalStackController: NSViewController {
     }
 
     private func showStatus(_ text: String, busy: Bool) {
-        for terminal in terminals.values {
-            terminal.view.isHidden = true
-            terminal.view.setSurfaceVisible(false)
-        }
-        for chat in chats.values { chat.isHidden = true }
+        hideHostContents()
         headerBar.isHidden = true
         frameView.isHidden = true
         restartButton.isHidden = true
         statusLabel.stringValue = text
         if busy { spinner.startAnimation(nil) } else { spinner.stopAnimation(nil) }
+        updateFocusRing()
         statusStack.isHidden = false
         kitBannerContextActive = false
         kitBannerFallbackAgent = nil
@@ -661,8 +778,8 @@ final class TerminalStackController: NSViewController {
     }
 
     /// Runtime controller reported a deduped terminal/process exit.
-    private func terminalRuntimeDidExit(_ id: UUID) {
-        if case .session(id) = controller.selection, let session = controller.session(id: id) {
+    func terminalRuntimeDidExit(_ id: UUID) {
+        if shownSession == id, let session = controller.session(id: id) {
             showExited(session)
         }
     }
@@ -671,11 +788,7 @@ final class TerminalStackController: NSViewController {
     /// unlike a window-blocking modal that could fire for a background session).
     private func showExited(_ session: Session) {
         activeSessionID = session.id
-        for terminal in terminals.values {
-            terminal.view.isHidden = true
-            terminal.view.setSurfaceVisible(false)
-        }
-        for chat in chats.values { chat.isHidden = true }
+        hideHostContents()
         headerBar.isHidden = false
         configureHeader(session)
         updateHeaderStatus(session.id)
@@ -741,15 +854,14 @@ final class TerminalStackController: NSViewController {
         controller.setChat(id, !session.isChat)
     }
 
-    /// Show the terminal for `id`, hide the rest and the status. Never re-parents.
+    /// Show the terminal for `id` in this pane (moving it here if it was in
+    /// another), hiding the rest and the status.
     private func showActive(_ id: UUID) {
-        for (sid, terminal) in terminals {
-            let visible = sid == id
-            terminal.view.isHidden = !visible
-            terminal.view.setSurfaceVisible(visible)
-        }
-        for chat in chats.values { chat.isHidden = true }
-        guard terminals[id] != nil, let session = controller.session(id: id) else { return }
+        guard let terminal = terminals[id], let session = controller.session(id: id) else { return }
+        adopt(terminal.view)
+        hideHostContents(except: terminal.view)
+        terminal.view.isHidden = false
+        terminal.view.setSurfaceVisible(true)
         activeSessionID = id
         configureHeader(session)
         updateHeaderStatus(id)
@@ -759,7 +871,8 @@ final class TerminalStackController: NSViewController {
         statusStack.isHidden = true
         kitBannerContextActive = true
         updateKitBanner()
-        view.window?.makeFirstResponder(terminals[id]?.view)
+        updateFocusRing()
+        if isFocused { view.window?.makeFirstResponder(terminals[id]?.view) }
     }
 
     private func configureHeader(_ session: Session) {
@@ -780,6 +893,7 @@ final class TerminalStackController: NSViewController {
         guard let session = controller.session(id: id) else { return }
         // Chat sessions show context/cost in their own footer (from ACP usage).
         claudeStats.isHidden = session.agent != .claude || session.isChat
+        claudeStatsCollapsed.isActive = claudeStats.isHidden
         guard session.agent == .claude, !session.isChat else { return }
         claudeStats.update(status: controller.claudeStatus(id), defaultModel: controller.claudeModel,
                            defaultEffort: controller.claudeEffort)
@@ -912,7 +1026,7 @@ final class TerminalStackController: NSViewController {
             runtime.terminalStarted(id)
             runtime.startTracking(session, resumeID: resumeID)
 
-            if case .session(id) = controller.selection { showActive(id) }
+            if shownSession == id { showActive(id) }
         }
     }
 
@@ -990,12 +1104,12 @@ final class TerminalStackController: NSViewController {
                 lastPrompt = prompt
                 controller.autoName(id, from: prompt)
             }
-            chat.onWorkingChange = { [controller] working in
+            chat.onWorkingChange = { [controller, surfaces] working in
                 let now = Date()
                 let transition = controller.reportActivity(id, working: working, lastWrite: now, at: now)
                 // Same "finished" notification terminals send, when you're elsewhere.
                 if transition.finishedWork, let s = controller.session(id: id),
-                   !(NSApp.isActive && controller.selection == .session(id)) {
+                   !(NSApp.isActive && surfaces.isShown(id)) {
                     NotificationManager.shared.sendWorkComplete(
                         sessionID: id, agentName: s.agent.displayName, sessionName: s.name,
                         lastPrompt: lastPrompt, workSeconds: transition.workSeconds, workdir: s.workdir)
@@ -1009,7 +1123,7 @@ final class TerminalStackController: NSViewController {
             chats[id] = view
             controller.setLive(id, true)
             chat.start()
-            if case .session(id) = controller.selection { showChat(id, view) }
+            if shownSession == id { showChat(id, view) }
             if let draft = drafts.removeValue(forKey: id) {
                 view.applyDraft(text: draft.text, urls: draft.urls, send: draft.send)
             }
@@ -1034,11 +1148,9 @@ final class TerminalStackController: NSViewController {
     }
 
     private func showChat(_ id: UUID, _ chat: ChatSessionView) {
-        for terminal in terminals.values {
-            terminal.view.isHidden = true
-            terminal.view.setSurfaceVisible(false)
-        }
-        for (sid, view) in chats { view.isHidden = sid != id }
+        adopt(chat)
+        hideHostContents(except: chat)
+        chat.isHidden = false
         guard let session = controller.session(id: id) else { return }
         activeSessionID = id
         configureHeader(session)
@@ -1050,7 +1162,8 @@ final class TerminalStackController: NSViewController {
         statusStack.isHidden = true
         kitBannerContextActive = true
         updateKitBanner()
-        chat.focusComposer()
+        updateFocusRing()
+        if isFocused { chat.focusComposer() }
     }
 
     private func closeChat(_ id: UUID) {

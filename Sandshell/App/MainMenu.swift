@@ -140,6 +140,17 @@ enum MainMenu {
                                          keyEquivalent: "0")
         showFiles.keyEquivalentModifierMask = [.command, .option]
         viewMenu.addItem(.separator())
+        viewMenu.addItem(withTitle: "Split Right", action: #selector(AppDelegate.splitRight(_:)), keyEquivalent: "d")
+        let splitDown = viewMenu.addItem(withTitle: "Split Down", action: #selector(AppDelegate.splitDown(_:)), keyEquivalent: "d")
+        splitDown.keyEquivalentModifierMask = [.command, .shift]
+        let closePane = viewMenu.addItem(withTitle: "Close Pane", action: #selector(AppDelegate.closePane(_:)), keyEquivalent: "w")
+        closePane.keyEquivalentModifierMask = [.command, .option]
+        let nextPane = viewMenu.addItem(withTitle: "Next Pane", action: #selector(AppDelegate.focusNextPane(_:)), keyEquivalent: "]")
+        nextPane.keyEquivalentModifierMask = [.command, .option]
+        let prevPane = viewMenu.addItem(withTitle: "Previous Pane", action: #selector(AppDelegate.focusPreviousPane(_:)), keyEquivalent: "[")
+        prevPane.keyEquivalentModifierMask = [.command, .option]
+        viewMenu.addItem(withTitle: "Equalize Panes", action: #selector(AppDelegate.equalizePanes(_:)), keyEquivalent: "")
+        viewMenu.addItem(.separator())
         let hideSidebar = viewMenu.addItem(withTitle: "Hide Sidebar",
                                            action: #selector(AppDelegate.hideSidebar(_:)), keyEquivalent: "1")
         hideSidebar.keyEquivalentModifierMask = [.control]
