@@ -97,6 +97,7 @@ enum SelfTest {
         case "links": links()
         case "title-strip": await titleStrip(window)
         case "follow": await follow(window)
+        case "open-quickly": await openQuickly()
         case "files": await files(window)
         case "files-relaunch": await filesRelaunch(window)
         case "kits": await kits(window)
@@ -1149,6 +1150,42 @@ enum SelfTest {
         snapshot(window, "fork-final")
     }
 
+    // MARK: Open Quickly
+
+    /// The match list's selected row: an accent bar with light text.
+    private static func openQuickly() async {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("sandshell-oq-\(UUID().uuidString.prefix(6))")
+        for name in ["src/app.py", "src/apply.swift", "README.md"] {
+            let url = dir.appendingPathComponent(name)
+            try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try? "x".write(to: url, atomically: true, encoding: .utf8)
+        }
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let indexed = await WorkspaceFileIndex.shared.files(under: dir.path)
+        check(Set(indexed) == ["README.md", "src/app.py", "src/apply.swift"],
+              "the file index reads a folder under /var (a symlink) correctly (\(indexed))")
+        let finder = OpenQuicklyController(root: dir)
+        let host = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 520, height: 360), styleMask: [.borderless],
+                            backing: .buffered, defer: false)
+        host.alphaValue = 0
+        host.contentViewController = finder
+        _ = await until(5) { finder.search("apy"); return !finder.results.isEmpty }
+        await wait(0.4)
+        check(finder.results.first == "src/app.py", "“apy” finds src/app.py first (\(finder.results.prefix(3)))")
+        snapshot(finder.view, "open-quickly")
+        guard let rep = finder.view.bitmapImageRepForCachingDisplay(in: finder.view.bounds) else { return }
+        finder.view.cacheDisplay(in: finder.view.bounds, to: rep)
+        // The first row sits under the search field (~63 pt from the top); the
+        // bitmap is in pixels, top-left origin.
+        let scale = CGFloat(rep.pixelsHigh) / finder.view.bounds.height
+        let color = rep.colorAt(x: Int(14 * scale), y: Int(63 * scale))
+        log("selected row color: \(String(describing: color))")
+        if let c = color?.usingColorSpace(.sRGB) {
+            check(c.brightnessComponent > 0.25 && c.saturationComponent > 0.2, "the selected row is accent-colored, not black")
+        }
+        host.close()
+    }
+
     // MARK: Following another app
 
     /// A chat whose conversation another app keeps writing: its turns appear
@@ -1292,6 +1329,25 @@ enum SelfTest {
         check(links.contains { $0.0 == "https://example.com/x" }, "a URL is a link")
         check(links.contains { $0.0 == "/usr/bin/git" }, "an absolute path that exists is a link")
         check(!links.contains { $0.0.contains("no/such") }, "a path that doesn't exist isn't")
+
+        // Paths with spaces: quoted, backslash-escaped, or bare.
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("sandshell-links-\(UUID().uuidString.prefix(6))")
+        let file = dir.appendingPathComponent("My Folder/Read Me.txt")
+        try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? "hi".write(to: file, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let spaced = ChatTranscriptView()
+        spaced.workdir = dir.path
+        spaced.debugApplyNow([.agentText(id: "b", text:
+            "Quoted `My Folder/Read Me.txt:3`, escaped My\\ Folder/Read\\ Me.txt, and bare \(file.path), done. "
+            + "Not `My Folder/Nope.txt`.")])
+        let spacedLinks = spaced.debugLinks
+        log("spaced links: \(spacedLinks.map { "\($0.0) → \($0.1)" })")
+        check(spacedLinks.contains { $0.0 == "My Folder/Read Me.txt" && $0.1.hasSuffix("#L3") },
+              "a quoted path with spaces links, with its line")
+        check(spacedLinks.contains { $0.0 == "My\\ Folder/Read\\ Me.txt" }, "a backslash-escaped path links")
+        check(spacedLinks.contains { $0.0 == file.path }, "a bare absolute path with spaces links whole")
+        check(!spacedLinks.contains { $0.0.contains("Nope") }, "a quoted path that doesn't exist doesn't")
     }
 }
 #endif

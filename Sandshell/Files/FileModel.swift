@@ -217,14 +217,23 @@ final class FileWatcher: @unchecked Sendable {
     private var stream: FSEventStreamRef?
     private let onChange: @MainActor () -> Void
 
+    /// What the stream holds (and releases when it's released): a weak way back,
+    /// so a callback that races the watcher's teardown finds nothing.
+    private final class Box: @unchecked Sendable { weak var watcher: FileWatcher? }
+
     init(path: String, latency: TimeInterval = 0.4, onChange: @escaping @MainActor () -> Void) {
         self.onChange = onChange
-        var context = FSEventStreamContext(version: 0, info: Unmanaged.passUnretained(self).toOpaque(),
-                                           retain: nil, release: nil, copyDescription: nil)
+        let box = Box()
+        box.watcher = self
+        var context = FSEventStreamContext(version: 0, info: Unmanaged.passRetained(box).toOpaque(),
+                                           retain: nil, release: { info in
+                                               if let info { Unmanaged<Box>.fromOpaque(info).release() }
+                                           }, copyDescription: nil)
+        // Delivered on the main queue (below).
         let callback: FSEventStreamCallback = { _, info, _, _, _, _ in
             guard let info else { return }
-            let watcher = Unmanaged<FileWatcher>.fromOpaque(info).takeUnretainedValue()
-            DispatchQueue.main.async { MainActor.assumeIsolated { watcher.onChange() } }
+            let box = Unmanaged<Box>.fromOpaque(info).takeUnretainedValue()
+            MainActor.assumeIsolated { box.watcher?.onChange() }
         }
         stream = FSEventStreamCreate(nil, callback, &context, [path] as CFArray,
                                      FSEventStreamEventId(kFSEventStreamEventIdSinceNow), latency,

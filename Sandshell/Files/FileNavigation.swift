@@ -124,6 +124,8 @@ final class OpenQuicklyController: NSViewController, NSSearchFieldDelegate, NSTa
 
     func numberOfRows(in tableView: NSTableView) -> Int { results.count }
 
+    func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? { OpenQuicklyRowView() }
+
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         let cell = tableView.makeView(withIdentifier: OpenQuicklyCell.id, owner: nil) as? OpenQuicklyCell ?? OpenQuicklyCell()
         cell.configure(path: results[row], root: root, query: field.stringValue)
@@ -132,6 +134,19 @@ final class OpenQuicklyController: NSViewController, NSSearchFieldDelegate, NSTa
 }
 
 /// Icon, file name (matched characters emphasised) and its folder.
+/// The selected match as an accent-colored rounded bar (like Xcode's), always
+/// emphasized: the popover's own selection material didn't survive
+/// vibrancy-less rendering (it came out black).
+final class OpenQuicklyRowView: NSTableRowView {
+    override var isEmphasized: Bool { get { true } set {} }
+
+    override func drawSelection(in dirtyRect: NSRect) {
+        guard selectionHighlightStyle != .none else { return }
+        NSColor.controlAccentColor.setFill()
+        NSBezierPath(roundedRect: bounds.insetBy(dx: 6, dy: 1), xRadius: 6, yRadius: 6).fill()
+    }
+}
+
 final class OpenQuicklyCell: NSTableCellView {
     static let id = NSUserInterfaceItemIdentifier("OpenQuicklyCell")
     private let icon = NSImageView()

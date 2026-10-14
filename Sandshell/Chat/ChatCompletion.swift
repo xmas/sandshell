@@ -177,6 +177,10 @@ actor WorkspaceFileIndex {
         if let hit = cache[root], Date().timeIntervalSince(hit.at) < 30 { return hit.files }
         var out: [String] = []
         let base = URL(fileURLWithPath: root)
+        // The enumerator may hand back the real path (/tmp → /private/tmp;
+        // resolvingSymlinksInPath goes the other way, so realpath).
+        let real = realpath(root, nil).map { defer { free($0) }; return String(cString: $0) }
+        let prefixes = Set([base.path] + (real.map { [$0] } ?? [])).map { $0 + "/" }
         if let e = FileManager.default.enumerator(at: base, includingPropertiesForKeys: [.isDirectoryKey],
                                                   options: [.skipsPackageDescendants]) {
             for case let url as URL in e {
@@ -184,7 +188,9 @@ actor WorkspaceFileIndex {
                 if Self.skip.contains(name) || name == ".DS_Store" { e.skipDescendants(); continue }
                 if e.level > 8 { e.skipDescendants(); continue }
                 if (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true { continue }
-                out.append(String(url.path.dropFirst(base.path.count + 1)))
+                let path = url.path
+                guard let prefix = prefixes.first(where: { path.hasPrefix($0) }) else { continue }
+                out.append(String(path.dropFirst(prefix.count)))
                 if out.count >= 20_000 { break }
             }
         }

@@ -163,14 +163,20 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
 
     private static let urlDetector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
     /// Path-like tokens: absolute, ~/, ./, or relative with a slash or an
-    /// extension, optionally followed by :line(:col).
+    /// extension (a backslash-escaped space is part of the name), optionally
+    /// followed by :line(:col).
     private static let pathPattern = try? NSRegularExpression(
-        pattern: #"(?<![\w/.~-])((?:~|\.{1,2})?/?[A-Za-z0-9_.@+-]+(?:/[A-Za-z0-9_.@+-]+)*)(?::(\d+))?(?::\d+)?"#)
+        pattern: #"(?<![\w/.~-])((?:~|\.{1,2})?/?(?:[A-Za-z0-9_.@+-]|\\ )+(?:/(?:[A-Za-z0-9_.@+-]|\\ )+)*)(?::(\d+))?(?::\d+)?"#)
+    /// A path in backticks or quotes, where it may contain plain spaces.
+    private static let quotedPattern = try? NSRegularExpression(pattern: #"([`"'])([^`"'\n]{3,300})\1"#)
+    /// A trailing :line(:col) on a quoted path.
+    private static let lineSuffix = try? NSRegularExpression(pattern: #":(\d+)(?::\d+)?$"#)
 
     /// URLs open in the browser; paths that exist on this Mac open in Files.
     private func linkify(_ rendered: NSAttributedString) -> NSAttributedString {
         let text = rendered.string
         guard text.count < 200_000 else { return rendered }
+        let ns = text as NSString
         let out = NSMutableAttributedString(attributedString: rendered)
         let whole = NSRange(location: 0, length: out.length)
         func free(_ r: NSRange) -> Bool {
@@ -185,21 +191,81 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
         guard let workdir, let pattern = Self.pathPattern else { return out }
         let fm = FileManager.default
         var checked = 0
-        for m in pattern.matches(in: text, range: whole) {
-            guard checked < 300, let r = Range(m.range(at: 1), in: text) else { continue }
-            var token = String(text[r])
-            while let last = token.last, ".,;:)".contains(last) { token.removeLast() }
-            guard token.count >= 3, token.contains("/") || token.contains("."), !token.hasPrefix("http") else { continue }
+        /// The file `token` names, if it exists (relative to the session's folder).
+        func existing(_ token: String) -> String? {
+            guard checked < 400 else { return nil }
             checked += 1
-            let expanded = (token as NSString).expandingTildeInPath
+            let expanded = (token.replacingOccurrences(of: "\\ ", with: " ") as NSString).expandingTildeInPath
             let path = expanded.hasPrefix("/") ? expanded : (workdir as NSString).appendingPathComponent(expanded)
-            var isDir: ObjCBool = false
-            guard fm.fileExists(atPath: path, isDirectory: &isDir) else { continue }
-            let range = NSRange(location: m.range(at: 1).location, length: (token as NSString).length)
-            guard free(range) else { continue }
+            return fm.fileExists(atPath: path) ? path : nil
+        }
+        func link(_ path: String, _ range: NSRange, line: String?) {
+            guard free(range) else { return }
             var link = URLComponents(url: URL(fileURLWithPath: path), resolvingAgainstBaseURL: false)
-            if let lr = Range(m.range(at: 2), in: text) { link?.fragment = "L" + text[lr] }
+            if let line { link?.fragment = "L" + line }
             if let url = link?.url { out.addAttribute(.link, value: url, range: range) }
+        }
+        func trimmed(_ token: String) -> String {
+            var token = token
+            while let last = token.last, ".,;:)".contains(last) { token.removeLast() }
+            return token
+        }
+        func looksLikePath(_ token: String) -> Bool {
+            token.count >= 3 && (token.contains("/") || token.contains(".")) && !token.hasPrefix("http")
+        }
+
+        // `My Folder/notes.md` (inline code — the backticks are gone by now),
+        // "…/Read Me.txt:12"
+        var spans = (Self.quotedPattern?.matches(in: text, range: whole) ?? []).map { $0.range(at: 2) }
+        out.enumerateAttribute(.inlinePresentationIntent, in: whole) { value, range, _ in
+            guard let raw = (value as? NSNumber)?.uintValue,
+                  InlinePresentationIntent(rawValue: raw).contains(.code) else { return }
+            spans.append(range)
+        }
+        for span in spans {
+            var inner = span
+            var line: String?
+            if let l = Self.lineSuffix?.firstMatch(in: text, range: inner) {
+                line = ns.substring(with: l.range(at: 1))
+                inner.length = l.range.location - inner.location
+            }
+            let token = ns.substring(with: inner).trimmingCharacters(in: .whitespaces)
+            guard looksLikePath(token), token.contains(" ") || token.contains("\\ "),
+                  let path = existing(token) else { continue }
+            link(path, inner, line: line)
+        }
+
+        for m in pattern.matches(in: text, range: whole) {
+            let r1 = m.range(at: 1)
+            let token = trimmed(ns.substring(with: r1))
+            guard looksLikePath(token) else { continue }
+            let line = m.range(at: 2).location == NSNotFound ? nil : ns.substring(with: m.range(at: 2))
+            if let path = existing(token) {
+                link(path, NSRange(location: r1.location, length: (token as NSString).length), line: line)
+                continue
+            }
+            // An unquoted path with spaces ("/Users/me/My Folder/a.txt"): the
+            // longest run of following words, on this line, that names a file.
+            guard token.hasPrefix("/") || token.hasPrefix("~/"), m.range.location + m.range.length < ns.length,
+                  ns.character(at: m.range.location + m.range.length) == 0x20 else { continue }
+            let lineEnd = ns.rangeOfCharacter(from: .newlines, range: NSRange(
+                location: r1.location, length: ns.length - r1.location)).location
+            let rest = ns.substring(with: NSRange(location: r1.location,
+                                                  length: (lineEnd == NSNotFound ? ns.length : lineEnd) - r1.location))
+            let words = rest.components(separatedBy: " ")
+            guard words.count >= 2 else { continue }
+            var best: (path: String, length: Int, line: String?)?
+            for count in 2...min(words.count, 8) {
+                var candidate = trimmed(words.prefix(count).joined(separator: " "))
+                var candidateLine: String?
+                let cns = candidate as NSString
+                if let l = Self.lineSuffix?.firstMatch(in: candidate, range: NSRange(location: 0, length: cns.length)) {
+                    candidateLine = cns.substring(with: l.range(at: 1))
+                    candidate = trimmed(cns.substring(to: l.range.location))
+                }
+                if let path = existing(candidate) { best = (path, (candidate as NSString).length, candidateLine) }
+            }
+            if let best { link(best.path, NSRange(location: r1.location, length: best.length), line: best.line) }
         }
         return out
     }
