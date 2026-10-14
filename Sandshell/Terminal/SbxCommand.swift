@@ -182,8 +182,20 @@ enum SbxCommand {
         return parts.joined(separator: " ")
     }
 
-    /// Pinned ACP adapter for Claude chat sessions (built on the Claude Agent SDK).
-    static let claudeACPPackage = "@agentclientprotocol/claude-agent-acp@0.90.0"
+    /// Pinned ACP adapter for Claude chat sessions (built on the Claude Agent
+    /// SDK; releases track Claude Code). Bump deliberately.
+    static let claudeACPVersion = "0.90.0"
+    static let claudeACPPackage = "@agentclientprotocol/claude-agent-acp@\(claudeACPVersion)"
+
+    /// Run the adapter from a per-version install in the sandbox, installing it
+    /// once (≈4s, 67 MB, no network afterwards; ~0.2s to start vs ~1.3s for
+    /// npx). Installs into a temp dir then renames into place, so concurrent
+    /// first starts can't corrupt it. `--omit=optional` skips the SDK's bundled
+    /// claude — we run the image's (CLAUDE_CODE_EXECUTABLE). npm's output goes
+    /// to stderr: stdout is the JSON-RPC channel.
+    private static var acpLaunch: String {
+        #"D="$HOME/.sandshell/acp/\#(claudeACPVersion)"; B="$D/node_modules/.bin/claude-agent-acp"; if [ ! -x "$B" ]; then mkdir -p "$HOME/.sandshell/acp"; T=$(mktemp -d "$D.tmp.XXXXXX"); if npm install --silent --no-audit --no-fund --omit=optional --prefix "$T" \#(claudeACPPackage) >&2; then mv -T "$T" "$D" 2>/dev/null || rm -rf "$T"; else rm -rf "$T"; echo "sandshell: couldn't install \#(claudeACPPackage)" >&2; exit 1; fi; fi; exec "$B""#
+    }
 
     /// `sbx` argv for a chat session: the ACP adapter over plain stdio (`-i`, no
     /// TTY). `CLAUDE_CODE_EXECUTABLE` points the adapter at the image's own
@@ -197,7 +209,7 @@ enum SbxCommand {
         args += envPairs(home: home, mcpURL: mcpURL, claude: nil, tag: tag)
         let auth = useProxyAuth(sbxProxyAuth) ? " " + proxyAuthSetup : ""
         args += ["bash", "-c",
-                 #"\#(pathSetup)\#(auth) export CLAUDE_CODE_EXECUTABLE="$(command -v claude)"; exec npx -y \#(claudeACPPackage)"#]
+                 #"\#(pathSetup)\#(auth) export CLAUDE_CODE_EXECUTABLE="$(command -v claude)"; \#(acpLaunch)"#]
         return args
     }
 
