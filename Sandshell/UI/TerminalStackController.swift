@@ -891,7 +891,8 @@ final class TerminalStackController: NSViewController {
                     effort: controller.claudeEffort,
                     statusScriptPath: script?.path,
                     statusDir: script == nil ? nil : ClaudeStatusFeed.statusDir(root: root).path,
-                    sessionID: id.uuidString)
+                    sessionID: id.uuidString,
+                    sbxProxyAuth: await SbxClient.shared.hasAnthropicSecret(sandbox: containerName))
             }
             let terminal = TerminalSession(
                 sessionID: id, containerName: containerName, agent: session.agent,
@@ -971,9 +972,10 @@ final class TerminalStackController: NSViewController {
                 resumeID = tid
             }
             Log.info(.workspace, "launching \(current.agent.rawValue) chat in “\(containerName)” at \(current.workdir)\(resumeID.map { " (resume \($0))" } ?? "")")
+            let proxyAuth = await SbxClient.shared.hasAnthropicSecret(sandbox: containerName)
             let chat = ChatSession(title: current.agent.displayName.capitalized, containerName: containerName,
                                    workdir: current.workdir, home: controller.home.path,
-                                   mcpURL: controller.mcpURL, resumeID: resumeID)
+                                   mcpURL: controller.mcpURL, resumeID: resumeID, sbxProxyAuth: proxyAuth)
             chat.onSessionID = { [controller] sid in controller.setTranscriptID(id, sid) }
             chat.onPrompt = { [controller] prompt in controller.autoName(id, from: prompt) }
             chat.onWorkingChange = { [controller] working in

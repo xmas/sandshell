@@ -98,6 +98,7 @@ final class ChatSession: ObservableObject {
 
     let title: String
     private let resumeID: String?
+    private let sbxProxyAuth: Bool
     private let containerName: String
     private let workdir: String
     private let home: String
@@ -107,8 +108,9 @@ final class ChatSession: ObservableObject {
     private var pumpTask: Task<Void, Never>?
 
     init(title: String, containerName: String, workdir: String, home: String, mcpURL: URL?,
-         resumeID: String? = nil) {
+         resumeID: String? = nil, sbxProxyAuth: Bool = false) {
         self.title = title
+        self.sbxProxyAuth = sbxProxyAuth
         self.resumeID = resumeID
         self.containerName = containerName
         self.workdir = workdir
@@ -119,14 +121,15 @@ final class ChatSession: ObservableObject {
     // MARK: Lifecycle
 
     func start() {
-        let args = SbxCommand.acpArguments(containerName: containerName, workdir: workdir, home: home, mcpURL: mcpURL)
+        let args = SbxCommand.acpArguments(containerName: containerName, workdir: workdir, home: home, mcpURL: mcpURL,
+                                           sbxProxyAuth: sbxProxyAuth)
         let conn = ACPConnection(executable: PathFixer.sbxPath(), arguments: args)
         connection = conn
         do { try conn.start() } catch {
             phase = .closed("Couldn’t launch sbx: \(error.localizedDescription)")
             return
         }
-        Log.info(.sbx, "chat: launched ACP adapter in “\(containerName)” at \(workdir)")
+        Log.info(.sbx, "chat: launched ACP adapter in “\(containerName)” at \(workdir) (auth: \(sbxProxyAuth ? "sbx proxy" : "~/.claude credentials"))")
         pumpTask = Task { [weak self] in
             for await event in conn.incoming { self?.handle(event) }
         }

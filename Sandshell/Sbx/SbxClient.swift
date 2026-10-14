@@ -6,6 +6,8 @@ actor SbxClient {
     static let shared = SbxClient()
 
     private let sbx: String
+    /// `hasAnthropicSecret` result per scope, briefly cached (checked per launch).
+    private var anthropicSecretCache: [String: (Bool, Date)] = [:]
 
     init() {
         self.sbx = PathFixer.sbxPath()
@@ -492,6 +494,26 @@ actor SbxClient {
     /// `sbx kit inspect <ref> --json` — metadata for a directory, zip, or OCI kit
     /// reference (pulls the kit for OCI refs, so this can take a few seconds).
     /// Returns nil when the reference can't be inspected.
+    /// Whether sbx holds an Anthropic credential (API key or OAuth) for this
+    /// sandbox — global or scoped to it. When it does, sbx's proxy attaches the
+    /// real credential to the agent's API requests and refreshes OAuth on the
+    /// host, once, for every sandbox.
+    func hasAnthropicSecret(sandbox: String) async -> Bool {
+        if let (value, at) = anthropicSecretCache[sandbox], Date().timeIntervalSince(at) < 30 { return value }
+        struct Listing: Decodable {
+            struct Secret: Decodable { let scope: String; let name: String }
+            let secrets: [Secret]
+        }
+        var found = false
+        if let out = try? await run(["secret", "ls", "--json", "--service", "anthropic"], routine: true), out.ok,
+           let json = Self.firstJSONObject(in: out.stdout), let data = json.data(using: .utf8),
+           let listing = try? JSONDecoder().decode(Listing.self, from: data) {
+            found = listing.secrets.contains { $0.name == "anthropic" && ($0.scope == "global" || $0.scope == sandbox) }
+        }
+        anthropicSecretCache[sandbox] = (found, Date())
+        return found
+    }
+
     func kitInspect(_ ref: String) async -> KitInspection? {
         guard let out = try? await run(["kit", "inspect", ref, "--json"], timeout: 90), out.ok,
               let json = Self.firstJSONObject(in: out.stdout),

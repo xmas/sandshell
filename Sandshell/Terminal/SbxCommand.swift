@@ -20,6 +20,8 @@ enum SbxCommand {
         var statusScriptPath: String?
         var statusDir: String?
         var sessionID: String?
+        /// Authenticate through sbx's credential proxy (see `proxyAuthSetup`).
+        var sbxProxyAuth = false
     }
 
     /// Host locale forwarded into the container; `C.UTF-8` is universally present
@@ -43,6 +45,22 @@ enum SbxCommand {
     private static var pathSetup: String {
         #"P="$PATH"; [ -d "\#(cargoBin)" ] && P="\#(cargoBin):$P"; [ -d "$HOME/bin" ] && P="$HOME/bin:$P"; [ -d "$HOME/.local/bin" ] && P="$HOME/.local/bin:$P"; export PATH="$P";"#
     }
+
+    /// Claude auth via sbx's credential proxy. The sandbox's own
+    /// `$HOME/.claude/.credentials.json` holds a placeholder token that sbx's
+    /// proxy swaps for the real credential (refreshing OAuth on the host, once,
+    /// for every sandbox). We keep `CLAUDE_CONFIG_DIR` on the mounted host
+    /// `~/.claude` for settings/transcripts, so hand claude the placeholder via
+    /// `CLAUDE_CODE_OAUTH_TOKEN` (which outranks the credentials file and is
+    /// never refreshed) — otherwise every sandboxed claude refreshes the host
+    /// file's token itself and they race (rotating refresh tokens).
+    private static var proxyAuthSetup: String {
+        #"T=$(sed -n 's/.*"accessToken":"\([^"]*\)".*/\1/p' "$HOME/.claude/.credentials.json" 2>/dev/null); [ -n "$T" ] && export CLAUDE_CODE_OAUTH_TOKEN="$T";"#
+    }
+
+    /// Whether to use `proxyAuthSetup`: requested, and not overridden by the
+    /// opt-in inference gateway (which brings its own auth).
+    private static func useProxyAuth(_ requested: Bool) -> Bool { requested && inferenceGatewayURL == nil }
 
     /// Env pairs passed through `sbx exec ... env K=V ...`. Mirrors
     /// `sbx.rs::sandbox_shell_env`, plus `SBX_MCP_URL` when the workspace has an
@@ -132,7 +150,8 @@ enum SbxCommand {
                               claude: ClaudeOptions? = nil) -> String {
         // program(...) already returns a properly-quoted command line (incl. any
         // `--resume <id>`), so it's not re-quoted here.
-        let bashc = "\(pathSetup) exec \(program(for: agent, resumeID: resumeID, claude: claude))"
+        let auth = agent == .claude && useProxyAuth(claude?.sbxProxyAuth ?? false) ? " \(proxyAuthSetup)" : ""
+        let bashc = "\(pathSetup)\(auth) exec \(program(for: agent, resumeID: resumeID, claude: claude))"
         var parts: [String] = [shellQuote(sbxPath), "exec", "-it"]
         if !workdir.isEmpty { parts += ["-w", shellQuote(workdir)] }
         parts.append(shellQuote(containerName))
@@ -149,13 +168,15 @@ enum SbxCommand {
     /// TTY). `CLAUDE_CODE_EXECUTABLE` points the adapter at the image's own
     /// claude instead of the SDK's bundled copy, so the base-image channel still
     /// decides the Claude Code version.
-    static func acpArguments(containerName: String, workdir: String, home: String, mcpURL: URL?) -> [String] {
+    static func acpArguments(containerName: String, workdir: String, home: String, mcpURL: URL?,
+                             sbxProxyAuth: Bool = false) -> [String] {
         var args = ["exec", "-i"]
         if !workdir.isEmpty { args += ["-w", workdir] }
         args += [containerName, "env", "-u", "MCP_GATEWAY_URL"]
         args += envPairs(home: home, mcpURL: mcpURL, claude: nil)
+        let auth = useProxyAuth(sbxProxyAuth) ? " " + proxyAuthSetup : ""
         args += ["bash", "-c",
-                 #"\#(pathSetup) export CLAUDE_CODE_EXECUTABLE="$(command -v claude)"; exec npx -y \#(claudeACPPackage)"#]
+                 #"\#(pathSetup)\#(auth) export CLAUDE_CODE_EXECUTABLE="$(command -v claude)"; exec npx -y \#(claudeACPPackage)"#]
         return args
     }
 
