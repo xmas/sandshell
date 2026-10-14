@@ -135,8 +135,8 @@ final class MainWindowController: NSWindowController {
             // only the session (the sidebar header already names the folder).
             let folder = self.root.lastPathComponent
             if let chrome {
-                self.toolbarBadge.isHidden = false
-                self.toolbarBadge.configure(chrome.agent)
+                self.toolbarBadge.isHidden = chrome.agent == nil
+                if let agent = chrome.agent { self.toolbarBadge.configure(agent) }
                 self.toolbarName.stringValue = chrome.title
                 self.toolbarSubtitle.stringValue = chrome.subtitle
                 self.window?.title = "\(folder) — \(chrome.title)"
@@ -409,10 +409,12 @@ final class MainWindowController: NSWindowController {
     private func syncFilesRoot() {
         guard let workspace, let filesItem, !filesItem.isCollapsed else { return }
         var folder = workspace.rootURL
+        var agent = workspace.primaryAgent
         if case .session(let id) = workspace.selection, let s = workspace.session(id: id) {
             folder = URL(fileURLWithPath: s.workdir)
+            agent = s.containerAgentKind
         }
-        filesPane?.setRoot(folder)
+        filesPane?.setRoot(folder, access: workspace.sandboxAccess(for: folder, agent: agent))
     }
 
     /// ⇧⌘F / sidebar footer / toolbar: search this workspace's open sessions and

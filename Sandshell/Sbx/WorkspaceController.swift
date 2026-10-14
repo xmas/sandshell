@@ -1127,6 +1127,22 @@ extension WorkspaceController {
     func backgroundTasks(_ id: UUID) -> [BackgroundTask] { backgroundTasks[id] ?? [] }
     func runningBackgroundTasks(_ id: UUID) -> Int { backgroundTasks[id]?.filter(\.isRunning).count ?? 0 }
 
+    /// How `folder` is shared with `agent`'s sandbox: its real mounts once it
+    /// exists, else what the workspace's mount policy will give it.
+    func sandboxAccess(for folder: URL, agent: AgentKind) -> SandboxAccess {
+        let name = containerName(for: agent)
+        let mounts: [SandboxAccess.Mount]
+        if let sandbox = containers[agent], !sandbox.workspaces.isEmpty {
+            mounts = sandbox.workspaces.map {
+                let spec = MountSpec(spec: $0)
+                return .init(path: spec.path.standardizedFileURL.path, readOnly: spec.readonly)
+            }
+        } else {
+            mounts = resolvedMounts().map { .init(path: $0.path.standardizedFileURL.path, readOnly: $0.readonly) }
+        }
+        return SandboxAccess(folder: folder, sandbox: name, mounts: mounts, created: containers[agent] != nil)
+    }
+
     /// The tail of a background command's output file, read inside its sandbox.
     func backgroundOutput(_ sessionID: UUID, _ task: BackgroundTask) async -> String? {
         guard let path = task.outputPath, let session = session(id: sessionID) else { return nil }

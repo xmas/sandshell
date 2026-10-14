@@ -103,10 +103,10 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
         let pane = TerminalStackController(controller: controller, surfaces: surfaces)
         pane.onToggleSidebar = { [weak self] in self?.onToggleSidebar?() }
         pane.onChromeChange = { [weak self, weak pane] chrome in
-            if let self, pane === self.focused { self.onChromeChange?(chrome) }
+            if let self, pane === self.toolbarPane { self.onChromeChange?(chrome) }
         }
         pane.onStatusChange = { [weak self, weak pane] text, working in
-            if let self, pane === self.focused { self.onStatusChange?(text, working) }
+            if let self, pane === self.toolbarPane { self.onStatusChange?(text, working) }
         }
         pane.onClosePane = { [weak self, weak pane] in if let pane { self?.close(pane) } }
         pane.onSplit = { [weak self, weak pane] edge in
@@ -138,8 +138,8 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
     func focus(_ pane: TerminalStackController) {
         focused = pane
         for p in panes { p.isFocused = p === pane }
-        // A Files pane leaves the sidebar selection alone.
-        guard pane.shownFiles == nil else { return pane.reemitChrome() }
+        // A Files pane leaves the sidebar selection and the toolbar alone.
+        guard pane.shownFiles == nil else { toolbarPane?.reemitChrome(); return }
         lastSessionPane = pane
         if let id = pane.shownSession {
             if controller.selection != .session(id) { controller.selection = .session(id) }
@@ -547,14 +547,23 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
         (panes.first { $0.shownSession == id } ?? focused)?.dropFiles(urls, on: id)
     }
 
-    @objc func revealInFinderClicked() { focused?.revealInFinderClicked() }
-    @objc func stopClicked() { focused?.stopClicked() }
-    @objc func headerRestartClicked() { focused?.headerRestartClicked() }
-    @objc func toggleChatClicked() { focused?.toggleChatClicked() }
+    /// The pane the toolbar speaks for: the focused pane unless it's a Files
+    /// pane — then the session pane last used, so clicking into Files doesn't
+    /// take the session's toolbar away.
+    var toolbarPane: TerminalStackController? {
+        if let focused, focused.shownFiles == nil { return focused }
+        if let last = lastSessionPane, panes.contains(where: { $0 === last }) { return last }
+        return panes.first { $0.shownSession != nil } ?? focused
+    }
+
+    @objc func revealInFinderClicked() { toolbarPane?.revealInFinderClicked() }
+    @objc func stopClicked() { toolbarPane?.stopClicked() }
+    @objc func headerRestartClicked() { toolbarPane?.headerRestartClicked() }
+    @objc func toggleChatClicked() { toolbarPane?.toggleChatClicked() }
 }
 
 extension PaneTreeController: NSToolbarItemValidation {
-    func validateToolbarItem(_ item: NSToolbarItem) -> Bool { focused?.validateToolbarItem(item) ?? false }
+    func validateToolbarItem(_ item: NSToolbarItem) -> Bool { toolbarPane?.validateToolbarItem(item) ?? false }
 }
 
 /// NSSplitView that knows its layout node.

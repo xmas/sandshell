@@ -61,9 +61,10 @@ final class FilesPaneController: NSSplitViewController {
     }
 
     /// Show `folder` (nil = nothing).
-    func setRoot(_ folder: URL?) {
+    func setRoot(_ folder: URL?, access: SandboxAccess? = nil) {
         _ = view   // make sure children are loaded
         tree.setRoot(folder)
+        tree.sandboxAccess = access
     }
 
     func open(_ url: URL) {

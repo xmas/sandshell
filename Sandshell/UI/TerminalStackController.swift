@@ -351,7 +351,8 @@ final class TerminalStackController: NSViewController {
     var onToggleSidebar: (() -> Void)?
     /// The active session's identity, published to the window's native toolbar
     /// (agent badge + title/subtitle). `nil` when no session is shown.
-    struct Chrome { let agent: AgentKind; let title: String; let subtitle: String }
+    /// `agent` is nil for a Files pane that isn't any session's (no badge).
+    struct Chrome { let agent: AgentKind?; let title: String; let subtitle: String }
     var onChromeChange: ((Chrome?) -> Void)?
     /// Live status for the toolbar: text ("Working  ◷ 39m 16s" / "Ready") and
     /// whether the agent is currently working (drives the green tint).
@@ -465,7 +466,8 @@ final class TerminalStackController: NSViewController {
         }
         guard let surface = files.view.superview else { return }
         let (url, title) = target.resolve(in: controller)
-        files.setRoot(url)
+        let agent = target.session.flatMap { controller.session(id: $0)?.containerAgentKind } ?? controller.primaryAgent
+        files.setRoot(url, access: controller.sandboxAccess(for: url, agent: agent))
         hideHostContents(except: surface)
         surface.isHidden = false
         activeSessionID = nil
@@ -491,6 +493,17 @@ final class TerminalStackController: NSViewController {
         if let id = activeSessionID, id == shownSession, let session = controller.session(id: id) {
             configureHeader(session)
             updateHeaderStatus(id)
+        } else if let files = shownFiles {
+            // A Files pane speaks for its session (or just its folder).
+            let (url, title) = files.resolve(in: controller)
+            if let id = files.session, let session = controller.session(id: id) {
+                onChromeChange?(Chrome(agent: session.agent, title: session.name,
+                                       subtitle: "Files · \(shortHome(url.path))"))
+                updateHeaderStatus(id)
+            } else {
+                onChromeChange?(Chrome(agent: nil, title: "Files — \(title)", subtitle: shortHome(url.path)))
+                onStatusChange?("", false)
+            }
         } else {
             onChromeChange?(nil)
             onStatusChange?("", false)
@@ -1002,6 +1015,10 @@ final class TerminalStackController: NSViewController {
     /// Open the active session's working directory in Finder (its own window,
     /// showing the project's contents — not the parent with the folder selected).
     @objc func revealInFinderClicked() {
+        if activeSessionID == nil, let files = shownFiles {
+            NSWorkspace.shared.open(files.resolve(in: controller).url)
+            return
+        }
         guard let id = activeSessionID, let s = controller.session(id: id) else { return }
         NSWorkspace.shared.open(URL(fileURLWithPath: s.workdir))
     }
@@ -1741,6 +1758,7 @@ extension TerminalStackController: NSToolbarItemValidation {
     /// Chat/Terminal toggle only for Claude sessions, and it shows the mode you'd
     /// switch *to*.
     func validateToolbarItem(_ item: NSToolbarItem) -> Bool {
+        if item.action == #selector(revealInFinderClicked) { return activeSessionID != nil || shownFiles != nil }
         guard item.action == #selector(toggleChatClicked) else { return activeSessionID != nil }
         let session = activeSessionID.flatMap { controller.session(id: $0) }
         let isChat = session?.isChat ?? false

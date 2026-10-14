@@ -91,6 +91,7 @@ enum SelfTest {
         case "background": await background(window)
         case "pane-buttons": await paneButtons(window)
         case "files-alone": await filesAlone(window)
+        case "sandbox-access": await sandboxAccess(window)
         case "files": await files(window)
         case "files-relaunch": await filesRelaunch(window)
         case "kits": await kits(window)
@@ -1014,6 +1015,38 @@ enum SelfTest {
               "a session on the left, Files on the right")
         await wait(0.6)
         snapshot(window, "files-alone")
+    }
+
+    // MARK: Sandbox access
+
+    /// Files says whose files these are: the sandbox, read-write, and its mounts.
+    private static func sandboxAccess(_ window: MainWindowController) async {
+        guard let tree = window.paneTree, let ws = window.workspaceController,
+              let a = ws.orderedSessions.first else { return log("need a session") }
+        ws.selection = .session(a.id)
+        check(await until(90) { tree.surfaces.terminals[a.id] != nil }, "session launches")
+        window.openFilesInSplit()
+        await wait(0.8)
+        guard let files = tree.panes.compactMap(\.filesPane).first else { return check(false, "Files pane opens") }
+        let access = files.tree.sandboxAccess
+        log("sandbox line: \(access?.summary ?? "none"); mount=\(access?.mount?.path ?? "-"); fs=\(access?.hostFileSystem ?? "-") volume=\(access?.volumeName ?? "-")")
+        log("mounts: \(access?.mounts.map { "\($0.path)\($0.readOnly ? ":ro" : "")" } ?? [])")
+        check(access?.mode == .readWrite, "the session's folder reads as read-write in its sandbox")
+        check(access?.sandbox == ws.containerName(for: a.containerAgentKind), "it names the session's sandbox")
+        check(access?.hostFileSystem == "APFS", "it knows the Mac side is APFS")
+        await wait(0.5)
+        snapshot(window, "sandbox-access")
+        if let access {
+            let host = NSHostingView(rootView: SandboxAccessView(access: access))
+            host.appearance = NSAppearance(named: .aqua)
+            host.frame = NSRect(origin: .zero, size: host.fittingSize)
+            host.layoutSubtreeIfNeeded()
+            if let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) {
+                host.cacheDisplay(in: host.bounds, to: rep)
+                try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: out + "/sandbox-access-popover.png"))
+                log("snapshot sandbox-access-popover.png")
+            }
+        }
     }
 }
 #endif

@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 
 /// The Files pane's tree: the session's folder with Finder icons and git
 /// status, live-refreshed as files change. A filter field above it narrows to
@@ -30,6 +31,17 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
     private let filter = NSSearchField()
     private let outline = FileOutlineView()
     private let branchLabel = NSTextField(labelWithString: "")
+    /// "Sandbox “x” · read-write": these are the sandbox's files too.
+    private let sandboxButton = NSButton()
+    private var sandboxPopover: NSPopover?
+
+    /// What the session's sandbox can do with this folder (nil hides the line).
+    var sandboxAccess: SandboxAccess? {
+        didSet {
+            guard isViewLoaded, sandboxAccess != oldValue else { return }
+            updateSandboxLine()
+        }
+    }
 
     override func loadView() {
         let root = NSView()
@@ -66,7 +78,21 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
         branchLabel.textColor = .secondaryLabelColor
         branchLabel.lineBreakMode = .byTruncatingMiddle
 
-        for v in [filter, scroll, branchLabel] as [NSView] {
+        sandboxButton.isBordered = false
+        sandboxButton.imagePosition = .imageLeading
+        sandboxButton.alignment = .left
+        sandboxButton.lineBreakMode = .byTruncatingTail
+        sandboxButton.target = self
+        sandboxButton.action = #selector(showSandboxAccess)
+        sandboxButton.setAccessibilityIdentifier("files-sandbox-access")
+        sandboxButton.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        let footer = NSStackView(views: [sandboxButton, branchLabel])
+        footer.orientation = .vertical
+        footer.alignment = .leading
+        footer.spacing = 3
+        updateSandboxLine()
+
+        for v in [filter, scroll, footer] as [NSView] {
             v.translatesAutoresizingMaskIntoConstraints = false
             root.addSubview(v)
         }
@@ -77,12 +103,38 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
             scroll.topAnchor.constraint(equalTo: filter.bottomAnchor, constant: 6),
             scroll.leadingAnchor.constraint(equalTo: root.leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: root.trailingAnchor),
-            branchLabel.topAnchor.constraint(equalTo: scroll.bottomAnchor, constant: 4),
-            branchLabel.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 10),
-            branchLabel.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -10),
-            branchLabel.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -6),
+            footer.topAnchor.constraint(equalTo: scroll.bottomAnchor, constant: 4),
+            footer.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 10),
+            footer.trailingAnchor.constraint(lessThanOrEqualTo: root.trailingAnchor, constant: -10),
+            footer.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -6),
+            branchLabel.widthAnchor.constraint(lessThanOrEqualTo: root.widthAnchor, constant: -20),
+            sandboxButton.widthAnchor.constraint(lessThanOrEqualTo: root.widthAnchor, constant: -20),
         ])
         view = root
+    }
+
+    // MARK: Sandbox
+
+    private func updateSandboxLine() {
+        guard let access = sandboxAccess else { sandboxButton.isHidden = true; return }
+        sandboxButton.isHidden = false
+        let tint: NSColor = access.mode == .readWrite ? .systemOrange : .secondaryLabelColor
+        sandboxButton.image = NSImage(systemSymbolName: access.symbol, accessibilityDescription: nil)?
+            .withSymbolConfiguration(.init(pointSize: 10, weight: .semibold))
+        sandboxButton.contentTintColor = tint
+        sandboxButton.attributedTitle = NSAttributedString(string: " " + access.summary, attributes: [
+            .font: NSFont.systemFont(ofSize: 11, weight: .medium), .foregroundColor: tint])
+        sandboxButton.toolTip = "These files are shared with a sandbox — click for what it can do with them"
+    }
+
+    @objc private func showSandboxAccess() {
+        guard let access = sandboxAccess else { return }
+        if let open = sandboxPopover, open.isShown { open.close(); return }
+        let popover = NSPopover()
+        popover.behavior = .transient
+        popover.contentViewController = NSHostingController(rootView: SandboxAccessView(access: access))
+        popover.show(relativeTo: sandboxButton.bounds, of: sandboxButton, preferredEdge: .maxY)
+        sandboxPopover = popover
     }
 
     // MARK: Root
