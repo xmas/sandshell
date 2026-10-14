@@ -36,6 +36,9 @@ final class WorkspaceController: ObservableObject {
     /// Each Claude session's background tasks (subagents, background shells,
     /// Monitors), kept current by the window's `BackgroundTaskMonitor`.
     @Committed private(set) var backgroundTasks: [UUID: [BackgroundTask]] = [:]
+    /// What each sandbox is (kernel, distribution, mount types), asked once.
+    @Committed private(set) var sandboxSystems: [String: SandboxSystem] = [:]
+    private var probingSandboxes: Set<String> = []
     /// Authoritative lifecycle phase per agent container — the single source of
     /// truth for creation, build, running, stopped, and rebuild state.
     @Committed private(set) var containerPhases: [AgentKind: ContainerPhase] = [:]
@@ -1127,6 +1130,17 @@ extension WorkspaceController {
     func backgroundTasks(_ id: UUID) -> [BackgroundTask] { backgroundTasks[id] ?? [] }
     func runningBackgroundTasks(_ id: UUID) -> Int { backgroundTasks[id]?.filter(\.isRunning).count ?? 0 }
 
+    /// Ask a running sandbox what it is (cached; one probe at a time).
+    func probeSandboxSystem(_ name: String) {
+        guard sandboxSystems[name] == nil, !probingSandboxes.contains(name) else { return }
+        probingSandboxes.insert(name)
+        Task {
+            let output = await SbxClient.shared.exec(inSandbox: name, script: SandboxSystem.probe)
+            probingSandboxes.remove(name)
+            if let output, let system = SandboxSystem(probeOutput: output) { sandboxSystems[name] = system }
+        }
+    }
+
     /// How `folder` is shared with `agent`'s sandbox: its real mounts once it
     /// exists, else what the workspace's mount policy will give it.
     func sandboxAccess(for folder: URL, agent: AgentKind) -> SandboxAccess {
@@ -1140,7 +1154,9 @@ extension WorkspaceController {
         } else {
             mounts = resolvedMounts().map { .init(path: $0.path.standardizedFileURL.path, readOnly: $0.readonly) }
         }
-        return SandboxAccess(folder: folder, sandbox: name, mounts: mounts, created: containers[agent] != nil)
+        if containers[agent]?.isRunning == true { probeSandboxSystem(name) }
+        return SandboxAccess(folder: folder, sandbox: name, mounts: mounts, created: containers[agent] != nil,
+                             system: sandboxSystems[name])
     }
 
     /// The tail of a background command's output file, read inside its sandbox.

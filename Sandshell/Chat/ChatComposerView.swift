@@ -72,7 +72,12 @@ final class ChatComposerView: NSView, NSTextViewDelegate {
         wantsLayer = true
         layer?.cornerRadius = 10
         layer?.borderWidth = 1
-        layer?.borderColor = NSColor.separatorColor.cgColor
+        // Lifted off the transcript: a near-white field with a soft shadow.
+        layer?.masksToBounds = false
+        layer?.shadowColor = NSColor.black.cgColor
+        layer?.shadowOpacity = 0.06
+        layer?.shadowRadius = 6
+        layer?.shadowOffset = CGSize(width: 0, height: -1)
 
         addSubview(chipRow)
         addSubview(scrollView)
@@ -90,6 +95,14 @@ final class ChatComposerView: NSView, NSTextViewDelegate {
     }
 
     required init?(coder: NSCoder) { fatalError() }
+
+    // Layer colors don't follow light/dark on their own; resolve them here.
+    override var wantsUpdateLayer: Bool { true }
+    override func updateLayer() {
+        let dark = effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        layer?.backgroundColor = (dark ? NSColor(white: 1, alpha: 0.07) : NSColor(white: 1, alpha: 0.96)).cgColor
+        layer?.borderColor = NSColor.separatorColor.cgColor
+    }
 
     func focus() { window?.makeFirstResponder(textView) }
 

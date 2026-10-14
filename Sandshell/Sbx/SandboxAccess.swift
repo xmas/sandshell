@@ -1,6 +1,52 @@
 import Foundation
 import SwiftUI
 
+/// The sandbox itself, as it reports from inside: a Linux virtual machine
+/// with its own kernel and distribution, sharing Mac folders over virtiofs.
+struct SandboxSystem: Equatable, Sendable {
+    var kernel: String          // "7.0.14"
+    var arch: String            // "aarch64"
+    var distribution: String?   // "Ubuntu 26.04.1 LTS"
+    var cpus: Int?
+    var memory: String?         // "8.9 GiB"
+    /// Mount point → filesystem type (e.g. "virtiofs"), for the shared folders.
+    var mountTypes: [String: String]
+
+    /// "Ubuntu 26.04" from "Ubuntu 26.04.1 LTS".
+    var shortDistribution: String? {
+        guard let d = distribution else { return nil }
+        let words = d.split(separator: " ")
+        guard words.count >= 2 else { return d }
+        let version = words[1].split(separator: ".").prefix(2).joined(separator: ".")
+        return "\(words[0]) \(version)"
+    }
+
+    /// The probe run inside the sandbox; prints key=value lines.
+    static let probe = #"echo "kernel=$(uname -r)"; echo "arch=$(uname -m)"; . /etc/os-release 2>/dev/null && echo "distro=$PRETTY_NAME"; echo "cpus=$(nproc 2>/dev/null)"; awk '/MemTotal/{print "memkb="$2}' /proc/meminfo; awk '$1=="host"{print "mount="$2" "$3}' /proc/mounts"#
+
+    init?(probeOutput: String) {
+        var values: [String: String] = [:]
+        var mounts: [String: String] = [:]
+        for line in probeOutput.split(separator: "\n") {
+            guard let eq = line.firstIndex(of: "=") else { continue }
+            let key = String(line[..<eq]), value = String(line[line.index(after: eq)...])
+            if key == "mount" {
+                let parts = value.split(separator: " ")
+                if parts.count == 2 { mounts[String(parts[0])] = String(parts[1]) }
+            } else {
+                values[key] = value
+            }
+        }
+        guard let kernel = values["kernel"], !kernel.isEmpty else { return nil }
+        self.kernel = kernel.split(separator: "-").first.map(String.init) ?? kernel
+        arch = values["arch"] ?? ""
+        distribution = values["distro"].flatMap { $0.isEmpty ? nil : $0 }
+        cpus = values["cpus"].flatMap(Int.init)
+        memory = values["memkb"].flatMap(Double.init).map { String(format: "%.1f GiB", $0 / 1_048_576) }
+        mountTypes = mounts
+    }
+}
+
 /// What a sandbox can do with a folder on this Mac, for the Files pane's
 /// reminder that these are shared files: which sandbox, read-write or
 /// read-only, how it's shared, and what else that sandbox can (and can't) see.
@@ -23,8 +69,30 @@ struct SandboxAccess: Equatable {
     /// The Mac side: "APFS" etc., and the volume's name.
     let hostFileSystem: String?
     let volumeName: String?
+    /// What the sandbox is (once it has been asked).
+    let system: SandboxSystem?
 
-    init(folder: URL, sandbox: String, mounts: [Mount], created: Bool) {
+    /// How the folder is mounted inside: "virtiofs" (the sandbox's word for it).
+    var mountType: String? { mount.flatMap { system?.mountTypes[$0.path] } }
+
+    /// The Files title strip: "Ubuntu 26.04 VM · Linux 7.0.14 · virtiofs read-write".
+    var titleSummary: String {
+        var parts: [String] = []
+        if let system {
+            parts.append("\(system.shortDistribution ?? "Linux") VM · Linux \(system.kernel)")
+        } else {
+            parts.append("Linux VM “\(sandbox)”")
+        }
+        switch mode {
+        case .readWrite: parts.append("\(mountType ?? "virtiofs") read-write")
+        case .readOnly: parts.append("\(mountType ?? "virtiofs") read-only")
+        case .notShared: parts.append("not shared")
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    init(folder: URL, sandbox: String, mounts: [Mount], created: Bool, system: SandboxSystem? = nil) {
+        self.system = system
         self.sandbox = sandbox
         self.mounts = mounts
         self.created = created
@@ -93,8 +161,15 @@ struct SandboxAccessView: View {
                     row("eye.slash", .secondary, "Not shared",
                         "This folder isn't mounted into the sandbox, so the agent can't see it.")
                 }
+                row("cpu", .secondary, "The sandbox",
+                    access.system.map { s in
+                        "A Linux virtual machine with its own kernel: Linux \(s.kernel) (\(s.arch))"
+                            + (s.distribution.map { ", \($0)" } ?? "")
+                            + (s.cpus.map { ", \($0) CPUs" } ?? "") + (s.memory.map { ", \($0) memory" } ?? "")
+                            + ". The agent runs inside it, not on your Mac."
+                    } ?? "A Linux virtual machine with its own kernel. The agent runs inside it, not on your Mac.")
                 row("externaldrive", .secondary, "How it's shared",
-                    "A virtiofs mount at the same path inside the sandbox — the same files, not a copy. "
+                    "A \(access.mountType ?? "virtiofs") mount at the same path inside the VM — the same files, not a copy. "
                     + "On your Mac: \(access.hostFileSystem ?? "local disk")"
                     + (access.volumeName.map { " volume “\($0)”" } ?? "") + ".")
             }

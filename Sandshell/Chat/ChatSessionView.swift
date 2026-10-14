@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import SwiftUI
 
 /// A native chat surface for one session, hosted in the detail pane in place
 /// of the terminal: transcript, permission prompt bar, composer, and a footer
@@ -9,6 +10,9 @@ final class ChatSessionView: NSView {
     let session: ChatSession
 
     private let transcript = ChatTranscriptView()
+    /// Until the first message: the whale from the icon, and where this runs.
+    private lazy var emptyState = NSHostingView(rootView: ChatEmptyState(
+        agent: session.title.capitalized, folder: (session.workdir as NSString).lastPathComponent))
     private let composer = ChatComposerView()
     private let permissionBar = NSStackView()
     private let permissionLabel = NSTextField(wrappingLabelWithString: "")
@@ -126,10 +130,15 @@ final class ChatSessionView: NSView {
         bottom.spacing = 8
         bottom.detachesHiddenViews = true
 
-        for v in [transcript, bottom, footer] as [NSView] {
+        for v in [transcript, emptyState, bottom, footer] as [NSView] {
             v.translatesAutoresizingMaskIntoConstraints = false
             addSubview(v)
         }
+        NSLayoutConstraint.activate([
+            emptyState.centerXAnchor.constraint(equalTo: transcript.centerXAnchor),
+            emptyState.centerYAnchor.constraint(equalTo: transcript.centerYAnchor),
+            emptyState.widthAnchor.constraint(lessThanOrEqualTo: transcript.widthAnchor, constant: -48),
+        ])
         NSLayoutConstraint.activate([
             transcript.topAnchor.constraint(equalTo: topAnchor),
             transcript.leadingAnchor.constraint(equalTo: leadingAnchor),
@@ -149,7 +158,10 @@ final class ChatSessionView: NSView {
     // MARK: Binding
 
     private func bind() {
-        session.$items.sink { [weak self] in self?.transcript.update($0) }.store(in: &bag)
+        session.$items.sink { [weak self] items in
+            self?.transcript.update(items)
+            self?.emptyState.isHidden = !items.isEmpty
+        }.store(in: &bag)
         session.$permission.sink { [weak self] in self?.showPermission($0) }.store(in: &bag)
         session.$phase.sink { [weak self] in self?.showPhase($0) }.store(in: &bag)
         session.$usage.sink { [weak self] in self?.showUsage($0) }.store(in: &bag)
@@ -245,5 +257,32 @@ final class ChatSessionView: NSView {
 
     @objc private func modelChanged() {
         if let id = modelPopup.selectedItem?.representedObject as? String { session.setModel(id) }
+    }
+}
+
+/// An empty chat: the app's whale, faded, over what to do next.
+private struct ChatEmptyState: View {
+    let agent: String
+    let folder: String
+
+    var body: some View {
+        VStack(spacing: 14) {
+            Image(nsImage: NSWorkspace.shared.icon(forFile: Bundle.main.bundlePath))
+                .resizable()
+                .interpolation(.high)
+                .frame(width: 132, height: 132)
+                .opacity(0.9)
+                .shadow(color: .black.opacity(0.08), radius: 10, y: 4)
+            Text("What should \(agent) work on?")
+                .font(.title3.weight(.medium))
+                .foregroundStyle(.secondary)
+            Text("It works in \(folder), inside its sandbox. Type / for commands, @ to mention a file, or drop files here.")
+                .font(.callout)
+                .foregroundStyle(.tertiary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 360)
+        }
+        .allowsHitTesting(false)
+        .accessibilityElement(children: .combine)
     }
 }

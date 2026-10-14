@@ -375,6 +375,10 @@ final class TerminalStackController: NSViewController {
     private let titleLine = NSView()
     /// Claude model/effort choosers + context/tokens/cost, trailing edge of the title strip.
     private let claudeStats = ClaudeStatsView()
+    /// Over an unfocused pane (when split): a translucent wash of the background.
+    private let dimOverlay = PassThroughView()
+    /// Sandbox · folder · branch chips (replaces the plain title for sessions).
+    private let contextBar = SessionContextBar()
     /// "2 running" — the session's background tasks; opens their list.
     private let backgroundPill = NSButton()
     private var backgroundPopover: NSPopover?
@@ -465,13 +469,18 @@ final class TerminalStackController: NSViewController {
             filesPane = files
         }
         guard let surface = files.view.superview else { return }
-        let (url, title) = target.resolve(in: controller)
+        let (url, _) = target.resolve(in: controller)
         let agent = target.session.flatMap { controller.session(id: $0)?.containerAgentKind } ?? controller.primaryAgent
-        files.setRoot(url, access: controller.sandboxAccess(for: url, agent: agent))
+        let access = controller.sandboxAccess(for: url, agent: agent)
+        files.setRoot(url, access: access)
         hideHostContents(except: surface)
         surface.isHidden = false
         activeSessionID = nil
-        titleLabel.stringValue = "Files — \(title)"
+        // Where these files are and what they're shared with — not the session's name.
+        titleLabel.stringValue = "\(shortHome(url.path)) — \(access.titleSummary)"
+        titleLabel.isHidden = false
+        contextBar.isHidden = true
+        titleLabel.toolTip = "These files are shared with sandbox “\(access.sandbox)” — see the Sandbox line under the file list"
         backgroundPill.isHidden = true
         filesPaneButton.isHidden = true
         claudeStats.isHidden = true
@@ -510,15 +519,15 @@ final class TerminalStackController: NSViewController {
         }
     }
 
+    /// With several panes, the ones not in focus are dimmed slightly (no ring).
     private func updateFocusRing() {
         guard isViewLoaded else { return }
         let c = controller.theme.colors
-        let ring = showsFocusRing && isFocused
-        frameView.layer?.borderColor = (ring ? NSColor.controlAccentColor : c.border).cgColor
-        frameView.layer?.borderWidth = ring ? 2 : 1
-        // An empty pane has no frame showing: ring the pane itself.
-        view.layer?.borderWidth = ring && frameView.isHidden ? 2 : 0
-        view.layer?.borderColor = NSColor.controlAccentColor.withAlphaComponent(0.7).cgColor
+        frameView.layer?.borderColor = c.border.cgColor
+        frameView.layer?.borderWidth = 1
+        view.layer?.borderWidth = 0
+        dimOverlay.layer?.backgroundColor = c.termBg.withAlphaComponent(0.4).cgColor
+        dimOverlay.isHidden = !(showsFocusRing && !isFocused)
     }
 
     /// Hide everything in this pane's host except `keep`.
@@ -642,6 +651,10 @@ final class TerminalStackController: NSViewController {
         claudeStats.onModelPicked = { [weak self] id in self?.modelPicked(id) }
         claudeStats.onEffortPicked = { [weak self] level in self?.effortPicked(level) }
         titleStrip.addSubview(claudeStats)
+        contextBar.translatesAutoresizingMaskIntoConstraints = false
+        contextBar.isHidden = true
+        contextBar.onShowFiles = { [weak self] in self?.onOpenFiles?() }
+        titleStrip.addSubview(contextBar)
         backgroundPill.translatesAutoresizingMaskIntoConstraints = false
         backgroundPill.bezelStyle = .inline
         backgroundPill.controlSize = .small
@@ -758,6 +771,11 @@ final class TerminalStackController: NSViewController {
             titleStrip.trailingAnchor.constraint(equalTo: frameView.trailingAnchor),
             titleStrip.heightAnchor.constraint(equalToConstant: 30),
             titleLabel.leadingAnchor.constraint(equalTo: titleStrip.leadingAnchor, constant: 14),
+            contextBar.leadingAnchor.constraint(equalTo: titleStrip.leadingAnchor, constant: 10),
+            contextBar.centerYAnchor.constraint(equalTo: titleStrip.centerYAnchor),
+            contextBar.trailingAnchor.constraint(lessThanOrEqualTo: backgroundPill.leadingAnchor, constant: -10),
+            contextBar.trailingAnchor.constraint(lessThanOrEqualTo: claudeStats.leadingAnchor, constant: -10),
+            contextBar.trailingAnchor.constraint(lessThanOrEqualTo: paneControls.leadingAnchor, constant: -10),
             titleLabel.centerYAnchor.constraint(equalTo: titleStrip.centerYAnchor),
             paneControls.trailingAnchor.constraint(equalTo: titleStrip.trailingAnchor, constant: -12),
             paneControls.centerYAnchor.constraint(equalTo: titleStrip.centerYAnchor),
@@ -778,6 +796,17 @@ final class TerminalStackController: NSViewController {
 
             statusStack.centerXAnchor.constraint(equalTo: frameView.centerXAnchor),
             statusStack.centerYAnchor.constraint(equalTo: container.centerYAnchor),
+        ])
+        // Topmost: dims the pane while another one has focus (clicks pass through).
+        dimOverlay.wantsLayer = true
+        dimOverlay.isHidden = true
+        dimOverlay.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(dimOverlay)
+        NSLayoutConstraint.activate([
+            dimOverlay.topAnchor.constraint(equalTo: container.topAnchor),
+            dimOverlay.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+            dimOverlay.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            dimOverlay.trailingAnchor.constraint(equalTo: container.trailingAnchor),
         ])
         self.view = container
         applyTheme()
@@ -823,6 +852,14 @@ final class TerminalStackController: NSViewController {
             .store(in: &cancellables)
         controller.$backgroundTasks.dropFirst().sink { [weak self] _ in self?.updateBackgroundPill() }
             .store(in: &cancellables)
+        // The sandbox answered what it is: refresh a Files pane's title and line.
+        controller.$sandboxSystems.dropFirst().sink { [weak self] _ in
+            guard let self else { return }
+            if self.shownFiles != nil { return self.refresh() }
+            if let id = self.activeSessionID, let session = self.controller.session(id: id) {
+                self.configureHeader(session)
+            }
+        }.store(in: &cancellables)
         // A tapped "background task finished" notification opens the list.
         NotificationCenter.default.publisher(for: NotificationManager.showBackgroundTasks)
             .sink { [weak self] note in
@@ -864,6 +901,7 @@ final class TerminalStackController: NSViewController {
         claudeStats.applyTheme(c)
         kitBanner.applyTheme(c)
         for b in [closePaneButton, filesPaneButton, splitRightButton, splitDownButton] { b.contentTintColor = c.termDim }
+        contextBar.applyTheme(c)
         updateFocusRing()
         headerName.textColor = c.text
         sidebarToggle.contentTintColor = c.text2
@@ -1076,6 +1114,13 @@ final class TerminalStackController: NSViewController {
         headerSub.stringValue = "\(container) · \(shortHome(session.workdir))"
         let program = session.agent == .shell ? "bash" : session.agent.rawValue
         titleLabel.stringValue = "\(program) — \(container)" + (session.isChat ? " · chat (ACP)" : "")
+        // The strip shows where the session runs: sandbox, folder, branch.
+        let folder = URL(fileURLWithPath: session.workdir)
+        contextBar.update(folder: folder,
+                          access: controller.sandboxAccess(for: folder, agent: session.containerAgentKind))
+        contextBar.toolTip = titleLabel.stringValue
+        contextBar.isHidden = false
+        titleLabel.isHidden = true
         updateClaudeStats(session.id)
         updateBackgroundPill()
         filesPaneButton.isHidden = false
@@ -1460,6 +1505,7 @@ final class TerminalStackController: NSViewController {
     /// `sbx exec` (libghostty closes the PTY on surface teardown) and removes its
     /// temp launch script. Without this, closing a window leaks the scripts.
     func teardown() {
+        contextBar.stop()
         if let m = pasteEventMonitor { NSEvent.removeMonitor(m); pasteEventMonitor = nil }
         for wc in searchWindows.values { wc.close() }
         searchWindows.removeAll()
@@ -1784,4 +1830,9 @@ private final class FilesSurfaceView: NSView {
     required init?(coder: NSCoder) { fatalError() }
     override var wantsUpdateLayer: Bool { true }
     override func updateLayer() { layer?.backgroundColor = NSColor.textBackgroundColor.cgColor }
+}
+
+/// Draws but never takes clicks (the pane's dimming wash).
+private final class PassThroughView: NSView {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }

@@ -87,7 +87,10 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
         controller.$selection.sink { [weak self] sel in self?.selectionChanged(sel) }.store(in: &cancellables)
         // Clicking anywhere in a pane focuses it.
         clickMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
-            guard let self, event.window === self.view.window else { return event }
+            guard let self, let window = self.view.window, event.window === window else { return event }
+            // The toolbar/titlebar is its own area (panes extend up under it):
+            // a click there never moves pane focus.
+            guard window.contentLayoutRect.contains(event.locationInWindow) else { return event }
             let point = self.view.convert(event.locationInWindow, from: nil)
             if let pane = self.panes.first(where: { $0.view.convert($0.view.bounds, to: self.view).contains(point) }),
                pane !== self.focused {

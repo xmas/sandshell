@@ -21,7 +21,7 @@ struct FilesTarget: Codable, Equatable {
 /// window's trailing edge (following the active session), or hosted in a
 /// split pane (`FilesTarget`).
 @MainActor
-final class FilesPaneController: NSSplitViewController {
+final class FilesPaneController: NSViewController, NSSplitViewDelegate {
     let tree = FileTreeController()
     let editor = FileEditorController()
     /// Narrower minimums for a split pane (the inspector has room to spare).
@@ -33,6 +33,17 @@ final class FilesPaneController: NSSplitViewController {
         set { tree.onAddToChat = newValue }
     }
 
+    /// A plain, frame-based split: dragging its divider moves only its own two
+    /// sides. (A nested NSSplitViewController's Auto Layout drag pushed every
+    /// split in the window around, the sidebar included.)
+    private let split = NSSplitView()
+    private var placedDivider = false
+    private var treeMin: CGFloat { compact ? 170 : 180 }
+    private var editorMin: CGFloat { compact ? 150 : 280 }
+    private static let treeMax: CGFloat = 420
+    /// The last tree width the user dragged to: where new Files panes start.
+    private var widthKey: String { compact ? "filesPaneTreeWidth" : "filesTreeWidth" }
+
     init(compact: Bool = false) {
         self.compact = compact
         super.init(nibName: nil, bundle: nil)
@@ -40,24 +51,56 @@ final class FilesPaneController: NSSplitViewController {
 
     @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
 
+    override func loadView() {
+        split.isVertical = true
+        split.dividerStyle = .thin
+        split.delegate = self
+        addChild(tree)
+        addChild(editor)
+        split.addArrangedSubview(tree.view)
+        split.addArrangedSubview(editor.view)
+        view = split
+    }
+
     override func viewDidLoad() {
         super.viewDidLoad()
-        splitView.isVertical = true
-        splitView.dividerStyle = .thin
-        splitView.autosaveName = compact ? "SandshellFilesPaneSplit" : "SandshellFilesSplit"
-        let treeItem = NSSplitViewItem(viewController: tree)
-        treeItem.minimumThickness = compact ? 170 : 180
-        treeItem.maximumThickness = 420
-        treeItem.canCollapse = true
-        treeItem.holdingPriority = .init(260)
-        let editorItem = NSSplitViewItem(viewController: editor)
-        editorItem.minimumThickness = compact ? 150 : 280
-        addSplitViewItem(treeItem)
-        addSplitViewItem(editorItem)
         tree.onOpen = { [weak self] url in self?.editor.open(url) }
         tree.onOpenAtLine = { [weak self] url, line, query in self?.editor.open(url, line: line, highlight: query) }
         tree.onGitStatus = { [weak self] status in self?.editor.updateGit(status) }
         tree.onFilesChanged = { [weak self] in self?.editor.filesChangedOnDisk() }
+    }
+
+    override func viewDidLayout() {
+        super.viewDidLayout()
+        guard !placedDivider, split.bounds.width > treeMin + editorMin else { return }
+        placedDivider = true
+        let saved = CGFloat(UserDefaults.standard.double(forKey: widthKey))
+        split.setPosition(clampTree(saved > 0 ? saved : 220), ofDividerAt: 0)
+    }
+
+    private func clampTree(_ width: CGFloat) -> CGFloat {
+        max(treeMin, min(width, Self.treeMax, split.bounds.width - editorMin - split.dividerThickness))
+    }
+
+    // MARK: NSSplitViewDelegate
+
+    func splitView(_ splitView: NSSplitView, constrainMinCoordinate proposed: CGFloat, ofSubviewAt index: Int) -> CGFloat {
+        treeMin
+    }
+
+    func splitView(_ splitView: NSSplitView, constrainMaxCoordinate proposed: CGFloat, ofSubviewAt index: Int) -> CGFloat {
+        min(Self.treeMax, splitView.bounds.width - editorMin - splitView.dividerThickness)
+    }
+
+    /// When the pane itself resizes, the editor takes the change; the tree keeps its width.
+    func splitView(_ splitView: NSSplitView, shouldAdjustSizeOfSubview view: NSView) -> Bool {
+        view !== tree.view
+    }
+
+    func splitViewDidResizeSubviews(_ notification: Notification) {
+        // Only the user's drags (AppKit tags them with the divider index) set the default.
+        guard placedDivider, notification.userInfo?["NSSplitViewDividerIndex"] != nil else { return }
+        UserDefaults.standard.set(Double(tree.view.frame.width), forKey: widthKey)
     }
 
     /// Show `folder` (nil = nothing).

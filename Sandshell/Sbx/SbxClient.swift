@@ -651,6 +651,13 @@ actor SbxClient {
 
     // MARK: - In-sandbox reads
 
+    /// Run a short shell script inside a running sandbox; nil if it fails.
+    func exec(inSandbox name: String, script: String) async -> String? {
+        guard let out = try? await run(["exec", name, "sh", "-c", script], routine: true, timeout: 20), out.ok
+        else { return nil }
+        return out.stdout
+    }
+
     /// Read a file from inside a running sandbox (`sbx exec <name> cat <path>`).
     /// Routine (not logged per call, bounded timeout) — used for polling the kit
     /// startup log. Throws if the sandbox isn't running or the file is missing.
