@@ -1,6 +1,13 @@
 import Foundation
 import SQLite3
 
+/// How strongly a search query matched a conversation or session — lower ranks
+/// first: the title beats the folder, which beats a hit in the body text.
+enum MatchTier: Int, Comparable, Sendable {
+    case title, folder, body
+    static func < (a: MatchTier, b: MatchTier) -> Bool { a.rawValue < b.rawValue }
+}
+
 /// SQLite-backed cache for agent conversation metadata. Stores `searchText`
 /// on disk rather than in-process RAM, and avoids re-parsing transcript files
 /// whose mtime hasn't changed since the last scan.
@@ -45,8 +52,17 @@ final class HistoryCache: @unchecked Sendable {
         q.sync { _upsert(url: url, mtime: mtime, record: record, searchText: searchText) }
     }
 
-    /// Returns URL paths of records whose title, cwd, or full text matches `query`.
-    func search(query: String) -> [String] {
+    /// One ranked hit: the transcript path, its best tier, and (for body hits)
+    /// the text around the first occurrence.
+    struct Match: Sendable {
+        let path: String
+        let tier: MatchTier
+        let snippet: String?
+    }
+
+    /// Records whose title, cwd, or full text contains `query` (substring,
+    /// case-insensitive), best tier first, then newest.
+    func search(query: String) -> [Match] {
         q.sync { _search(query: query) }
     }
 
@@ -71,6 +87,18 @@ final class HistoryCache: @unchecked Sendable {
         """
         var err: UnsafeMutablePointer<Int8>?
         sqlite3_exec(db, sql, nil, nil, &err)
+        // v2 stores search_text in its original case (for display snippets);
+        // drop v1's lowercased rows so they're re-parsed on the next scan.
+        if userVersion() < 2 {
+            sqlite3_exec(db, "DELETE FROM records; PRAGMA user_version = 2;", nil, nil, &err)
+        }
+    }
+
+    private func userVersion() -> Int32 {
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, "PRAGMA user_version", -1, &stmt, nil) == SQLITE_OK else { return 0 }
+        defer { sqlite3_finalize(stmt) }
+        return sqlite3_step(stmt) == SQLITE_ROW ? sqlite3_column_int(stmt, 0) : 0
     }
 
     // MARK: - Queries
@@ -128,22 +156,62 @@ final class HistoryCache: @unchecked Sendable {
         sqlite3_step(stmt)
     }
 
-    private func _search(query: String) -> [String] {
-        let pattern = "%" + query.lowercased() + "%"
+    private func _search(query: String) -> [Match] {
+        let needle = query.lowercased()
+        // LIKE is already ASCII case-insensitive; escape its wildcards so a
+        // literal `%`, `_` or `\` in the query matches itself.
+        let escaped = needle.replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "%", with: "\\%")
+            .replacingOccurrences(of: "_", with: "\\_")
         let sql = """
-            SELECT url FROM records
-            WHERE lower(COALESCE(search_text, '')) LIKE ?1
-               OR lower(COALESCE(title, ''))       LIKE ?1
-               OR lower(COALESCE(cwd, ''))         LIKE ?1
+            SELECT url, tier,
+                   CASE WHEN tier = 2 THEN instr(lower(search_text), ?2) END AS pos,
+                   CASE WHEN tier = 2 THEN substr(search_text,
+                        max(1, instr(lower(search_text), ?2) - \(Self.snippetLead)), \(Self.snippetLength)) END
+            FROM (
+                SELECT url, recorded_date, search_text,
+                       CASE WHEN COALESCE(title, '') LIKE ?1 ESCAPE '\\' THEN 0
+                            WHEN COALESCE(cwd, '')   LIKE ?1 ESCAPE '\\' THEN 1
+                            ELSE 2 END AS tier
+                FROM records
+                WHERE COALESCE(title, '')       LIKE ?1 ESCAPE '\\'
+                   OR COALESCE(cwd, '')         LIKE ?1 ESCAPE '\\'
+                   OR COALESCE(search_text, '') LIKE ?1 ESCAPE '\\'
+            )
+            ORDER BY tier, recorded_date DESC
         """
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
         defer { sqlite3_finalize(stmt) }
-        sqlite3_bind_text(stmt, 1, pattern, -1, transient)
-        var urls: [String] = []
+        sqlite3_bind_text(stmt, 1, "%" + escaped + "%", -1, transient)
+        sqlite3_bind_text(stmt, 2, needle, -1, transient)
+        var matches: [Match] = []
         while sqlite3_step(stmt) == SQLITE_ROW {
-            if let ptr = sqlite3_column_text(stmt, 0) { urls.append(String(cString: ptr)) }
+            guard let ptr = sqlite3_column_text(stmt, 0) else { continue }
+            let tier = MatchTier(rawValue: Int(sqlite3_column_int(stmt, 1))) ?? .body
+            var snippet: String?
+            if sqlite3_column_type(stmt, 3) != SQLITE_NULL, let text = sqlite3_column_text(stmt, 3) {
+                let pos = Int(sqlite3_column_int(stmt, 2))
+                snippet = Self.tidySnippet(String(cString: text), truncatedStart: pos > Self.snippetLead + 1)
+            }
+            matches.append(Match(path: String(cString: ptr), tier: tier, snippet: snippet))
         }
-        return urls
+        return matches
+    }
+
+    /// Characters of context kept before the match, and the snippet's length.
+    private static let snippetLead = 50
+    private static let snippetLength = 220
+
+    /// One line of display text: whitespace runs collapsed, a partial leading
+    /// word dropped, and ellipses where the text was cut.
+    static func tidySnippet(_ raw: String, truncatedStart: Bool) -> String {
+        var text = raw.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+        if truncatedStart, let space = text.firstIndex(of: " "),
+           text.distance(from: text.startIndex, to: space) < 20 {
+            text = String(text[text.index(after: space)...])
+        }
+        let cutEnd = raw.count >= snippetLength
+        return (truncatedStart ? "…" : "") + text + (cutEnd ? "…" : "")
     }
 }

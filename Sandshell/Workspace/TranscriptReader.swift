@@ -334,7 +334,7 @@ enum TranscriptReader {
         }
         guard count > 0 else { return nil }
         return ConversationSummary(firstPrompt: first, cwd: cwd, messageCount: count,
-                                   searchText: text.lowercased(), sessionID: nil)
+                                   searchText: text, sessionID: nil)
     }
 
     private static func claudeMessages(at url: URL) -> [(role: String, text: String)] {
@@ -419,7 +419,7 @@ enum TranscriptReader {
         guard meta.messageCount > 0 else { return nil }
         return ConversationSummary(firstPrompt: meta.firstPrompt, cwd: meta.cwd,
                                    messageCount: meta.messageCount,
-                                   searchText: meta.searchText.lowercased(),
+                                   searchText: meta.searchText,
                                    sessionID: meta.sessionID)
     }
 

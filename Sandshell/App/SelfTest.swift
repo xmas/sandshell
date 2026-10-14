@@ -92,6 +92,7 @@ enum SelfTest {
         case "files-relaunch": await filesRelaunch(window)
         case "kits": await kits(window)
         case "agents": await agents(window)
+        case "search": await search(window)
         default: log("unknown self-test \(requested ?? "")")
         }
         log(failures == 0 ? "ALL PASSED" : "\(failures) FAILED")
@@ -118,7 +119,11 @@ enum SelfTest {
     }
 
     private static func snapshot(_ window: MainWindowController, _ name: String) {
-        guard let view = window.window?.contentView else { return }
+        snapshot(window.window, name)
+    }
+
+    private static func snapshot(_ window: NSWindow?, _ name: String) {
+        guard let view = window?.contentView else { return }
         view.layoutSubtreeIfNeeded()
         guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
         view.cacheDisplay(in: view.bounds, to: rep)   // (layer contents, regardless of window alpha)
@@ -683,6 +688,180 @@ enum SelfTest {
         view.cacheDisplay(in: view.bounds, to: rep)
         try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: out + "/kits-pane-drift.png"))
         log("snapshot kits-pane-drift.png")
+    }
+
+    // MARK: Search
+
+    /// Expects the workspace's state.json to hold (most recent first) a claude
+    /// chat "Zebra chat" resuming transcript `zebraID`, a shell "deploy notes"
+    /// and a shell "alpha build". Past conversations are fixtures in a fake
+    /// home under the output dir, with a private search cache.
+    static let zebraID = "11111111-1111-4111-8111-111111111111"
+
+    private static func search(_ window: MainWindowController) async {
+        guard let ws = window.workspaceController, let tree = window.paneTree else { return log("no window") }
+        let root = ws.rootURL.path
+        let sessions = ws.orderedSessions
+        guard sessions.map(\.name) == ["Zebra chat", "deploy notes", "alpha build"] else {
+            return log("unexpected sessions \(sessions.map(\.name))")
+        }
+        let (chat, deploy, alpha) = (sessions[0], sessions[1], sessions[2])
+        check(chat.isChat && chat.transcriptID == zebraID, "chat session resumes the zebra transcript")
+
+        // Cache: tiers, original-case snippets, LIKE wildcards taken literally.
+        let base = URL(fileURLWithPath: out).appendingPathComponent("search-fixtures")
+        try? FileManager.default.removeItem(at: base)
+        if let cache = HistoryCache(directory: base.appendingPathComponent("unit-cache")) {
+            func put(_ path: String, _ title: String, _ cwd: String, _ text: String) {
+                cache.upsert(url: URL(fileURLWithPath: path), mtime: Date(),
+                             record: .init(id: path, agent: .claude, title: title, cwd: cwd,
+                                           messageCount: 1, date: Date(), sessionID: nil),
+                             searchText: text)
+            }
+            put("/u/title", "Alpha plan", "/w", "nothing")
+            put("/u/cwd", "plan", "/w/alpha", "nothing")
+            put("/u/body", "plan", "/w", String(repeating: "filler words here ", count: 20) + "the Alpha release")
+            put("/u/pct", "sale", "/w", "save 50% now")
+            put("/u/plain", "sale", "/w", "save 500 now")
+            let hits = cache.search(query: "alpha")
+            check(hits.map(\.path) == ["/u/title", "/u/cwd", "/u/body"]
+                    && hits.map(\.tier) == [.title, .folder, .body], "cache ranks title > folder > body")
+            let snip = hits.last?.snippet ?? ""
+            log("body snippet: \(snip)")
+            check(snip.contains("Alpha release") && snip.hasPrefix("…"), "body snippet keeps case and marks the cut")
+            check(cache.search(query: "0%").map(\.path) == ["/u/pct"], "'%' in a query is literal")
+        } else {
+            check(false, "open unit cache")
+        }
+
+        // Fixture transcripts (Claude JSONL) in a fake home.
+        let home = base.appendingPathComponent("home")
+        let project = home.appendingPathComponent(".claude/projects/fixtures")
+        try? FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
+        let ids = (title: "22222222-2222-4222-8222-222222222222", body: "33333333-3333-4333-8333-333333333333",
+                   elsewhere: "44444444-4444-4444-8444-444444444444", folder: "55555555-5555-4555-8555-555555555555")
+        func transcript(_ id: String, cwd: String, prompt: String, reply: String, age: TimeInterval) {
+            func line(_ obj: [String: Any]) -> String {
+                String(data: try! JSONSerialization.data(withJSONObject: obj), encoding: .utf8)!
+            }
+            let text = [
+                line(["type": "user", "cwd": cwd, "message": ["role": "user", "content": prompt]]),
+                line(["type": "assistant", "cwd": cwd,
+                      "message": ["role": "assistant", "content": [["type": "text", "text": reply]]]]),
+            ].joined(separator: "\n") + "\n"
+            let url = project.appendingPathComponent(id + ".jsonl")
+            try? text.write(to: url, atomically: true, encoding: .utf8)
+            try? FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-age)],
+                                                   ofItemAtPath: url.path)
+        }
+        transcript(zebraID, cwd: root, prompt: "Plan the zebra migration",
+                   reply: "We should feed the quokka first, then move the herd.", age: 400)
+        transcript(ids.title, cwd: root, prompt: "Fix alpha bug in the parser", reply: "Done.", age: 300)
+        transcript(ids.folder, cwd: root + "/alpha-dir", prompt: "Tidy up imports", reply: "Done.", age: 200)
+        transcript(ids.body, cwd: root + "/sub", prompt: "Refactor the lexer",
+                   reply: "Refactored it, and updated the Alpha release notes to match.", age: 100)
+        transcript(ids.elsewhere, cwd: "/private/tmp/sandshell-search-elsewhere",
+                   prompt: "alpha somewhere else", reply: "ok", age: 50)
+
+        let wc = SearchWindowController(workspace: ws, mainWindow: window.window, home: home,
+                                        cacheDirectory: base.appendingPathComponent("cache"))
+        if let w = wc.window {
+            w.alphaValue = 0
+            w.ignoresMouseEvents = true
+            w.orderBack(nil)
+        }
+        let store = wc.store
+        store.reload()
+        check(await until(20) { !store.history.loading && store.history.records.count == 4 },
+              "past conversations scanned (4 in this workspace, the one elsewhere left out): \(store.history.records.count)")
+        func titles() -> [String] { store.results.map { ($0.isLive ? "live:" : "past:") + $0.title } }
+        func settle(_ q: String) async -> Bool {
+            store.query = q
+            return await until(10) { store.matchedQuery == q && !store.busy }
+        }
+
+        check(await settle(""), "empty query settles")
+        log("all: \(titles())")
+        check(titles() == ["live:Zebra chat", "live:deploy notes", "live:alpha build",
+                           "past:Refactor the lexer", "past:Tidy up imports", "past:Fix alpha bug in the parser"],
+              "empty query: open sessions in sidebar order, then past newest first; the open chat's own transcript isn't listed twice")
+        snapshot(wc.window, "search-all")
+
+        check(await settle("alpha"), "query 'alpha' settles")
+        log("alpha: \(titles()) tiers \(store.results.map { $0.tier.map { "\($0)" } ?? "-" })")
+        check(titles() == ["live:alpha build", "past:Fix alpha bug in the parser",
+                           "past:Tidy up imports", "past:Refactor the lexer"],
+              "'alpha': open first, then past by title > folder > body (despite body being newest)")
+        check(store.results.last?.snippet?.contains("Alpha release") == true, "body match carries its snippet")
+        check(store.selectedID == store.results.first?.id, "top hit selected")
+        await wait(0.8)
+        snapshot(wc.window, "search-alpha")
+
+        store.moveSelection(1)
+        check(store.selected?.title == "Fix alpha bug in the parser", "↓ moves to the next result")
+        store.moveSelection(-5)
+        check(store.selected?.title == "alpha build", "↑ clamps at the first result")
+
+        check(await settle("quokka"), "query 'quokka' settles")
+        log("quokka: \(titles())")
+        check(titles() == ["live:Zebra chat"] && store.results.first?.tier == .body
+                && store.results.first?.snippet?.contains("quokka") == true,
+              "a body hit in an open chat's transcript ranks the chat (live), not a duplicate past entry")
+
+        check(await settle("deploy"), "query 'deploy' settles")
+        check(titles() == ["live:deploy notes"], "live sessions match by name")
+
+        // Live result: selecting one already shown in another pane focuses that pane.
+        func focusedIndex() -> Int? { tree.panes.firstIndex { $0 === tree.focused } }
+        func live(_ id: UUID) -> Bool { tree.surfaces.terminals[id] != nil }
+        ws.selection = .session(alpha.id)
+        check(await until(120) { live(alpha.id) }, "alpha shell launches")
+        window.splitRight()
+        await wait()
+        ws.selection = .session(deploy.id)
+        check(await until(90) { live(deploy.id) }, "deploy shell launches in the second pane")
+        check(focusedIndex() == 1, "second pane focused")
+        check(await settle("alpha"), "query 'alpha' again")
+        if let hit = store.results.first(where: { $0.isLive }) {
+            wc.open(hit)
+            await wait()
+            check(ws.selection == .session(alpha.id) && focusedIndex() == 0
+                    && tree.panes.map(\.shownSession) == [alpha.id, deploy.id],
+                  "opening a live result focuses the pane already showing it (no relaunch, no restore)")
+            check(ws.orderedSessions.count == 3, "no session created for a live result")
+            check(wc.window?.isVisible == false, "window closes after opening")
+        }
+        snapshot(window, "search-live-opened")
+
+        // Past result: restored through restoreSession, then selected. Done on a
+        // second, window-less workspace so selecting the restored Claude session
+        // doesn't launch it (its fixture transcript isn't in the real ~/.claude).
+        let otherRoot = base.appendingPathComponent("restore-ws")
+        let restoreID = "66666666-6666-4666-8666-666666666666"
+        transcript(restoreID, cwd: otherRoot.path, prompt: "Restore me please", reply: "Sure.", age: 10)
+        guard let ws2 = try? WorkspaceController.open(root: otherRoot) else { return check(false, "open restore-ws") }
+        let wc2 = SearchWindowController(workspace: ws2, mainWindow: nil, home: home,
+                                         cacheDirectory: base.appendingPathComponent("cache"))
+        let store2 = wc2.store
+        store2.reload()
+        check(await until(20) { !store2.history.loading && store2.history.records.map(\.id) == [restoreID] },
+              "the other workspace sees only its own past conversation")
+        store2.query = "restore"
+        check(await until(10) { store2.matchedQuery == "restore" && !store2.busy }, "query 'restore' settles")
+        if let hit = store2.results.first, !hit.isLive, hit.transcriptID == restoreID {
+            let before = ws2.orderedSessions.count
+            wc2.open(hit)
+            let restored = ws2.orderedSessions.first { $0.transcriptID == restoreID }
+            check(ws2.orderedSessions.count == before + 1 && restored != nil
+                    && ws2.selection == restored.map { .session($0.id) },
+                  "opening a past result restores it as a session and selects it")
+            check(restored?.workdir == otherRoot.path && restored?.name == "Restore me please",
+                  "restored into the conversation's cwd, named for it")
+            check(await until(5) { store2.results.map(\.isLive) == [true] },
+                  "the restored conversation now lists once, as open")
+        } else {
+            check(false, "past result for 'restore': \(store2.results.map(\.title))")
+        }
     }
 }
 #endif

@@ -75,6 +75,10 @@ enum MainMenu {
         let openQuickly = fileMenu.addItem(withTitle: "Open Quickly…", action: #selector(AppDelegate.openQuickly(_:)),
                                            keyEquivalent: "o")
         openQuickly.keyEquivalentModifierMask = [.command, .shift]
+        // ⇧⌘F: ⌘F is Find (terminal scrollback search, chat transcript, editor).
+        let search = fileMenu.addItem(withTitle: "Search Sessions…",
+                                      action: #selector(AppDelegate.showSearch(_:)), keyEquivalent: "f")
+        search.keyEquivalentModifierMask = [.command, .shift]
         fileMenu.addItem(withTitle: "Save", action: #selector(FileEditorController.saveDocument(_:)), keyEquivalent: "s")
         fileMenu.addItem(withTitle: "Welcome to Sandshell…",
                          action: #selector(AppDelegate.runFirstLaunchSetup(_:)), keyEquivalent: "")

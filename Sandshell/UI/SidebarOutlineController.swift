@@ -88,7 +88,7 @@ final class SidebarListController: NSViewController {
     private let rightBorder = NSView()
     private let footer = NSView()
     private let footerBorder = NSView()
-    private let historyButton = HoverButton()
+    private let searchButton = HoverButton()
     private let settingsButton = SidebarIconButton(
         symbolName: "gearshape",
         pointSize: 13,
@@ -113,6 +113,9 @@ final class SidebarListController: NSViewController {
     var onDropFiles: ((UUID, [URL]) -> Void)?
     /// "Open Files in Split" from a session row's context menu.
     var onOpenFilesInSplit: ((UUID) -> Void)?
+    /// Open the window's Search (footer button / "Search…" menu item); the
+    /// folder is where a restored conversation lands if its cwd has none.
+    var onShowSearch: ((UUID?) -> Void)?
 
     /// True while a container is building/rebuilding (drives the empty-state
     /// placeholder — session creation itself is never gated on this).
@@ -218,21 +221,22 @@ final class SidebarListController: NSViewController {
         newSessionButton.target = self
         newSessionButton.action = #selector(newSessionButtonClicked)
 
-        historyButton.title = "History"
-        historyButton.translatesAutoresizingMaskIntoConstraints = false
-        historyButton.isBordered = false
-        historyButton.wantsLayer = true
-        historyButton.layer?.cornerRadius = 9
-        historyButton.layer?.masksToBounds = true
-        historyButton.image = NSImage(systemSymbolName: "clock.arrow.circlepath", accessibilityDescription: nil)
-        historyButton.imagePosition = .imageLeading
-        historyButton.imageHugsTitle = true        // keep icon + text together, centered
-        historyButton.alignment = .center
-        historyButton.font = .systemFont(ofSize: 12, weight: .regular)
-        historyButton.target = self
-        historyButton.action = #selector(historyClicked)
+        searchButton.title = "Search"
+        searchButton.translatesAutoresizingMaskIntoConstraints = false
+        searchButton.isBordered = false
+        searchButton.wantsLayer = true
+        searchButton.layer?.cornerRadius = 9
+        searchButton.layer?.masksToBounds = true
+        searchButton.image = NSImage(systemSymbolName: "magnifyingglass", accessibilityDescription: nil)
+        searchButton.imagePosition = .imageLeading
+        searchButton.imageHugsTitle = true        // keep icon + text together, centered
+        searchButton.alignment = .center
+        searchButton.font = .systemFont(ofSize: 12, weight: .regular)
+        searchButton.target = self
+        searchButton.action = #selector(searchClicked)
+        searchButton.toolTip = "Search sessions and past conversations (⇧⌘F)"
 
-        // Per-root settings inspector lives behind a square gear next to History.
+        // Per-root settings inspector lives behind a square gear next to Search.
         // This custom control avoids NSButtonCell's image-only metrics so the
         // visible background and centered glyph stay optically square.
         settingsButton.translatesAutoresizingMaskIntoConstraints = false
@@ -286,7 +290,7 @@ final class SidebarListController: NSViewController {
         footer.addSubview(settingsButton)
         footer.addSubview(terminalButton)
         footer.addSubview(consoleButton)
-        footer.addSubview(historyButton)
+        footer.addSubview(searchButton)
         NSLayoutConstraint.activate([
             brandBox.widthAnchor.constraint(equalToConstant: 28),
             brandBox.heightAnchor.constraint(equalToConstant: 28),
@@ -329,7 +333,7 @@ final class SidebarListController: NSViewController {
             footerBorder.leadingAnchor.constraint(equalTo: footer.leadingAnchor),
             footerBorder.trailingAnchor.constraint(equalTo: footer.trailingAnchor),
             footerBorder.heightAnchor.constraint(equalToConstant: 1),
-            // Footer: a square gear (per-root settings) + a History button that
+            // Footer: a square gear (per-root settings) + a Search button that
             // fills the remaining width to the right edge. Both 34pt tall,
             // vertically centered in the footer.
             settingsButton.leadingAnchor.constraint(equalTo: footer.leadingAnchor, constant: 14),
@@ -344,10 +348,10 @@ final class SidebarListController: NSViewController {
             consoleButton.centerYAnchor.constraint(equalTo: settingsButton.centerYAnchor),
             consoleButton.widthAnchor.constraint(equalToConstant: 34),
             consoleButton.heightAnchor.constraint(equalToConstant: 34),
-            historyButton.leadingAnchor.constraint(equalTo: consoleButton.trailingAnchor, constant: 8),
-            historyButton.trailingAnchor.constraint(equalTo: footer.trailingAnchor, constant: -14),
-            historyButton.centerYAnchor.constraint(equalTo: settingsButton.centerYAnchor),
-            historyButton.heightAnchor.constraint(equalToConstant: 34),
+            searchButton.leadingAnchor.constraint(equalTo: consoleButton.trailingAnchor, constant: 8),
+            searchButton.trailingAnchor.constraint(equalTo: footer.trailingAnchor, constant: -14),
+            searchButton.centerYAnchor.constraint(equalTo: settingsButton.centerYAnchor),
+            searchButton.heightAnchor.constraint(equalToConstant: 34),
 
             rightBorder.topAnchor.constraint(equalTo: container.topAnchor),
             rightBorder.trailingAnchor.constraint(equalTo: container.trailingAnchor),
@@ -392,12 +396,12 @@ final class SidebarListController: NSViewController {
             b.restingBackgroundColor = resting
             b.hoverBackgroundColor = hover
         }
-        historyButton.contentTintColor = c.sidebarFg
-        historyButton.restingBackgroundColor = resting
-        historyButton.hoverBackgroundColor = hover
-        // Leading space widens the gap between the clock icon and the label.
-        historyButton.attributedTitle = NSAttributedString(
-            string: "  History",
+        searchButton.contentTintColor = c.sidebarFg
+        searchButton.restingBackgroundColor = resting
+        searchButton.hoverBackgroundColor = hover
+        // Leading space widens the gap between the magnifying-glass icon and the label.
+        searchButton.attributedTitle = NSAttributedString(
+            string: "  Search",
             attributes: [
                 .foregroundColor: c.sidebarFg,
                 .font: NSFont.systemFont(ofSize: 12, weight: .regular),
@@ -785,7 +789,7 @@ final class SidebarListController: NSViewController {
         statusDebugWindow?.show()
     }
 
-    /// Present the per-root settings inspector (gear next to History, and ⌘,) as a
+    /// Present the per-root settings inspector (gear next to Search, and ⌘,) as a
     /// native macOS sheet — a fixed-size SwiftUI view; Close or Esc dismisses it.
     /// No-op if a sheet is already up (so ⌘, doesn't stack inspectors).
     @objc func presentInspector() {
@@ -820,7 +824,7 @@ final class SidebarListController: NSViewController {
     /// Shared "+ New Session" menu content. The top items are actions —
     /// New Claude / New Codex / New Shell in the current context's folder,
     /// plus shells joining an agent's sandbox — then "In Folder ▸" for picking
-    /// (or adding) another working directory, then History.
+    /// (or adding) another working directory, then Search.
     private func newSessionMenuItems() -> [NSMenuItem] {
         var items: [NSMenuItem] = []
         let defaultFolder = currentContextFolderID()
@@ -837,11 +841,11 @@ final class SidebarListController: NSViewController {
         folders.submenu = folderSubmenu()
         items.append(folders)
         items.append(.separator())
-        let history = NSMenuItem(title: "History…", action: #selector(showHistoryFromMenu(_:)), keyEquivalent: "")
-        history.target = self
-        history.image = NSImage(systemSymbolName: "clock.arrow.circlepath", accessibilityDescription: nil)
-        history.representedObject = defaultFolder
-        items.append(history)
+        let search = NSMenuItem(title: "Search Sessions…", action: #selector(showSearchFromMenu(_:)), keyEquivalent: "")
+        search.target = self
+        search.image = NSImage(systemSymbolName: "magnifyingglass", accessibilityDescription: nil)
+        search.representedObject = defaultFolder
+        items.append(search)
         return items
     }
 
@@ -934,37 +938,13 @@ final class SidebarListController: NSViewController {
         }
     }
 
-    /// Open the searchable conversation-History browser as a sheet; selecting a
-    /// conversation restores it as a session.
-    @objc private func showHistoryFromMenu(_ sender: NSMenuItem) {
-        presentHistory(preferredFolder: sender.representedObject as? UUID)
+    /// Open the Search window (open sessions + restorable past conversations).
+    @objc private func showSearchFromMenu(_ sender: NSMenuItem) {
+        onShowSearch?(sender.representedObject as? UUID)
     }
 
-    /// History from the footer button (routes purely by the conversation's cwd).
-    @objc private func historyClicked() { presentHistory(preferredFolder: nil) }
-
-    private func presentHistory(preferredFolder: UUID?) {
-        let store = HistoryStore(home: controller.home, roots: controller.mountRoots)
-        var sheet: NSViewController?
-        let view = HistoryView(
-            theme: controller.theme,
-            store: store,
-            onOpen: { [weak self] record in
-                sheet?.dismiss(nil)
-                guard let self,
-                      let session = self.controller.restoreSession(record, into: preferredFolder)
-                else { return }
-                self.controller.selection = .session(session.id)
-                self.applySelectionToOutline()
-            },
-            onClose: { sheet?.dismiss(nil) })
-        let hosting = NSHostingController(rootView: view)
-        // Force a single appearance for the whole modal so its sidebar matches the
-        // rest (not the app's split light-sidebar/dark-detail mix).
-        hosting.view.appearance = NSAppearance(named: controller.theme.colors.isDark ? .darkAqua : .aqua)
-        sheet = hosting
-        presentAsSheet(hosting)
-    }
+    /// Search from the footer button (restores route purely by the conversation's cwd).
+    @objc private func searchClicked() { onShowSearch?(nil) }
 
     func closeSelectedSession() {
         if case let .session(id) = controller.selection { controller.closeSession(id) }
@@ -1630,7 +1610,7 @@ final class SidebarIconButton: NSControl {
     }
 }
 
-/// An `NSButton` with a resting/hover background swap (the footer History pill).
+/// An `NSButton` with a resting/hover background swap (the footer Search pill).
 final class HoverButton: NSButton {
     var restingBackgroundColor: NSColor = .clear {
         didSet { if !hovering { layer?.backgroundColor = restingBackgroundColor.cgColor } }

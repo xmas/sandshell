@@ -569,6 +569,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     case "n" where ctrl: app.newChat(nil); return true
                     case "n" where shift: app.duplicateWindow(nil); return true
                     case "n": app.newSession(nil); return true
+                    // ⇧⌘F (⌘F stays Find).
+                    case "F": app.showSearch(nil); return true
+                    case "f" where shift: app.showSearch(nil); return true
                     case "[", "{": app.selectPreviousSession(nil); return true
                     case "]", "}": app.selectNextSession(nil); return true
                     default: break
@@ -656,6 +659,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @MainActor @objc func newChat(_ sender: Any?) {
         let raw = (sender as? NSMenuItem)?.representedObject as? String
         activeController?.newChat(agent: raw.map(AgentKind.init(rawValue:)) ?? .claude)
+    }
+
+    /// ⇧⌘F — the Search window (sessions + past conversations). From an open
+    /// Search window, just refocus it (it belongs to its own workspace).
+    @MainActor @objc func showSearch(_ sender: Any?) {
+        if let search = NSApp.keyWindow?.windowController as? SearchWindowController {
+            search.show()
+            return
+        }
+        activeController?.showSearch()
     }
 
     /// ⌘N — new session in the current project with the same agent.

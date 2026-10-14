@@ -16,6 +16,8 @@ final class MainWindowController: NSWindowController {
     private var selectionObserver: AnyCancellable?
     private static let filesVisibleKey = "filesPaneVisible"
     private var detail: PaneTreeController?
+    /// This workspace's Search window (⇧⌘F), created on first use.
+    private var searchWindow: SearchWindowController?
     private var collapseObservation: NSKeyValueObservation?
     // Native-toolbar identity + live status, updated from the detail controller.
     private let toolbarBadge = AgentBadgeView(side: 26, fontSize: 11, radius: 8)
@@ -106,6 +108,7 @@ final class MainWindowController: NSWindowController {
             guard let s = self?.workspace?.session(id: id) else { return }
             self?.detail?.openFiles(FilesTarget(session: id, folder: s.workdir))
         }
+        sidebarVC.onShowSearch = { [weak self] folder in self?.showSearch(preferredFolder: folder) }
         sidebarVC.onDropFiles = { [weak self] id, urls in
             self?.workspace?.selection = .session(id)
             self?.detail?.dropFiles(urls, on: id)
@@ -320,6 +323,7 @@ final class MainWindowController: NSWindowController {
     var inspectorFiles: FilesPaneController? { filesPane }
     var workspaceController: WorkspaceController? { workspace }
     var sidebarList: SidebarListController? { sidebar }
+    var searchWindowController: SearchWindowController? { searchWindow }
     #endif
 
     // MARK: Panes (View ▸ Split Right / Split Down / Close Pane …)
@@ -393,6 +397,18 @@ final class MainWindowController: NSWindowController {
         }
         filesPane?.setRoot(folder)
     }
+
+    /// ⇧⌘F / sidebar footer / toolbar: search this workspace's open sessions and
+    /// the past conversations that can be restored into it.
+    func showSearch(preferredFolder: UUID? = nil) {
+        guard let workspace else { return }
+        let search = searchWindow ?? SearchWindowController(workspace: workspace, mainWindow: window)
+        searchWindow = search
+        search.preferredFolder = preferredFolder
+        search.show()
+    }
+
+    @objc func showSearchFromToolbar() { showSearch() }
 
     /// ⌘, — open the per-root settings inspector sheet (all settings live there).
     func showSettings() {
@@ -516,6 +532,7 @@ extension MainWindowController: NSWindowDelegate {
     /// scripts), close its Settings window, and let `AppDelegate` forget it.
     func windowWillClose(_ notification: Notification) {
         detail?.teardown()
+        searchWindow?.close()
         onClose?()
     }
 }
@@ -529,6 +546,7 @@ private extension NSToolbarItem.Identifier {
     static let restartSession = NSToolbarItem.Identifier("restartSession")
     static let chatToggle     = NSToolbarItem.Identifier("chatToggle")
     static let filesToggle    = NSToolbarItem.Identifier("filesToggle")
+    static let search         = NSToolbarItem.Identifier("search")
 }
 
 extension MainWindowController: NSToolbarDelegate {
@@ -537,11 +555,11 @@ extension MainWindowController: NSToolbarDelegate {
         // bezeled button that renders as a glass capsule (and can hold a focus
         // ring) on macOS 26+/SDK 27 builds.
         [.sidebarToggle, .identity, .flexibleSpace, .sessionStatus,
-         .chatToggle, .revealFolder, .stopSession, .restartSession, .filesToggle]
+         .chatToggle, .revealFolder, .stopSession, .restartSession, .search, .filesToggle]
     }
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [.sidebarToggle, .identity, .sessionStatus, .chatToggle, .filesToggle,
+        [.sidebarToggle, .identity, .sessionStatus, .chatToggle, .filesToggle, .search,
          .revealFolder, .stopSession, .restartSession, .flexibleSpace, .space]
     }
 
@@ -583,6 +601,15 @@ extension MainWindowController: NSToolbarDelegate {
             item.toolTip = "Show Files (⌥⌘0) — ⌥-click to open Files in a split"
             item.view = Self.plainToolbarButton(symbol: "sidebar.right", label: "Show Files",
                                                 target: self, action: #selector(toggleFilesFromToolbar))
+            return item
+        }
+        if itemIdentifier == .search {
+            let item = NSToolbarItem(itemIdentifier: .search)
+            item.label = "Search"
+            item.paletteLabel = "Search Sessions"
+            item.toolTip = "Search Sessions (⇧⌘F)"
+            item.view = Self.plainToolbarButton(symbol: "magnifyingglass", label: "Search Sessions",
+                                                target: self, action: #selector(showSearchFromToolbar))
             return item
         }
         if itemIdentifier == .sidebarToggle {

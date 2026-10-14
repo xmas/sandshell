@@ -1,6 +1,6 @@
 import Foundation
 
-/// One past agent conversation, surfaced in the History browser.
+/// One past agent conversation, surfaced in the Search window.
 struct ConversationRecord: Identifiable, Hashable {
     let id: String          // transcript UUID (= the agent session id)
     let agent: AgentKind
@@ -45,45 +45,38 @@ struct ConversationRecord: Identifiable, Hashable {
 }
 
 /// Loads + searches every available agent conversation (agent transcripts) for
-/// the History browser. Scans on a background task; publishes results on main.
+/// the Search window. Scans on a background task; publishes results on main.
 /// Full-text search is delegated to `HistoryCache` (SQLite), so `ConversationRecord`
 /// no longer holds a 60 KB `searchText` blob per entry.
 @MainActor
 final class HistoryStore: ObservableObject {
     @Published private(set) var records: [ConversationRecord] = []
     @Published private(set) var loading = false
-    @Published var query = ""
 
     private let home: URL
-    private let roots: [String]   // host paths the workspace mounts
+    let roots: [String]   // host paths the workspace mounts
     private let cache: HistoryCache?
 
-    init(home: URL, roots: [String]) {
+    /// `cacheDirectory` overrides the shared Application Support cache (self-tests).
+    init(home: URL, roots: [String], cacheDirectory: URL? = nil) {
         self.home = home
         self.roots = roots
-        let cacheDir = FileManager.default
+        let cacheDir = cacheDirectory ?? FileManager.default
             .urls(for: .applicationSupportDirectory, in: .userDomainMask)
             .first?.appendingPathComponent("Sandshell")
             ?? home.appendingPathComponent(".sandshell")
         self.cache = HistoryCache(directory: cacheDir)
     }
 
-    var filtered: [ConversationRecord] {
-        let q = query.trimmingCharacters(in: .whitespaces)
-        guard !q.isEmpty else { return records }
-        let ql = q.lowercased()
-        // Full-text search via SQLite; fall back to title/cwd when cache unavailable.
-        let matchingPaths: Set<String>
-        if let cache {
-            matchingPaths = Set(cache.search(query: ql))
-        } else {
-            matchingPaths = []
-        }
-        return records.filter { record in
-            matchingPaths.contains(record.url.path)
-                || record.title.lowercased().contains(ql)
-                || (record.cwd?.lowercased().contains(ql) ?? false)
-        }
+    /// Ranked full-text matches for `query`, keyed by transcript path. The cache
+    /// spans every workspace, so callers intersect with `records`. Runs the
+    /// SQLite scan off the main thread; empty when the cache is unavailable
+    /// (callers still match titles and folders themselves).
+    func matches(for query: String) async -> [String: HistoryCache.Match] {
+        guard let cache else { return [:] }
+        return await Task.detached(priority: .userInitiated) {
+            Dictionary(cache.search(query: query).map { ($0.path, $0) }, uniquingKeysWith: { a, _ in a })
+        }.value
     }
 
     func load() {
