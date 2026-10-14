@@ -17,16 +17,21 @@ actor SbxClient {
     func list() async throws -> [Sandbox] {
         let out = try await run(["ls", "--json"], routine: true)
         guard out.ok else { throw SbxError.command(out.stderr.isEmpty ? out.stdout : out.stderr) }
+        // Older CLIs wrap the list (`{"sandboxes": [...]}`); sbx 0.47+ emits a
+        // bare array. Decode whichever top-level value comes first.
         struct ListOutput: Decodable { let sandboxes: [Sandbox] }
         // `sbx` may auto-start the sandboxd daemon on the first cold `ls` and
         // print a startup banner ("Starting sandboxd daemon…") to stdout *before*
-        // the JSON. Slice from the first `{` so that preamble doesn't corrupt the
-        // decode.
-        guard let json = Self.firstJSONObject(in: out.stdout),
+        // the JSON. Slice from the first bracket so that preamble doesn't corrupt
+        // the decode.
+        let stdout = out.stdout
+        let isArray = (stdout.firstIndex(of: "[") ?? stdout.endIndex) < (stdout.firstIndex(of: "{") ?? stdout.endIndex)
+        guard let json = isArray ? Self.firstJSONArray(in: stdout) : Self.firstJSONObject(in: stdout),
               let data = json.data(using: .utf8) else {
             throw SbxError.parse("ls: no JSON in output: \(out.stdout)")
         }
         do {
+            if isArray { return try JSONDecoder().decode([Sandbox].self, from: data) }
             return try JSONDecoder().decode(ListOutput.self, from: data).sandboxes
         } catch {
             throw SbxError.parse("ls json: \(error) (output: \(out.stdout))")
@@ -192,13 +197,13 @@ actor SbxClient {
         Log.info(.sbx, "rebuilding sandbox “\(sandbox.name)” (\(sandbox.agent))")
         _ = try? await stop(sandbox.name)
         _ = try? await remove(sandbox.name)
-        let args = ["create", "-q", "--name", sandbox.name, sandbox.agent] + sandbox.workspaces
+        let args = ["create", "--no-progress", "--name", sandbox.name, sandbox.agent] + sandbox.workspaces
         return try await createAndPoll(args, cwd: sandbox.primaryWorkdir, env: nil, name: sandbox.name)
     }
 
     // MARK: - Create
 
-    /// `sbx create -q [flags] <agent> <workspace> [config mounts...]`
+    /// `sbx create --no-progress [flags] <agent> <workspace> [config mounts...]`
     ///
     /// Run from inside the primary workspace dir so sbx derives a sensible
     /// default name and container working directory. Appends the standard
@@ -208,7 +213,7 @@ actor SbxClient {
     /// via `sbx mcp load` once the sandbox is running.
     @discardableResult
     func create(_ opts: CreateOptions) async throws -> CommandOutput {
-        var args: [String] = ["create", "-q"]
+        var args: [String] = ["create", "--no-progress"]
 
         let name = opts.name.trimmingCharacters(in: .whitespaces)
         if !name.isEmpty { args += ["--name", name] }
@@ -277,7 +282,7 @@ actor SbxClient {
 
     // MARK: - Workspace container lifecycle (Phase 1)
 
-    /// `sbx create -q --name <name> <agent> <mounts…>`
+    /// `sbx create --no-progress --name <name> <agent> <mounts…>`
     ///
     /// Builds the container for one agent of a `Workspace` from its
     /// policy-resolved `mounts` (first entry = the rw workspace root). Injects
@@ -287,7 +292,7 @@ actor SbxClient {
     @discardableResult
     func create(workspace: Workspace, agent: AgentKind, name: String,
                 mounts: [MountSpec], kits: [String] = []) async throws -> Sandbox {
-        var args = ["create", "-q", "--name", name]
+        var args = ["create", "--no-progress", "--name", name]
         // Base image channel: nil = sbx's default (stable) template; the tag is
         // pulled fresh either way (sbx defaults to --pull always).
         if let template = workspace.templateImage(for: agent) { args += ["-t", template] }

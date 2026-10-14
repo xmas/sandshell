@@ -449,7 +449,7 @@ final class WorkspaceController: ObservableObject {
 
     /// Display-only `sbx create …` for a sandbox (Sandboxes inspector / debug).
     func createCommandDisplay(for sandbox: Sandbox) -> String {
-        var parts = ["sbx", "create", "-q", "--name", sandbox.name]
+        var parts = ["sbx", "create", "--no-progress", "--name", sandbox.name]
         if let agent = agentForContainer(named: sandbox.name), let t = workspace.templateImage(for: agent) {
             parts += ["-t", t]
         }
