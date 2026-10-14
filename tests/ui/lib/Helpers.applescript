@@ -40,8 +40,12 @@ on appIsRunning(bundleID)
 end appIsRunning
 
 on appProcess(bundleID)
+	-- System Events re-resolves processes by executable name, so only ever
+	-- act on the runner's renamed copy — never a Sandshell you have open.
 	tell application "System Events"
-		return first application process whose bundle identifier is bundleID
+		set p to first application process whose bundle identifier is bundleID
+		if name of p is not "SandshellUITest" then error "refusing to drive process \"" & (name of p) & "\" — expected the runner's SandshellUITest copy"
+		return p
 	end tell
 end appProcess
 
@@ -64,7 +68,7 @@ on jsonGet(jsonText, pyExpr)
 	set tmp to "/tmp/sandshell-uitest-status.json"
 	set fRef to open for access (POSIX file tmp) with write permission
 	set eof of fRef to 0
-	write jsonText to fRef
+	write jsonText to fRef as «class utf8»
 	close access fRef
 	return do shell script "python3 -c " & quoted form of ("import json
 d = json.load(open('" & tmp & "'))
@@ -77,39 +81,39 @@ end jsonGet
 -- for these tests — see SandboxesPane.swift / InspectorView.swift) or, where
 -- no identifier was worth adding, by their accessible name/title.
 
+-- One pass over the container's entire contents. (A `whose` filter on
+-- AXIdentifier fails as soon as any sibling lacks the attribute, which turned
+-- the old recursive search into a walk too slow for the timeouts.)
 on findByIdentifier(containerRef, ident)
 	tell application "System Events"
 		try
-			return (first UI element of containerRef whose value of attribute "AXIdentifier" is ident)
-		end try
-		try
-			set kids to UI elements of containerRef
+			set elements to entire contents of containerRef
 		on error
 			return missing value
 		end try
+		repeat with e in elements
+			try
+				if (value of attribute "AXIdentifier" of e) is ident then return contents of e
+			end try
+		end repeat
 	end tell
-	repeat with child in kids
-		set found to my findByIdentifier(child, ident)
-		if found is not missing value then return found
-	end repeat
 	return missing value
 end findByIdentifier
 
+-- By AX title (`name`) or AX label (`description`, e.g. icon buttons).
 on findByLabel(containerRef, label)
 	tell application "System Events"
 		try
-			return (first UI element of containerRef whose name is label)
-		end try
-		try
-			set kids to UI elements of containerRef
+			set elements to entire contents of containerRef
 		on error
 			return missing value
 		end try
+		repeat with e in elements
+			try
+				if (name of e) is label or (description of e) is label then return contents of e
+			end try
+		end repeat
 	end tell
-	repeat with child in kids
-		set found to my findByLabel(child, label)
-		if found is not missing value then return found
-	end repeat
 	return missing value
 end findByLabel
 

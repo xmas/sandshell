@@ -7,6 +7,9 @@ import SwiftUI
 struct SandboxesPaneView: View {
     @ObservedObject var controller: WorkspaceController
     @State private var pendingDelete: Sandbox?
+    /// Expanded rows, by name: Stop/Run moves a row between the sections
+    /// (a new row view), and it should stay open under the cursor.
+    @State private var expanded: Set<String> = []
 
     /// Running sandboxes shown above, stopped/inactive ones below.
     private var running: [Sandbox] { controller.allSandboxes.filter { $0.isRunning } }
@@ -40,14 +43,14 @@ struct SandboxesPaneView: View {
             if !running.isEmpty {
                 Section("Running (\(running.count))") {
                     ForEach(running) { sb in
-                        SandboxRow(sb: sb, controller: controller) { pendingDelete = sb }
+                        SandboxRow(sb: sb, controller: controller, expanded: expansion(sb)) { pendingDelete = sb }
                     }
                 }
             }
             if !inactive.isEmpty {
                 Section("Inactive (\(inactive.count))") {
                     ForEach(inactive) { sb in
-                        SandboxRow(sb: sb, controller: controller) { pendingDelete = sb }
+                        SandboxRow(sb: sb, controller: controller, expanded: expansion(sb)) { pendingDelete = sb }
                     }
                 }
             }
@@ -72,13 +75,18 @@ struct SandboxesPaneView: View {
                  + "Workspace files on disk are not affected.")
         }
     }
+
+    private func expansion(_ sb: Sandbox) -> Binding<Bool> {
+        Binding(get: { expanded.contains(sb.name) },
+                set: { if $0 { expanded.insert(sb.name) } else { expanded.remove(sb.name) } })
+    }
 }
 
 private struct SandboxRow: View {
     let sb: Sandbox
     @ObservedObject var controller: WorkspaceController
+    @Binding var expanded: Bool
     let requestDelete: () -> Void
-    @State private var expanded = false
 
     private var busy: Bool { controller.sandboxBusy.contains(sb.name) }
 
@@ -107,6 +115,10 @@ private struct SandboxRow: View {
         }
         .contentShape(Rectangle())
         .onTapGesture { withAnimation(.easeInOut(duration: 0.2)) { expanded.toggle() } }
+        // One pressable element, so VoiceOver (and AX automation) can expand it.
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction { expanded.toggle() }
         .accessibilityIdentifier("sandbox-row-\(sb.name)")
     }
 

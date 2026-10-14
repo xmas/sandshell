@@ -23,9 +23,9 @@ on run argv
 	set deadline to (current date) + 10
 	repeat
 		set building to Helpers's windowGet(bundleID, windowTitle, "w['isBuilding']")
-		set placeholder to Helpers's windowGet(bundleID, windowTitle, "w['emptyState']")
+		set placeholder to Helpers's windowGet(bundleID, windowTitle, "w.get('emptyState')")
 		if building is "True" then
-			set activity to Helpers's windowGet(bundleID, windowTitle, "w['activity']")
+			set activity to Helpers's windowGet(bundleID, windowTitle, "w.get('activity')")
 			if activity is not "None" and placeholder is not activity then error "while building, the empty state should show the build progress \"" & activity & "\", got \"" & placeholder & "\""
 			if activity is not "None" then
 				set sawBuilding to true
@@ -62,7 +62,7 @@ on run argv
 		if (current date) > deadline then error "sandbox still building 60s after the session went live"
 		delay 1
 	end repeat
-	set placeholder to Helpers's windowGet(bundleID, windowTitle, "w['emptyState']")
+	set placeholder to Helpers's windowGet(bundleID, windowTitle, "w.get('emptyState')")
 	if placeholder is not "None" then error "empty state still showing \"" & placeholder & "\" with a live session"
 
 	set summary to "build overlay not observed (sandbox came up first)"

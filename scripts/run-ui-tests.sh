@@ -53,6 +53,7 @@ if [[ "$BUILD" == "1" ]]; then
   done
   if ! xcodebuild -project Sandshell.xcodeproj -scheme Sandshell -configuration Debug \
        -derivedDataPath build-uitests PRODUCT_BUNDLE_IDENTIFIER="$UITEST_BUNDLE_ID" \
+       SANDSHELL_APP_NAME=SandshellUITest \
        -destination 'platform=macOS,arch=arm64' build \
        >/tmp/sandshell-uitest-build.log 2>&1; then
     echo "error: build failed — last lines:"; tail -40 /tmp/sandshell-uitest-build.log; exit 1
@@ -62,9 +63,18 @@ fi
 
 [[ -n "$APP" ]] || APP="build-uitests/Build/Products/Debug/Sandshell.app"
 [[ -d "$APP" ]] || { echo "error: app not found at '$APP'"; exit 1; }
-APP="$(cd "$APP" && pwd)"
-BIN="$APP/Contents/MacOS/Sandshell"
-[[ -x "$BIN" ]] || { echo "error: executable not found at '$BIN'"; exit 1; }
+# System Events re-resolves a process by its executable name, so a test
+# instance whose executable is also "Sandshell" can be confused with yours —
+# AX actions would land in your app. Run a copy whose executable is renamed.
+TEST_APP="$ROOT/build-uitests/SandshellUITest.app"
+rm -rf "$TEST_APP"
+ditto "$APP" "$TEST_APP"
+mv "$TEST_APP/Contents/MacOS/Sandshell" "$TEST_APP/Contents/MacOS/SandshellUITest"
+plutil -replace CFBundleExecutable -string SandshellUITest "$TEST_APP/Contents/Info.plist"
+codesign --force --deep --sign - --preserve-metadata=entitlements,flags "$TEST_APP" >/dev/null 2>&1 \
+  || { echo "error: could not re-sign $TEST_APP"; exit 1; }
+APP="$TEST_APP"
+BIN="$APP/Contents/MacOS/SandshellUITest"
 BUNDLE_ID="$(defaults read "$APP/Contents/Info" CFBundleIdentifier)"
 echo "==> Testing $APP ($BUNDLE_ID)"
 
@@ -114,7 +124,9 @@ for s in json.load(sys.stdin):
   if [[ "$KEEP_OPEN" == "0" ]]; then
     defaults delete "$BUNDLE_ID" >/dev/null 2>&1 || true
     # Keep sandshell:// URLs going to the user's installed app.
-    /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -u "$APP" >/dev/null 2>&1 || true
+    LSREGISTER=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
+    "$LSREGISTER" -u "$APP" >/dev/null 2>&1 || true
+    "$LSREGISTER" -u "$ROOT/build-uitests/Build/Products/Debug/Sandshell.app" >/dev/null 2>&1 || true
   fi
 }
 trap cleanup EXIT

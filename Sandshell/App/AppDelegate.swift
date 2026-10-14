@@ -144,6 +144,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         KitStore.seedOfficialDefaultsIfNeeded()
         Log.info(.app, "Sandshell launched (sbx: \(PathFixer.sbxPath()))")
 
+        #if DEBUG
+        SelfTest.prepare()
+        #endif
         // Restore every window that was open at last quit; otherwise open the
         // chosen default root folder (falling back to ~/Sandshell).
         let restore = OpenWindows.all

@@ -19,12 +19,14 @@ enum UITestHeadless {
 
     static func start() {
         hideNewWindows()
-        timer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { _ in
+        let t = Timer(timeInterval: 0.05, repeats: true) { _ in
             MainActor.assumeIsolated {
                 hideNewWindows()
                 serveBridge()
             }
         }
+        RunLoop.main.add(t, forMode: .common)   // keeps hiding windows while an alert runs modally
+        timer = t
     }
 
     private static func serveBridge() {
@@ -39,8 +41,11 @@ enum UITestHeadless {
     private static func hideNewWindows() {
         for w in NSApp.windows where w.isVisible && !seen.contains(ObjectIdentifier(w)) {
             seen.insert(ObjectIdentifier(w))
-            w.alphaValue = 0
+            // Not 0: AppKit leaves fully transparent windows out of the AX tree.
+            w.alphaValue = 0.01
             w.ignoresMouseEvents = true
+            // AX only lists windows on the current Space; follow the user's.
+            w.collectionBehavior.insert(.canJoinAllSpaces)
             if w.sheetParent == nil { w.orderBack(nil) }
         }
     }
@@ -52,6 +57,17 @@ enum UITestHeadless {
 @MainActor
 enum SelfTest {
     static var requested: String? { UserDefaults.standard.string(forKey: "SandshellSelfTest") }
+
+    /// Before any window opens: start from the default single-pane layout so
+    /// one scenario's saved panes can't leak into the next (`files-relaunch`
+    /// is the one that checks a saved layout, so it keeps them).
+    static func prepare() {
+        guard let scenario = requested, scenario != "files-relaunch" else { return }
+        let defaults = UserDefaults.standard
+        for key in defaults.dictionaryRepresentation().keys where key.hasPrefix("paneLayout:") {
+            defaults.removeObject(forKey: key)
+        }
+    }
     private static var out: String { UserDefaults.standard.string(forKey: "SandshellSelfTestOut") ?? NSTemporaryDirectory() }
     private static var lines: [String] = []
     private static var failures = 0

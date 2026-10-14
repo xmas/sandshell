@@ -54,6 +54,10 @@ The suite runs **beside** your own Sandshell, without taking focus:
   UserDefaults (no restored windows or layouts) and System
   Events address it by that id — never your `com.xmas.sandshell`. It refuses
   an app carrying the release bundle id.
+- It runs a copy (`build-uitests/SandshellUITest.app`) whose executable is
+  renamed `SandshellUITest` and re-signed ad hoc: System Events re-resolves
+  process references by executable name, so with two "Sandshell" processes
+  AX actions could land in yours. `appProcess` refuses any other process.
 - It launches the binary with `-SandshellUITestHeadless YES` (DEBUG only, see
   `UITestHeadless` in `App/SelfTest.swift`): the app never activates, skips
   the notification-permission prompt and update check, and keeps every window

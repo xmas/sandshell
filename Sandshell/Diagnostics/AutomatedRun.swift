@@ -35,7 +35,10 @@ enum AutomatedRun {
     }
 
     @MainActor private static func answerAlerts() {
-        var panels = NSApp.windows.compactMap(\.attachedSheet)
+        // The UI-test suite answers its own sheet alerts (they stay hidden and
+        // never take focus); an app-modal alert would block it, so take those.
+        var panels = UserDefaults.standard.bool(forKey: "SandshellUITestHeadless")
+            ? [] : NSApp.windows.compactMap(\.attachedSheet)
         if let modal = NSApp.modalWindow { panels.append(modal) }
         for panel in panels where String(describing: type(of: panel)).contains("Alert") {
             guard let button = defaultButton(in: panel.contentView) else { continue }
