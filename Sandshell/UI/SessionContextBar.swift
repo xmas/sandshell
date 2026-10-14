@@ -9,6 +9,8 @@ final class SessionContextBar: NSStackView {
     var onShowFiles: (() -> Void)?
     /// Files beside the pane, showing only the changed files.
     var onShowChanges: (() -> Void)?
+    /// The chips changed size (the branch arrived): re-share the strip.
+    var onWidthChange: (() -> Void)?
 
     private let sandboxChip = ContextChip(symbol: "shippingbox")
     private let folderChip = ContextChip(symbol: "folder")
@@ -24,7 +26,9 @@ final class SessionContextBar: NSStackView {
         orientation = .horizontal
         spacing = 6
         setViews([sandboxChip, folderChip, branchChip], in: .leading)
-        setHuggingPriority(.defaultLow, for: .horizontal)
+        // Below the chips' compression resistance, or Auto Layout squeezes them
+        // to nothing even with room to spare.
+        setHuggingPriority(.init(200), for: .horizontal)
         sandboxChip.target = self
         sandboxChip.action = #selector(sandboxClicked)
         sandboxChip.setAccessibilityIdentifier("context-sandbox")
@@ -34,9 +38,9 @@ final class SessionContextBar: NSStackView {
         branchChip.target = self
         branchChip.action = #selector(branchClicked)
         branchChip.setAccessibilityIdentifier("context-branch")
-        // The branch chip gives way first in a narrow pane, then the sandbox's.
-        branchChip.setContentCompressionResistancePriority(.init(240), for: .horizontal)
-        sandboxChip.setContentCompressionResistancePriority(.init(245), for: .horizontal)
+        // The sandbox chip gives way first in a narrow pane, then the branch's.
+        sandboxChip.setContentCompressionResistancePriority(.init(240), for: .horizontal)
+        branchChip.setContentCompressionResistancePriority(.init(245), for: .horizontal)
         folderChip.setContentCompressionResistancePriority(.init(250), for: .horizontal)
         // Commits and edits happen behind our back: re-read the branch now and then.
         gitTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
@@ -50,6 +54,14 @@ final class SessionContextBar: NSStackView {
     private var gitTimer: Timer?
 
     func stop() { gitTimer?.invalidate(); gitTimer = nil }
+
+    /// Room the strip should leave the folder and branch chips (each capped) before
+    /// anything beside them takes it; the sandbox chip gives way.
+    var preferredMinWidth: CGFloat {
+        var width = min(folderChip.intrinsicContentSize.width, 140)
+        if !branchChip.isHidden { width += spacing + min(branchChip.intrinsicContentSize.width, 170) }
+        return width
+    }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
@@ -66,9 +78,10 @@ final class SessionContextBar: NSStackView {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         let path = folder.path == home ? "~" : folder.path.hasPrefix(home + "/") ? "~" + folder.path.dropFirst(home.count) : folder.path
         folderChip.set(title: folder.lastPathComponent, tip: "\(path) — \(access.summary)")
-        guard folder != self.folder else { return }
+        guard folder != self.folder else { onWidthChange?(); return }
         self.folder = folder
         branchChip.isHidden = true
+        onWidthChange?()
         refreshGit()
     }
 
@@ -99,6 +112,7 @@ final class SessionContextBar: NSStackView {
                                         + (n > 0 ? " — \(n) changed file\(n == 1 ? "" : "s"), +\(added) −\(removed) lines" : " — no changes"))
             }
             self.branchChip.isHidden = false
+            self.onWidthChange?()
         }
     }
 
@@ -208,3 +222,9 @@ final class ContextChip: NSButton {
         return NSSize(width: size.width + 14, height: 20)
     }
 }
+
+#if DEBUG
+extension SessionContextBar {
+    var debugFolderChip: NSButton { folderChip }
+}
+#endif

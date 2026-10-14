@@ -382,7 +382,7 @@ final class TerminalStackController: NSViewController {
     private var activeSessionID: UUID?
     // Framed terminal
     private let frameView = NSView()
-    private let titleStrip = NSView()
+    private let titleStrip = LayoutReportingView()
     private let titleLabel = NSTextField(labelWithString: "")
     private let titleLine = NSView()
     /// Claude model/effort choosers + context/tokens/cost, trailing edge of the title strip.
@@ -392,7 +392,7 @@ final class TerminalStackController: NSViewController {
     /// Sandbox · folder · branch chips (replaces the plain title for sessions).
     private let contextBar = SessionContextBar()
     /// "2 running" — the session's background tasks; opens their list.
-    private let backgroundPill = NSButton()
+    private let backgroundPill = CollapsingButton()
     private var backgroundPopover: NSPopover?
     // Kit startup banner (failed / warning / still installing), above the frame.
     private let kitBanner = KitStartupBannerView()
@@ -689,6 +689,9 @@ final class TerminalStackController: NSViewController {
         contextBar.isHidden = true
         contextBar.onShowFiles = { [weak self] in self?.onOpenFiles?(false) }
         contextBar.onShowChanges = { [weak self] in self?.onOpenFiles?(true) }
+        contextBar.onWidthChange = { [weak self] in self?.shareTitleStrip() }
+        // Not from inside layout(): the readout's new constraints would wait a pass.
+        titleStrip.onLayout = { [weak self] in DispatchQueue.main.async { self?.shareTitleStrip() } }
         titleStrip.addSubview(contextBar)
         backgroundPill.translatesAutoresizingMaskIntoConstraints = false
         backgroundPill.bezelStyle = .inline
@@ -1192,6 +1195,16 @@ final class TerminalStackController: NSViewController {
                                subtitle: "\(container) · \(shortHome(session.workdir))"))
     }
 
+    /// Split the strip between the context chips and the Claude readout: the
+    /// readout sheds its optional pieces before the chips are squeezed.
+    private func shareTitleStrip() {
+        guard !claudeStats.isHidden else { return }
+        var room = titleStrip.bounds.width - 10 - 12 - paneControls.fittingSize.width - 12
+        if !backgroundPill.isHidden { room -= backgroundPill.fittingSize.width + 8 }
+        if !contextBar.isHidden { room -= contextBar.preferredMinWidth + 10 }
+        claudeStats.maxWidth = max(room, 0)
+    }
+
     /// Title-strip readout: shown for Claude sessions only; numbers fill in as
     /// status reports arrive, the model falls back to the workspace's choice.
     private func updateClaudeStats(_ id: UUID) {
@@ -1202,6 +1215,7 @@ final class TerminalStackController: NSViewController {
         guard session.agent == .claude, !session.isChat else { return }
         claudeStats.update(status: controller.claudeStatus(id), defaultModel: controller.claudeModel,
                            defaultEffort: controller.claudeEffort)
+        shareTitleStrip()
     }
 
     /// Shown while the session has background tasks running, or finished ones
@@ -1214,6 +1228,7 @@ final class TerminalStackController: NSViewController {
             !$0.isRunning && !$0.orphaned && Date().timeIntervalSince($0.finishedAt ?? $0.startedAt) < 1800
         }.count
         backgroundPill.isHidden = running == 0 && recent == 0
+        defer { shareTitleStrip() }
         let color: NSColor = running > 0 ? .hex("16a34a") : .secondaryLabelColor
         backgroundPill.attributedTitle = NSAttributedString(
             string: running > 0 ? "\(running) running" : "\(recent) done",
@@ -1906,6 +1921,49 @@ private final class FilesSurfaceView: NSView {
 }
 
 /// Draws but never takes clicks (the pane's dimming wash).
+/// Takes no width while hidden, so a hidden pill doesn't hold space in the strip.
+private final class CollapsingButton: NSButton {
+    override var isHidden: Bool { didSet { if isHidden != oldValue { invalidateIntrinsicContentSize() } } }
+    override var intrinsicContentSize: NSSize {
+        isHidden ? NSSize(width: 0, height: super.intrinsicContentSize.height) : super.intrinsicContentSize
+    }
+}
+
+/// Tells its owner when it lays out (its width changed).
+private final class LayoutReportingView: NSView {
+    var onLayout: (() -> Void)?
+    private var lastWidth: CGFloat = -1
+
+    override func layout() {
+        super.layout()
+        guard bounds.width != lastWidth else { return }
+        lastWidth = bounds.width
+        onLayout?()
+    }
+}
+
 private final class PassThroughView: NSView {
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
+
+#if DEBUG
+extension TerminalStackController {
+    /// Self-test: show the Claude readout with `status`, whatever the session is.
+    func debugShowClaudeReadout(_ status: ClaudeSessionStatus?) {
+        claudeStats.isHidden = false
+        claudeStatsCollapsed.isActive = false
+        claudeStats.update(status: status, defaultModel: nil, defaultEffort: nil)
+        shareTitleStrip()
+    }
+
+    var debugReadoutFitting: String { claudeStats.debugFitting }
+
+    /// Self-test: the strip's width, the folder chip's, and the readout's.
+    var debugTitleStripWidths: (strip: CGFloat, folder: CGFloat, folderWanted: CGFloat, readout: CGFloat, budget: CGFloat) {
+        view.layoutSubtreeIfNeeded()
+        return (titleStrip.bounds.width, contextBar.debugFolderChip.frame.width,
+                min(contextBar.debugFolderChip.intrinsicContentSize.width, 140), claudeStats.frame.width,
+                claudeStats.maxWidth)
+    }
+}
+#endif

@@ -95,6 +95,7 @@ enum SelfTest {
         case "launch-failure": await launchFailure(window)
         case "fork": await fork(window)
         case "links": links()
+        case "title-strip": await titleStrip(window)
         case "files": await files(window)
         case "files-relaunch": await filesRelaunch(window)
         case "kits": await kits(window)
@@ -1111,6 +1112,48 @@ enum SelfTest {
                   "the fork has the first reply and not the second (\(said(f).prefix(80)))")
         }
         snapshot(window, "fork-final")
+    }
+
+    // MARK: Title strip
+
+    /// A Claude readout beside the context chips: as the window narrows the
+    /// readout drops its optional pieces before the folder chip loses its name.
+    /// (Uses a shell session with a fake status; the strip doesn't care.)
+    private static func titleStrip(_ window: MainWindowController) async {
+        guard let tree = window.paneTree, let ws = window.workspaceController,
+              let a = ws.orderedSessions.first, let w = window.window else { return log("need a session") }
+        ws.selection = .session(a.id)
+        check(await until(300) { tree.surfaces.terminals[a.id] != nil }, "session launches")
+        await wait(1.0)
+        let json = #"""
+            {"model":{"id":"claude-opus-5-5","display_name":"Opus 5.5"},"effort":{"level":"high"},
+             "context_window":{"total_input_tokens":1234567,"total_output_tokens":456789,
+                               "context_window_size":1000000,"used_percentage":42},
+             "cost":{"total_cost_usd":12.34}}
+            """#
+        let status = try? JSONDecoder().decode(ClaudeSessionStatus.self, from: Data(json.utf8))
+        check(status?.model != nil, "fake status decodes")
+        guard let pane = tree.panes.first else { return check(false, "a pane") }
+        pane.debugShowClaudeReadout(status)
+        func measure(_ name: String, folderAtLeast: CGFloat? = nil) async {
+            await wait(0.6)
+            let m = pane.debugTitleStripWidths
+            log("\(name): strip \(Int(m.strip)) folder \(Int(m.folder))/\(Int(m.folderWanted)) readout \(Int(m.readout)) budget \(m.budget > 99999 ? "∞" : "\(Int(m.budget))")")
+            log(pane.debugReadoutFitting)
+            check(m.readout <= max(m.budget, 16) + 1, "\(name): the readout stays within its budget")
+            check(m.folderWanted > 60 && m.folder >= (folderAtLeast ?? m.folderWanted - 1), "\(name): the folder chip keeps its name")
+            snapshot(window, "title-strip-\(name)")
+        }
+        for width in [1400.0, 1100, 900] {
+            var frame = w.frame
+            frame.size.width = width
+            w.setFrame(frame, display: true)
+            await measure("window-\(Int(width))")
+        }
+        // A narrow split pane: the readout is down to its model chooser.
+        tree.split(pane, edge: .trailing, showing: nil)
+        await measure("split", folderAtLeast: 80)
+        check(pane.debugTitleStripWidths.readout < 24, "split: the readout is down to ⓘ")
     }
 
     // MARK: Links

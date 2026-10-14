@@ -30,6 +30,12 @@ final class ClaudeStatsView: NSView {
     private var popover: NSPopover?
     private var detailHost: NSHostingController<ClaudeStatsDetailView>?
     private var cancellables: Set<AnyCancellable> = []
+    /// The widest the readout may get: optional pieces give way (tokens, cost,
+    /// gauge, effort, %, then the model chooser — ⓘ still has it all) so the
+    /// strip's context chips keep their room.
+    var maxWidth: CGFloat = .greatestFiniteMagnitude {
+        didSet { if abs(oldValue - maxWidth) >= 1 { render() } }
+    }
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -69,6 +75,8 @@ final class ClaudeStatsView: NSView {
         stack.orientation = .horizontal
         stack.spacing = 10
         stack.alignment = .centerY
+        stack.detachesHiddenViews = true
+        stack.setHuggingPriority(.defaultHigh, for: .horizontal)   // shrink as pieces drop out
         stack.translatesAutoresizingMaskIntoConstraints = false
         stack.setViews([gauge, ctxLabel, tokensLabel, costLabel, modelButton, effortButton, infoButton], in: .leading)
         addSubview(stack)
@@ -323,6 +331,11 @@ final class ClaudeStatsView: NSView {
             costLabel.isHidden = true
         }
 
+        for piece in [tokensLabel, costLabel, gauge, effortButton, ctxLabel, modelButton] as [NSView]
+        where stack.fittingSize.width > maxWidth {
+            piece.isHidden = true
+        }
+
         // Keep an open popover current.
         detailHost?.rootView = detailView()
     }
@@ -349,3 +362,11 @@ final class ContextGaugeView: NSView {
         NSBezierPath(roundedRect: fill, xRadius: r, yRadius: r).fill()
     }
 }
+
+#if DEBUG
+extension ClaudeStatsView {
+    var debugFitting: String {
+        "fit \(Int(stack.fittingSize.width)) shown \(stack.views.filter { !$0.isHidden }.map { "\(type(of: $0)):\(Int($0.frame.width))" })"
+    }
+}
+#endif
