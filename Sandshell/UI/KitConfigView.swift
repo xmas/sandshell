@@ -9,6 +9,11 @@ final class KitConfigModel: ObservableObject {
     @Published var registry: [KitRef]
     @Published var enabled: Set<String>
     @Published var newRef: String = ""
+    /// Said under "Add a kit" (e.g. an agent kit went to Agents instead).
+    @Published var notice: String?
+    /// A `kind: sandbox` kit was added here: it defines an agent, so it's
+    /// registered as one; the host offers it in this workspace (nil = can't).
+    var onAgentKit: ((AgentProfile) -> Void)?
 
     private var baseline: Set<String>
 
@@ -58,7 +63,8 @@ final class KitConfigModel: ObservableObject {
         if !registry.contains(where: { $0.ref == kit.ref }) { registry.append(kit) }
         enabled.insert(kit.ref)
         newRef = ""
-        if kit.displayName == nil { enrich(kit.ref) }
+        notice = nil
+        enrich(kit.ref, fillMetadata: kit.displayName == nil)
     }
 
     /// Add a kit picked in the Docker Hub browser (metadata comes with it).
@@ -67,7 +73,8 @@ final class KitConfigModel: ObservableObject {
         KitStore.update(kit.ref, displayName: kit.shortName, summary: kit.description)
         registry = KitStore.all
         enabled.insert(kit.ref)
-        if kit.description.isEmpty { enrich(kit.ref) }
+        notice = nil
+        enrich(kit.ref, fillMetadata: kit.description.isEmpty)
     }
 
     func isRegistered(_ ref: String) -> Bool { registry.contains { $0.ref == ref } }
@@ -87,9 +94,32 @@ final class KitConfigModel: ObservableObject {
 
     func enableDefaults() { for kit in missingDefaults { enabled.insert(kit.ref) } }
 
-    private func enrich(_ ref: String) {
+    /// Read the kit with `sbx kit inspect`: an agent kit (`kind: sandbox`)
+    /// can't go in as `--kit`, so it moves to the agent registry; any other
+    /// gets its display name + summary when `fillMetadata`.
+    private func enrich(_ ref: String, fillMetadata: Bool) {
         Task { @MainActor in
             guard let info = await SbxClient.shared.kitInspect(ref) else { return }
+            if info.kind == "sandbox" {
+                KitStore.remove(ref)
+                registry = KitStore.all
+                enabled.remove(ref)
+                do {
+                    let profile = try await AgentProfileStore.register(kitRef: ref)
+                    if let onAgentKit {
+                        onAgentKit(profile)
+                        notice = "“\(profile.displayName)” defines an agent, not a kit — it’s been added under Agents "
+                            + "and is offered in New Session."
+                    } else {
+                        notice = "“\(profile.displayName)” defines an agent, not a kit — it’s been added to your agents "
+                            + "(Settings ▸ Agents)."
+                    }
+                } catch {
+                    notice = error.localizedDescription
+                }
+                return
+            }
+            guard fillMetadata else { return }
             KitStore.update(ref, displayName: info.title, summary: info.description)
             registry = KitStore.all
         }
@@ -184,6 +214,10 @@ struct KitConfigView: View {
                         .onSubmit { model.add(model.newRef) }
                     Button("Add") { model.add(model.newRef) }
                         .disabled(model.newRef.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+                if let notice = model.notice {
+                    Text(notice).font(.caption).foregroundStyle(.secondary)
+                        .accessibilityIdentifier("kits-notice")
                 }
                 HStack(spacing: 8) {
                     Button {

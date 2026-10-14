@@ -84,6 +84,7 @@ final class ChatSession: ObservableObject {
         didSet {
             if (oldValue == .running) != (phase == .running) { onWorkingChange?(phase == .running) }
             if phase != .starting { isCatchingUp = false }
+            if case .closed(let why) = phase, oldValue != phase { onClosed?(why) }
         }
     }
     @Published private(set) var permission: PendingPermission?
@@ -108,6 +109,8 @@ final class ChatSession: ObservableObject {
     var onWorkingChange: ((Bool) -> Void)?
     /// Each prompt the user sends (the sidebar names sessions after them).
     var onPrompt: ((String) -> Void)?
+    /// The agent stopped for good (not signed in, exited): why.
+    var onClosed: ((String) -> Void)?
 
     let title: String
     /// Which agent's ACP entry point runs (`SbxCommand.acpAgents`).

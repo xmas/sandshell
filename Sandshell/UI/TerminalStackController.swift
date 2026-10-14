@@ -1296,7 +1296,7 @@ final class TerminalStackController: NSViewController {
             onStatusChange?("", false)
             return
         }
-        let label = rt.status == .working ? "Working" : "Ready"
+        let label = rt.stoppedReason != nil ? "Stopped" : rt.status == .working ? "Working" : "Ready"
         let live = rt.liveWorkSeconds()
         let time = live > 0 ? "  ◷ \(formatWorkTime(live))" : ""
         headerStatus.stringValue = label + time
@@ -1487,6 +1487,8 @@ final class TerminalStackController: NSViewController {
                                    mcpURL: controller.mcpURL, resumeID: resumeID, sbxProxyAuth: proxyAuth,
                                    sessionID: id, unavailable: unavailable)
             chat.onSessionID = { [controller] sid in controller.setTranscriptID(id, sid) }
+            chat.onClosed = { [controller] why in controller.setStopped(id, why) }
+            controller.setStopped(id, nil)
             var lastPrompt: String?
             chat.onPrompt = { [controller] prompt in
                 lastPrompt = prompt

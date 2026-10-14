@@ -197,11 +197,17 @@ actor SbxClient {
     /// rm → recreate with the same agent + mounts (the specs from `sbx ls`).
     @discardableResult
     func rebuildSandbox(_ sandbox: Sandbox) async throws -> Sandbox {
+        // A kit agent is recreated from its kit, when it's a registered one;
+        // sbx can't create one from its bare name, so don't take it down first.
+        let kind = AgentKind(rawValue: sandbox.agent)
+        if !kind.isBuiltin, AgentProfileStore.profile(for: kind)?.kitRef == nil {
+            throw SbxError.command("“\(sandbox.name)” runs the custom agent “\(sandbox.agent)”, whose kit isn’t "
+                + "registered here, so it can’t be recreated. Add the agent’s kit under Settings ▸ Agents, then rebuild.")
+        }
         Log.info(.sbx, "rebuilding sandbox “\(sandbox.name)” (\(sandbox.agent))")
         _ = try? await stop(sandbox.name)
         _ = try? await remove(sandbox.name)
-        // A kit agent is recreated from its kit, when it's a registered one.
-        let agent = AgentKind(rawValue: sandbox.agent).createReference
+        let agent = kind.createReference
         let args = ["create", "--no-progress", "--name", sandbox.name, agent] + sandbox.workspaces
         return try await createAndPoll(args, cwd: sandbox.primaryWorkdir, env: nil, name: sandbox.name)
     }

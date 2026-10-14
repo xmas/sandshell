@@ -169,7 +169,14 @@ private struct KitsInspectorPane: View {
 
     init(controller: WorkspaceController) {
         self.controller = controller
-        _model = StateObject(wrappedValue: KitConfigModel(enabledRefs: controller.kits))
+        _model = StateObject(wrappedValue: {
+            let model = KitConfigModel(enabledRefs: controller.kits)
+            model.onAgentKit = { [weak controller] profile in
+                guard let controller else { return }
+                controller.setCustomAgents(controller.customAgents + [profile.kind])
+            }
+            return model
+        }())
     }
 
     var body: some View {

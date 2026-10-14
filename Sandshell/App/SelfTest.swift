@@ -327,12 +327,45 @@ enum SelfTest {
         // 2. New Session menu.
         let titles = window.sidebarList?.newSessionMenuTitles() ?? []
         log("menu: \(titles.joined(separator: " | "))")
-        for t in ["New Claude Chat", "New Codex Chat", "New Gemini Chat", "New Gemini", "Other Agents ▸ New Kiro"] {
+        // Chat is the default; terminal versions sit under In Terminal.
+        for t in ["New Claude", "New Codex", "New Gemini", "In Terminal ▸ New Claude in Terminal",
+                  "Other Agents ▸ New Kiro"] {
             check(titles.contains(t), "menu has “\(t)”")
         }
         for agent in ws.customAgents {
             check(titles.contains("New \(agent.displayName)") && titles.contains("Shell in \(agent.displayName) Sandbox"),
                   "menu offers the custom agent \(agent.displayName)")
+        }
+
+        // 2b. An agent kit added under Kits goes to the agent registry, not `--kit`.
+        if let kit = defaults.string(forKey: "SandshellSelfTestKit") {
+            let kits = KitConfigModel(enabledRefs: [])
+            var handed: AgentProfile?
+            kits.onAgentKit = { handed = $0 }
+            kits.add(kit)
+            check(await until(30) { kits.notice != nil }, "the Kits pane reads the added kit")
+            check(handed?.kitRef == kit && !kits.isRegistered(kit) && !kits.enabledRefs.contains(kit),
+                  "an agent kit added under Kits becomes an agent (\(kits.notice ?? "-"))")
+        }
+
+        // 2c. A pristine session named before brand spellings is reused, renamed.
+        if let folder = ws.folders.first?.id,
+           let old = ws.addSession(folderID: folder, agent: .dockerAgent, name: "New Docker-Agent Session") {
+            let again = ws.addSession(folderID: folder, agent: .dockerAgent)
+            check(again?.id == old.id && again?.name == "New Docker Agent Session",
+                  "an old blank “New Docker-Agent Session” is reused (\(again?.name ?? "-"))")
+            ws.closeSession(old.id)
+        }
+
+        // 2d. Rebuilding an unregistered kit agent's sandbox refuses before taking it down.
+        let orphan = try! JSONDecoder().decode(Sandbox.self, from: Data(
+            #"{"name":"sandshell-selftest-no-such-sandbox","agent":"never-registered-agent","status":"running"}"#.utf8))
+        do {
+            _ = try await SbxClient.shared.rebuildSandbox(orphan)
+            check(false, "rebuilding an unregistered kit agent fails")
+        } catch {
+            check(error.localizedDescription.contains("isn’t registered"),
+                  "rebuilding an unregistered kit agent says why (\(error.localizedDescription.prefix(80)))")
         }
 
         // 3. Codex + Gemini over ACP.
@@ -365,6 +398,7 @@ enum SelfTest {
                 } ?? []
                 log("\(agent.rawValue) chat: \(String(describing: chat()?.phase)) — \(notices.first ?? "-")")
                 check(notices.contains { $0.contains("sbx secret set \(service)") }, "\(agent.displayName) chat says how to add a credential")
+                check(ws.runtime(s.id)?.stoppedReason != nil, "\(agent.displayName) chat's row says Stopped, not Ready")
             }
             ws.selection = .session(s.id)
             await wait(1)

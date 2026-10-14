@@ -150,6 +150,10 @@ private struct SandboxRow: View {
                 commandBlock("Launch", controller.launchCommandDisplay(for: sb))
 
                 actions.padding(.top, 8)
+                if let error = controller.sandboxErrors[sb.name] {
+                    Text(error).font(.caption).foregroundStyle(.red).textSelection(.enabled)
+                        .accessibilityIdentifier("sandbox-error-\(sb.name)")
+                }
             }
             .padding(.vertical, 4)
             .frame(maxWidth: .infinity, alignment: .leading)

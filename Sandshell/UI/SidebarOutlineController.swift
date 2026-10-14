@@ -1483,7 +1483,7 @@ final class SessionCellView: NSTableCellView {
         var parts = [agentLabel]
         if let workdirName { parts.append(workdirName) }
         let work = runtime.flatMap { compactWorkTime($0.liveWorkSeconds()) }
-        switch runtime?.status {
+        switch runtime?.stoppedReason == nil ? runtime?.status : nil {
         case .working:
             workingView.isHidden = false
             workingView.startAnimating()
@@ -1504,8 +1504,10 @@ final class SessionCellView: NSTableCellView {
             statusDot.isHidden = true
             timeLabel.isHidden = true
         }
+        if runtime?.stoppedReason != nil { parts.append("Stopped") }
         if backgroundRunning > 0 { parts.append("\(backgroundRunning) in background") }
         subLabel.stringValue = parts.joined(separator: " · ")
+        subLabel.toolTip = runtime?.stoppedReason
     }
 
     private func syncHover() {

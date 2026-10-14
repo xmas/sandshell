@@ -79,7 +79,7 @@ final class WorkspaceController: ObservableObject {
     @Committed private(set) var rootProfile: RootProfile
     /// Custom (kit-defined) agents this workspace offers (see `availableAgents`).
     @Committed private(set) var customAgents: [AgentKind] = []
-    private var agentProfileObserver: NSObjectProtocol?
+    nonisolated(unsafe) private var agentProfileObserver: NSObjectProtocol?
 
     /// Whether the mount-config UI should be shown before creating a container
     /// (true until the user confirms mounts for this workspace).
@@ -106,6 +106,10 @@ final class WorkspaceController: ObservableObject {
             MainActor.assumeIsolated { self?.revision += 1 }
         }
         startStatusFeedPolling()
+    }
+
+    deinit {
+        if let agentProfileObserver { NotificationCenter.default.removeObserver(agentProfileObserver) }
     }
 
     // MARK: Claude model/effort + status feed
@@ -430,6 +434,8 @@ final class WorkspaceController: ObservableObject {
     @Committed private(set) var allSandboxes: [Sandbox] = []
     /// Sandboxes with an in-flight lifecycle action (run/stop/delete/rebuild).
     @Committed private(set) var sandboxBusy: Set<String> = []
+    /// Why the last Settings ▸ Sandboxes action on a sandbox failed (shown on its row).
+    @Committed private(set) var sandboxErrors: [String: String] = [:]
     /// True while `sbx ls` is being scanned (so the pane shows "Loading…", not
     /// a premature "no sandboxes" empty state).
     @Committed private(set) var sandboxesLoading = false
@@ -445,10 +451,12 @@ final class WorkspaceController: ObservableObject {
 
     private func sandboxAction(_ name: String, _ work: @escaping () async throws -> Void) {
         sandboxBusy.insert(name)
+        sandboxErrors[name] = nil
         Task {
             defer { self.sandboxBusy.remove(name) }
             do { try await work() } catch {
                 self.lastError = error.localizedDescription
+                self.sandboxErrors[name] = error.localizedDescription
                 Log.error(.workspace, "sandbox action \(name) failed: \(error.localizedDescription)")
             }
             self.refreshSandboxes()
@@ -1069,6 +1077,9 @@ struct SessionRuntime: Equatable {
     var lastActivityAt: Date?
     /// A live terminal is open for this session (drives bold name weight).
     var isLive: Bool = false
+    /// The session's agent stopped and can't go on (a chat that isn't signed
+    /// in, or whose agent exited): why, shown instead of "Ready".
+    var stoppedReason: String?
     /// Session finished a working burst in the background; user hasn't looked.
     var isUnread: Bool = false
     /// Latest status Claude Code reported for this session (model, context,
@@ -1193,6 +1204,14 @@ extension WorkspaceController {
 
     /// Whether a session has a live terminal (set by the detail pane).
     func isLive(_ id: UUID) -> Bool { runtimes[id]?.isLive ?? false }
+    func setStopped(_ id: UUID, _ reason: String?) {
+        var rt = runtimes[id] ?? SessionRuntime()
+        guard rt.stoppedReason != reason else { return }
+        rt.stoppedReason = reason
+        if reason != nil { rt.status = .ready; rt.workingSince = nil }
+        runtimes[id] = rt
+    }
+
     func setLive(_ id: UUID, _ live: Bool) {
         var rt = runtimes[id] ?? SessionRuntime()
         guard rt.isLive != live else { return }
@@ -1426,6 +1445,15 @@ extension WorkspaceController {
         return "New \(agent.displayName) Session"
     }
 
+    /// The default names before agents had brand spellings (the raw id,
+    /// capitalized: "New Docker-Agent Session", "New Opencode Session").
+    private static func legacyDefaultSessionName(for agent: AgentKind, containerAgent: AgentKind? = nil) -> String {
+        if let containerAgent, containerAgent != agent {
+            return "\(agent.rawValue.capitalized) in \(containerAgent.rawValue.capitalized)"
+        }
+        return "New \(agent.rawValue.capitalized) Session"
+    }
+
     /// Add a session, or reuse an existing **pristine** one (same project +
     /// agent + container, never used: still showing its default name and not
     /// manually renamed) so repeatedly asking for a new session doesn't pile up
@@ -1439,13 +1467,19 @@ extension WorkspaceController {
         // Normalize away a no-op override so it doesn't split reuse buckets.
         let override = (containerAgent == agent) ? nil : containerAgent
         let defaultName = Self.defaultSessionName(for: agent, containerAgent: override)
+        let defaultNames: Set = [defaultName, Self.legacyDefaultSessionName(for: agent, containerAgent: override)]
         if name == nil,
-           let existing = state.sessions.first(where: {
+           let index = state.sessions.firstIndex(where: {
                $0.folderID == folderID && $0.agent == agent
-                   && $0.containerAgent == override && $0.name == defaultName && $0.isChat == chat
+                   && $0.containerAgent == override && defaultNames.contains($0.name) && $0.isChat == chat
                    && runtimes[$0.id] == nil   // never launched (shells keep their default name)
            }) {
-            return existing   // reuse the pristine "New … Session" (no prompts yet)
+            // Reuse the pristine "New … Session" (no prompts yet), under today's spelling.
+            if state.sessions[index].name != defaultName {
+                state.sessions[index].name = defaultName
+                saveState()
+            }
+            return state.sessions[index]
         }
         let session = Session(
             folderID: folderID,
