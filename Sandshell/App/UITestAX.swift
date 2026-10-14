@@ -51,12 +51,15 @@ enum UITestAX {
 
     /// SwiftUI builds a hosting view's accessibility tree only once an
     /// assistive client shows up (none does with the screen locked): say one has.
+    /// (The legacy attribute API, by selector: only it can say so.)
     private static func wakeSwiftUI(_ window: NSWindow) {
-        NSApp.accessibilitySetValue(NSNumber(value: true),
-                                    forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface"))
+        _ = NSApp.perform(NSSelectorFromString("accessibilitySetValue:forAttribute:"),
+                          with: NSNumber(value: true), with: "AXEnhancedUserInterface")
         var sheet: NSWindow? = window
         while let w = sheet {
-            for v in w.contentView.map({ [$0] + $0.subviews }) ?? [] { _ = v.accessibilityAttributeValue(.children) }
+            for v in w.contentView.map({ [$0] + $0.subviews }) ?? [] {
+                _ = v.perform(NSSelectorFromString("accessibilityAttributeValue:"), with: "AXChildren")
+            }
             sheet = w.attachedSheet
         }
     }
@@ -64,7 +67,7 @@ enum UITestAX {
     /// An element of the tree. SwiftUI's nodes answer the NSAccessibility
     /// selectors without being `NSAccessibilityProtocol` to Swift, so they're
     /// reached through Objective-C dispatch.
-    struct Node {
+    @MainActor struct Node {
         let object: AnyObject
         var identifier: String? {
             guard let id = object.accessibilityIdentifier?(), !id.isEmpty else { return nil }

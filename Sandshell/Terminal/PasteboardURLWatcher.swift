@@ -39,7 +39,7 @@ final class PasteboardURLWatcher {
         // became active — only react to changes from here on.
         lastChangeCount = NSPasteboard.general.changeCount
         timer = Timer.scheduledTimer(withTimeInterval: pollInterval, repeats: true) { [weak self] _ in
-            self?.poll()
+            MainActor.assumeIsolated { self?.poll() }
         }
     }
 

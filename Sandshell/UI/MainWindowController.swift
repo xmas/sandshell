@@ -41,6 +41,15 @@ final class MainWindowController: NSWindowController {
         stack.orientation = .horizontal
         stack.alignment = .centerY
         stack.spacing = 8
+        // 200–360 pt, as wide as it can be: a long session name truncates
+        // instead of blowing the whole toolbar into the overflow menu.
+        stack.setHuggingPriority(.init(1), for: .horizontal)
+        stack.setClippingResistancePriority(.init(1), for: .horizontal)
+        NSLayoutConstraint.activate([
+            stack.widthAnchor.constraint(greaterThanOrEqualToConstant: 200),
+            stack.widthAnchor.constraint(lessThanOrEqualToConstant: 360),
+            stack.heightAnchor.constraint(equalToConstant: 32),
+        ])
         return stack
     }()
     /// The workspace root this window is bound to (window-per-folder).
@@ -240,6 +249,11 @@ final class MainWindowController: NSWindowController {
         toolbarSubtitle.lineBreakMode = .byTruncatingMiddle
         toolbarStatus.font = .systemFont(ofSize: 12, weight: .medium)
         toolbarStatus.textColor = .secondaryLabelColor
+        toolbarStatus.setContentHuggingPriority(.init(1), for: .horizontal)
+        NSLayoutConstraint.activate([
+            toolbarStatus.widthAnchor.constraint(greaterThanOrEqualToConstant: 40),
+            toolbarStatus.widthAnchor.constraint(lessThanOrEqualToConstant: 150),
+        ])
         toolbarName.stringValue = ""   // no session yet: the sidebar header names the folder
         toolbarBadge.isHidden = true
 
@@ -321,6 +335,14 @@ final class MainWindowController: NSWindowController {
     #if DEBUG
     /// Self-test access (see SelfTest).
     var paneTree: PaneTreeController? { detail }
+
+    #if DEBUG
+    /// Self-test: the toolbar's identity and status views' widths.
+    var debugToolbarWidths: (identity: CGFloat, status: CGFloat, visible: Int, items: Int) {
+        (identityItemView.frame.width, toolbarStatus.frame.width,
+         window?.toolbar?.visibleItems?.count ?? -1, window?.toolbar?.items.count ?? -1)
+    }
+    #endif
     var inspectorFiles: FilesPaneController? { filesPane }
     var workspaceController: WorkspaceController? { workspace }
     var sidebarList: SidebarListController? { sidebar }
@@ -595,11 +617,7 @@ extension MainWindowController: NSToolbarDelegate {
         // the toolbar identity blank — see the identityItemView note).
         if itemIdentifier == .identity {
             let item = NSToolbarItem(itemIdentifier: .identity)
-            item.view = flag ? identityItemView : NSTextField(labelWithString: "Session")
-            // Bound the width so a long session name truncates instead of blowing
-            // the whole toolbar into the overflow menu.
-            item.minSize = NSSize(width: 200, height: 32)
-            item.maxSize = NSSize(width: 360, height: 32)
+            item.view = flag ? identityItemView : NSTextField(labelWithString: "Session")   // width: see identityItemView
             item.visibilityPriority = .high
             // No bezel: on macOS 26+/SDK 27 a bordered item is wrapped in a Liquid
             // Glass capsule, which is not this app's look (xmas-sandshell-85c).
@@ -610,8 +628,6 @@ extension MainWindowController: NSToolbarDelegate {
             toolbarStatus.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
             let item = NSToolbarItem(itemIdentifier: .sessionStatus)
             item.view = flag ? toolbarStatus : NSTextField(labelWithString: "Status")
-            item.minSize = NSSize(width: 40, height: 20)
-            item.maxSize = NSSize(width: 150, height: 20)
             item.isBordered = false
             return item
         }

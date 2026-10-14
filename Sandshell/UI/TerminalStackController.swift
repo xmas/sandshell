@@ -1337,7 +1337,8 @@ final class TerminalStackController: NSViewController {
         showStatus(resumeID == nil ? "Starting \(session.agent.displayName)…"
                                    : "Restoring \(session.agent.displayName)…", busy: true)
 
-        Task {
+        // Holds the pane until the terminal is up (its exit handler holds it weakly).
+        Task { [self] in
             let containerName = await controller.ensureContainerReady(for: session.containerAgentKind)
             pending.remove(id)
             guard let containerName else {

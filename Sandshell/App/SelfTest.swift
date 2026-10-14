@@ -1319,6 +1319,10 @@ enum SelfTest {
             frame.size.width = width
             w.setFrame(frame, display: true)
             await measure("window-\(Int(width))")
+            let t = window.debugToolbarWidths
+            log("  toolbar at \(Int(width)): identity \(Int(t.identity)) status \(Int(t.status)) visible \(t.visible)/\(t.items)")
+            check(t.visible == t.items && t.identity >= 199 && t.identity <= 361,
+                  "at \(Int(width)) the toolbar fits every item; the identity flexes within 200–360")
         }
         // A narrow split pane: the readout is down to its model chooser.
         tree.split(pane, edge: .trailing, showing: nil)
