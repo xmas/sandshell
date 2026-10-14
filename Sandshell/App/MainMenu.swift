@@ -67,6 +67,9 @@ enum MainMenu {
         let openFolder = fileMenu.addItem(withTitle: "Open Folder…",
                                           action: #selector(AppDelegate.openFolder(_:)), keyEquivalent: "n")
         openFolder.keyEquivalentModifierMask = [.command, .option]
+        let openQuickly = fileMenu.addItem(withTitle: "Open Quickly…", action: #selector(AppDelegate.openQuickly(_:)),
+                                           keyEquivalent: "o")
+        openQuickly.keyEquivalentModifierMask = [.command, .shift]
         fileMenu.addItem(withTitle: "Save", action: #selector(FileEditorController.saveDocument(_:)), keyEquivalent: "s")
         fileMenu.addItem(withTitle: "Welcome to Sandshell…",
                          action: #selector(AppDelegate.runFirstLaunchSetup(_:)), keyEquivalent: "")
@@ -105,6 +108,8 @@ enum MainMenu {
             finderItem("Use Selection for Find", .setSearchString, "e"),
             NSMenuItem(title: "Jump to Selection", action: #selector(NSResponder.centerSelectionInVisibleArea(_:)),
                        keyEquivalent: "j"),
+            .separator(),
+            NSMenuItem(title: "Go to Line…", action: #selector(FileEditorController.goToLine(_:)), keyEquivalent: "l"),
         ]))
         editMenu.addItem(submenu("Spelling and Grammar", [
             NSMenuItem(title: "Show Spelling and Grammar", action: #selector(NSText.showGuessPanel(_:)), keyEquivalent: ":"),
@@ -139,6 +144,9 @@ enum MainMenu {
         let showFiles = viewMenu.addItem(withTitle: "Show Files", action: #selector(AppDelegate.toggleFiles(_:)),
                                          keyEquivalent: "0")
         showFiles.keyEquivalentModifierMask = [.command, .option]
+        let filesSplit = viewMenu.addItem(withTitle: "Open Files in Split", action: #selector(AppDelegate.openFilesInSplit(_:)),
+                                          keyEquivalent: "0")
+        filesSplit.keyEquivalentModifierMask = [.command, .option, .shift]
         viewMenu.addItem(.separator())
         viewMenu.addItem(withTitle: "Split Right", action: #selector(AppDelegate.splitRight(_:)), keyEquivalent: "d")
         let splitDown = viewMenu.addItem(withTitle: "Split Down", action: #selector(AppDelegate.splitDown(_:)), keyEquivalent: "d")
@@ -149,7 +157,9 @@ enum MainMenu {
         nextPane.keyEquivalentModifierMask = [.command, .option]
         let prevPane = viewMenu.addItem(withTitle: "Previous Pane", action: #selector(AppDelegate.focusPreviousPane(_:)), keyEquivalent: "[")
         prevPane.keyEquivalentModifierMask = [.command, .option]
-        viewMenu.addItem(withTitle: "Equalize Panes", action: #selector(AppDelegate.equalizePanes(_:)), keyEquivalent: "")
+        let equalize = viewMenu.addItem(withTitle: "Equalize Panes", action: #selector(AppDelegate.equalizePanes(_:)),
+                                        keyEquivalent: "=")
+        equalize.keyEquivalentModifierMask = [.command, .control]
         viewMenu.addItem(.separator())
         let hideSidebar = viewMenu.addItem(withTitle: "Hide Sidebar",
                                            action: #selector(AppDelegate.hideSidebar(_:)), keyEquivalent: "1")

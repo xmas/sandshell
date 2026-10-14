@@ -88,6 +88,77 @@ struct GitStatus: Sendable, Equatable {
         p.waitUntilExit()
         return p.terminationStatus == 0 ? String(decoding: data, as: UTF8.self) : nil
     }
+
+    /// Run a git command that changes the repo; nil on success, else git's message.
+    nonisolated static func change(_ args: [String]) -> String? {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+        p.arguments = args
+        let err = Pipe()
+        p.standardOutput = FileHandle.nullDevice
+        p.standardError = err
+        do { try p.run() } catch { return error.localizedDescription }
+        let data = err.fileHandleForReading.readDataToEndOfFile()
+        p.waitUntilExit()
+        guard p.terminationStatus != 0 else { return nil }
+        let message = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        return message.isEmpty ? "git exited with status \(p.terminationStatus)" : message
+    }
+}
+
+// MARK: - Hunks
+
+/// One file's unified diff split into hunks, so a single hunk can be staged,
+/// unstaged or reverted with `git apply` (the repo is on the host: session
+/// workdirs are host paths mounted into the sandbox).
+struct FilePatch: Equatable, Sendable {
+    /// `diff --git` / `index` / `---` / `+++` lines.
+    var header: [String] = []
+    /// Each hunk's lines, starting with its `@@` line.
+    var hunks: [[String]] = []
+
+    var isEmpty: Bool { hunks.isEmpty }
+
+    init(_ diff: String) {
+        var lines = diff.components(separatedBy: "\n")
+        if lines.last == "" { lines.removeLast() }
+        for line in lines {
+            if line.hasPrefix("@@") { hunks.append([line]) }
+            else if hunks.isEmpty { header.append(line) }
+            else { hunks[hunks.count - 1].append(line) }
+        }
+    }
+
+    /// A patch holding only hunk `index` (the file header plus that hunk).
+    func patch(forHunk index: Int) -> String {
+        (header + hunks[index]).joined(separator: "\n") + "\n"
+    }
+
+    enum Action: String, Sendable {
+        case stage, unstage, revert
+
+        /// `git apply` flags: stage → index; unstage → index, reversed;
+        /// revert → working tree, reversed.
+        var applyArgs: [String] {
+            switch self {
+            case .stage: ["--cached"]
+            case .unstage: ["--cached", "-R"]
+            case .revert: ["-R"]
+            }
+        }
+    }
+
+    /// Apply hunk `index` in `repo`; nil on success, else git's message.
+    func apply(_ action: Action, hunk index: Int, repo: String) async -> String? {
+        let patch = patch(forHunk: index)
+        return await Task.detached(priority: .userInitiated) {
+            let file = FileManager.default.temporaryDirectory
+                .appendingPathComponent("sandshell-hunk-\(UUID().uuidString).patch")
+            do { try patch.write(to: file, atomically: true, encoding: .utf8) } catch { return error.localizedDescription }
+            defer { try? FileManager.default.removeItem(at: file) }
+            return GitStatus.change(["-C", repo, "apply"] + action.applyArgs + ["--whitespace=nowarn", file.path])
+        }.value
+    }
 }
 
 // MARK: - File tree

@@ -109,6 +109,23 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
         refreshGit()
     }
 
+    /// Expand down to `url` and select it (Open Quickly) — unless a filter is showing.
+    func reveal(_ url: URL) {
+        guard let root, let rootNode, filterResults == nil, searchGroups == nil,
+              url.path.hasPrefix(root.path + "/") else { return }
+        var node = rootNode
+        for name in url.path.dropFirst(root.path.count + 1).split(separator: "/") {
+            if !node.isLoaded { node.loadChildren() }
+            guard let child = node.children?.first(where: { $0.name == name }) else { return }
+            if node !== rootNode { outline.expandItem(node) }
+            node = child
+        }
+        let row = outline.row(forItem: node)
+        guard row >= 0 else { return }
+        outline.selectRowIndexes([row], byExtendingSelection: false)
+        outline.scrollRowToVisible(row)
+    }
+
     /// Coalesce file-system bursts into one re-list + git status.
     private func scheduleRefresh() {
         guard !refreshPending else { return }

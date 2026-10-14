@@ -111,6 +111,8 @@ final class SidebarListController: NSViewController {
     var onOpenWorkspace: ((URL) -> Void)?
     /// Files dropped on a session row (the window routes them to that session).
     var onDropFiles: ((UUID, [URL]) -> Void)?
+    /// "Open Files in Split" from a session row's context menu.
+    var onOpenFilesInSplit: ((UUID) -> Void)?
 
     /// True while a container is building/rebuilding (drives the empty-state
     /// placeholder — session creation itself is never gated on this).
@@ -1013,6 +1015,7 @@ final class SidebarListController: NSViewController {
             return menu
         }
         menu.addItem(menuItem("Close Session", #selector(contextCloseSession), object: session.id))
+        menu.addItem(menuItem("Open Files in Split", #selector(contextOpenFiles), object: session.id))
         if session.agent == .claude {
             menu.addItem(menuItem(session.isChat ? "Show as Terminal" : "Show as Chat",
                                   #selector(contextToggleChat), object: session.id))
@@ -1035,6 +1038,10 @@ final class SidebarListController: NSViewController {
         item.target = self
         item.representedObject = object
         return item
+    }
+
+    @objc private func contextOpenFiles(_ sender: NSMenuItem) {
+        if let id = sender.representedObject as? UUID { onOpenFilesInSplit?(id) }
     }
 
     @objc private func contextCloseSession(_ sender: NSMenuItem) {

@@ -102,6 +102,10 @@ final class MainWindowController: NSWindowController {
         let sidebarVC = SidebarListController(controller: controller)
         self.sidebar = sidebarVC
         sidebarVC.onOpenWorkspace = { [weak self] r in self?.onOpenWorkspace?(r) }
+        sidebarVC.onOpenFilesInSplit = { [weak self] id in
+            guard let s = self?.workspace?.session(id: id) else { return }
+            self?.detail?.openFiles(FilesTarget(session: id, folder: s.workdir))
+        }
         sidebarVC.onDropFiles = { [weak self] id, urls in
             self?.workspace?.selection = .session(id)
             self?.detail?.dropFiles(urls, on: id)
@@ -313,6 +317,7 @@ final class MainWindowController: NSWindowController {
     #if DEBUG
     /// Self-test access (see SelfTest).
     var paneTree: PaneTreeController? { detail }
+    var inspectorFiles: FilesPaneController? { filesPane }
     var workspaceController: WorkspaceController? { workspace }
     #endif
 
@@ -356,7 +361,28 @@ final class MainWindowController: NSWindowController {
         syncFilesRoot()
     }
 
-    @objc func toggleFilesFromToolbar() { toggleFiles() }
+    /// Toolbar Files button: click toggles the trailing Files pane;
+    /// ⌥-click opens Files in a split beside the focused pane instead.
+    @objc func toggleFilesFromToolbar() {
+        if NSApp.currentEvent?.modifierFlags.contains(.option) == true { openFilesInSplit() } else { toggleFiles() }
+    }
+
+    /// View ▸ Open Files in Split (⇧⌥⌘0): the focused session's folder as a pane.
+    func openFilesInSplit() {
+        guard let detail else { return }
+        detail.openFiles(detail.defaultFilesTarget())
+    }
+
+    /// File ▸ Open Quickly (⇧⌘O) when no Files surface has focus: the focused
+    /// Files pane, else the trailing Files pane (shown if needed), else any.
+    func openQuickly() {
+        if let files = detail?.focusedFiles { return files.openQuickly(nil) }
+        if let item = filesItem, !item.isCollapsed, let files = filesPane { return files.openQuickly(nil) }
+        if let files = detail?.anyFiles { return files.openQuickly(nil) }
+        toggleFiles()
+        // After the inspector's expand animation, so the popover anchors in place.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in self?.filesPane?.openQuickly(nil) }
+    }
 
     private func syncFilesRoot() {
         guard let workspace, let filesItem, !filesItem.isCollapsed else { return }
@@ -553,7 +579,7 @@ extension MainWindowController: NSToolbarDelegate {
             let item = NSToolbarItem(itemIdentifier: .filesToggle)
             item.label = "Files"
             item.paletteLabel = "Show Files"
-            item.toolTip = "Show Files (⌥⌘0)"
+            item.toolTip = "Show Files (⌥⌘0) — ⌥-click to open Files in a split"
             item.view = Self.plainToolbarButton(symbol: "sidebar.right", label: "Show Files",
                                                 target: self, action: #selector(toggleFilesFromToolbar))
             return item

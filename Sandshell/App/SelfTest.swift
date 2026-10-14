@@ -52,6 +52,8 @@ enum SelfTest {
         case "chat": await chat(window)
         case "building": await building(window)
         case "alerts": alerts()
+        case "files": await files(window)
+        case "files-relaunch": await filesRelaunch(window)
         default: log("unknown self-test \(requested ?? "")")
         }
         log(failures == 0 ? "ALL PASSED" : "\(failures) FAILED")
@@ -236,6 +238,138 @@ enum SelfTest {
         let started = Date()
         let answer = alert.runModal()
         check(answer == .alertFirstButtonReturn, String(format: "app-modal alert answered with its default button in %.1fs", Date().timeIntervalSince(started)))
+    }
+
+    // MARK: Files in a pane
+
+    private static func snapshot(_ view: NSView, _ name: String) {
+        view.layoutSubtreeIfNeeded()
+        guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
+        view.cacheDisplay(in: view.bounds, to: rep)
+        try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: out + "/\(name).png"))
+        log("snapshot \(name).png")
+    }
+
+    private static func git(_ repo: URL, _ args: String...) -> String {
+        GitStatus.git(["-C", repo.path] + args) ?? "<git failed>"
+    }
+
+    /// Needs a workspace that is a git repo with README.md (headings, prose,
+    /// a fenced code block) and a committed src/app.py modified in two places,
+    /// plus one shell session.
+    private static func files(_ window: MainWindowController) async {
+        guard let tree = window.paneTree, let ws = window.workspaceController else { return log("no window") }
+        guard let a = ws.orderedSessions.first?.id else { return log("need a session") }
+        let repo = ws.rootURL
+        ws.selection = .session(a)
+        check(await until(90) { tree.surfaces.terminals[a] != nil }, "session launches in the only pane")
+
+        window.openFilesInSplit()
+        await wait()
+        check(tree.panes.count == 2 && tree.panes[0].shownSession == a && tree.panes[1].shownFiles?.session == a,
+              "Open Files in Split puts Files for the session beside it")
+        check(tree.focused === tree.panes[1], "the Files pane is focused")
+        guard let files = tree.panes[1].filesPane else { return log("no Files surface") }
+        check(await until(10) { files.tree.git.repoRoot != nil }, "Files pane sees the git repo")
+        check(files.tree.root?.standardizedFileURL.path == repo.standardizedFileURL.path, "Files root is the session's folder")
+
+        window.openFilesInSplit()
+        await wait()
+        check(tree.panes.count == 2, "opening the same Files again focuses it instead of duplicating")
+
+        // Picking a session while Files is focused leaves the Files pane in place.
+        ws.selection = nil
+        ws.selection = .session(a)
+        await wait()
+        check(tree.panes[1].shownFiles != nil && tree.focused === tree.panes[0], "sidebar pick focuses the session pane, Files stays")
+
+        // Markdown preview: serif prose, monospaced code.
+        files.open(repo.appendingPathComponent("README.md"))
+        await wait(0.8)
+        if let text = files.editor.previewText, text.length > 0 {
+            let s = text.string as NSString
+            func font(at needle: String) -> NSFont? {
+                let r = s.range(of: needle)
+                return r.location == NSNotFound ? nil : text.attribute(.font, at: r.location, effectiveRange: nil) as? NSFont
+            }
+            let prose = font(at: "Sandshell keeps")
+            let code = font(at: "print(")
+            let heading = font(at: "Scratch Notes")
+            log("prose font: \(prose?.fontName ?? "nil") · heading: \(heading?.fontName ?? "nil") · code: \(code?.fontName ?? "nil")")
+            func isSerif(_ f: NSFont?) -> Bool {
+                guard let f else { return false }
+                let name = f.fontName.lowercased()
+                return name.contains("newyork") || name.contains("serif") || (f.familyName ?? "").contains("New York")
+            }
+            check(isSerif(prose) && isSerif(heading), "Markdown prose and headings render in New York")
+            check(code?.isFixedPitch == true, "Markdown code stays monospaced")
+        } else {
+            check(false, "Markdown preview rendered")
+        }
+        await wait(0.4)
+        snapshot(window, "files-split")
+        snapshot(files.view, "files-markdown")
+
+        // Open Quickly finds and opens src/app.py.
+        files.openQuickly(nil)
+        await wait(0.6)
+        if let finder = files.openQuicklyController {
+            _ = await until(5) { finder.search("apy"); return !finder.results.isEmpty }
+            check(finder.results.first == "src/app.py", "Open Quickly: “apy” finds src/app.py first (got \(finder.results.prefix(3)))")
+            snapshot(finder.view, "files-open-quickly")
+            finder.openSelected()
+            await wait()
+            check(files.editor.currentURL?.lastPathComponent == "app.py", "Open Quickly opens the file")
+        } else {
+            check(false, "Open Quickly popover shown")
+        }
+
+        // Go to Line.
+        files.editor.goToLineForTesting(7)
+        check(files.editor.caretLineForTesting == 7, "Go to Line moves the caret to line 7")
+
+        // Changes view: two unstaged hunks → stage one → unstage → revert one.
+        files.editor.setMode(.changes)
+        check(await until(5) { files.editor.hunkCounts.map { $0 == (2, 0) } ?? false },
+              "Changes view shows 2 unstaged hunks (got \(String(describing: files.editor.hunkCounts)))")
+        snapshot(files.view, "files-changes")
+        var error = await files.editor.performHunkAction(.stage, hunk: 0, staged: false)
+        check(error == nil, "stage hunk 1 \(error ?? "")")
+        check(await until(5) { files.editor.hunkCounts.map { $0 == (1, 1) } ?? false }, "after staging: 1 unstaged, 1 staged")
+        check(git(repo, "diff", "--cached", "--numstat").contains("src/app.py"), "the hunk is in the index")
+        snapshot(files.view, "files-changes-staged")
+        error = await files.editor.performHunkAction(.unstage, hunk: 0, staged: true)
+        check(error == nil, "unstage it \(error ?? "")")
+        check(await until(5) { files.editor.hunkCounts.map { $0 == (2, 0) } ?? false }, "after unstaging: 2 unstaged again")
+        let before = (try? String(contentsOf: repo.appendingPathComponent("src/app.py"), encoding: .utf8)) ?? ""
+        error = await files.editor.performHunkAction(.revert, hunk: 1, staged: false)
+        check(error == nil, "revert hunk 2 \(error ?? "")")
+        let after = (try? String(contentsOf: repo.appendingPathComponent("src/app.py"), encoding: .utf8)) ?? ""
+        check(before.contains("CHANGED-TAIL") && !after.contains("CHANGED-TAIL") && after.contains("CHANGED-HEAD"),
+              "revert removed only the second hunk from the file")
+        check(await until(5) { files.editor.hunkCounts.map { $0 == (1, 0) } ?? false }, "after revert: 1 unstaged hunk")
+
+        // Equalize, then the layout (with its Files pane) is saved.
+        window.equalizePanes()
+        await wait(1.2)
+        let key = "paneLayout:" + ws.rootURL.standardizedFileURL.path
+        let saved = UserDefaults.standard.data(forKey: key).map { String(decoding: $0, as: UTF8.self) } ?? ""
+        log("saved layout: \(saved)")
+        check(saved.contains("\"files\"") && saved.contains(a.uuidString), "layout saved with the Files pane")
+    }
+
+    /// Second launch after `files`: the Files pane comes back beside the session.
+    private static func filesRelaunch(_ window: MainWindowController) async {
+        guard let tree = window.paneTree, let ws = window.workspaceController else { return log("no window") }
+        await wait(1.0)
+        check(tree.panes.count == 2, "two panes restored (got \(tree.panes.count))")
+        let filesPane = tree.panes.first { $0.shownFiles != nil }
+        check(filesPane != nil && tree.panes.contains { $0.shownSession != nil }, "a session pane and a Files pane restored")
+        if let files = filesPane?.filesPane {
+            check(files.tree.root?.standardizedFileURL.path == ws.rootURL.standardizedFileURL.path, "restored Files shows the session's folder")
+        }
+        await wait(1.5)
+        snapshot(window, "files-relaunch")
     }
 }
 #endif

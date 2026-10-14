@@ -295,6 +295,11 @@ final class TerminalStackController: NSViewController {
 
     /// The session this pane shows (the pane tree decides; nil = empty pane).
     private(set) var shownSession: UUID?
+    /// Or the Files tree + editor for a session's folder (exclusive with a session).
+    private(set) var shownFiles: FilesTarget?
+    private(set) var filesPane: FilesPaneController?
+    /// "Add to Chat" from this pane's Files tree.
+    var onFilesAddToChat: (([URL], FilesTarget) -> Void)?
     /// Focused pane: the one the sidebar selection and toolbar act on.
     var isFocused = true { didSet { updateFocusRing() } }
     /// Draw the focus ring only when there's more than one pane.
@@ -374,10 +379,75 @@ final class TerminalStackController: NSViewController {
 
     // MARK: Pane
 
-    /// Show `id` in this pane (nil = empty).
+    /// Show `id` in this pane (nil = empty). Unsaved Files edits are the
+    /// caller's to confirm first (`confirmLeavingFiles`).
     func show(_ id: UUID?) {
+        dropFilesPane()
         shownSession = id
         refresh()
+    }
+
+    /// Show the Files tree + editor for `target` instead of a session.
+    func showFiles(_ target: FilesTarget) {
+        shownSession = nil
+        shownFiles = target
+        refresh()
+    }
+
+    /// Before replacing or closing a Files pane: save/discard edits (false = cancel).
+    func confirmLeavingFiles() -> Bool { filesPane?.confirmClose() ?? true }
+
+    private func dropFilesPane() {
+        shownFiles = nil
+        guard let filesPane else { return }
+        filesPane.view.superview?.removeFromSuperview()
+        filesPane.removeFromParent()
+        self.filesPane = nil
+    }
+
+    private func presentFiles(_ target: FilesTarget) {
+        let files: FilesPaneController
+        if let existing = filesPane {
+            files = existing
+        } else {
+            files = FilesPaneController(compact: true)
+            files.onAddToChat = { [weak self] urls in
+                guard let self, let target = self.shownFiles else { return }
+                self.onFilesAddToChat?(urls, target)
+            }
+            addChild(files)
+            // The editor paints the system text background, not the terminal's.
+            let surface = FilesSurfaceView()
+            files.view.translatesAutoresizingMaskIntoConstraints = false
+            surface.addSubview(files.view)
+            NSLayoutConstraint.activate([
+                files.view.topAnchor.constraint(equalTo: surface.topAnchor),
+                files.view.bottomAnchor.constraint(equalTo: surface.bottomAnchor),
+                files.view.leadingAnchor.constraint(equalTo: surface.leadingAnchor),
+                files.view.trailingAnchor.constraint(equalTo: surface.trailingAnchor),
+            ])
+            addTerminalView(surface)
+            filesPane = files
+        }
+        guard let surface = files.view.superview else { return }
+        let (url, title) = target.resolve(in: controller)
+        files.setRoot(url)
+        hideHostContents(except: surface)
+        surface.isHidden = false
+        activeSessionID = nil
+        titleLabel.stringValue = "Files — \(title)"
+        claudeStats.isHidden = true
+        claudeStatsCollapsed.isActive = true
+        frameView.isHidden = false
+        restartButton.isHidden = true
+        spinner.stopAnimation(nil)
+        statusStack.isHidden = true
+        kitBannerContextActive = false
+        kitBannerFallbackAgent = nil
+        updateKitBanner()
+        updateFocusRing()
+        onChromeChange?(nil)
+        onStatusChange?("", false)
     }
 
     /// Re-send this pane's identity/status to the window (it became focused).
@@ -694,6 +764,8 @@ final class TerminalStackController: NSViewController {
     /// `selection` may be passed by the `$selection` sink; other callers pass nil
     /// to use the current one.
     func refresh() {
+        // Files don't wait on the container.
+        if let files = shownFiles { return presentFiles(files) }
         if controller.isBuilding {
             showStatus(controller.activity ?? "Building…", busy: true)
             return
@@ -1513,4 +1585,16 @@ extension TerminalStackController: NSToolbarItemValidation {
         }
         return session?.agent == .claude
     }
+}
+
+/// Background for a Files surface in a pane: the system text background,
+/// following light/dark (CALayer colors don't track appearance on their own).
+private final class FilesSurfaceView: NSView {
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+    }
+    required init?(coder: NSCoder) { fatalError() }
+    override var wantsUpdateLayer: Bool { true }
+    override func updateLayer() { layer?.backgroundColor = NSColor.textBackgroundColor.cgColor }
 }

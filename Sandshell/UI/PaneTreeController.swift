@@ -8,9 +8,11 @@ extension NSPasteboard.PasteboardType {
 
 /// The window's detail area as a tree of split panes. Each leaf is a
 /// `TerminalStackController` showing one session from the shared
-/// `SessionSurfaces`; splits are native NSSplitViews (draggable dividers),
-/// nested either way. The focused pane follows the sidebar selection; the
-/// layout (structure, sessions, divider fractions) is saved per window.
+/// `SessionSurfaces`, or a Files surface (tree + editor) for a session's
+/// folder; splits are native NSSplitViews (draggable dividers), nested either
+/// way. The focused pane follows the sidebar selection — a Files pane stays put
+/// and the selection goes to the last session pane instead; the layout
+/// (structure, sessions, Files panes, divider fractions) is saved per window.
 @MainActor
 final class PaneTreeController: NSViewController, NSSplitViewDelegate {
     /// Split orientation: `.horizontal` = side by side (vertical divider).
@@ -37,6 +39,9 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
     let surfaces: SessionSurfaces
     private var root: Node!
     private(set) var focused: TerminalStackController!
+    /// The session pane focused most recently (sidebar picks land there while
+    /// a Files pane has focus).
+    private weak var lastSessionPane: TerminalStackController?
     private var sidebarCollapsed = false
     private var cancellables: Set<AnyCancellable> = []
     private var clickMonitor: Any?
@@ -103,6 +108,10 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
             if let self, pane === self.focused { self.onStatusChange?(text, working) }
         }
         pane.onClosePane = { [weak self, weak pane] in if let pane { self?.close(pane) } }
+        pane.onFilesAddToChat = { [weak self] urls, target in
+            guard let self else { return }
+            if let id = target.session ?? self.selectedSession { self.dropFiles(urls, on: id) }
+        }
         addChild(pane)
         return pane
     }
@@ -111,6 +120,9 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
     func focus(_ pane: TerminalStackController) {
         focused = pane
         for p in panes { p.isFocused = p === pane }
+        // A Files pane leaves the sidebar selection alone.
+        guard pane.shownFiles == nil else { return pane.reemitChrome() }
+        lastSessionPane = pane
         if let id = pane.shownSession {
             if controller.selection != .session(id) { controller.selection = .session(id) }
         } else if controller.selection != nil {
@@ -129,9 +141,51 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
             if other !== focused { focus(other) }
             return
         }
+        if focused.shownFiles != nil {
+            // Keep the Files pane: show the session in the last session pane,
+            // or in a new one beside the Files.
+            if let target = lastSessionPane ?? panes.first(where: { $0.shownFiles == nil }),
+               panes.contains(where: { $0 === target }) {
+                target.show(id)
+                focus(target)
+                scheduleSave()
+            } else {
+                split(focused, edge: .leading, showing: id)
+            }
+            return
+        }
         focused.show(id)
         focused.reemitChrome()
         scheduleSave()
+    }
+
+    private var selectedSession: UUID? {
+        if case .session(let id)? = controller.selection { id } else { nil }
+    }
+
+    // MARK: Files panes
+
+    /// The Files surface of the focused pane, if it shows one.
+    var focusedFiles: FilesPaneController? { focused?.filesPane }
+
+    /// Any pane's Files surface (the focused one first).
+    var anyFiles: FilesPaneController? { focusedFiles ?? panes.lazy.compactMap(\.filesPane).first }
+
+    /// What "Open Files in Split" shows: the focused pane's session, else the
+    /// selected one, else the workspace folder.
+    func defaultFilesTarget() -> FilesTarget {
+        if let id = focused?.shownSession ?? selectedSession, let s = controller.session(id: id) {
+            return FilesTarget(session: id, folder: s.workdir)
+        }
+        if let files = focused?.shownFiles { return files }
+        return FilesTarget(session: nil, folder: controller.rootURL.path)
+    }
+
+    /// Open a Files pane to the right of the focused pane (or focus the one
+    /// already showing `target`).
+    func openFiles(_ target: FilesTarget) {
+        if let existing = panes.first(where: { $0.shownFiles == target }) { return focus(existing) }
+        split(focused, edge: .trailing, showing: nil, files: target)
     }
 
     // MARK: Splitting
@@ -144,7 +198,7 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
         split(focused, edge: edge, showing: session)
     }
 
-    func split(_ pane: TerminalStackController, edge: Edge, showing session: UUID?) {
+    func split(_ pane: TerminalStackController, edge: Edge, showing session: UUID?, files: FilesTarget? = nil) {
         guard let leaf = node(for: pane) else { return }
         let axis: Axis = (edge == .leading || edge == .trailing) ? .horizontal : .vertical
         let newPane = makePane()
@@ -164,7 +218,9 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
             leaf.fractions = []
         }
         rebuild()
-        if let session {
+        if let files {
+            newPane.showFiles(files)
+        } else if let session {
             panes.filter { $0 !== newPane && $0.shownSession == session }.forEach { $0.show(nil) }
             newPane.show(session)
         } else {
@@ -177,7 +233,7 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
     /// Close a pane (its session keeps running and can be shown again).
     func close(_ pane: TerminalStackController) {
         guard panes.count > 1, let leaf = node(for: pane), let parent = leaf.parent,
-              case .split(let axis, var kids) = parent.kind else { return }
+              case .split(let axis, var kids) = parent.kind, pane.confirmLeavingFiles() else { return }
         kids.removeAll { $0 === leaf }
         if kids.count == 1 {
             let only = kids[0]
@@ -367,6 +423,7 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
         if let edge {
             split(pane, edge: edge, showing: id)
         } else {
+            guard pane.confirmLeavingFiles() else { return false }
             panes.filter { $0 !== pane && $0.shownSession == id }.forEach { $0.show(nil) }
             pane.show(id)
             focus(pane)
@@ -382,6 +439,7 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
         var children: [Saved]?
         var fractions: [CGFloat]?
         var session: UUID?
+        var files: FilesTarget?
     }
 
     private func scheduleSave() {
@@ -392,7 +450,7 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
             self.saveScheduled = false
             @MainActor func encode(_ n: Node) -> Saved {
                 switch n.kind {
-                case .leaf(let p): return Saved(session: p.shownSession)
+                case .leaf(let p): return Saved(session: p.shownSession, files: p.shownFiles)
                 case .split(let a, let kids): return Saved(axis: a, children: kids.map(encode), fractions: n.fractions)
                 }
             }
@@ -415,6 +473,7 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
                 return n
             }
             let pane = makePane()
+            if let files = s.files { pane.showFiles(files); return Node(.leaf(pane)) }
             // Restore only sessions that still exist, each in one pane.
             if let id = s.session, controller.session(id: id) != nil, seen.insert(id).inserted {
                 pane.show(id)

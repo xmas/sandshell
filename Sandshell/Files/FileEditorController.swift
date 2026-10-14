@@ -85,6 +85,11 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
     private var git = GitStatus.empty
     private var changes = LineChanges()
     private var highlightPending = false
+    /// The Changes view's hunks (unstaged vs the index, staged vs HEAD) and the
+    /// file they belong to, for the per-hunk Stage / Unstage / Revert links.
+    private var shownPatches: (file: OpenFile, unstaged: FilePatch, staged: FilePatch)?
+    private var goToLinePopover: NSPopover?
+    private var documentLinkAttributes: [NSAttributedString.Key: Any]?
 
     private let tabBar = NSStackView()
     private let tabScroll = NSScrollView()
@@ -95,6 +100,9 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
     private let bannerLabel = NSTextField(labelWithString: "")
     private let container = NSView()
     private let emptyLabel = NSTextField(labelWithString: "Select a file")
+    /// Path + mode row (popovers anchor here).
+    let headerView = NSStackView()
+    private var header: NSStackView { headerView }
 
     private let editorScroll = NSScrollView()
     private let editor = CodeTextView(usingTextLayoutManager: true)
@@ -124,7 +132,7 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
         modeControl.target = self
         modeControl.action = #selector(modeChanged)
         modeControl.setAccessibilityIdentifier("files-mode")
-        let header = NSStackView(views: [pathLabel, NSView(), modeControl])
+        header.setViews([pathLabel, NSView(), modeControl], in: .leading)
         header.orientation = .horizontal
         header.edgeInsets = NSEdgeInsets(top: 0, left: 12, bottom: 0, right: 10)
 
@@ -219,6 +227,8 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
         preview.usesFindBar = true
         preview.textContainerInset = NSSize(width: 22, height: 16)
         preview.textLayoutManager?.delegate = blocks
+        preview.delegate = self   // Changes view: per-hunk action links
+        documentLinkAttributes = preview.linkTextAttributes
         previewScroll.documentView = preview
         previewScroll.hasVerticalScroller = true
         previewScroll.drawsBackground = false
@@ -241,6 +251,11 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
         open(url)
         guard let file = current, file.isText else { return }
         if file.mode != .source { file.mode = .source; show(file) }
+        jump(toLine: line, highlight: highlight)
+    }
+
+    /// Select `line` (1-based; at `column`, or the first `highlight` match on it).
+    private func jump(toLine line: Int, column: Int? = nil, highlight: String = "") {
         let ns = editor.string as NSString
         var start = 0
         var n = 1
@@ -249,21 +264,72 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
             n += 1
         }
         let lineRange = ns.lineRange(for: NSRange(location: min(start, ns.length), length: 0))
+        let content = lineRange.length - (ns.substring(with: lineRange).hasSuffix("\n") ? 1 : 0)
         var target = NSRange(location: lineRange.location, length: 0)
+        if let column, column > 1 { target.location += min(column - 1, content) }
         if !highlight.isEmpty {
             let hit = ns.range(of: highlight, options: .caseInsensitive, range: lineRange)
             if hit.location != NSNotFound { target = hit }
         }
         editor.setSelectedRange(target)
         editor.scrollRangeToVisible(target)
-        if target.length > 0 { editor.showFindIndicator(for: target) }
+        let flash = target.length > 0 ? target : NSRange(location: lineRange.location, length: content)
+        if flash.length > 0 { editor.showFindIndicator(for: flash) }
         view.window?.makeFirstResponder(editor)
     }
+
+    /// The caret's line (1-based).
+    private var caretLine: Int {
+        let ns = editor.string as NSString
+        let upTo = ns.substring(to: min(editor.selectedRange().location, ns.length))
+        return upTo.reduce(1) { $1 == "\n" ? $0 + 1 : $0 }
+    }
+
+    /// Edit ▸ Find ▸ Go to Line… (⌘L).
+    @objc func goToLine(_ sender: Any?) {
+        guard let file = current, file.isText else { return NSSound.beep() }
+        if let open = goToLinePopover, open.isShown { open.close(); return }
+        commitEditorText()
+        if file.mode != .source { file.mode = .source; show(file) }
+        let lines = editor.string.reduce(1) { $1 == "\n" ? $0 + 1 : $0 }
+        let prompt = GoToLineController(lineCount: lines, currentLine: caretLine)
+        let popover = NSPopover()
+        popover.behavior = .transient
+        popover.contentViewController = prompt
+        prompt.onGo = { [weak self, weak popover] line, column in
+            popover?.close()
+            self?.jump(toLine: min(line, lines), column: column)
+        }
+        prompt.onCancel = { [weak popover] in popover?.close() }
+        goToLinePopover = popover
+        popover.show(relativeTo: header.bounds, of: header, preferredEdge: .minY)
+    }
+
+    #if DEBUG
+    // Self-test hooks.
+    func goToLineForTesting(_ line: Int, column: Int? = nil) { jump(toLine: line, column: column) }
+    var caretLineForTesting: Int { caretLine }
+    var previewText: NSAttributedString? { preview.textStorage }
+    var currentURL: URL? { current?.url }
+    func setMode(_ mode: OpenFile.Mode) {
+        guard let file = current else { return }
+        commitEditorText()
+        file.mode = mode
+        show(file)
+    }
+    func performHunkAction(_ action: FilePatch.Action, hunk: Int, staged: Bool) async -> String? {
+        await runHunkAction(action, hunk: hunk, staged: staged, confirmed: true)
+    }
+    var hunkCounts: (unstaged: Int, staged: Int)? {
+        shownPatches.map { ($0.unstaged.hunks.count, $0.staged.hunks.count) }
+    }
+    #endif
 
     func updateGit(_ status: GitStatus) {
         git = status
         rebuildTabs()
-        if let current { refreshChanges(for: current) }
+        guard let current else { return }
+        if current.mode == .changes { show(current) } else { refreshChanges(for: current) }
     }
 
     /// Files changed on disk (FSEvents via the tree): reload clean files,
@@ -346,9 +412,12 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
             view.window?.makeFirstResponder(editor)
             refreshChanges(for: file)
         case .preview:
-            preview.textStorage?.setAttributedString(ChatRenderer.markdown(file.text))
+            preview.linkTextAttributes = documentLinkAttributes
+            preview.textStorage?.setAttributedString(ChatRenderer.markdown(file.text, prose: .document))
             previewScroll.isHidden = false
         case .changes:
+            // Hunk actions read as buttons, not web links.
+            preview.linkTextAttributes = [.foregroundColor: NSColor.controlAccentColor, .cursor: NSCursor.pointingHand]
             showDiff(file)
         }
     }
@@ -365,6 +434,9 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
         show(file)
     }
 
+    /// Changes: unstaged hunks (working tree vs the index) and staged hunks
+    /// (index vs HEAD), each with Stage / Revert or Unstage; an untracked file
+    /// shows as all added, with Stage File.
     private func showDiff(_ file: OpenFile) {
         previewScroll.isHidden = false
         let untracked = git.changes[file.url.path] == .untracked
@@ -372,37 +444,221 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
         let path = file.url.path
         let text = file.text
         Task { [weak self] in
-            let diff: String = await Task.detached(priority: .utility) {
-                if untracked { return text.split(separator: "\n", omittingEmptySubsequences: false).map { "+" + $0 }.joined(separator: "\n") }
-                guard let repo else { return "" }
-                return GitStatus.git(["-C", repo, "diff", "--no-color", "--no-ext-diff", "HEAD", "--", path]) ?? ""
+            let (unstaged, staged): (String, String) = await Task.detached(priority: .utility) {
+                if untracked {
+                    return (text.split(separator: "\n", omittingEmptySubsequences: false).map { "+" + $0 }.joined(separator: "\n"), "")
+                }
+                guard let repo else { return ("", "") }
+                let base = ["-C", repo, "diff", "--no-color", "--no-ext-diff"]
+                return (GitStatus.git(base + ["--", path]) ?? "", GitStatus.git(base + ["--cached", "--", path]) ?? "")
             }.value
             guard let self, self.current === file, file.mode == .changes else { return }
-            self.preview.textStorage?.setAttributedString(Self.renderDiff(diff))
+            if untracked {
+                self.shownPatches = nil
+                self.preview.textStorage?.setAttributedString(Self.renderDiff(unstaged, untracked: true, editable: !file.isDirty))
+                return
+            }
+            let patches = (file: file, unstaged: FilePatch(unstaged), staged: FilePatch(staged))
+            self.shownPatches = patches
+            self.preview.textStorage?.setAttributedString(
+                Self.renderChanges(unstaged: patches.unstaged, staged: patches.staged, editable: !file.isDirty))
         }
     }
 
-    /// Unified diff with tinted added/removed lines and hunk headers.
-    static func renderDiff(_ diff: String) -> NSAttributedString {
+    static let hunkScheme = "sandshell-hunk"
+
+    /// Both halves of a file's changes, as sections of hunks with action links.
+    static func renderChanges(unstaged: FilePatch, staged: FilePatch, editable: Bool) -> NSAttributedString {
         let out = NSMutableAttributedString()
-        let small = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        if unstaged.isEmpty && staged.isEmpty {
+            out.append(NSAttributedString(string: "No changes against HEAD.", attributes: [
+                .font: NSFont.systemFont(ofSize: 13), .foregroundColor: NSColor.secondaryLabelColor]))
+            return out
+        }
+        if !editable {
+            out.append(sectionTitle("Save the file to stage or revert its hunks."))
+        }
+        if !unstaged.isEmpty {
+            out.append(sectionTitle(staged.isEmpty ? "Changes" : "Unstaged Changes"))
+            for (i, hunk) in unstaged.hunks.enumerated() {
+                let actions: [(String, String)] = editable ? [("Stage", "stage/\(i)"), ("Revert…", "revert/\(i)")] : []
+                out.append(renderHunk(hunk, actions: actions))
+            }
+        }
+        if !staged.isEmpty {
+            out.append(sectionTitle("Staged Changes"))
+            for (i, hunk) in staged.hunks.enumerated() {
+                out.append(renderHunk(hunk, actions: editable ? [("Unstage", "unstage/\(i)")] : []))
+            }
+        }
+        // End on a plain paragraph so the last hunk's tint stops at its last line.
+        out.append(NSAttributedString(string: "\n", attributes: [.font: diffFont]))
+        return out
+    }
+
+    /// Unified diff with tinted added/removed lines and hunk headers.
+    static func renderDiff(_ diff: String, untracked: Bool = false, editable: Bool = false) -> NSAttributedString {
+        let out = NSMutableAttributedString()
+        if untracked {
+            out.append(sectionTitle("Untracked File", actions: editable ? [("Stage File", "add/0")] : []))
+        }
         for line in diff.split(separator: "\n", omittingEmptySubsequences: false) {
             let s = String(line)
             if s.hasPrefix("diff --git") || s.hasPrefix("index ") || s.hasPrefix("--- ") || s.hasPrefix("+++ ")
                 || s.hasPrefix("new file mode") || s.hasPrefix("deleted file mode") { continue }
-            let kind: BlockStyle.Kind? = s.hasPrefix("@@") ? .hunk : s.hasPrefix("+") ? .added : s.hasPrefix("-") ? .removed : nil
-            let color: NSColor = kind == .hunk ? .secondaryLabelColor : .labelColor
-            let piece = NSMutableAttributedString(string: s + "\n", attributes: [.font: small, .foregroundColor: color])
-            if let kind {
-                piece.addAttribute(.chatBlock, value: BlockStyle(kind, .middle), range: NSRange(location: 0, length: piece.length))
-            }
-            out.append(piece)
+            out.append(diffLine(s))
         }
         if out.length == 0 {
             out.append(NSAttributedString(string: "No changes against HEAD.", attributes: [
                 .font: NSFont.systemFont(ofSize: 13), .foregroundColor: NSColor.secondaryLabelColor]))
         }
         return out
+    }
+
+    private static let diffFont = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+
+    private static func diffLine(_ s: String, trailing: NSAttributedString? = nil) -> NSAttributedString {
+        let kind: BlockStyle.Kind? = s.hasPrefix("@@") ? .hunk : s.hasPrefix("+") ? .added : s.hasPrefix("-") ? .removed : nil
+        let color: NSColor = kind == .hunk ? .secondaryLabelColor : .labelColor
+        let piece = NSMutableAttributedString(string: s, attributes: [.font: diffFont, .foregroundColor: color])
+        if let trailing { piece.append(trailing) }
+        piece.append(NSAttributedString(string: "\n", attributes: [.font: diffFont]))
+        if let kind {
+            piece.addAttribute(.chatBlock, value: BlockStyle(kind, .middle), range: NSRange(location: 0, length: piece.length))
+        }
+        return piece
+    }
+
+    /// "   Stage   Revert…" — links handled by `textView(_:clickedOnLink:at:)`.
+    private static func actionLinks(_ actions: [(title: String, path: String)]) -> NSAttributedString {
+        let out = NSMutableAttributedString()
+        for (title, path) in actions {
+            out.append(NSAttributedString(string: "   ", attributes: [.font: diffFont]))
+            out.append(NSAttributedString(string: title, attributes: [
+                .font: NSFont.systemFont(ofSize: 11.5, weight: .semibold),
+                .link: URL(string: "\(hunkScheme)://\(path)")!,
+                .toolTip: title.hasPrefix("Revert") ? "Discard this hunk's changes from the file" : "\(title) this hunk",
+            ]))
+        }
+        return out
+    }
+
+    /// The `@@` line carries the actions up front and truncates its context
+    /// text rather than wrapping in a narrow pane.
+    private static func renderHunk(_ lines: [String], actions: [(String, String)]) -> NSAttributedString {
+        let out = NSMutableAttributedString()
+        for (n, line) in lines.enumerated() {
+            guard n == 0, !actions.isEmpty else { out.append(diffLine(line)); continue }
+            let header = NSMutableAttributedString(attributedString: actionLinks(actions))
+            header.deleteCharacters(in: NSRange(location: 0, length: 3))   // no leading gap
+            header.append(NSAttributedString(string: "   ", attributes: [.font: diffFont]))
+            header.append(diffLine(line))
+            let p = NSMutableParagraphStyle()
+            p.lineBreakMode = .byTruncatingTail
+            header.addAttributes([.paragraphStyle: p, .chatBlock: BlockStyle(.hunk, .middle)],
+                                 range: NSRange(location: 0, length: header.length))
+            out.append(header)
+        }
+        return out
+    }
+
+    private static func sectionTitle(_ text: String, actions: [(String, String)] = []) -> NSAttributedString {
+        let p = NSMutableParagraphStyle()
+        p.paragraphSpacingBefore = 6
+        p.paragraphSpacing = 4
+        let out = NSMutableAttributedString(string: text, attributes: [
+            .font: NSFont.systemFont(ofSize: 12, weight: .semibold), .foregroundColor: NSColor.secondaryLabelColor])
+        if !actions.isEmpty { out.append(actionLinks(actions)) }
+        out.append(NSAttributedString(string: "\n"))
+        out.addAttribute(.paragraphStyle, value: p, range: NSRange(location: 0, length: out.length))
+        return out
+    }
+
+    // MARK: Hunk actions
+
+    func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
+        guard textView === preview, let url = link as? URL ?? (link as? String).flatMap(URL.init(string:)),
+              url.scheme == Self.hunkScheme, let host = url.host,
+              let index = Int(url.lastPathComponent) else { return false }
+        Task { [weak self] in
+            guard let self else { return }
+            let error: String?
+            switch host {
+            case "add": error = await self.stageWholeFile()
+            case "stage": error = await self.runHunkAction(.stage, hunk: index, staged: false, confirmed: false)
+            case "revert": error = await self.runHunkAction(.revert, hunk: index, staged: false, confirmed: false)
+            case "unstage": error = await self.runHunkAction(.unstage, hunk: index, staged: true, confirmed: false)
+            default: error = nil
+            }
+            if let error {
+                let alert = NSAlert()
+                alert.messageText = "Couldn’t \(host == "add" ? "stage the file" : "\(host) the hunk")"
+                alert.informativeText = error
+                alert.runModal()
+            }
+        }
+        return true
+    }
+
+    /// Stage / unstage / revert one hunk of the shown file. Revert asks first.
+    private func runHunkAction(_ action: FilePatch.Action, hunk: Int, staged: Bool, confirmed: Bool) async -> String? {
+        guard let shown = shownPatches, let repo = git.repoRoot, !shown.file.isDirty else { return nil }
+        let patch = staged ? shown.staged : shown.unstaged
+        guard patch.hunks.indices.contains(hunk) else { return nil }
+        if action == .revert && !confirmed {
+            let alert = NSAlert()
+            alert.alertStyle = .warning
+            alert.messageText = "Revert this change in “\(shown.file.url.lastPathComponent)”?"
+            alert.informativeText = "The hunk’s edits are removed from the file on disk. This can’t be undone."
+            alert.addButton(withTitle: "Revert")
+            alert.addButton(withTitle: "Cancel")
+            alert.buttons.first?.hasDestructiveAction = true
+            guard alert.runModal() == .alertFirstButtonReturn else { return nil }
+        }
+        if let error = await patch.apply(action, hunk: hunk, repo: repo) { return error }
+        await afterRepoChange(shown.file, reloadText: action == .revert)
+        return nil
+    }
+
+    /// Untracked file → `git add`.
+    private func stageWholeFile() async -> String? {
+        guard let file = current, let repo = git.repoRoot else { return nil }
+        let path = file.url.path
+        let error = await Task.detached(priority: .userInitiated) { GitStatus.change(["-C", repo, "add", "--", path]) }.value
+        if error == nil { await afterRepoChange(file, reloadText: false) }
+        return error
+    }
+
+    /// Refresh status, the Changes view (and the text, after a revert) right
+    /// away rather than waiting for FSEvents.
+    private func afterRepoChange(_ file: OpenFile, reloadText: Bool) async {
+        if reloadText { reload(file) }
+        guard let root = git.repoRoot else { return }
+        let status = await GitStatus.load(for: URL(fileURLWithPath: root))
+        git = status
+        rebuildTabs()
+        if current === file { show(file) }
+    }
+
+    /// Unsaved edits in any tab: Save All / Discard / Cancel (false = cancel).
+    func confirmCloseAll() -> Bool {
+        commitEditorText()
+        let dirty = files.filter(\.isDirty)
+        guard !dirty.isEmpty else { return true }
+        let alert = NSAlert()
+        alert.messageText = dirty.count == 1 ? "Save changes to “\(dirty[0].url.lastPathComponent)”?"
+            : "Save changes to \(dirty.count) files?"
+        alert.informativeText = "Your changes will be lost if you don’t save them."
+        alert.addButton(withTitle: dirty.count == 1 ? "Save" : "Save All")
+        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "Don’t Save")
+        switch alert.runModal() {
+        case .alertFirstButtonReturn:
+            dirty.forEach(save)
+            return !files.contains(where: \.isDirty)
+        case .alertSecondButtonReturn: return false
+        default: return true
+        }
     }
 
     private func refreshChanges(for file: OpenFile) {
@@ -518,6 +774,7 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
 
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         if item.action == #selector(saveDocument(_:)) { return current?.isDirty == true }
+        if item.action == #selector(goToLine(_:)) { return current?.isText == true }
         return true
     }
 }

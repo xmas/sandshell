@@ -545,6 +545,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     case "w" where opt: app.closePane(nil); return true
                     case let c where opt && ["[", "{", "“", "”"].contains(c): app.focusPreviousPane(nil); return true
                     case let c where opt && ["]", "}", "‘", "’"].contains(c): app.focusNextPane(nil); return true
+                    case "=" where ctrl: app.equalizePanes(nil); return true
+                    case "O": app.openQuickly(nil); return true
+                    case "o" where shift: app.openQuickly(nil); return true
                     case "n" where ctrl: app.newChat(nil); return true
                     case "n" where shift: app.duplicateWindow(nil); return true
                     case "n": app.newSession(nil); return true
@@ -617,6 +620,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// ⌥⌘0 — the Files pane (tree + editor) for the active session's folder.
     @MainActor @objc func toggleFiles(_ sender: Any?) {
         activeController?.toggleFiles()
+    }
+
+    /// ⇧⌥⌘0 — the Files tree + editor as a pane beside the focused one.
+    @MainActor @objc func openFilesInSplit(_ sender: Any?) {
+        activeController?.openFilesInSplit()
+    }
+
+    /// ⇧⌘O — fuzzy file finder over the session folder (the Files surface
+    /// holding focus answers first via the responder chain; this is the fallback).
+    @MainActor @objc func openQuickly(_ sender: Any?) {
+        activeController?.openQuickly()
     }
 
     /// ⌃⌘N — new native Claude chat (ACP) in the current folder.

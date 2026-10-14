@@ -305,10 +305,27 @@ enum ChatRenderer {
 
     // MARK: Markdown
 
+    /// Typeface for Markdown prose (code, tables and inline code stay monospaced).
+    struct Prose {
+        var size: CGFloat
+        var serif: Bool
+        /// Chat transcript: the system font at the transcript size.
+        static let chat = Prose(size: 13.5, serif: false)
+        /// A Markdown document (Files preview): New York, a little larger.
+        static let document = Prose(size: 15, serif: true)
+
+        func font(_ size: CGFloat? = nil, weight: NSFont.Weight = .regular) -> NSFont {
+            let size = size ?? self.size
+            let system = NSFont.systemFont(ofSize: size, weight: weight)
+            guard serif, let serif = system.fontDescriptor.withDesign(.serif) else { return system }
+            return NSFont(descriptor: serif, size: size) ?? system
+        }
+    }
+
     /// Line-oriented markdown: fenced code (highlighted, on a block), tables,
     /// ATX headings, bullet/numbered lists with hanging indents, quotes and
     /// rules; inline bold/italic/code/links via Foundation.
-    static func markdown(_ text: String) -> NSAttributedString {
+    static func markdown(_ text: String, prose: Prose = .chat) -> NSAttributedString {
         let out = NSMutableAttributedString()
         let lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
         var i = 0
@@ -334,7 +351,7 @@ enum ChatRenderer {
                 out.append(table(rows))
                 continue
             }
-            out.append(block(lines[i], trimmed: trimmed))
+            out.append(block(lines[i], trimmed: trimmed, prose: prose))
             i += 1
         }
         return out
@@ -399,10 +416,11 @@ enum ChatRenderer {
         return out
     }
 
-    private static func block(_ raw: String, trimmed: String) -> NSAttributedString {
+    private static func block(_ raw: String, trimmed: String, prose: Prose) -> NSAttributedString {
+        let body = prose.font()
         let para = NSMutableParagraphStyle()
-        para.paragraphSpacing = 4
-        para.lineSpacing = 1.5
+        para.paragraphSpacing = prose.serif ? 7 : 4
+        para.lineSpacing = prose.serif ? 3 : 1.5
         var text = trimmed
         var font = body
         var color = NSColor.labelColor
@@ -410,7 +428,7 @@ enum ChatRenderer {
         if let m = trimmed.range(of: #"^#{1,6} "#, options: .regularExpression) {
             let level = trimmed[m].count - 1
             text = String(trimmed[m.upperBound...])
-            font = .systemFont(ofSize: body.pointSize + CGFloat(max(0, 4 - level)) * 1.5, weight: .semibold)
+            font = prose.font(body.pointSize + CGFloat(max(0, 4 - level)) * 1.5, weight: .semibold)
             para.paragraphSpacingBefore = 8
         } else if trimmed.range(of: #"^(-{3,}|\*{3,}|_{3,})$"#, options: .regularExpression) != nil {
             return NSAttributedString(string: "\n", attributes: [.font: body])
@@ -454,11 +472,19 @@ enum ChatRenderer {
                 font = NSFont.monospacedSystemFont(ofSize: base.pointSize - 1, weight: .regular)
                 ns.addAttribute(.backgroundColor, value: NSColor.labelColor.withAlphaComponent(0.07), range: range)
             }
-            if intent.contains(.stronglyEmphasized) { font = NSFontManager.shared.convert(font, toHaveTrait: .boldFontMask) }
-            if intent.contains(.emphasized) { font = NSFontManager.shared.convert(font, toHaveTrait: .italicFontMask) }
+            if intent.contains(.stronglyEmphasized) { font = withTrait(font, .bold, .boldFontMask) }
+            if intent.contains(.emphasized) { font = withTrait(font, .italic, .italicFontMask) }
             ns.addAttribute(.font, value: font, range: range)
         }
         return ns
+    }
+
+    /// Bold/italic that keeps the face's design (NSFontManager can drop New
+    /// York back to the plain system font).
+    private static func withTrait(_ font: NSFont, _ trait: NSFontDescriptor.SymbolicTraits,
+                                  _ fallback: NSFontTraitMask) -> NSFont {
+        let d = font.fontDescriptor.withSymbolicTraits(font.fontDescriptor.symbolicTraits.union(trait))
+        return NSFont(descriptor: d, size: font.pointSize) ?? NSFontManager.shared.convert(font, toHaveTrait: fallback)
     }
 }
 
