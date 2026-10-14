@@ -55,6 +55,8 @@ struct InspectorView: View {
             GeneralPaneView(controller: controller)
         case .sandboxes:
             SandboxesPaneView(controller: controller)
+        case .folders:
+            FoldersPaneView(controller: controller)
         case .mounts:
             MountsInspectorPane(controller: controller)
         case .kits:
@@ -106,7 +108,7 @@ private struct TabButton: View {
 /// The per-root inspector panes. All app settings live here — there is no
 /// separate global Settings window.
 enum InspectorPane: String, CaseIterable, Identifiable {
-    case general, sandboxes, mounts, kits, mcp, git, terminal
+    case general, sandboxes, folders, mounts, kits, mcp, git, terminal
     var id: String { rawValue }
     var title: String {
         switch self {
@@ -119,6 +121,7 @@ enum InspectorPane: String, CaseIterable, Identifiable {
         switch self {
         case .general: return "gearshape.fill"
         case .sandboxes: return "shippingbox.fill"
+        case .folders: return "folder.fill"
         case .mounts: return "externaldrive.fill"
         case .kits: return "cube.fill"
         case .mcp: return "point.3.connected.trianglepath.dotted"
@@ -131,6 +134,7 @@ enum InspectorPane: String, CaseIterable, Identifiable {
         switch self {
         case .general: return .systemGray
         case .sandboxes: return .systemBrown
+        case .folders: return .systemIndigo
         case .mounts: return .systemBlue
         case .kits: return .systemGreen
         case .mcp: return .systemPurple
