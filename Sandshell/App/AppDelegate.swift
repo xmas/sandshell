@@ -225,8 +225,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     #if DEBUG
     /// The UI-test bridge's commands (see `UITestHeadless`): the 'Shll' Apple
-    /// Events' operations, plus opening a `sandshell://` URL.
+    /// Events' operations, opening a `sandshell://` URL, and `ax …` (`UITestAX`).
     @MainActor func uiTestCommand(_ command: String) -> String {
+        if command.hasPrefix("ax ") { return UITestAX.handle(command) }
         if command.hasPrefix("open "), let url = URL(string: String(command.dropFirst(5))) {
             openFromURL(url)
         } else if command == "news" {

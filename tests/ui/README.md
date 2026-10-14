@@ -41,6 +41,13 @@ without fighting that:
    `SandboxesPane.swift` and `InspectorView.swift` so the Settings ▸ Sandboxes
    lifecycle test (Stop/Run/Delete) can address specific rows/buttons
    reliably instead of matching on button titles that repeat across rows.
+3. **In-app accessibility over the bridge** (`ax …`, `App/UITestAX.swift`):
+   the Settings tests (04, 05) find and press elements by identifier or label
+   from inside the app rather than through System Events, which sees no other
+   app's windows while the screen is locked or the display asleep — an
+   overnight run. The app walks its own accessibility tree (switching
+   SwiftUI's on first, which otherwise waits for an assistive client) and
+   presses buttons with AXPress (alert buttons with a click).
 
 Everything else (menu structure) is read directly off the accessibility tree
 by title, since menu titles are already stable, real UI.
@@ -63,8 +70,8 @@ The suite runs **beside** your own Sandshell, without taking focus:
   the notification-permission prompt and update check, and keeps every window
   — sheets included — transparent, click-through and behind other apps.
 - Tests only use the bridge, AX reads and AX actions (`perform action
-  "AXPress"`, never `click`, `frontmost` or keystrokes), so nothing moves the
-  mouse or steals keyboard input.
+  "AXPress"` or the bridge's in-app presses, never `click`, `frontmost` or
+  keystrokes), so nothing moves the mouse or steals keyboard input.
 - The test workspace is a fresh temp folder configured as a plain-shell
   workspace (fast to create; never starts an agent with your account). It's
   opened with a `sandshell://open` URL handed to the test instance through the

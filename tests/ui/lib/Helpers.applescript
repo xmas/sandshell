@@ -31,6 +31,64 @@ on shllNewSession(bundleID)
 	return my bridge("news")
 end shllNewSession
 
+-- MARK: In-app accessibility
+--
+-- `ax …` bridge commands (UITestAX in Sandshell/App/UITestAX.swift): the app
+-- finds and presses elements in its own accessibility tree. Unlike System
+-- Events these keep working while the screen is locked or the display asleep,
+-- when other apps' windows vanish from AX. Elements are named by
+-- AXIdentifier, or by label/title for the few without one.
+
+on axCommand(verb, windowTitle, target)
+	set r to my bridge("ax " & verb & tab & windowTitle & tab & target)
+	if r starts with "error" then error "ax " & verb & " " & target & ": " & r
+	return r
+end axCommand
+
+on axIdentifierExists(windowTitle, ident)
+	return my axCommand("exists-id", windowTitle, ident) is "yes"
+end axIdentifierExists
+
+on axWaitForIdentifier(windowTitle, ident, timeoutSeconds)
+	set deadline to (current date) + timeoutSeconds
+	repeat
+		if my axIdentifierExists(windowTitle, ident) then return true
+		if (current date) > deadline then error "timed out waiting for AXIdentifier \"" & ident & "\""
+		delay 0.3
+	end repeat
+end axWaitForIdentifier
+
+-- verb: "press-id" or "press-label"; retries until the element shows up.
+on axPress(verb, windowTitle, target, timeoutSeconds)
+	set deadline to (current date) + timeoutSeconds
+	repeat
+		if my axCommand(verb, windowTitle, target) is "ok" then return true
+		if (current date) > deadline then error "timed out waiting to press \"" & target & "\""
+		delay 0.3
+	end repeat
+end axPress
+
+on axPressIdentifier(windowTitle, ident, timeoutSeconds)
+	return my axPress("press-id", windowTitle, ident, timeoutSeconds)
+end axPressIdentifier
+
+on axPressLabel(windowTitle, label, timeoutSeconds)
+	return my axPress("press-label", windowTitle, label, timeoutSeconds)
+end axPressLabel
+
+on axWaitForSheet(windowTitle, timeoutSeconds)
+	set deadline to (current date) + timeoutSeconds
+	repeat
+		if (my axCommand("sheets", windowTitle, "") as integer) > 0 then return true
+		if (current date) > deadline then error "the settings sheet never opened"
+		delay 0.3
+	end repeat
+end axWaitForSheet
+
+on axIdentifiers(windowTitle)
+	return paragraphs of my axCommand("ids", windowTitle, "")
+end axIdentifiers
+
 -- MARK: Process lookup
 
 on appIsRunning(bundleID)

@@ -456,7 +456,18 @@ final class WorkspaceController: ObservableObject {
         }
     }
 
-    func startSandbox(_ name: String) { sandboxAction(name) { try await SbxClient.shared.start(name) } }
+    /// `sbx run` is detached: stay busy until `sbx ls` says it's running (or 30 s
+    /// pass), so the row flips to Stop instead of waiting for a manual refresh.
+    func startSandbox(_ name: String) {
+        sandboxAction(name) {
+            try await SbxClient.shared.start(name)
+            for _ in 0..<30 {
+                let list = (try? await SbxClient.shared.list()) ?? []
+                if list.contains(where: { $0.name == name && $0.isRunning }) { return }
+                try? await Task.sleep(for: .seconds(1))
+            }
+        }
+    }
     func stopSandbox(_ name: String) { sandboxAction(name) { _ = try await SbxClient.shared.stop(name) } }
     func deleteSandbox(_ name: String) { sandboxAction(name) { _ = try await SbxClient.shared.remove(name) } }
 
