@@ -17,6 +17,10 @@ settings:
     ARCHS: arm64
     ONLY_ACTIVE_ARCH: YES
     MARKETING_VERSION: "0.2.20"
+    # The process name. scripts/run-ui-tests.sh overrides it so System Events
+    # (which re-resolves processes by name) can't confuse its test instance
+    # with a Sandshell you have open.
+    SANDSHELL_APP_NAME: Sandshell
     CURRENT_PROJECT_VERSION: "1"
     DEVELOPMENT_TEAM: ""
     CODE_SIGN_STYLE: Automatic
@@ -34,8 +38,8 @@ targets:
     info:
       path: Sandshell/Resources/Info.plist
       properties:
-        CFBundleName: Sandshell
-        CFBundleDisplayName: Sandshell
+        CFBundleName: $(SANDSHELL_APP_NAME)
+        CFBundleDisplayName: $(SANDSHELL_APP_NAME)
         CFBundleIconFile: AppIcon
         CFBundlePackageType: APPL
         CFBundleShortVersionString: $(MARKETING_VERSION)

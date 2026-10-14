@@ -1533,6 +1533,7 @@ final class SidebarIconButton: NSControl {
         wantsLayer = true
         layer?.cornerRadius = 9
         layer?.masksToBounds = true
+        setAccessibilityElement(true)   // a custom NSControl isn't one by default
         setAccessibilityRole(.button)
         setAccessibilityLabel(accessibilityDescription)
 
