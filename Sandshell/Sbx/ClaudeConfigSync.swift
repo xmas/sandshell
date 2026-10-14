@@ -68,7 +68,9 @@ enum ClaudeConfigSync {
     /// either side propagate without clobbering the fresher one.
     /// Also clears stale `mcp-needs-auth-cache.json` entries for servers we
     /// just provided tokens for (removes the "needs authentication" badge).
-    static func syncCredentialsFromKeychain(home: URL) {
+    /// `includeClaudeLogin: false` copies only the MCP tokens — for when sbx's
+    /// credential proxy holds the Claude login.
+    static func syncCredentialsFromKeychain(home: URL, includeClaudeLogin: Bool = true) {
         guard let blob = keychainCredentials() else { return }
         guard let keychainObj = (try? JSONSerialization.jsonObject(with: Data(blob.utf8))) as? [String: Any]
         else { return }
@@ -77,7 +79,7 @@ enum ClaudeConfigSync {
         var fileObj: [String: Any] = readJSON(at: dest) ?? [:]
 
         // claudeAiOauth — single object, take later expiry.
-        if let keyOAuth = keychainObj["claudeAiOauth"] {
+        if includeClaudeLogin, let keyOAuth = keychainObj["claudeAiOauth"] {
             let keyExp  = expiresAt(keyOAuth)
             let fileExp = (fileObj["claudeAiOauth"]).flatMap { expiresAt($0) }
             let take: Bool

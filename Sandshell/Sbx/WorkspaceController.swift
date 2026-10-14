@@ -713,13 +713,17 @@ final class WorkspaceController: ObservableObject {
                                 force: Bool) async throws {
         // Mirror host MCP configs and OAuth tokens into the bind-mounted claude
         // config dir before the container starts (ported from sbx-ui projects.rs).
+        // When sbx's proxy holds the Claude login, sandboxes authenticate through
+        // it, so the Keychain login stays out of the file (a sandbox refreshing
+        // from it would rotate the host's refresh token).
+        let name = containerName(for: agent)
         let homeURL = home
+        let proxied = await SbxClient.shared.hasAnthropicSecret(sandbox: name)
         await Task.detached(priority: .utility) {
             ClaudeConfigSync.syncMCPServers(home: homeURL)
-            ClaudeConfigSync.syncCredentialsFromKeychain(home: homeURL)
+            ClaudeConfigSync.syncCredentialsFromKeychain(home: homeURL, includeClaudeLogin: !proxied)
         }.value
 
-        let name = containerName(for: agent)
         let mounts = resolvedMounts()
         let kits = resolvedKits()
         let signature = configSignature(mounts: mounts, kits: kits)
