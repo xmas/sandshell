@@ -44,8 +44,9 @@ enum UITestHeadless {
             // Not 0: AppKit leaves fully transparent windows out of the AX tree.
             w.alphaValue = 0.01
             w.ignoresMouseEvents = true
-            // AX only lists windows on the current Space; follow the user's.
-            w.collectionBehavior.insert(.canJoinAllSpaces)
+            // AX only lists windows on the current Space; follow the user's,
+            // full-screen apps' Spaces included.
+            w.collectionBehavior.formUnion([.canJoinAllSpaces, .fullScreenAuxiliary])
             if w.sheetParent == nil { w.orderBack(nil) }
         }
     }

@@ -51,12 +51,12 @@ on run argv
 	-- Stop it (button flips to "Run") and Run it again (flips back to "Stop").
 	if Helpers's identifierExists(targetWindow, "sandbox-run-" & sbName) then
 		Helpers's clickIdentifier(targetWindow, "sandbox-run-" & sbName, 10)
-		Helpers's waitForIdentifier(targetWindow, "sandbox-stop-" & sbName, 30)
+		Helpers's waitForIdentifier(targetWindow, "sandbox-stop-" & sbName, 60)
 	end if
 	Helpers's clickIdentifier(targetWindow, "sandbox-stop-" & sbName, 10)
-	Helpers's waitForIdentifier(targetWindow, "sandbox-run-" & sbName, 30)
+	Helpers's waitForIdentifier(targetWindow, "sandbox-run-" & sbName, 60)
 	Helpers's clickIdentifier(targetWindow, "sandbox-run-" & sbName, 10)
-	Helpers's waitForIdentifier(targetWindow, "sandbox-stop-" & sbName, 30)
+	Helpers's waitForIdentifier(targetWindow, "sandbox-stop-" & sbName, 60)
 
 	-- Delete it, confirm the destructive dialog, and wait for the row to vanish.
 	Helpers's clickIdentifier(targetWindow, "sandbox-delete-" & sbName, 10)

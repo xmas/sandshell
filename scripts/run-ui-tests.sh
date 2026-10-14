@@ -190,13 +190,22 @@ run_test "$TESTS_DIR/00_launch_and_status.applescript" "$BUNDLE_ID" "$WINDOW_TIT
 run_test "$TESTS_DIR/02_new_session_while_building.applescript" "$BUNDLE_ID" "$WINDOW_TITLE"
 run_test "$TESTS_DIR/01_menu_structure.applescript" "$BUNDLE_ID"
 run_test "$TESTS_DIR/03_flat_session_order.applescript" "$BUNDLE_ID" "$WINDOW_TITLE"
-if [[ "$SB_CREATED" == "1" ]]; then
-  run_test "$TESTS_DIR/04_settings_sandboxes_lifecycle.applescript" "$BUNDLE_ID" "$WINDOW_TITLE" "$SB_NAME"
+# While the screen is locked macOS stops exposing other apps' windows to
+# Accessibility, so the tests that drive window contents can't run.
+SKIPPED=()
+if ioreg -n Root -d1 | grep -q '"CGSSessionScreenIsLocked"=Yes'; then
+  echo "--- screen is locked: skipping 05_folders_pane and 04_settings_sandboxes_lifecycle (AX can't see windows) ---"
+  SKIPPED+=(05_folders_pane 04_settings_sandboxes_lifecycle)
+else
+  run_test "$TESTS_DIR/05_folders_pane.applescript" "$BUNDLE_ID" "$WINDOW_TITLE"
+  if [[ "$SB_CREATED" == "1" ]]; then
+    run_test "$TESTS_DIR/04_settings_sandboxes_lifecycle.applescript" "$BUNDLE_ID" "$WINDOW_TITLE" "$SB_NAME"
+  fi
 fi
 
 echo ""
 echo "===================="
-echo "  $PASS passed, $FAIL failed"
+echo "  $PASS passed, $FAIL failed${SKIPPED[*]:+, skipped: ${SKIPPED[*]}}"
 [[ $FAIL -gt 0 ]] && echo "  Failed: ${FAILED_NAMES[*]}"
 echo "===================="
 exit $(( FAIL > 0 ? 1 : 0 ))

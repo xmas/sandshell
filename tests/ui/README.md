@@ -78,6 +78,9 @@ The suite runs **beside** your own Sandshell, without taking focus:
   defaults, and unregisters the test app from LaunchServices so
   `sandshell://` links keep opening your installed app.
 
+With the screen locked, macOS hides other apps' windows from Accessibility,
+so the runner skips the window-driving tests (05, 04) and says so.
+
 Nothing in a run needs a click: the instance is an `AutomatedRun` (no
 Keychain read, no notification prompt, alerts answer themselves, rebuilds
 only for `/tmp` workspaces), and no Apple Events go to the test build. The
@@ -92,6 +95,7 @@ reads) once, like any UI automation.
 | `02_new_session_while_building.applescript` | Runs right after the window opens: the sidebar empty state shows the sandbox build progress (or "No sessions yet"), `news` adds a session immediately even mid-build, the session goes live (real `sbx create` + terminal), and the placeholder is gone afterwards. Runs before 01 so it catches the build. |
 | `01_menu_structure.applescript` | Menu bar + File menu have the expected items. Read-only. |
 | `03_flat_session_order.applescript` | A second session lands at the top of the flat list, and the sidebar rows (`sidebarSessionIDs`) match the controller's session order. |
+| `05_folders_pane.applescript` | Settings ▸ Folders lists the workspace's folders with New Folder / Add Existing… (read-only). Runs before 04. |
 | `04_settings_sandboxes_lifecycle.applescript` | Settings ▸ Sandboxes: Stop → Run → Delete of the throwaway sandbox, confirming each state change in the UI. Skipped if the runner couldn't create it. |
 
 The `stat` JSON's per-window entries carry `sessions` (in sidebar order),

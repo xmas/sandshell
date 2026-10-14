@@ -20,21 +20,23 @@ on run argv
 
 	-- 1. Empty state: build progress while building, else "No sessions yet".
 	set sawBuilding to false
+	set lastMismatch to ""
 	set deadline to (current date) + 10
 	repeat
 		set building to Helpers's windowGet(bundleID, windowTitle, "w['isBuilding']")
 		set placeholder to Helpers's windowGet(bundleID, windowTitle, "w.get('emptyState')")
 		if building is "True" then
 			set activity to Helpers's windowGet(bundleID, windowTitle, "w.get('activity')")
-			if activity is not "None" and placeholder is not activity then error "while building, the empty state should show the build progress \"" & activity & "\", got \"" & placeholder & "\""
-			if activity is not "None" then
+			-- The sidebar catches up on the next run-loop turn; keep polling.
+			if activity is not "None" and placeholder is activity then
 				set sawBuilding to true
 				exit repeat
 			end if
+			set lastMismatch to "while building, the empty state should show the build progress \"" & activity & "\", got \"" & placeholder & "\""
 		else if placeholder is "No sessions yet" then
 			exit repeat
 		end if
-		if (current date) > deadline then error "empty state never showed build progress or \"No sessions yet\" (last: " & placeholder & ")"
+		if (current date) > deadline then error "empty state never showed build progress or \"No sessions yet\" (last: " & placeholder & ") " & lastMismatch
 		delay 0.3
 	end repeat
 
