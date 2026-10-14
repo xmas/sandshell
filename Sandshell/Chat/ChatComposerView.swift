@@ -5,13 +5,23 @@ import UniformTypeIdentifiers
 /// emacs bindings (⌃A/E/K/Y/T, ⌥-word moves, ~/Library/KeyBindings), spelling,
 /// substitutions, Writing Tools, dictation, Services and undo. Return sends;
 /// Shift/Option-Return inserts a newline. Files, folders and images dropped or
-/// pasted become attachment chips above the text.
+/// pasted become attachment chips above the text. `/` at the start opens the
+/// agent's commands; `@` opens the workspace's files (inserted as chips).
 final class ChatComposerView: NSView, NSTextViewDelegate {
     var onSubmit: ((String, [ChatAttachment]) -> Void)?
     /// ⎋ in the composer; return true if handled (e.g. stopped a running turn).
     var onEscape: (() -> Bool)?
     /// Maps a file URL to one the sandbox can read (see ChatSessionView).
     var resolveFileURLs: (([URL]) -> [URL])?
+    /// The agent's slash commands, for `/` completion.
+    var commands: () -> [ChatSession.Command] = { [] }
+    /// Workspace folder (host path) for `@` file completion.
+    var fileRoot: String?
+
+    private let completion = CompletionPanel()
+    /// The `/…` or `@…` token being completed.
+    private var completionRange: NSRange?
+    private var completionGeneration = 0
 
     private let scrollView = NSScrollView()
     private let textView = ComposerTextView()
@@ -26,7 +36,10 @@ final class ChatComposerView: NSView, NSTextViewDelegate {
         chipRow.translatesAutoresizingMaskIntoConstraints = false
 
         textView.delegate = self
-        textView.isRichText = false
+        // Rich text only so `@file` chips (attachments) can live inline; pasted
+        // text is still inserted plain (see ComposerTextView.paste).
+        textView.isRichText = true
+        textView.importsGraphics = false
         textView.allowsUndo = true
         textView.font = .systemFont(ofSize: 13.5)
         textView.textContainerInset = NSSize(width: 6, height: 8)
@@ -39,6 +52,9 @@ final class ChatComposerView: NSView, NSTextViewDelegate {
         textView.textContainer?.widthTracksTextView = true
         textView.onAttach = { [weak self] new in self?.attach(new) }
         textView.setAccessibilityIdentifier("chat-composer")
+        textView.placeholder = "Message Claude…   / for commands, @ for files"
+        textView.onResign = { [weak self] in self?.completion.hide() }
+        completion.onAccept = { [weak self] item in self?.accept(item) }
 
         scrollView.documentView = textView
         scrollView.hasVerticalScroller = true
@@ -90,6 +106,17 @@ final class ChatComposerView: NSView, NSTextViewDelegate {
     // MARK: NSTextViewDelegate
 
     func textView(_ textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+        if completion.isVisible {
+            switch selector {
+            case #selector(NSResponder.moveDown(_:)): completion.move(1); return true
+            case #selector(NSResponder.moveUp(_:)): completion.move(-1); return true
+            case #selector(NSResponder.insertNewline(_:)), #selector(NSResponder.insertTab(_:)):
+                if let item = completion.selected { accept(item) }
+                return true
+            case #selector(NSResponder.cancelOperation(_:)): completion.hide(); return true
+            default: break
+            }
+        }
         if selector == #selector(NSResponder.cancelOperation(_:)) { return onEscape?() ?? false }
         guard selector == #selector(NSResponder.insertNewline(_:)) else { return false }
         let mods = NSApp.currentEvent?.modifierFlags ?? []
@@ -101,14 +128,108 @@ final class ChatComposerView: NSView, NSTextViewDelegate {
         return true
     }
 
-    func textDidChange(_ notification: Notification) { resize() }
+    func textDidChange(_ notification: Notification) {
+        resize()
+        updateCompletion()
+    }
+
+    func textViewDidChangeSelection(_ notification: Notification) {
+        if completion.isVisible { updateCompletion() }
+    }
+
+    // MARK: Completion
+
+    /// Find the `/…` (at the very start) or `@…` token ending at the caret and
+    /// show matching commands or files.
+    private func updateCompletion() {
+        let ns = textView.string as NSString
+        let caret = textView.selectedRange()
+        guard caret.length == 0, caret.location <= ns.length else { return hideCompletion() }
+        var start = caret.location
+        while start > 0 {
+            let c = ns.character(at: start - 1)
+            if c == 0xFFFC || CharacterSet.whitespacesAndNewlines.contains(UnicodeScalar(c) ?? " ") { break }
+            start -= 1
+        }
+        let range = NSRange(location: start, length: caret.location - start)
+        let token = ns.substring(with: range)
+        completionGeneration += 1
+        let generation = completionGeneration
+        if token.hasPrefix("/"), start == 0 {
+            let q = token.dropFirst().lowercased()
+            let matches = commands()
+                .filter { q.isEmpty || $0.name.lowercased().hasPrefix(q) || $0.name.lowercased().contains(q) }
+                .sorted { ($0.name.lowercased().hasPrefix(q) ? 0 : 1, $0.name) < ($1.name.lowercased().hasPrefix(q) ? 0 : 1, $1.name) }
+                .prefix(40)
+                .map { cmd -> CompletionItem in
+                    let detail = [cmd.hint ?? "", cmd.description].filter { !$0.isEmpty }.joined(separator: " — ")
+                    return CompletionItem(kind: .command(name: cmd.name), title: "/" + cmd.name, detail: detail)
+                }
+            showCompletion(Array(matches), range: range)
+        } else if token.hasPrefix("@"), let root = fileRoot {
+            let q = String(token.dropFirst())
+            Task { [weak self] in
+                let files = await WorkspaceFileIndex.shared.files(under: root)
+                let matches = WorkspaceFileIndex.match(files, query: q)
+                guard let self, self.completionGeneration == generation else { return }
+                self.showCompletion(matches.map { rel in
+                    CompletionItem(kind: .file(URL(fileURLWithPath: root).appendingPathComponent(rel), relative: rel),
+                                   title: (rel as NSString).lastPathComponent,
+                                   detail: (rel as NSString).deletingLastPathComponent)
+                }, range: range)
+            }
+        } else {
+            hideCompletion()
+        }
+    }
+
+    private func showCompletion(_ items: [CompletionItem], range: NSRange) {
+        guard !items.isEmpty else { return hideCompletion() }
+        completionRange = range
+        let caret = textView.firstRect(forCharacterRange: NSRange(location: range.location, length: 0), actualRange: nil)
+        completion.show(items, below: caret, parent: window)
+    }
+
+    private func hideCompletion() {
+        completionRange = nil
+        completion.hide()
+    }
+
+    private func accept(_ item: CompletionItem) {
+        guard let range = completionRange else { return }
+        switch item.kind {
+        case .command(let name):
+            textView.insertText("/\(name) ", replacementRange: range)
+        case .file(let url, let relative):
+            let chip = NSMutableAttributedString(attachment: MentionAttachment(url: url, relative: relative))
+            chip.append(NSAttributedString(string: " ", attributes: textView.typingAttributes))
+            textView.insertText(chip, replacementRange: range)
+        }
+        hideCompletion()
+    }
 
     // MARK: Private
 
     private func submit() {
-        let text = textView.string
+        hideCompletion()
+        // `@file` chips become `@relative/path` in the text, plus the file itself.
+        var text = ""
+        var mentioned: [URL] = []
+        if let storage = textView.textStorage {
+            storage.enumerateAttribute(.attachment, in: NSRange(location: 0, length: storage.length)) { value, range, _ in
+                if let mention = value as? MentionAttachment {
+                    text += "@" + mention.relative
+                    mentioned.append(mention.url)
+                } else if value == nil {
+                    text += (storage.string as NSString).substring(with: range)
+                }
+            }
+        }
+        let files = mentioned.map { url in
+            ChatAttachment(kind: .file(resolveFileURLs?([url]).first ?? url))
+        }
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty else { return }
-        onSubmit?(text, attachments)
+        onSubmit?(text, attachments + files)
         textView.string = ""
         attachments = []
         resize()
@@ -146,13 +267,35 @@ final class ChatComposerView: NSView, NSTextViewDelegate {
 /// instead of inserting them as text.
 final class ComposerTextView: NSTextView {
     var onAttach: (([ChatAttachment]) -> Void)?
+    var onResign: (() -> Void)?
+    var placeholder = "" { didSet { needsDisplay = true } }
+
+    override func resignFirstResponder() -> Bool {
+        onResign?()
+        return super.resignFirstResponder()
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        guard string.isEmpty, !placeholder.isEmpty else { return }
+        let inset = textContainerInset
+        let padding = textContainer?.lineFragmentPadding ?? 0
+        (placeholder as NSString).draw(at: NSPoint(x: inset.width + padding, y: inset.height),
+                                       withAttributes: [.font: font ?? .systemFont(ofSize: 13.5),
+                                                        .foregroundColor: NSColor.placeholderTextColor])
+    }
+
+    override func didChangeText() {
+        super.didChangeText()
+        needsDisplay = true   // placeholder appears/disappears
+    }
 
     override var readablePasteboardTypes: [NSPasteboard.PasteboardType] {
         [.fileURL, .png, .tiff] + super.readablePasteboardTypes
     }
 
     override func paste(_ sender: Any?) {
-        if !takeAttachments(from: .general) { super.paste(sender) }
+        if !takeAttachments(from: .general) { pasteAsPlainText(sender) }
     }
 
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {

@@ -67,6 +67,8 @@ final class ChatSessionView: NSView {
         permissionBar.setAccessibilityIdentifier("chat-permission")
 
         composer.onSubmit = { [weak self] text, attachments in self?.session.send(text: text, attachments: attachments) }
+        composer.commands = { [weak session] in session?.commands ?? [] }
+        composer.fileRoot = session.workdir
         composer.onEscape = { [weak self] in
             guard let self, case .running = self.session.phase else { return false }
             self.session.cancel()

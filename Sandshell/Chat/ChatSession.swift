@@ -92,7 +92,9 @@ final class ChatSession: ObservableObject {
     @Published private(set) var currentModel: String?
     /// Context window fill and session cost, from `usage_update`.
     @Published private(set) var usage: Usage?
-    @Published private(set) var commands: [String] = []
+    /// Slash commands and skills the agent advertises (`available_commands_update`).
+    struct Command: Equatable { let name: String; let description: String; let hint: String? }
+    @Published private(set) var commands: [Command] = []
     /// Unrecognized `session/update` kinds seen (spike: what else the adapter sends).
     @Published private(set) var unknownUpdates: Set<String> = []
 
@@ -109,7 +111,8 @@ final class ChatSession: ObservableObject {
     private let sbxProxyAuth: Bool
     private let tag: SbxCommand.ProcessTag
     private let containerName: String
-    private let workdir: String
+    /// Host path of the session's working directory (mounted at the same path).
+    let workdir: String
     private let home: String
     private let mcpURL: URL?
     private var connection: ACPConnection?
@@ -344,7 +347,11 @@ final class ChatSession: ObservableObject {
                 items.append(.plan(id: UUID(), entries: entries))
             }
         case "available_commands_update":
-            commands = (u["availableCommands"]?.array ?? []).compactMap { $0["name"]?.string }
+            commands = (u["availableCommands"]?.array ?? []).compactMap {
+                guard let name = $0["name"]?.string else { return nil }
+                return Command(name: name, description: $0["description"]?.string ?? "",
+                               hint: $0["input"]?["hint"]?.string)
+            }
         case "current_mode_update":
             currentMode = u["currentModeId"]?.string
         case let other:
