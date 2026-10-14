@@ -130,6 +130,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // windows exist, and start following the system.
         AppAppearance.shared.start()
         MainMenu.install(appName: "Sandshell")
+        NSApp.servicesProvider = self
+        NSUpdateDynamicServices()
         KitStore.seedOfficialDefaultsIfNeeded()
         Log.info(.app, "Sandshell launched (sbx: \(PathFixer.sbxPath()))")
 
@@ -546,6 +548,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// ⌘, — open the Settings window.
     @MainActor @objc func openSettings(_ sender: Any?) {
         activeController?.showSettings()
+    }
+
+    /// New Claude chat seeded with text/files in the front workspace (Services,
+    /// Shortcuts). Opens the default workspace when no window is up.
+    @MainActor func newChat(draft: String, urls: [URL], send: Bool) {
+        NSApp.activate()
+        guard let target = activeController ?? windows.first
+                ?? openWorkspace(primaryRoot ?? WorkspaceBootstrap.defaultRoot) else { return }
+        target.newChat(draft: draft, urls: urls, send: send)
+    }
+
+    /// Services ▸ New Sandshell Chat: selected text arrives quoted (type your
+    /// question below it); selected files become attachments.
+    @MainActor @objc func newChatFromService(_ pboard: NSPasteboard, userData: String?,
+                                             error: AutoreleasingUnsafeMutablePointer<NSString?>) {
+        let urls = (pboard.readObjects(forClasses: [NSURL.self],
+                                       options: [.urlReadingFileURLsOnly: true]) as? [URL]) ?? []
+        var draft = ""
+        if urls.isEmpty, let text = pboard.string(forType: .string), !text.isEmpty {
+            draft = text.split(separator: "\n", omittingEmptySubsequences: false)
+                .map { "> " + $0 }.joined(separator: "\n") + "\n\n"
+        }
+        newChat(draft: draft, urls: urls, send: false)
     }
 
     /// ⌃⌘N — new native Claude chat (ACP) in the current folder.

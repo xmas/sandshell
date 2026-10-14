@@ -51,6 +51,18 @@ targets:
           - CFBundleURLName: com.xmas.sandshell
             CFBundleURLSchemes:
               - sandshell
+        # Services ▸ New Sandshell Chat (selected text or files → new chat).
+        NSServices:
+          - NSMenuItem:
+              default: New Sandshell Chat
+            NSMessage: newChatFromService
+            NSPortName: Sandshell
+            NSRequiredContext: {}
+            NSSendTypes:
+              - public.utf8-plain-text
+              - public.file-url
+            NSSendFileTypes:
+              - public.item
         CFBundleDocumentTypes:
           - CFBundleTypeName: All Documents
             CFBundleTypeRole: Viewer

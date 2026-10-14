@@ -101,6 +101,14 @@ final class ChatComposerView: NSView, NSTextViewDelegate {
 
     func setEnabled(_ enabled: Bool) { textView.isEditable = enabled }
 
+    /// Pre-fill the composer (Services / Shortcuts), caret at the end.
+    func setDraft(_ text: String) {
+        textView.string = text
+        textView.setSelectedRange(NSRange(location: (text as NSString).length, length: 0))
+        textView.needsDisplay = true
+        resize()
+    }
+
     func submitFromButton() { submit() }
 
     // MARK: NSTextViewDelegate
@@ -247,14 +255,34 @@ final class ChatComposerView: NSView, NSTextViewDelegate {
     private func rebuildChips() {
         chipRow.arrangedSubviews.forEach { $0.removeFromSuperview() }
         for (i, a) in attachments.enumerated() {
-            let chip = NSButton(title: "\(a.displayName)  ✕", target: self, action: #selector(removeChip(_:)))
-            chip.tag = i
-            chip.bezelStyle = .inline
-            chip.controlSize = .small
-            chip.toolTip = "Remove attachment"
+            let name = NSButton(title: a.displayName, target: self, action: #selector(previewChip(_:)))
+            name.tag = i
+            name.bezelStyle = .inline
+            name.controlSize = .small
+            name.image = NSImage(systemSymbolName: { if case .image = a.kind { "photo" } else { "doc" } }(),
+                                 accessibilityDescription: nil)
+            name.imagePosition = .imageLeading
+            name.toolTip = "Quick Look"
+            let remove = NSButton(image: NSImage(systemSymbolName: "xmark.circle.fill", accessibilityDescription: "Remove")!,
+                                  target: self, action: #selector(removeChip(_:)))
+            remove.tag = i
+            remove.isBordered = false
+            remove.contentTintColor = .secondaryLabelColor
+            remove.toolTip = "Remove attachment"
+            let chip = NSStackView(views: [name, remove])
+            chip.spacing = 2
             chipRow.addArrangedSubview(chip)
         }
         chipRow.isHidden = attachments.isEmpty
+    }
+
+    @objc private func previewChip(_ sender: NSButton) {
+        guard attachments.indices.contains(sender.tag) else { return }
+        switch attachments[sender.tag].kind {
+        case .file(let url): QuickLook.shared.show([url])
+        case .image(let data, let mime, _):
+            if let url = ImageAttachment(data: data, mimeType: mime).fileURL { QuickLook.shared.show([url]) }
+        }
     }
 
     @objc private func removeChip(_ sender: NSButton) {

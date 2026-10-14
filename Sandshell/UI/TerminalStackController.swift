@@ -253,6 +253,8 @@ final class TerminalStackController: NSViewController {
     private var terminals: [UUID: TerminalSession] = [:]
     /// Sessions shown as native chat (ACP) instead of a terminal.
     private var chats: [UUID: ChatSessionView] = [:]
+    /// Drafts for chats still starting (Services, Shortcuts).
+    private var drafts: [UUID: (text: String, urls: [URL], send: Bool)] = [:]
     private var pending: Set<UUID> = []
     private var cancellables: Set<AnyCancellable> = []
 
@@ -997,7 +999,27 @@ final class TerminalStackController: NSViewController {
             controller.setLive(id, true)
             chat.start()
             if case .session(id) = controller.selection { showChat(id, view) }
+            if let draft = drafts.removeValue(forKey: id) {
+                view.applyDraft(text: draft.text, urls: draft.urls, send: draft.send)
+            }
         }
+    }
+
+    /// Files dropped on a session's sidebar row: a chat gets them as
+    /// attachments (now, or once it starts); a live terminal gets their paths.
+    func dropFiles(_ urls: [URL], on id: UUID) {
+        guard let session = controller.session(id: id) else { return }
+        if session.isChat {
+            queueDraft("", urls: urls, send: false, for: id)
+        } else if activeSessionID == id {
+            insertExternalItems(urls)
+        }
+    }
+
+    /// Put a draft into the session's chat — now if it's open, else when it starts.
+    func queueDraft(_ text: String, urls: [URL], send: Bool, for id: UUID) {
+        if let chat = chats[id] { chat.applyDraft(text: text, urls: urls, send: send) }
+        else { drafts[id] = (text, urls, send) }
     }
 
     private func showChat(_ id: UUID, _ chat: ChatSessionView) {

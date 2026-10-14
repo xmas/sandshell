@@ -97,6 +97,10 @@ final class MainWindowController: NSWindowController {
         let sidebarVC = SidebarListController(controller: controller)
         self.sidebar = sidebarVC
         sidebarVC.onOpenWorkspace = { [weak self] r in self?.onOpenWorkspace?(r) }
+        sidebarVC.onDropFiles = { [weak self] id, urls in
+            self?.workspace?.selection = .session(id)
+            self?.detail?.dropFiles(urls, on: id)
+        }
         let sidebarItem = NSSplitViewItem(sidebarWithViewController: sidebarVC)
         // Resizable within a range; collapses (auto-collapses when dragged below
         // the minimum, since it's a sidebar item with canCollapse).
@@ -281,6 +285,15 @@ final class MainWindowController: NSWindowController {
 
     func newChat() {
         workspace?.newChatInCurrentContext()
+    }
+
+    /// New Claude chat seeded with text/files (Services, Shortcuts); `send`
+    /// submits it as soon as the agent is ready.
+    func newChat(draft: String, urls: [URL], send: Bool) {
+        guard let session = workspace?.newChatInCurrentContext() else { return }
+        detail?.queueDraft(draft, urls: urls, send: send, for: session.id)
+        showWindow(nil)
+        window?.makeKeyAndOrderFront(nil)
     }
 
     /// Adopt `prefs` as this window's appearance ("Apply to All" from the

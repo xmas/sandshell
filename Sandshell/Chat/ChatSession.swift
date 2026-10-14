@@ -157,6 +157,10 @@ final class ChatSession: ObservableObject {
                 applyConfig(result["configOptions"])
                 if let sid = sessionID { onSessionID?(sid) }
                 phase = .ready
+                if let (text, attachments) = queued {
+                    queued = nil
+                    send(text: text, attachments: attachments)
+                }
             } catch {
                 phase = .closed("Agent failed to start: \(error.localizedDescription)")
             }
@@ -235,6 +239,13 @@ final class ChatSession: ObservableObject {
             if case .running = phase { phase = .ready }
         }
     }
+
+    /// Send `text` as soon as the session is ready (Shortcuts / Services
+    /// "send now"); sends immediately if it already is.
+    func sendWhenReady(text: String, attachments: [ChatAttachment]) {
+        if phase == .ready { send(text: text, attachments: attachments) } else { queued = (text, attachments) }
+    }
+    private var queued: (String, [ChatAttachment])?
 
     func cancel() {
         guard case .running = phase, let sid = sessionID else { return }

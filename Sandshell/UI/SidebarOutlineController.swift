@@ -109,6 +109,8 @@ final class SidebarListController: NSViewController {
     /// Open another workspace folder in its own window (Obsidian-vault style).
     /// Set by `MainWindowController`; routed to `AppDelegate.openWorkspace`.
     var onOpenWorkspace: ((URL) -> Void)?
+    /// Files dropped on a session row (the window routes them to that session).
+    var onDropFiles: ((UUID, [URL]) -> Void)?
 
     /// True while a container is building/rebuilding (drives the empty-state
     /// placeholder — session creation itself is never gated on this).
@@ -161,6 +163,8 @@ final class SidebarListController: NSViewController {
         outline.intercellSpacing = NSSize(width: 0, height: 1)
         outline.dataSource = self
         outline.delegate = self
+        outline.registerForDraggedTypes([.fileURL])
+        outline.setDraggingSourceOperationMask(.copy, forLocal: false)
         outline.target = self
         outline.action = #selector(rowClicked)
         outline.menuProvider = { [weak self] row in self?.contextMenu(forRow: row) }
@@ -1037,6 +1041,27 @@ final class SidebarListController: NSViewController {
 
 extension SidebarListController: NSTableViewDataSource {
     func numberOfRows(in tableView: NSTableView) -> Int { displayedSessionIDs.count }
+
+    /// Files dragged onto a session row attach to that session (chat: as
+    /// attachments; terminal: as sandbox-readable paths).
+    func tableView(_ tableView: NSTableView, validateDrop info: NSDraggingInfo, proposedRow row: Int,
+                   proposedDropOperation dropOperation: NSTableView.DropOperation) -> NSDragOperation {
+        guard !displayedSessionIDs.isEmpty,
+              info.draggingPasteboard.canReadObject(forClasses: [NSURL.self],
+                                                    options: [.urlReadingFileURLsOnly: true]) else { return [] }
+        tableView.setDropRow(min(max(row, 0), displayedSessionIDs.count - 1), dropOperation: .on)
+        return .copy
+    }
+
+    func tableView(_ tableView: NSTableView, acceptDrop info: NSDraggingInfo, row: Int,
+                   dropOperation: NSTableView.DropOperation) -> Bool {
+        guard row >= 0, row < displayedSessionIDs.count,
+              let urls = info.draggingPasteboard.readObjects(forClasses: [NSURL.self],
+                                                             options: [.urlReadingFileURLsOnly: true]) as? [URL],
+              !urls.isEmpty else { return false }
+        onDropFiles?(displayedSessionIDs[row], urls)
+        return true
+    }
 }
 
 // MARK: - Delegate (cells, selection)

@@ -277,9 +277,8 @@ enum ChatRenderer {
     }
 
     private static func image(_ data: Data) -> NSAttributedString {
-        guard let img = NSImage(data: data) else { return NSAttributedString() }
-        let attachment = NSTextAttachment()
-        attachment.image = img
+        let attachment = ImageAttachment(data: data)
+        guard let img = attachment.image else { return NSAttributedString() }
         let size = img.size
         let scale = min(1, maxImageWidth / max(size.width, 1))
         attachment.bounds = CGRect(x: 0, y: 0, width: size.width * scale, height: size.height * scale)

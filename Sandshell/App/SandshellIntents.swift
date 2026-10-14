@@ -23,6 +23,25 @@ struct ShowSandshellIntent: AppIntent {
     }
 }
 
+/// Starts a native Claude chat in the front workspace, optionally sending a
+/// prompt right away — for Shortcuts, Spotlight and Siri.
+struct NewClaudeChatIntent: AppIntent {
+    static let title: LocalizedStringResource = "New Claude Chat"
+    static let description = IntentDescription(
+        "Start a Claude chat in Sandshell's front workspace, optionally with a prompt.")
+    static let openAppWhenRun = true
+
+    @Parameter(title: "Prompt") var prompt: String?
+    @Parameter(title: "Send Immediately", default: true) var sendNow: Bool
+
+    @MainActor
+    func perform() async throws -> some IntentResult {
+        let text = prompt ?? ""
+        (NSApp.delegate as? AppDelegate)?.newChat(draft: text, urls: [], send: sendNow && !text.isEmpty)
+        return .result()
+    }
+}
+
 /// Registers Sandshell's App Shortcuts. Required for the App Intents metadata
 /// to be extracted at build time and registered cleanly at launch.
 struct SandshellShortcuts: AppShortcutsProvider {
@@ -35,6 +54,15 @@ struct SandshellShortcuts: AppShortcutsProvider {
             ],
             shortTitle: "Open Sandshell",
             systemImageName: "shippingbox"
+        )
+        AppShortcut(
+            intent: NewClaudeChatIntent(),
+            phrases: [
+                "New chat in \(.applicationName)",
+                "Ask Claude in \(.applicationName)",
+            ],
+            shortTitle: "New Claude Chat",
+            systemImageName: "bubble.left.and.text.bubble.right"
         )
     }
 }

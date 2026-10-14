@@ -13,8 +13,8 @@ import AppKit
 final class ChatTranscriptView: NSView, NSTextViewDelegate {
     private struct Segment { let id: String; var item: ChatItem; var length: Int }
 
-    private let scrollView = NSTextView.scrollableTextView()
-    private var textView: NSTextView { scrollView.documentView as! NSTextView }
+    private let scrollView = NSScrollView()
+    private let textView = TranscriptTextView(usingTextLayoutManager: true)
     private let fragments = BlockFragmentProvider()
     private var segments: [Segment] = []
     private var items: [ChatItem] = []
@@ -36,6 +36,13 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
             scrollView.trailingAnchor.constraint(equalTo: trailingAnchor),
         ])
         let tv = textView
+        tv.minSize = .zero
+        tv.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: .greatestFiniteMagnitude)
+        tv.isVerticallyResizable = true
+        tv.isHorizontallyResizable = false
+        tv.autoresizingMask = [.width]
+        tv.textContainer?.widthTracksTextView = true
+        scrollView.documentView = tv
         tv.isEditable = false
         tv.isSelectable = true
         tv.drawsBackground = false
