@@ -7,8 +7,9 @@ import AppKit
 @MainActor
 final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOutlineViewDelegate,
                                 NSSearchFieldDelegate, NSMenuDelegate {
-    /// Open a file in the editor.
+    /// Open a file in the editor (at a line, for search results).
     var onOpen: ((URL) -> Void)?
+    var onOpenAtLine: ((URL, Int, String) -> Void)?
     /// "Add to Chat" from the context menu.
     var onAddToChat: (([URL]) -> Void)?
     /// Git status changed (the editor refreshes its change markers).
@@ -22,6 +23,9 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
     private var watcher: FileWatcher?
     private var refreshPending = false
     private var filterResults: [FileNode]?
+    /// "?query" content-search results, grouped by file.
+    private var searchGroups: [SearchGroup]?
+    private var searchQuery = ""
 
     private let filter = NSSearchField()
     private let outline = FileOutlineView()
@@ -29,7 +33,7 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
 
     override func loadView() {
         let root = NSView()
-        filter.placeholderString = "Filter files"
+        filter.placeholderString = "Filter, or ? to search in files"
         filter.delegate = self
         filter.sendsSearchStringImmediately = true
         filter.setAccessibilityIdentifier("files-filter")
@@ -91,6 +95,7 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
         watcher = nil
         filter.stringValue = ""
         filterResults = nil
+        searchGroups = nil
         guard let url else {
             rootNode = nil
             outline.reloadData()
@@ -143,9 +148,15 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
         let query = filter.stringValue.trimmingCharacters(in: .whitespaces)
         guard !query.isEmpty else {
             filterResults = nil
+            searchGroups = nil
             outline.reloadData()
             return
         }
+        if query.hasPrefix("?") {
+            searchContents(String(query.dropFirst()).trimmingCharacters(in: .whitespaces), in: root)
+            return
+        }
+        searchGroups = nil
         let base = root.path
         Task { [weak self] in
             let files = await WorkspaceFileIndex.shared.files(under: base)
@@ -157,6 +168,64 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
         }
     }
 
+    /// `?query`: search file contents (git grep incl. untracked in a repo,
+    /// grep otherwise), case-insensitive, fixed string; grouped by file.
+    private func searchContents(_ query: String, in root: URL) {
+        filterResults = nil
+        searchQuery = query
+        guard !query.isEmpty else {
+            searchGroups = []
+            outline.reloadData()
+            return
+        }
+        let inRepo = git.repoRoot != nil
+        Task { [weak self] in
+            let output: String = await Task.detached(priority: .userInitiated) {
+                if inRepo {
+                    return GitStatus.git(["-C", root.path, "grep", "-n", "-I", "-i", "-F", "--untracked",
+                                          "--no-color", "-e", query, "--", "."]) ?? ""
+                }
+                let p = Process()
+                p.executableURL = URL(fileURLWithPath: "/usr/bin/grep")
+                p.currentDirectoryURL = root
+                p.arguments = ["-rnIiF", "--exclude-dir=.git", "--exclude-dir=node_modules", "--exclude-dir=build",
+                               "--exclude-dir=.build", "--exclude-dir=DerivedData", "-e", query, "."]
+                let out = Pipe()
+                p.standardOutput = out
+                p.standardError = FileHandle.nullDevice
+                guard (try? p.run()) != nil else { return "" }
+                let data = out.fileHandleForReading.readDataToEndOfFile()
+                p.waitUntilExit()
+                return String(decoding: data, as: UTF8.self)
+            }.value
+            guard let self, self.filter.stringValue.trimmingCharacters(in: .whitespaces) == "?" + query
+                    || self.filter.stringValue.trimmingCharacters(in: .whitespaces) == "? " + query else { return }
+            var groups: [String: SearchGroup] = [:]
+            var order: [String] = []
+            var total = 0
+            for line in output.split(separator: "\n") where total < 500 {
+                // path:line:text (path may contain ':' — split from the left on the first two).
+                let parts = line.split(separator: ":", maxSplits: 2, omittingEmptySubsequences: false)
+                guard parts.count == 3, let n = Int(parts[1]) else { continue }
+                var rel = String(parts[0])
+                if rel.hasPrefix("./") { rel.removeFirst(2) }
+                let url = root.appendingPathComponent(rel)
+                let group = groups[rel] ?? {
+                    order.append(rel)
+                    let g = SearchGroup(url: url, relative: rel)
+                    groups[rel] = g
+                    return g
+                }()
+                group.matches.append(MatchNode(url: url, line: n, text: String(parts[2])))
+                total += 1
+            }
+            self.searchGroups = order.compactMap { groups[$0] }
+            self.outline.reloadData()
+            self.outline.expandItem(nil, expandChildren: true)
+            self.branchLabel.stringValue = "\(total) match\(total == 1 ? "" : "es") in \(order.count) file\(order.count == 1 ? "" : "s")"
+        }
+    }
+
     /// ↓ from the filter moves into the results; Return opens the first.
     func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
         switch selector {
@@ -165,7 +234,10 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
             if outline.selectedRow < 0, outline.numberOfRows > 0 { outline.selectRowIndexes([0], byExtendingSelection: false) }
             return true
         case #selector(NSResponder.insertNewline(_:)):
-            if let node = (outline.item(atRow: max(outline.selectedRow, 0)) as? FileNode), !node.isDirectory {
+            let item = outline.item(atRow: max(outline.selectedRow, 0))
+            if let match = item as? MatchNode ?? (item as? SearchGroup)?.matches.first {
+                onOpenAtLine?(match.url, match.line, searchQuery)
+            } else if let node = item as? FileNode, !node.isDirectory {
                 onOpen?(node.url)
             }
             return true
@@ -176,6 +248,10 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
     // MARK: Data source
 
     func outlineView(_ outlineView: NSOutlineView, numberOfChildrenOfItem item: Any?) -> Int {
+        if let groups = searchGroups {
+            if item == nil { return groups.count }
+            return (item as? SearchGroup)?.matches.count ?? 0
+        }
         if let results = filterResults { return item == nil ? results.count : 0 }
         guard let node = (item as? FileNode) ?? rootNode else { return 0 }
         if !node.isLoaded { node.loadChildren() }
@@ -183,22 +259,38 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
     }
 
     func outlineView(_ outlineView: NSOutlineView, child index: Int, ofItem item: Any?) -> Any {
+        if let groups = searchGroups {
+            if let group = item as? SearchGroup { return group.matches[index] }
+            return groups[index]
+        }
         if let results = filterResults { return results[index] }
         let node = (item as? FileNode) ?? rootNode!
         return node.children![index]
     }
 
     func outlineView(_ outlineView: NSOutlineView, isItemExpandable item: Any) -> Bool {
-        filterResults == nil && ((item as? FileNode)?.isDirectory ?? false)
+        if item is SearchGroup { return true }
+        return filterResults == nil && searchGroups == nil && ((item as? FileNode)?.isDirectory ?? false)
     }
 
     func outlineView(_ outlineView: NSOutlineView, pasteboardWriterForItem item: Any) -> (any NSPasteboardWriting)? {
-        (item as? FileNode)?.url as NSURL?
+        ((item as? FileNode)?.url ?? (item as? SearchGroup)?.url) as NSURL?
     }
 
     // MARK: Delegate
 
     func outlineView(_ outlineView: NSOutlineView, viewFor tableColumn: NSTableColumn?, item: Any) -> NSView? {
+        if let group = item as? SearchGroup {
+            let cell = outlineView.makeView(withIdentifier: FileCell.id, owner: nil) as? FileCell ?? FileCell()
+            cell.configure(icon: NSWorkspace.shared.icon(forFile: group.url.path), title: group.relative,
+                           change: git.changes[group.url.path], dirtyFolder: false)
+            return cell
+        }
+        if let match = item as? MatchNode {
+            let cell = outlineView.makeView(withIdentifier: MatchCell.id, owner: nil) as? MatchCell ?? MatchCell()
+            cell.configure(match, query: searchQuery)
+            return cell
+        }
         guard let node = item as? FileNode else { return nil }
         let cell = outlineView.makeView(withIdentifier: FileCell.id, owner: nil) as? FileCell ?? FileCell()
         let path = node.url.path
@@ -211,7 +303,10 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
     }
 
     @objc private func clicked() {
-        guard let node = outline.item(atRow: outline.clickedRow) as? FileNode, !node.isDirectory else { return }
+        let item = outline.item(atRow: outline.clickedRow)
+        if let match = item as? MatchNode { onOpenAtLine?(match.url, match.line, searchQuery); return }
+        if let group = item as? SearchGroup { onOpen?(group.url); return }
+        guard let node = item as? FileNode, !node.isDirectory else { return }
         onOpen?(node.url)
     }
 
@@ -329,5 +424,76 @@ final class FileCell: NSTableCellView {
             badge.stringValue = dirtyFolder ? "●" : ""
             badge.textColor = .systemOrange.withAlphaComponent(0.7)
         }
+    }
+}
+
+/// Content-search results for one file.
+@MainActor
+final class SearchGroup: NSObject {
+    let url: URL
+    let relative: String
+    var matches: [MatchNode] = []
+    init(url: URL, relative: String) {
+        self.url = url
+        self.relative = relative
+    }
+}
+
+/// One matching line.
+final class MatchNode: NSObject {
+    let url: URL
+    let line: Int
+    let text: String
+    init(url: URL, line: Int, text: String) {
+        self.url = url
+        self.line = line
+        self.text = text
+    }
+}
+
+/// "12  …matching line…" with the query emphasised.
+final class MatchCell: NSTableCellView {
+    static let id = NSUserInterfaceItemIdentifier("MatchCell")
+    private let number = NSTextField(labelWithString: "")
+    private let snippet = NSTextField(labelWithString: "")
+
+    init() {
+        super.init(frame: .zero)
+        identifier = Self.id
+        number.font = .monospacedDigitSystemFont(ofSize: 10.5, weight: .regular)
+        number.textColor = .tertiaryLabelColor
+        number.alignment = .right
+        snippet.lineBreakMode = .byTruncatingTail
+        for v in [number, snippet] as [NSView] {
+            v.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(v)
+        }
+        snippet.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        NSLayoutConstraint.activate([
+            number.leadingAnchor.constraint(equalTo: leadingAnchor),
+            number.widthAnchor.constraint(equalToConstant: 30),
+            number.centerYAnchor.constraint(equalTo: centerYAnchor),
+            snippet.leadingAnchor.constraint(equalTo: number.trailingAnchor, constant: 6),
+            snippet.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
+            snippet.centerYAnchor.constraint(equalTo: centerYAnchor),
+        ])
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    func configure(_ match: MatchNode, query: String) {
+        number.stringValue = "\(match.line)"
+        let text = match.text.trimmingCharacters(in: .whitespaces)
+        let s = NSMutableAttributedString(string: text, attributes: [
+            .font: NSFont.monospacedSystemFont(ofSize: 11, weight: .regular), .foregroundColor: NSColor.secondaryLabelColor])
+        var range = (text as NSString).range(of: query, options: .caseInsensitive)
+        while range.location != NSNotFound {
+            s.addAttributes([.foregroundColor: NSColor.labelColor,
+                             .font: NSFont.monospacedSystemFont(ofSize: 11, weight: .bold)], range: range)
+            let next = NSMaxRange(range)
+            range = (text as NSString).range(of: query, options: .caseInsensitive,
+                                             range: NSRange(location: next, length: (text as NSString).length - next))
+        }
+        snippet.attributedStringValue = s
     }
 }

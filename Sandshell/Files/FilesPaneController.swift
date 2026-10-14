@@ -27,6 +27,7 @@ final class FilesPaneController: NSSplitViewController {
         addSplitViewItem(treeItem)
         addSplitViewItem(editorItem)
         tree.onOpen = { [weak self] url in self?.editor.open(url) }
+        tree.onOpenAtLine = { [weak self] url, line, query in self?.editor.open(url, line: line, highlight: query) }
         tree.onGitStatus = { [weak self] status in self?.editor.updateGit(status) }
         tree.onFilesChanged = { [weak self] in self?.editor.filesChangedOnDisk() }
     }

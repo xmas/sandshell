@@ -236,6 +236,30 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
         show(file)
     }
 
+    /// Open at a line (search results), selecting and flashing `highlight`.
+    func open(_ url: URL, line: Int, highlight: String) {
+        open(url)
+        guard let file = current, file.isText else { return }
+        if file.mode != .source { file.mode = .source; show(file) }
+        let ns = editor.string as NSString
+        var start = 0
+        var n = 1
+        while n < line, start < ns.length {
+            start = NSMaxRange(ns.lineRange(for: NSRange(location: start, length: 0)))
+            n += 1
+        }
+        let lineRange = ns.lineRange(for: NSRange(location: min(start, ns.length), length: 0))
+        var target = NSRange(location: lineRange.location, length: 0)
+        if !highlight.isEmpty {
+            let hit = ns.range(of: highlight, options: .caseInsensitive, range: lineRange)
+            if hit.location != NSNotFound { target = hit }
+        }
+        editor.setSelectedRange(target)
+        editor.scrollRangeToVisible(target)
+        if target.length > 0 { editor.showFindIndicator(for: target) }
+        view.window?.makeFirstResponder(editor)
+    }
+
     func updateGit(_ status: GitStatus) {
         git = status
         rebuildTabs()
