@@ -79,6 +79,7 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
             focused = panes.first
         }
         rebuild()
+        ensureSessionBesideFiles()
     }
 
     override func viewDidLoad() {
@@ -113,18 +114,17 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
         }
         pane.onOpenFiles = { [weak self, weak pane] in
             guard let self, let pane else { return }
+            // Files sits beside a session, never in place of one: an empty pane
+            // first takes the selected (else most recent) session not on screen.
+            if pane.shownSession == nil, pane.shownFiles == nil, let id = self.sessionToShow() {
+                pane.show(id)
+                self.focus(pane)
+            }
             let target = pane.shownSession.flatMap { id in
                 self.controller.session(id: id).map { FilesTarget(session: id, folder: $0.workdir) }
             } ?? FilesTarget(session: nil, folder: self.controller.rootURL.path)
             if let existing = self.panes.first(where: { $0.shownFiles == target }) { return self.focus(existing) }
-            // An empty pane becomes the Files pane; otherwise open one beside it.
-            if pane.shownSession == nil && pane.shownFiles == nil {
-                pane.showFiles(target)
-                self.focus(pane)
-                self.scheduleSave()
-            } else {
-                self.split(pane, edge: .trailing, showing: nil, files: target)
-            }
+            self.split(pane, edge: .trailing, showing: nil, files: target)
         }
         pane.onFilesAddToChat = { [weak self] urls, target in
             guard let self else { return }
@@ -179,6 +179,28 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
 
     private var selectedSession: UUID? {
         if case .session(let id)? = controller.selection { id } else { nil }
+    }
+
+    /// A session for a pane that needs one: the selected, else the most recent,
+    /// that no pane is showing yet.
+    private func sessionToShow() -> UUID? {
+        let shown = Set(panes.compactMap(\.shownSession))
+        return [selectedSession].compactMap { $0 }.first { !shown.contains($0) }
+            ?? controller.orderedSessions.map(\.id).first { !shown.contains($0) }
+    }
+
+    /// A layout with Files but no session (saved by an earlier build): put a
+    /// session back on the leading side of the first Files pane.
+    private func ensureSessionBesideFiles() {
+        guard !panes.contains(where: { $0.shownSession != nil }),
+              let files = panes.first(where: { $0.shownFiles != nil }),
+              let id = sessionToShow() else { return }
+        if let empty = panes.first(where: { $0.shownSession == nil && $0.shownFiles == nil }) {
+            empty.show(id)
+            focus(empty)
+        } else {
+            split(files, edge: .leading, showing: id)
+        }
     }
 
     // MARK: Files panes

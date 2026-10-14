@@ -63,7 +63,7 @@ enum SelfTest {
     /// one scenario's saved panes can't leak into the next (`files-relaunch`
     /// is the one that checks a saved layout, so it keeps them).
     static func prepare() {
-        guard let scenario = requested, scenario != "files-relaunch" else { return }
+        guard let scenario = requested, !["files-relaunch", "files-alone"].contains(scenario) else { return }
         let defaults = UserDefaults.standard
         for key in defaults.dictionaryRepresentation().keys where key.hasPrefix("paneLayout:") {
             defaults.removeObject(forKey: key)
@@ -90,6 +90,7 @@ enum SelfTest {
         case "alerts": alerts()
         case "background": await background(window)
         case "pane-buttons": await paneButtons(window)
+        case "files-alone": await filesAlone(window)
         case "files": await files(window)
         case "files-relaunch": await filesRelaunch(window)
         case "kits": await kits(window)
@@ -967,16 +968,20 @@ enum SelfTest {
 
         check(press("empty-pane-files", empty), "Show Files pressed in the empty pane")
         await wait(0.6)
-        check(tree.panes.count == 2 && empty.shownFiles != nil, "the empty pane becomes Files")
+        let b = empty.shownSession
+        check(b != nil && b != a, "the empty pane takes a session first")
+        check(tree.panes.count == 3 && tree.panes.contains { $0.shownFiles?.session == b },
+              "Files opens beside it instead of replacing it")
+        snapshot(window, "pane-buttons-empty-files")
 
         check(press("pane-split-down", first), "Split Down pressed")
         await wait()
-        check(tree.panes.count == 3, "Split Down adds a pane")
+        check(tree.panes.count == 4, "Split Down adds a pane")
         if let added = tree.panes.first(where: { $0.shownSession == nil && $0.shownFiles == nil }) {
             check(press("empty-pane-close", added), "Close Pane pressed")
             await wait()
         }
-        check(tree.panes.count == 2, "the empty pane closes")
+        check(tree.panes.count == 3, "the empty pane closes")
 
         // The workspace Files pane isn't this session's: Files opens one beside it.
         check(press("pane-files", first), "Files pressed on the session's pane")
@@ -988,6 +993,27 @@ enum SelfTest {
         check(tree.panes.count == count, "pressing Files again focuses it instead of opening another")
         await wait(0.6)
         snapshot(window, "pane-buttons-final")
+
+        // Leave only a Files pane (what an earlier build could save) for `files-alone`.
+        while let session = tree.panes.first(where: { $0.shownFiles == nil }), tree.panes.count > 1 {
+            tree.close(session)
+            await wait(0.2)
+        }
+        while tree.panes.count > 1, let extra = tree.panes.last { tree.close(extra); await wait(0.2) }
+        await wait(1.0)
+        log("left \(tree.panes.count) pane(s): files=\(tree.panes.first?.shownFiles != nil)")
+    }
+
+    /// Relaunch after `pane-buttons`: a saved Files-only layout gets a session
+    /// pane back on its leading side.
+    private static func filesAlone(_ window: MainWindowController) async {
+        guard let tree = window.paneTree else { return log("no window") }
+        await wait(0.8)
+        check(tree.panes.count == 2, "two panes after restoring a Files-only layout (got \(tree.panes.count))")
+        check(tree.panes.first?.shownSession != nil && tree.panes.last?.shownFiles != nil,
+              "a session on the left, Files on the right")
+        await wait(0.6)
+        snapshot(window, "files-alone")
     }
 }
 #endif
