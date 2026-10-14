@@ -330,6 +330,8 @@ final class TerminalStackController: NSViewController {
     var onOpenFiles: (() -> Void)?
     private let closePaneButton = NSButton()
     private let filesPaneButton = NSButton()
+    /// Chat ⇄ Terminal for this pane's session (agents that can chat).
+    private let chatModeButton = NSButton()
     private let splitRightButton = NSButton()
     private let splitDownButton = NSButton()
     /// Title-strip pane controls: Files, Split Right, Split Down, Close.
@@ -483,6 +485,7 @@ final class TerminalStackController: NSViewController {
         titleLabel.toolTip = "These files are shared with sandbox “\(access.sandbox)” — see the Sandbox line under the file list"
         backgroundPill.isHidden = true
         filesPaneButton.isHidden = true
+        chatModeButton.isHidden = true
         claudeStats.isHidden = true
         claudeStatsCollapsed.isActive = true
         frameView.isHidden = false
@@ -669,6 +672,7 @@ final class TerminalStackController: NSViewController {
         backgroundPill.isHidden = true
         titleStrip.addSubview(backgroundPill)
         for (button, symbol, tip, action, id) in [
+            (chatModeButton, "terminal", "Show as Terminal", #selector(toggleChatClicked), "pane-chat-mode"),
             (filesPaneButton, "folder", "Show Files beside this pane (⇧⌥⌘0)", #selector(openFilesClicked), "pane-files"),
             (splitRightButton, "rectangle.split.2x1", "Split Right (⌘D)", #selector(splitRightClicked), "pane-split-right"),
             (splitDownButton, "rectangle.split.1x2", "Split Down (⇧⌘D)", #selector(splitDownClicked), "pane-split-down"),
@@ -688,7 +692,9 @@ final class TerminalStackController: NSViewController {
         paneControls.orientation = .horizontal
         paneControls.spacing = 10
         paneControls.translatesAutoresizingMaskIntoConstraints = false
-        paneControls.setViews([filesPaneButton, splitRightButton, splitDownButton, closePaneButton], in: .leading)
+        chatModeButton.isHidden = true
+        paneControls.setViews([chatModeButton, filesPaneButton, splitRightButton, splitDownButton, closePaneButton],
+                              in: .leading)
         titleStrip.addSubview(paneControls)
         frameView.addSubview(titleStrip)
         frameView.addSubview(host)
@@ -900,7 +906,9 @@ final class TerminalStackController: NSViewController {
         titleLabel.textColor = c.termDim
         claudeStats.applyTheme(c)
         kitBanner.applyTheme(c)
-        for b in [closePaneButton, filesPaneButton, splitRightButton, splitDownButton] { b.contentTintColor = c.termDim }
+        for b in [closePaneButton, filesPaneButton, splitRightButton, splitDownButton, chatModeButton] {
+            b.contentTintColor = c.termDim
+        }
         contextBar.applyTheme(c)
         updateFocusRing()
         headerName.textColor = c.text
@@ -1124,6 +1132,14 @@ final class TerminalStackController: NSViewController {
         updateClaudeStats(session.id)
         updateBackgroundPill()
         filesPaneButton.isHidden = false
+        let canChat = SbxCommand.supportsACP(session.agent) && session.containerAgent == nil
+        chatModeButton.isHidden = !canChat
+        let modeTip = session.isChat ? "Show as Terminal" : "Show as Chat"
+        chatModeButton.image = NSImage(systemSymbolName: session.isChat ? "terminal" : "bubble.left.and.text.bubble.right",
+                                       accessibilityDescription: modeTip)?
+            .withSymbolConfiguration(.init(pointSize: 11, weight: .medium))
+        chatModeButton.toolTip = modeTip
+        chatModeButton.setAccessibilityLabel(modeTip)
         onChromeChange?(Chrome(agent: session.agent, title: session.name,
                                subtitle: "\(container) · \(shortHome(session.workdir))"))
     }

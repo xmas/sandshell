@@ -1465,8 +1465,10 @@ extension WorkspaceController {
             folderID = first.id; agent = primaryAgent
         }
         setFolder(folderID, expanded: true)
+        // Chat is the default for agents that have one; the pane's switch flips it.
+        let chat = containerAgent == nil && SbxCommand.supportsACP(agent)
         guard let s = addSession(folderID: folderID, agent: agent,
-                                 containerAgent: containerAgent) else { return nil }
+                                 containerAgent: containerAgent, chat: chat) else { return nil }
         selection = .session(s.id)
         return s
     }

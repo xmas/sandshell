@@ -869,22 +869,27 @@ final class SidebarListController: NSViewController {
             return item
         }
         var items: [NSMenuItem] = []
-        // Native chats, for each agent with an ACP entry point; each runs in
-        // that agent's own sandbox, which is created for it and so can run it.
-        for agent in SbxCommand.acpAgents {
-            items.append(action("New \(agent.displayName) Chat", agent.menuIcon,
-                                NewSessionRequest(folderID: folderID, agent: agent, chat: true)))
-        }
-        items.append(.separator())
         let custom = controller.customAgents
         var featured: [AgentKind] = [.claude, .codex, .gemini, .shell]
         if !featured.contains(controller.primaryAgent), controller.primaryAgent.isBuiltin {
             featured.insert(controller.primaryAgent, at: 0)
         }
+        // Agents that can chat start as a chat (the default); each runs in its
+        // own sandbox. The pane's Chat/Terminal switch flips it later.
         for agent in featured + custom {
             items.append(action("New \(agent.displayName)", agent.menuIcon,
-                                NewSessionRequest(folderID: folderID, agent: agent)))
+                                NewSessionRequest(folderID: folderID, agent: agent,
+                                                  chat: SbxCommand.supportsACP(agent))))
         }
+        let terminal = NSMenuItem(title: "In Terminal", action: nil, keyEquivalent: "")
+        terminal.image = NSImage(systemSymbolName: "terminal", accessibilityDescription: nil)
+        let terminalMenu = NSMenu()
+        for agent in SbxCommand.acpAgents {
+            terminalMenu.addItem(action("New \(agent.displayName) in Terminal", agent.menuIcon,
+                                        NewSessionRequest(folderID: folderID, agent: agent)))
+        }
+        terminal.submenu = terminalMenu
+        items.append(terminal)
         let others = AgentKind.builtins.filter { !featured.contains($0) }
         if !others.isEmpty {
             let more = NSMenuItem(title: "Other Agents", action: nil, keyEquivalent: "")

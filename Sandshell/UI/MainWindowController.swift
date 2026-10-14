@@ -574,12 +574,13 @@ extension MainWindowController: NSToolbarDelegate {
         // Our own sidebar toggle, not `.toggleSidebar`: the system item is a
         // bezeled button that renders as a glass capsule (and can hold a focus
         // ring) on macOS 26+/SDK 27 builds.
+        // Chat ⇄ Terminal lives on each pane (title strip), not here.
         [.sidebarToggle, .identity, .flexibleSpace, .sessionStatus,
-         .chatToggle, .revealFolder, .stopSession, .restartSession, .search, .filesToggle]
+         .revealFolder, .stopSession, .restartSession, .search, .filesToggle]
     }
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [.sidebarToggle, .identity, .sessionStatus, .chatToggle, .filesToggle, .search,
+        [.sidebarToggle, .identity, .sessionStatus, .filesToggle, .search,
          .revealFolder, .stopSession, .restartSession, .flexibleSpace, .space]
     }
 
