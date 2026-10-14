@@ -19,8 +19,14 @@ extension AgentKind {
         case .codex: return .hex("10a37f")
         case .gemini: return .hex("4285f4")
         case .shell: return .hex("64748b")
-        default: return .hex("64748b")
+        default: return .hex(AgentProfileStore.profile(for: self)?.colorHex ?? "64748b")
         }
+    }
+
+    /// SF Symbol a custom agent's profile picked (nil for builtins, which use
+    /// their brand logo or glyph).
+    var customSymbol: String? {
+        isBuiltin ? nil : AgentProfileStore.profile(for: self)?.icon
     }
 
     /// Asset-catalog name of the agent's brand logo (template SVG), or nil to
@@ -70,7 +76,9 @@ final class AgentBadgeView: NSView {
 
     func configure(_ agent: AgentKind) {
         layer?.backgroundColor = agent.badgeColor.cgColor
-        if let name = agent.badgeImageName, let image = NSImage(named: name) {
+        let image = agent.badgeImageName.flatMap { NSImage(named: $0) }
+            ?? agent.customSymbol.flatMap { NSImage(systemSymbolName: $0, accessibilityDescription: nil) }
+        if let image {
             image.isTemplate = true
             icon.image = image
             icon.isHidden = false

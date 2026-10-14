@@ -53,6 +53,11 @@ enum MainMenu {
         let newChat = fileMenu.addItem(withTitle: "New Claude Chat",
                                        action: #selector(AppDelegate.newChat(_:)), keyEquivalent: "n")
         newChat.keyEquivalentModifierMask = [.command, .control]
+        for agent in SbxCommand.acpAgents where agent != .claude {
+            let item = fileMenu.addItem(withTitle: "New \(agent.displayName) Chat",
+                                        action: #selector(AppDelegate.newChat(_:)), keyEquivalent: "")
+            item.representedObject = agent.rawValue
+        }
         let duplicateWindow = fileMenu.addItem(withTitle: "Duplicate Window",
                                                action: #selector(AppDelegate.duplicateWindow(_:)), keyEquivalent: "n")
         duplicateWindow.keyEquivalentModifierMask = [.command, .shift]

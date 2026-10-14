@@ -28,6 +28,9 @@ struct WorkspaceConfig: Codable {
     var claudeModel: String?
     /// `claude --effort` level for this workspace's Claude sessions; `nil` = Claude's default.
     var claudeEffort: String?
+    /// Custom (kit-defined) agents this workspace offers next to the builtins;
+    /// their display identity lives app-globally in `AgentProfileStore`.
+    var customAgents: [AgentKind] = []
 
     static let defaultArchiveInterval: TimeInterval = 1800   // 30 min
 
@@ -61,7 +64,7 @@ struct WorkspaceConfig: Codable {
 
     enum CodingKeys: String, CodingKey {
         case schemaVersion, policy, mcpServers, mcpURL, primaryAgent, configured, archiveInterval, theme, kits
-        case imageChannel, customImage, claudeModel, claudeEffort
+        case imageChannel, customImage, claudeModel, claudeEffort, customAgents
     }
 
     init(from decoder: Decoder) throws {
@@ -80,6 +83,7 @@ struct WorkspaceConfig: Codable {
         customImage = try c.decodeIfPresent(String.self, forKey: .customImage) ?? ""
         claudeModel = try c.decodeIfPresent(String.self, forKey: .claudeModel)
         claudeEffort = try c.decodeIfPresent(String.self, forKey: .claudeEffort)
+        customAgents = try c.decodeIfPresent([AgentKind].self, forKey: .customAgents) ?? []
     }
 
     // MARK: - Persistence

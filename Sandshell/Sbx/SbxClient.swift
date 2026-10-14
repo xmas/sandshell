@@ -7,8 +7,8 @@ actor SbxClient {
     static let shared = SbxClient()
 
     private let sbx: String
-    /// `hasAnthropicSecret` result per scope, briefly cached (checked per launch).
-    private var anthropicSecretCache: [String: (Bool, Date)] = [:]
+    /// `hasServiceSecret` result per service + scope, briefly cached (checked per launch).
+    private var secretCache: [String: (Bool, Date)] = [:]
 
     init() {
         self.sbx = PathFixer.sbxPath()
@@ -200,7 +200,9 @@ actor SbxClient {
         Log.info(.sbx, "rebuilding sandbox “\(sandbox.name)” (\(sandbox.agent))")
         _ = try? await stop(sandbox.name)
         _ = try? await remove(sandbox.name)
-        let args = ["create", "--no-progress", "--name", sandbox.name, sandbox.agent] + sandbox.workspaces
+        // A kit agent is recreated from its kit, when it's a registered one.
+        let agent = AgentKind(rawValue: sandbox.agent).createReference
+        let args = ["create", "--no-progress", "--name", sandbox.name, agent] + sandbox.workspaces
         return try await createAndPoll(args, cwd: sandbox.primaryWorkdir, env: nil, name: sandbox.name)
     }
 
@@ -300,7 +302,7 @@ actor SbxClient {
         // pulled fresh either way (sbx defaults to --pull always).
         if let template = workspace.templateImage(for: agent) { args += ["-t", template] }
         args += kits.flatMap { ["--kit", $0] }
-        args.append(agent.rawValue)
+        args.append(agent.createReference)   // a custom agent is created from its kit
         args += mounts.map(\.spec)
         return try await createAndPoll(args, cwd: workspace.rootURL.path,
                                        env: ["SBX_MCP_URL": workspace.mcpURL.absoluteString],
@@ -543,18 +545,25 @@ actor SbxClient {
     /// real credential to the agent's API requests and refreshes OAuth on the
     /// host, once, for every sandbox.
     func hasAnthropicSecret(sandbox: String) async -> Bool {
-        if let (value, at) = anthropicSecretCache[sandbox], Date().timeIntervalSince(at) < 30 { return value }
+        await hasServiceSecret("anthropic", sandbox: sandbox)
+    }
+
+    /// Whether sbx holds a credential for `service` (`anthropic`, `openai`,
+    /// `google`, …) that applies to this sandbox — global or scoped to it.
+    func hasServiceSecret(_ service: String, sandbox: String) async -> Bool {
+        let key = "\(service)\u{0}\(sandbox)"
+        if let (value, at) = secretCache[key], Date().timeIntervalSince(at) < 30 { return value }
         struct Listing: Decodable {
             struct Secret: Decodable { let scope: String; let name: String }
             let secrets: [Secret]
         }
         var found = false
-        if let out = try? await run(["secret", "ls", "--json", "--service", "anthropic"], routine: true), out.ok,
+        if let out = try? await run(["secret", "ls", "--json", "--service", service], routine: true), out.ok,
            let json = Self.firstJSONObject(in: out.stdout), let data = json.data(using: .utf8),
            let listing = try? JSONDecoder().decode(Listing.self, from: data) {
-            found = listing.secrets.contains { $0.name == "anthropic" && ($0.scope == "global" || $0.scope == sandbox) }
+            found = listing.secrets.contains { $0.name == service && ($0.scope == "global" || $0.scope == sandbox) }
         }
-        anthropicSecretCache[sandbox] = (found, Date())
+        secretCache[key] = (found, Date())
         return found
     }
 

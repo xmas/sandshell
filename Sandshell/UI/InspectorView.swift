@@ -61,6 +61,8 @@ struct InspectorView: View {
             MountsInspectorPane(controller: controller)
         case .kits:
             KitsInspectorPane(controller: controller)
+        case .agents:
+            AgentsInspectorPane(controller: controller)
         case .mcp:
             MCPInspectorPane(controller: controller)
         case .git:
@@ -108,7 +110,7 @@ private struct TabButton: View {
 /// The per-root inspector panes. All app settings live here — there is no
 /// separate global Settings window.
 enum InspectorPane: String, CaseIterable, Identifiable {
-    case general, sandboxes, folders, mounts, kits, mcp, git, terminal
+    case general, sandboxes, folders, mounts, kits, agents, mcp, git, terminal
     var id: String { rawValue }
     var title: String {
         switch self {
@@ -124,6 +126,7 @@ enum InspectorPane: String, CaseIterable, Identifiable {
         case .folders: return "folder.fill"
         case .mounts: return "externaldrive.fill"
         case .kits: return "cube.fill"
+        case .agents: return "person.crop.square.fill"
         case .mcp: return "point.3.connected.trianglepath.dotted"
         case .git: return "arrow.triangle.branch"
         case .terminal: return "terminal.fill"
@@ -137,6 +140,7 @@ enum InspectorPane: String, CaseIterable, Identifiable {
         case .folders: return .systemIndigo
         case .mounts: return .systemBlue
         case .kits: return .systemGreen
+        case .agents: return .systemPink
         case .mcp: return .systemPurple
         case .git: return .systemOrange
         case .terminal: return .systemTeal
@@ -198,6 +202,19 @@ private struct KitsInspectorPane: View {
             }
         }
     }
+}
+
+/// Agents pane for the inspector: register custom (kit-defined) agents and pick
+/// which this workspace offers. Applies immediately — nothing to rebuild.
+private struct AgentsInspectorPane: View {
+    @StateObject private var model: AgentConfigModel
+
+    init(controller: WorkspaceController) {
+        _model = StateObject(wrappedValue: AgentConfigModel(
+            enabled: controller.customAgents, apply: { [weak controller] in controller?.setCustomAgents($0) }))
+    }
+
+    var body: some View { AgentConfigView(model: model) }
 }
 
 /// Mounts pane for the inspector: edits the workspace mount policy and applies it

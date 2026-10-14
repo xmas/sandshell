@@ -82,7 +82,11 @@ struct KitInspection: Decodable {
     var caps: Permissions?           // schema v1 spelling
     var ports: [Port]?
     var agentInstructions: AgentInstructions?
+    /// `sandbox` (defines an agent; the create positional) or `mixin` (`--kit`).
+    var kind: String?
+    var sandbox: SandboxSpec?
 
+    struct SandboxSpec: Decodable { var image: String?; var entrypoint: [String]? }
     struct Permissions: Decodable {
         struct Network: Decodable { var allow: [String]?; var deny: [String]? }
         var network: Network?

@@ -29,7 +29,7 @@ final class NotificationManager: NSObject {
                           workdir: String) {
         guard !AutomatedRun.isActive else { return }
         let content = UNMutableNotificationContent()
-        content.title = "\(agentName.capitalized) finished — \(sessionName)"
+        content.title = "\(agentName) finished — \(sessionName)"
         if let p = lastPrompt?.trimmingCharacters(in: .whitespacesAndNewlines), !p.isEmpty {
             content.subtitle = p.count > 80 ? String(p.prefix(77)) + "…" : p
         }

@@ -74,6 +74,7 @@ enum SelfTest {
         case "files": await files(window)
         case "files-relaunch": await filesRelaunch(window)
         case "kits": await kits(window)
+        case "agents": await agents(window)
         default: log("unknown self-test \(requested ?? "")")
         }
         log(failures == 0 ? "ALL PASSED" : "\(failures) FAILED")
@@ -229,6 +230,192 @@ enum SelfTest {
         await wait(3)
         check(chat.items.count == countAtStop, "nothing streams in after Stop (\(chat.items.count - countAtStop) late items)")
         snapshot(window, "chat-final")
+    }
+
+    // MARK: Custom agents + Codex/Gemini chats
+
+    /// Custom agent registration (from the `kind: sandbox` kit named by
+    /// `-SandshellSelfTestKit <dir>`, optionally a mixin at
+    /// `-SandshellSelfTestMixin <dir>`), the New Session menu, then for Codex
+    /// and Gemini: a raw ACP initialize + session/new against each agent's
+    /// sandbox (created through the app's own path), and the chat surface's
+    /// behavior without credentials (or a PONG round trip with them).
+    private static func agents(_ window: MainWindowController) async {
+        guard let tree = window.paneTree, let ws = window.workspaceController else { return log("no window") }
+        let defaults = UserDefaults.standard
+
+        // 1. Registration from a kind: sandbox kit.
+        if let kit = defaults.string(forKey: "SandshellSelfTestKit") {
+            do {
+                let p = try await AgentProfileStore.register(kitRef: kit)
+                log("registered \(p.agent) “\(p.displayName)” color \(p.colorHex) image \(p.image ?? "-")")
+                let agent = p.kind
+                check(!agent.isBuiltin && agent.displayName == p.displayName, "custom agent shows its kit's display name")
+                check(agent.createReference == kit, "sbx create positional is the kit (\(agent.createReference))")
+                check(ImageChannel.custom.templateImage(for: agent, custom: "example/img:1") == nil
+                      && ImageChannel.custom.templateImage(for: .codex, custom: "example/img:1") != nil,
+                      "no -t for a kit agent (builtins still get it)")
+                ws.setCustomAgents([agent])
+                check(ws.availableAgents.contains(agent) && ws.customAgents == [agent], "workspace offers the custom agent")
+                let cfg = (try? WorkspaceConfig.load(root: ws.rootURL)) ?? nil
+                check(cfg?.customAgents == [agent], "custom agent persisted in config.json")
+                check(ws.agentForContainer(named: ws.containerName(for: agent)) == agent,
+                      "agentForContainer finds the custom agent's container")
+                var edited = p
+                edited.displayName = "Probe Agent"
+                AgentProfileStore.upsert(edited)
+                check(agent.displayName == "Probe Agent", "display name edit applies")
+                renderAgentsPane(ws)
+
+                // The custom agent's sandbox, created from its kit through the app's path.
+                if let c = await ws.ensureContainerReady(for: agent),
+                   let sb = try? await SbxClient.shared.status(name: c) {
+                    check(sb.agent == p.agent, "custom agent's sandbox \(c) created from its kit (sbx agent \(sb.agent))")
+                } else {
+                    check(false, "custom agent's sandbox comes up (\(ws.lastError ?? "?"))")
+                }
+                if let folder = ws.folders.first, let s = ws.addSession(folderID: folder.id, agent: agent) {
+                    ws.selection = .session(s.id)
+                    check(await until(90) { tree.surfaces.terminals[s.id] != nil }, "custom agent terminal session launches")
+                    await wait(3)
+                    snapshot(window, "custom-agent-session")
+                }
+            } catch {
+                check(false, "register custom agent: \(error.localizedDescription)")
+            }
+        }
+        if let mixin = defaults.string(forKey: "SandshellSelfTestMixin") {
+            do {
+                _ = try await AgentProfileStore.register(kitRef: mixin)
+                check(false, "a mixin kit is refused as an agent")
+            } catch {
+                check(error.localizedDescription.contains("not an agent"), "a mixin kit is refused: \(error.localizedDescription)")
+            }
+        }
+
+        // 2. New Session menu.
+        let titles = window.sidebarList?.newSessionMenuTitles() ?? []
+        log("menu: \(titles.joined(separator: " | "))")
+        for t in ["New Claude Chat", "New Codex Chat", "New Gemini Chat", "New Gemini", "Other Agents ▸ New Kiro"] {
+            check(titles.contains(t), "menu has “\(t)”")
+        }
+        for agent in ws.customAgents {
+            check(titles.contains("New \(agent.displayName)") && titles.contains("Shell in \(agent.displayName) Sandbox"),
+                  "menu offers the custom agent \(agent.displayName)")
+        }
+
+        // 3. Codex + Gemini over ACP.
+        for agent in [AgentKind.codex, .gemini] {
+            guard let container = await ws.ensureContainerReady(for: agent) else {
+                check(false, "\(agent.rawValue) sandbox comes up (\(ws.lastError ?? "?"))")
+                continue
+            }
+            log("\(agent.rawValue) sandbox: \(container)")
+            await handshake(agent, container: container, workdir: ws.rootURL.path, home: ws.home.path)
+
+            guard let s = ws.newChatInCurrentContext(agent: agent) else { check(false, "new \(agent.rawValue) chat"); continue }
+            check(s.agent == agent && s.isChat && s.containerAgentKind == agent, "\(agent.displayName) chat session runs in its own sandbox")
+            func chat() -> ChatSession? { tree.surfaces.chats[s.id]?.session }
+            let service = ChatSession.credentialService(for: agent) ?? ""
+            let hasCreds = await SbxClient.shared.hasServiceSecret(service, sandbox: container)
+            if hasCreds {
+                check(await until(300) { chat()?.phase == .ready }, "\(agent.displayName) chat reaches ready")
+                guard let c = chat(), c.phase == .ready else { continue }
+                c.send(text: "Reply with exactly the word PONG and nothing else.", attachments: [])
+                check(await until(180) {
+                    c.phase == .ready && c.items.contains { if case .agentText(_, let t) = $0 { t.contains("PONG") } else { false } }
+                }, "\(agent.displayName) prompt round trip")
+            } else {
+                log("no \(service) secret: expecting the credential error")
+                check(await until(120) { if case .closed = chat()?.phase { true } else { false } },
+                      "\(agent.displayName) chat stops instead of hanging")
+                let notices: [String] = chat()?.items.compactMap { item -> String? in
+                    if case .notice(_, let t, true) = item { return t } else { return nil }
+                } ?? []
+                log("\(agent.rawValue) chat: \(String(describing: chat()?.phase)) — \(notices.first ?? "-")")
+                check(notices.contains { $0.contains("sbx secret set \(service)") }, "\(agent.displayName) chat says how to add a credential")
+            }
+            ws.selection = .session(s.id)
+            await wait(1)
+            snapshot(window, "chat-\(agent.rawValue)")
+        }
+    }
+
+    /// Initialize + session/new against `agent`'s ACP entry point, with the
+    /// same argv the chat uses.
+    private static func handshake(_ agent: AgentKind, container: String, workdir: String, home: String) async {
+        guard let args = SbxCommand.acpArguments(agent: agent, containerName: container, workdir: workdir,
+                                                 home: home, mcpURL: nil) else {
+            return check(false, "\(agent.rawValue) has an ACP launch")
+        }
+        let conn = ACPConnection(executable: PathFixer.sbxPath(), arguments: args)
+        let drain = Task {
+            for await event in conn.incoming {
+                if case .stderr(let line) = event { Log.info(.sbx, "selftest[\(agent.rawValue)]: \(line)") }
+            }
+        }
+        defer { conn.terminate(); drain.cancel() }
+        do { try conn.start() } catch { return check(false, "\(agent.rawValue) adapter launches: \(error)") }
+        let started = Date()
+        do {
+            let initResult = try await withTimeout(300) {
+                try await conn.request("initialize", [
+                    "protocolVersion": 1,
+                    "clientCapabilities": ["fs": ["readTextFile": false, "writeTextFile": false], "terminal": false],
+                ])
+            }
+            let info = initResult["agentInfo"]
+            log(String(format: "\(agent.rawValue) initialize in %.1fs: %@ %@ · auth methods %@", Date().timeIntervalSince(started),
+                       info?["name"]?.string ?? "?", info?["version"]?.string ?? "?",
+                       (initResult["authMethods"]?.array ?? []).compactMap { $0["id"]?.string }.joined(separator: ",")))
+            check(initResult["protocolVersion"]?.int == 1, "\(agent.rawValue) ACP initialize")
+        } catch {
+            return check(false, "\(agent.rawValue) ACP initialize: \(error.localizedDescription)")
+        }
+        do {
+            let new = try await withTimeout(120) {
+                try await conn.request("session/new", ["cwd": .string(workdir), "mcpServers": []])
+            }
+            let models = (new["models"]?["availableModels"]?.array ?? []).compactMap { $0["modelId"]?.string }
+            let modes = (new["modes"]?["availableModes"]?.array ?? []).compactMap { $0["id"]?.string }
+            log("\(agent.rawValue) session/new: \(new["sessionId"]?.string ?? "-") models [\(models.joined(separator: ","))] modes [\(modes.joined(separator: ","))]")
+            check(new["sessionId"]?.string != nil, "\(agent.rawValue) session/new returns a session")
+        } catch {
+            // Without a credential, codex-acp answers session/new with ACP's auth error.
+            log("\(agent.rawValue) session/new: \(error.localizedDescription)")
+            check(ChatSession.isAuthRequired(error), "\(agent.rawValue) session/new: auth-required error (no credential)")
+        }
+    }
+
+    private struct Timeout: Error {}
+
+    private static func withTimeout<T: Sendable>(_ seconds: Double, _ work: @escaping @Sendable () async throws -> T) async throws -> T {
+        try await withThrowingTaskGroup(of: T.self) { group in
+            group.addTask { try await work() }
+            group.addTask { try await Task.sleep(for: .seconds(seconds)); throw Timeout() }
+            let first = try await group.next()!
+            group.cancelAll()
+            return first
+        }
+    }
+
+    /// Render the Agents inspector pane offscreen to a PNG.
+    private static func renderAgentsPane(_ ws: WorkspaceController) {
+        let model = AgentConfigModel(enabled: ws.customAgents, apply: { _ in })
+        let host = NSHostingView(rootView: AgentConfigView(model: model))
+        host.frame = NSRect(x: 0, y: 0, width: InspectorMetrics.paneWidth, height: InspectorMetrics.paneHeight)
+        let w = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        w.alphaValue = 0
+        w.ignoresMouseEvents = true
+        w.contentView = host
+        w.orderBack(nil)
+        host.layoutSubtreeIfNeeded()
+        if let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) {
+            host.cacheDisplay(in: host.bounds, to: rep)
+            try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: out + "/agents-pane.png"))
+            log("snapshot agents-pane.png")
+        }
+        w.orderOut(nil)
     }
 
     // MARK: New session mid-build

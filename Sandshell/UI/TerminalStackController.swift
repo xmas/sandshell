@@ -874,7 +874,7 @@ final class TerminalStackController: NSViewController {
         updateHeaderStatus(session.id)
         frameView.isHidden = true
         spinner.stopAnimation(nil)
-        statusLabel.stringValue = "\(session.agent.displayName.capitalized) exited."
+        statusLabel.stringValue = "\(session.agent.displayName) exited."
         restartButton.isHidden = false
         statusStack.isHidden = false
         kitBannerContextActive = true
@@ -930,7 +930,7 @@ final class TerminalStackController: NSViewController {
     /// terminal. Same conversation either way (resumed in the new surface).
     @objc func toggleChatClicked() {
         guard let id = activeSessionID, let session = controller.session(id: id),
-              session.agent == .claude else { return }
+              SbxCommand.supportsACP(session.agent) else { return }
         controller.setChat(id, !session.isChat)
     }
 
@@ -1061,8 +1061,8 @@ final class TerminalStackController: NSViewController {
         }
 
         pending.insert(id)
-        showStatus(resumeID == nil ? "Starting \(session.agent.displayName.capitalized)…"
-                                   : "Restoring \(session.agent.displayName.capitalized)…", busy: true)
+        showStatus(resumeID == nil ? "Starting \(session.agent.displayName)…"
+                                   : "Restoring \(session.agent.displayName)…", busy: true)
 
         Task {
             let containerName = await controller.ensureContainerReady(for: session.containerAgentKind)
@@ -1114,7 +1114,7 @@ final class TerminalStackController: NSViewController {
     private func confirmStartFresh(_ session: Session) -> Bool {
         let alert = NSAlert()
         alert.messageText = "Couldn’t restore “\(session.name)”."
-        alert.informativeText = "This session’s \(session.agent.displayName.capitalized) history "
+        alert.informativeText = "This session’s \(session.agent.displayName) history "
             + "is no longer available. Start a new session in its place?"
         alert.addButton(withTitle: "New Session")
         alert.addButton(withTitle: "Cancel")
@@ -1148,13 +1148,35 @@ final class TerminalStackController: NSViewController {
 
     // MARK: Chat sessions
 
+    /// Whether an agent's transcripts land on the host (mounted config dir), so
+    /// a resume id can be checked before it's tried.
+    private static func transcriptsOnHost(_ agent: AgentKind, home: URL) -> Bool {
+        switch agent {
+        case .claude: return true
+        case .codex: return FileManager.default.fileExists(atPath: home.appendingPathComponent(".codex").path)
+        default: return false
+        }
+    }
+
+    /// Why a chat for `agent` can't work in `container` before launching it —
+    /// no credential sbx's proxy could inject — or nil to go ahead. Claude keeps
+    /// its own fallbacks (host login, inference gateway), so it's never blocked.
+    private static func missingCredential(for agent: AgentKind, container: String, home: URL) async -> String? {
+        guard agent != .claude, let service = ChatSession.credentialService(for: agent) else { return nil }
+        if await SbxClient.shared.hasServiceSecret(service, sandbox: container) { return nil }
+        // Codex also signs in from a host ~/.codex/auth.json (mounted when present).
+        if agent == .codex,
+           FileManager.default.fileExists(atPath: home.appendingPathComponent(".codex/auth.json").path) { return nil }
+        return ChatSession.credentialHelp(for: agent)
+    }
+
     /// Bring the container up, then start the session's ACP agent and show its
     /// chat. Resumes the prior conversation when its transcript still exists.
     private func launchChat(_ session: Session) {
         let id = session.id
         guard !pending.contains(id), chats[id] == nil else { return }
         pending.insert(id)
-        showStatus("Starting \(session.agent.displayName.capitalized) chat…", busy: true)
+        showStatus("Starting \(session.agent.displayName) chat…", busy: true)
         Task { [weak self] in
             guard let self else { return }
             let containerName = await controller.ensureContainerReady(for: session.containerAgentKind)
@@ -1166,18 +1188,25 @@ final class TerminalStackController: NSViewController {
             guard let current = controller.session(id: id), current.isChat, chats[id] == nil else { return }
             var resumeID: String?
             if let tid = current.transcriptID,
-               TranscriptReader.transcriptExists(agent: current.agent, workdir: current.workdir,
-                                                 home: controller.home, id: tid) {
+               !Self.transcriptsOnHost(current.agent, home: controller.home)
+                || TranscriptReader.transcriptExists(agent: current.agent, workdir: current.workdir,
+                                                     home: controller.home, id: tid) {
+                // An agent whose history stays in the sandbox (Gemini; Codex without
+                // a host ~/.codex) can't be checked from here: try, and session/load
+                // falls back to a fresh conversation if it's gone.
                 resumeID = tid
             }
             Log.info(.workspace, "launching \(current.agent.rawValue) chat in “\(containerName)” at \(current.workdir)\(resumeID.map { " (resume \($0))" } ?? "")")
             await SbxClient.reapSessionProcessesAndWait(container: containerName,
                                                         match: "SANDSHELL_SESSION=\(id.uuidString)")
             let proxyAuth = await SbxClient.shared.hasAnthropicSecret(sandbox: containerName)
-            let chat = ChatSession(title: current.agent.displayName.capitalized, containerName: containerName,
+            let unavailable = await Self.missingCredential(for: current.agent, container: containerName,
+                                                           home: controller.home)
+            let chat = ChatSession(title: current.agent.displayName, agent: current.agent,
+                                   containerName: containerName,
                                    workdir: current.workdir, home: controller.home.path,
                                    mcpURL: controller.mcpURL, resumeID: resumeID, sbxProxyAuth: proxyAuth,
-                                   sessionID: id)
+                                   sessionID: id, unavailable: unavailable)
             chat.onSessionID = { [controller] sid in controller.setTranscriptID(id, sid) }
             var lastPrompt: String?
             chat.onPrompt = { [controller] prompt in
@@ -1591,7 +1620,7 @@ extension TerminalStackController: NSToolbarItemValidation {
             item.image = NSImage(systemSymbolName: isChat ? "terminal" : "bubble.left.and.text.bubble.right",
                                  accessibilityDescription: label)
         }
-        return session?.agent == .claude
+        return session.map { SbxCommand.supportsACP($0.agent) } ?? false
     }
 }
 

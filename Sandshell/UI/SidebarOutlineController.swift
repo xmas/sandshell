@@ -11,7 +11,7 @@ extension AgentKind {
         case .codex: return "chevron.left.forwardslash.chevron.right"
         case .gemini: return "diamond"
         case .shell: return "terminal"
-        default: return "cpu"
+        default: return customSymbol ?? "cpu"
         }
     }
 
@@ -845,7 +845,7 @@ final class SidebarListController: NSViewController {
         return items
     }
 
-    /// "New Claude", "New Codex", "New Shell", and shells attached to an
+    /// New chats, "New <Agent>" for the builtins + custom agents, and shells attached to an
     /// agent's sandbox — all in `folderID`.
     private func newSessionActions(folderID: UUID) -> [NSMenuItem] {
         func action(_ title: String, _ icon: NSImage?, _ req: NewSessionRequest) -> NSMenuItem {
@@ -856,18 +856,56 @@ final class SidebarListController: NSViewController {
             return item
         }
         var items: [NSMenuItem] = []
-        items.append(action("New Claude Chat", AgentKind.claude.menuIcon,
-                            NewSessionRequest(folderID: folderID, agent: .claude, chat: true)))
-        for agent in [AgentKind.claude, .codex, .shell] {
-            items.append(action("New \(agent.displayName.capitalized)", agent.menuIcon,
+        // Native chats, for each agent with an ACP entry point; each runs in
+        // that agent's own sandbox, which is created for it and so can run it.
+        for agent in SbxCommand.acpAgents {
+            items.append(action("New \(agent.displayName) Chat", agent.menuIcon,
+                                NewSessionRequest(folderID: folderID, agent: agent, chat: true)))
+        }
+        items.append(.separator())
+        let custom = controller.customAgents
+        var featured: [AgentKind] = [.claude, .codex, .gemini, .shell]
+        if !featured.contains(controller.primaryAgent), controller.primaryAgent.isBuiltin {
+            featured.insert(controller.primaryAgent, at: 0)
+        }
+        for agent in featured + custom {
+            items.append(action("New \(agent.displayName)", agent.menuIcon,
                                 NewSessionRequest(folderID: folderID, agent: agent)))
         }
-        for host in [AgentKind.claude, .codex] {
-            items.append(action("Shell in \(host.displayName.capitalized) Sandbox", host.menuIcon,
+        let others = AgentKind.builtins.filter { !featured.contains($0) }
+        if !others.isEmpty {
+            let more = NSMenuItem(title: "Other Agents", action: nil, keyEquivalent: "")
+            more.image = NSImage(systemSymbolName: "ellipsis.circle", accessibilityDescription: nil)
+            let sub = NSMenu()
+            for agent in others {
+                sub.addItem(action("New \(agent.displayName)", agent.menuIcon,
+                                   NewSessionRequest(folderID: folderID, agent: agent)))
+            }
+            more.submenu = sub
+            items.append(more)
+        }
+        items.append(.separator())
+        for host in [AgentKind.claude, .codex] + custom {
+            items.append(action("Shell in \(host.displayName) Sandbox", host.menuIcon,
                                 NewSessionRequest(folderID: folderID, agent: .shell, containerAgent: host)))
         }
         return items
     }
+
+    #if DEBUG
+    /// Self-test access: the "+ New Session" menu's titles, submenu items as
+    /// "Parent ▸ Child".
+    func newSessionMenuTitles() -> [String] {
+        func titles(_ items: [NSMenuItem], prefix: String) -> [String] {
+            items.flatMap { item -> [String] in
+                guard !item.isSeparatorItem else { return [] }
+                let own = prefix + item.title
+                return [own] + titles(item.submenu?.items ?? [], prefix: own + " ▸ ")
+            }
+        }
+        return titles(newSessionMenuItems(), prefix: "")
+    }
+    #endif
 
     /// "In Folder ▸": each known folder opens the same New … actions there,
     /// plus ways to add another folder.
@@ -1016,7 +1054,7 @@ final class SidebarListController: NSViewController {
         }
         menu.addItem(menuItem("Close Session", #selector(contextCloseSession), object: session.id))
         menu.addItem(menuItem("Open Files in Split", #selector(contextOpenFiles), object: session.id))
-        if session.agent == .claude {
+        if SbxCommand.supportsACP(session.agent) {
             menu.addItem(menuItem(session.isChat ? "Show as Terminal" : "Show as Chat",
                                   #selector(contextToggleChat), object: session.id))
         }
@@ -1409,7 +1447,7 @@ final class SessionCellView: NSTableCellView {
     /// folder rows to group them under.
     func configure(_ session: Session, runtime: SessionRuntime?, unread: Bool, active: Bool,
                    theme: ThemeColors, workdirName: String?) {
-        agentLabel = session.agent.displayName.capitalized
+        agentLabel = session.agent.displayName
         self.workdirName = workdirName
         accent = theme.accent
         fg = theme.sidebarFg

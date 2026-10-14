@@ -71,6 +71,9 @@ final class WorkspaceController: ObservableObject {
     /// This folder's identity (icon, color, sidebar background). Drives the
     /// sidebar header/background; editable in General.
     @Committed private(set) var rootProfile: RootProfile
+    /// Custom (kit-defined) agents this workspace offers (see `availableAgents`).
+    @Committed private(set) var customAgents: [AgentKind] = []
+    private var agentProfileObserver: NSObjectProtocol?
 
     /// Whether the mount-config UI should be shown before creating a container
     /// (true until the user confirms mounts for this workspace).
@@ -89,6 +92,12 @@ final class WorkspaceController: ObservableObject {
             guard let self else { return }
             self.config.theme = prefs
             try? self.config.save(root: self.workspace.rootURL)
+        }
+        self.customAgents = config.customAgents
+        // A custom agent's name/icon/color changed (any window): redraw rows.
+        agentProfileObserver = NotificationCenter.default.addObserver(
+            forName: AgentProfileStore.didChange, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.revision += 1 }
         }
         startStatusFeedPolling()
     }
@@ -216,6 +225,24 @@ final class WorkspaceController: ObservableObject {
         workspace.primaryAgent = agent
         config.primaryAgent = agent
         try? config.save(root: workspace.rootURL)
+    }
+
+    // MARK: Custom agents
+
+    /// Every agent this workspace offers: the builtins plus its registered
+    /// custom (kit-defined) agents.
+    var availableAgents: [AgentKind] { AgentKind.builtins + customAgents.filter { !$0.isBuiltin } }
+
+    /// Choose which registered custom agents this workspace offers. Persisted;
+    /// no rebuild — each agent gets its own container when first used.
+    func setCustomAgents(_ agents: [AgentKind]) {
+        var seen = Set<AgentKind>()
+        let cleaned = agents.filter { !$0.isBuiltin && seen.insert($0).inserted }
+        guard cleaned != customAgents else { return }
+        customAgents = cleaned
+        config.customAgents = cleaned
+        try? config.save(root: workspace.rootURL)
+        revision += 1
     }
 
     /// Apply edited MCP settings (server set + gateway URL), persist, and live-load
@@ -443,12 +470,13 @@ final class WorkspaceController: ObservableObject {
         }
     }
 
-    /// The workspace agent whose container has this name, if any. Searches the
-    /// builtins plus whatever custom agent identities this workspace actually
-    /// has sessions for (there's no registry of *possible* custom kinds yet —
-    /// just the ones in use — see Sidebar Phase 2 for a real registry).
-    private func agentForContainer(named name: String) -> AgentKind? {
-        (AgentKind.builtins + state.sessions.map(\.agent)).first { containerName(for: $0) == name }
+    /// The workspace agent whose container has this name, if any. Searches
+    /// every agent the workspace offers (builtins + registered custom agents),
+    /// plus any identity it has sessions or containers for — a session may
+    /// outlive its agent's registration.
+    func agentForContainer(named name: String) -> AgentKind? {
+        (availableAgents + state.sessions.flatMap { [$0.agent, $0.containerAgentKind] } + containers.keys)
+            .first { containerName(for: $0) == name }
     }
 
     /// Display-only `sbx create …` for a sandbox (Sandboxes inspector / debug).
@@ -542,9 +570,11 @@ final class WorkspaceController: ObservableObject {
 
     /// Combined create-time signature (mounts + kits + base image). A change in
     /// any drives a container rebuild, since all are fixed at `sbx create`.
-    func configSignature(mounts: [MountSpec], kits: [String]) -> String {
+    /// A custom agent ignores the base-image channel (its kit names the image),
+    /// so a channel change doesn't rebuild it.
+    func configSignature(mounts: [MountSpec], kits: [String], agent: AgentKind) -> String {
         mountSignature(mounts) + "\n--kits--\n" + kits.joined(separator: "\n")
-            + "\n--image--\n" + imageSignature
+            + "\n--image--\n" + (agent.isBuiltin ? imageSignature : "")
     }
 
     /// Base-image part of the signature. Empty whenever sbx's default image is
@@ -628,7 +658,7 @@ final class WorkspaceController: ObservableObject {
     func refreshKitDrift(for agent: AgentKind) {
         let name = containerName(for: agent)
         let configured = resolvedKits()
-        let expected = configSignature(mounts: resolvedMounts(), kits: configured)
+        let expected = configSignature(mounts: resolvedMounts(), kits: configured, agent: agent)
         let root = workspace.rootURL
         Task { @MainActor in
             guard let actual = await SbxClient.shared.inspect(name)?.kits else { return }
@@ -654,7 +684,7 @@ final class WorkspaceController: ObservableObject {
         guard let drift = kitDrift[agent], !drift.extra.isEmpty else { return }
         let name = drift.containerName
         let mounts = resolvedMounts()
-        let wasInSync = state.appliedMountSignatures[name] == configSignature(mounts: mounts, kits: resolvedKits())
+        let wasInSync = state.appliedMountSignatures[name] == configSignature(mounts: mounts, kits: resolvedKits(), agent: agent)
         let registered = Set(KitStore.all.map(\.ref))
         for ref in drift.extra where !registered.contains(ref) {
             KitStore.add(ref)
@@ -667,7 +697,7 @@ final class WorkspaceController: ObservableObject {
         workspace.kits = kits
         config.kits = kits
         try? config.save(root: workspace.rootURL)
-        if wasInSync { recordSignature(configSignature(mounts: mounts, kits: kits), for: name) }
+        if wasInSync { recordSignature(configSignature(mounts: mounts, kits: kits, agent: agent), for: name) }
         Log.info(.workspace, "adopted kit(s) from '\(name)' into the workspace: \(drift.extra.joined(separator: ", "))")
         kitDrift[agent] = nil
         refreshKitDrift(for: agent)
@@ -807,7 +837,7 @@ final class WorkspaceController: ObservableObject {
         let name = containerName(for: agent)
         let mounts = resolvedMounts()
         guard try await SbxClient.shared.status(name: name) != nil,
-              state.appliedMountSignatures[name] == configSignature(mounts: mounts, kits: previousKits) else {
+              state.appliedMountSignatures[name] == configSignature(mounts: mounts, kits: previousKits, agent: agent) else {
             return try await performBringUp(for: agent, onMismatch: .rebuild, force: true)
         }
         Log.info(.workspace, "adding \(refs.count) kit(s) to '\(name)' with sbx kit add")
@@ -830,7 +860,7 @@ final class WorkspaceController: ObservableObject {
             Log.info(.workspace, "sbx kit add \(ref) → '\(name)' not applied (\(reason)); rebuilding instead")
             return try await performBringUp(for: agent, onMismatch: .rebuild, force: true)
         }
-        recordSignature(configSignature(mounts: mounts, kits: resolvedKits()), for: name)
+        recordSignature(configSignature(mounts: mounts, kits: resolvedKits(), agent: agent), for: name)
         let sandbox: Sandbox
         do {
             sandbox = try await SbxClient.shared.waitUntilRunning(name: name, timeout: 60)
@@ -863,7 +893,7 @@ final class WorkspaceController: ObservableObject {
 
         let mounts = resolvedMounts()
         let kits = resolvedKits()
-        let signature = configSignature(mounts: mounts, kits: kits)
+        let signature = configSignature(mounts: mounts, kits: kits, agent: agent)
         let mcp = await effectiveMCPServers()
 
         let existing = try await SbxClient.shared.status(name: name)
@@ -1321,9 +1351,9 @@ extension WorkspaceController {
     /// attached to another agent's sandbox reads "Shell in Claude", etc.
     static func defaultSessionName(for agent: AgentKind, containerAgent: AgentKind? = nil) -> String {
         if let containerAgent, containerAgent != agent {
-            return "\(agent.displayName.capitalized) in \(containerAgent.displayName.capitalized)"
+            return "\(agent.displayName) in \(containerAgent.displayName)"
         }
-        return "New \(agent.displayName.capitalized) Session"
+        return "New \(agent.displayName) Session"
     }
 
     /// Add a session, or reuse an existing **pristine** one (same project +
@@ -1382,10 +1412,12 @@ extension WorkspaceController {
         return s
     }
 
-    /// ⌃⌘N: new native Claude chat in the selected session's folder (else the
-    /// first folder), selected right away.
+    /// ⌃⌘N: new native chat (Claude unless another ACP agent is asked for) in
+    /// the selected session's folder (else the first folder), selected right
+    /// away. The chat runs in that agent's own sandbox.
     @discardableResult
-    func newChatInCurrentContext() -> Session? {
+    func newChatInCurrentContext(agent: AgentKind = .claude) -> Session? {
+        guard SbxCommand.supportsACP(agent) else { return nil }
         let folderID: UUID
         if case .session(let id) = selection, let s = session(id: id) {
             folderID = s.folderID
@@ -1394,7 +1426,7 @@ extension WorkspaceController {
         } else {
             return nil
         }
-        guard let s = addSession(folderID: folderID, agent: .claude, chat: true) else { return nil }
+        guard let s = addSession(folderID: folderID, agent: agent, chat: true) else { return nil }
         selection = .session(s.id)
         return s
     }

@@ -302,8 +302,8 @@ struct GeneralPaneView: View {
             }
             Section("Agents") {
                 Picker("Primary Agent", selection: $primaryAgent) {
-                    ForEach([AgentKind.claude, .codex, .shell]) { agent in
-                        Text(agent.displayName.capitalized).tag(agent)
+                    ForEach(controller.availableAgents) { agent in
+                        Text(agent.displayName).tag(agent)
                     }
                 }
                 .onChange(of: primaryAgent) { _, new in controller.setPrimaryAgent(new) }
@@ -325,6 +325,12 @@ struct GeneralPaneView: View {
                 if let t = controller.workspace.templateImage(for: controller.primaryAgent) {
                     Text("sbx create -t \(t)").font(.system(size: 10.5, design: .monospaced)).foregroundStyle(.tertiary)
                         .lineLimit(1).truncationMode(.middle)
+                }
+                if !controller.customAgents.isEmpty {
+                    // `-t` would replace a kit agent's own image (see ImageChannel.templateImage).
+                    Text("Built-in agents only — \(controller.customAgents.map(\.displayName).joined(separator: ", ")) "
+                         + "always run\(controller.customAgents.count == 1 ? "s" : "") the image from \(controller.customAgents.count == 1 ? "its" : "their") kit.")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
                 HStack {
                     Text(controller.isBuilding ? "Rebuilding…" : "Changes apply when a sandbox is (re)built.")

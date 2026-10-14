@@ -30,6 +30,7 @@ final class ChatSessionView: NSView {
     init(session: ChatSession) {
         self.session = session
         super.init(frame: .zero)
+        composer.agentName = session.title
         buildLayout()
         bind()
     }

@@ -29,6 +29,12 @@ final class ChatComposerView: NSView, NSTextViewDelegate {
     private var heightConstraint: NSLayoutConstraint!
     private(set) var attachments: [ChatAttachment] = [] { didSet { rebuildChips() } }
 
+    /// Who the composer addresses ("Message Codex…").
+    var agentName = "Claude" { didSet { textView.placeholder = Self.placeholder(agentName: agentName) } }
+    private static func placeholder(agentName: String) -> String {
+        "Message \(agentName)…   / for commands, @ for files"
+    }
+
     override init(frame: NSRect) {
         super.init(frame: frame)
         chipRow.orientation = .horizontal
@@ -52,7 +58,7 @@ final class ChatComposerView: NSView, NSTextViewDelegate {
         textView.textContainer?.widthTracksTextView = true
         textView.onAttach = { [weak self] new in self?.attach(new) }
         textView.setAccessibilityIdentifier("chat-composer")
-        textView.placeholder = "Message Claude…   / for commands, @ for files"
+        textView.placeholder = Self.placeholder(agentName: "Claude")
         textView.onResign = { [weak self] in self?.completion.hide() }
         textView.usesFindBar = false
         completion.onAccept = { [weak self] item in self?.accept(item) }

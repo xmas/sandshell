@@ -71,6 +71,7 @@ struct AgentKind: RawRepresentable, Hashable, Codable, Identifiable {
     static let codex = AgentKind(rawValue: "codex")
     static let copilot = AgentKind(rawValue: "copilot")
     static let cursor = AgentKind(rawValue: "cursor")
+    static let devin = AgentKind(rawValue: "devin")
     static let dockerAgent = AgentKind(rawValue: "docker-agent")
     static let droid = AgentKind(rawValue: "droid")
     static let gemini = AgentKind(rawValue: "gemini")
@@ -82,10 +83,36 @@ struct AgentKind: RawRepresentable, Hashable, Codable, Identifiable {
     /// workspace may reference an agent identity outside this list via a
     /// `kind: sandbox` kit. Named deliberately unlike the old `allCases` so
     /// nothing reads this as "every possible agent."
-    static let builtins: [AgentKind] = [.claude, .codex, .copilot, .cursor, .dockerAgent,
+    static let builtins: [AgentKind] = [.claude, .codex, .copilot, .cursor, .devin, .dockerAgent,
                                         .droid, .gemini, .kiro, .opencode, .shell]
     var isBuiltin: Bool { Self.builtins.contains(self) }
-    var displayName: String { rawValue }
+
+    /// Human-facing name: the brand spelling for a builtin, else the custom
+    /// agent's registered profile name (`AgentProfileStore`), else the raw id.
+    var displayName: String {
+        switch self {
+        case .claude: return "Claude"
+        case .codex: return "Codex"
+        case .copilot: return "Copilot"
+        case .cursor: return "Cursor"
+        case .devin: return "Devin"
+        case .dockerAgent: return "Docker Agent"
+        case .droid: return "Droid"
+        case .gemini: return "Gemini"
+        case .kiro: return "Kiro"
+        case .opencode: return "OpenCode"
+        case .shell: return "Shell"
+        default: return AgentProfileStore.profile(for: self)?.displayName ?? rawValue
+        }
+    }
+
+    /// The first positional argument to `sbx create`: the agent name for a
+    /// builtin, the defining `kind: sandbox` kit for a custom agent (sbx can't
+    /// create a kit agent from its name alone).
+    var createReference: String {
+        if isBuiltin { return rawValue }
+        return AgentProfileStore.profile(for: self)?.kitRef ?? rawValue
+    }
 }
 
 /// Options for `sbx create`. Mirrors sbx.rs `CreateOpts`.
@@ -182,6 +209,10 @@ enum ImageChannel: String, Codable, CaseIterable, Identifiable {
     /// The `-t/--template` reference to pass to `sbx create`, or nil to let
     /// sbx pick its default (stable) image.
     func templateImage(for agent: AgentKind, custom: String) -> String? {
+        // A custom agent's image is its kit's `sandbox.image`, and `-t` silently
+        // replaces it (spike, sbx 0.48: the sandbox keeps the kit's agent
+        // identity but runs the -t image, which lacks the kit's agent binary).
+        guard agent.isBuiltin else { return nil }
         switch self {
         case .stable:  return nil
         case .nightly: return Self.flavor(for: agent).map { "docker/sandbox-templates:\($0)-nightly" }

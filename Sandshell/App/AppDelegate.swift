@@ -648,9 +648,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         activeController?.openQuickly()
     }
 
-    /// ⌃⌘N — new native Claude chat (ACP) in the current folder.
+    /// ⌃⌘N — new native Claude chat (ACP) in the current folder; the File menu's
+    /// New Codex/Gemini Chat items name their agent in `representedObject`.
     @MainActor @objc func newChat(_ sender: Any?) {
-        activeController?.newChat()
+        let raw = (sender as? NSMenuItem)?.representedObject as? String
+        activeController?.newChat(agent: raw.map(AgentKind.init(rawValue:)) ?? .claude)
     }
 
     /// ⌘N — new session in the current project with the same agent.

@@ -310,8 +310,8 @@ final class MainWindowController: NSWindowController {
     /// App quit: kill this window's session processes (no windowWillClose then).
     func prepareForQuit() { detail?.teardown() }
 
-    func newChat() {
-        workspace?.newChatInCurrentContext()
+    func newChat(agent: AgentKind = .claude) {
+        workspace?.newChatInCurrentContext(agent: agent)
     }
 
     #if DEBUG
@@ -319,6 +319,7 @@ final class MainWindowController: NSWindowController {
     var paneTree: PaneTreeController? { detail }
     var inspectorFiles: FilesPaneController? { filesPane }
     var workspaceController: WorkspaceController? { workspace }
+    var sidebarList: SidebarListController? { sidebar }
     #endif
 
     // MARK: Panes (View ▸ Split Right / Split Down / Close Pane …)

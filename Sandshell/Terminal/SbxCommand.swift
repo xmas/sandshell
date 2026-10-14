@@ -100,8 +100,12 @@ enum SbxCommand {
             "CARGO_HOME=\(cargoHome)",
             "RUSTUP_HOME=\(rustupHome)",
             "CLAUDE_CONFIG_DIR=\(home)/.claude",
-            "CODEX_HOME=\(home)/.codex",
         ]
+        // `~/.codex` is only mounted when it exists on the host (MountPolicy
+        // `.ifPresent`); otherwise keep sbx's own in-sandbox CODEX_HOME, which
+        // carries its proxy-auth and MCP config, rather than point codex at an
+        // unmounted path.
+        if FileManager.default.fileExists(atPath: "\(home)/.codex") { pairs.append("CODEX_HOME=\(home)/.codex") }
         if let mcpURL { pairs.append("SBX_MCP_URL=\(mcpURL.absoluteString)") }
         // Opt-in inference gateway: route claude through the host's
         // `inference-gateway-auth proxy`, which attaches the stored OAuth token.
@@ -137,7 +141,12 @@ enum SbxCommand {
             // interactive picker. The id is the rollout's session_meta.id.
             if let id = resumeID { return "codex resume \(shellQuote(id))" }
             return "codex"
-        default: return agent.rawValue
+        default:
+            // A kit agent runs its kit's entrypoint (`sbx exec` doesn't apply it).
+            if !agent.isBuiltin, let entry = AgentProfileStore.profile(for: agent)?.entrypoint, !entry.isEmpty {
+                return entry.map(shellQuote).joined(separator: " ")
+            }
+            return agent.rawValue
         }
     }
 
@@ -187,29 +196,65 @@ enum SbxCommand {
     static let claudeACPVersion = "0.90.0"
     static let claudeACPPackage = "@agentclientprotocol/claude-agent-acp@\(claudeACPVersion)"
 
-    /// Run the adapter from a per-version install in the sandbox, installing it
-    /// once (≈4s, 67 MB, no network afterwards; ~0.2s to start vs ~1.3s for
-    /// npx). Installs into a temp dir then renames into place, so concurrent
-    /// first starts can't corrupt it. `--omit=optional` skips the SDK's bundled
-    /// claude — we run the image's (CLAUDE_CODE_EXECUTABLE). npm's output goes
-    /// to stderr: stdout is the JSON-RPC channel.
-    private static var acpLaunch: String {
-        #"D="$HOME/.sandshell/acp/\#(claudeACPVersion)"; B="$D/node_modules/.bin/claude-agent-acp"; if [ ! -x "$B" ]; then mkdir -p "$HOME/.sandshell/acp"; T=$(mktemp -d "$D.tmp.XXXXXX"); if npm install --silent --no-audit --no-fund --omit=optional --prefix "$T" \#(claudeACPPackage) >&2; then mv -T "$T" "$D" 2>/dev/null || rm -rf "$T"; else rm -rf "$T"; echo "sandshell: couldn't install \#(claudeACPPackage)" >&2; exit 1; fi; fi; exec "$B""#
+    /// Pinned ACP adapter for Codex chat sessions (it drives `codex app-server`).
+    static let codexACPVersion = "2.2.2"
+    static let codexACPPackage = "@agentclientprotocol/codex-acp@\(codexACPVersion)"
+
+    /// Agents a native chat can run: each needs an ACP entry point inside its
+    /// sandbox — an adapter (Claude, Codex) or native support (Gemini CLI).
+    static let acpAgents: [AgentKind] = [.claude, .codex, .gemini]
+    static func supportsACP(_ agent: AgentKind) -> Bool { acpAgents.contains(agent) }
+
+    /// Run an npm-published adapter from a per-version install in the sandbox,
+    /// installing it once (Claude's: ≈4s, 67 MB, no network afterwards; ~0.2s to
+    /// start vs ~1.3s for npx). Installs into a temp dir then renames into place,
+    /// so concurrent first starts can't corrupt it. npm's output goes to stderr:
+    /// stdout is the JSON-RPC channel.
+    private static func npmAdapterLaunch(dir: String, package: String, bin: String, omitOptional: Bool) -> String {
+        let omit = omitOptional ? " --omit=optional" : ""
+        return #"D="$HOME/.sandshell/acp/\#(dir)"; B="$D/node_modules/.bin/\#(bin)"; if [ ! -x "$B" ]; then mkdir -p "$HOME/.sandshell/acp"; T=$(mktemp -d "$D.tmp.XXXXXX"); if npm install --silent --no-audit --no-fund\#(omit) --prefix "$T" \#(package) >&2; then mv -T "$T" "$D" 2>/dev/null || rm -rf "$T"; else rm -rf "$T"; echo "sandshell: couldn't install \#(package)" >&2; exit 1; fi; fi; exec "$B""#
     }
 
-    /// `sbx` argv for a chat session: the ACP adapter over plain stdio (`-i`, no
-    /// TTY). `CLAUDE_CODE_EXECUTABLE` points the adapter at the image's own
-    /// claude instead of the SDK's bundled copy, so the base-image channel still
-    /// decides the Claude Code version.
-    static func acpArguments(containerName: String, workdir: String, home: String, mcpURL: URL?,
-                             sbxProxyAuth: Bool = false, tag: ProcessTag? = nil) -> [String] {
+    /// In-sandbox program (a `bash -c` body after PATH setup) that speaks ACP on
+    /// stdio for `agent`, or nil when it has none.
+    private static func acpProgram(for agent: AgentKind, sbxProxyAuth: Bool) -> String? {
+        switch agent {
+        case .claude:
+            // `--omit=optional` skips the SDK's bundled claude; CLAUDE_CODE_EXECUTABLE
+            // points the adapter at the image's own, so the base-image channel still
+            // decides the Claude Code version.
+            let auth = useProxyAuth(sbxProxyAuth) ? proxyAuthSetup + " " : ""
+            return auth + #"export CLAUDE_CODE_EXECUTABLE="$(command -v claude)"; "#
+                + npmAdapterLaunch(dir: claudeACPVersion, package: claudeACPPackage,
+                                   bin: "claude-agent-acp", omitOptional: true)
+        case .codex:
+            // The adapter runs its own pinned codex (a regular dependency, not the
+            // image's): it talks to `codex app-server`, whose protocol moves with
+            // codex releases, and the stable image's codex trails the adapter's.
+            // NO_BROWSER hides the ChatGPT browser login, which can't work here.
+            return "export NO_BROWSER=1; "
+                + npmAdapterLaunch(dir: "codex-acp-\(codexACPVersion)", package: codexACPPackage,
+                                   bin: "codex-acp", omitOptional: false)
+        case .gemini:
+            // Gemini CLI speaks ACP itself (`--acp`; `--experimental-acp` is the
+            // deprecated spelling).
+            return #"command -v gemini >/dev/null || { echo "sandshell: gemini isn't installed in this sandbox's image" >&2; exit 127; }; exec gemini --acp"#
+        default:
+            return nil
+        }
+    }
+
+    /// `sbx` argv for a chat session: the agent's ACP entry point over plain
+    /// stdio (`-i`, no TTY). Nil when the agent has no ACP support.
+    static func acpArguments(agent: AgentKind = .claude, containerName: String, workdir: String,
+                             home: String, mcpURL: URL?, sbxProxyAuth: Bool = false,
+                             tag: ProcessTag? = nil) -> [String]? {
+        guard let program = acpProgram(for: agent, sbxProxyAuth: sbxProxyAuth) else { return nil }
         var args = ["exec", "-i"]
         if !workdir.isEmpty { args += ["-w", workdir] }
         args += [containerName, "env", "-u", "MCP_GATEWAY_URL"]
         args += envPairs(home: home, mcpURL: mcpURL, claude: nil, tag: tag)
-        let auth = useProxyAuth(sbxProxyAuth) ? " " + proxyAuthSetup : ""
-        args += ["bash", "-c",
-                 #"\#(pathSetup)\#(auth) export CLAUDE_CODE_EXECUTABLE="$(command -v claude)"; \#(acpLaunch)"#]
+        args += ["bash", "-c", pathSetup + " " + program]
         return args
     }
 

@@ -107,6 +107,11 @@ final class ChatSession: ObservableObject {
     var onPrompt: ((String) -> Void)?
 
     let title: String
+    /// Which agent's ACP entry point runs (`SbxCommand.acpAgents`).
+    let agent: AgentKind
+    /// Set when the chat can't work before it starts (e.g. no credentials for
+    /// the agent): shown instead of launching anything.
+    private let unavailable: String?
     private let resumeID: String?
     private let sbxProxyAuth: Bool
     private let tag: SbxCommand.ProcessTag
@@ -118,10 +123,19 @@ final class ChatSession: ObservableObject {
     private var connection: ACPConnection?
     private var sessionID: String?
     private var pumpTask: Task<Void, Never>?
+    /// The model list came as ACP's older `models` field (Gemini CLI), which is
+    /// switched with `session/set_model` rather than a config option.
+    private var modelViaSetModel = false
+    /// Last `sandshell: …` line our launch script wrote to stderr — the reason
+    /// to show when the agent exits before it ever answered.
+    private var launchError: String?
 
-    init(title: String, containerName: String, workdir: String, home: String, mcpURL: URL?,
-         resumeID: String? = nil, sbxProxyAuth: Bool = false, sessionID: UUID = UUID()) {
+    init(title: String, agent: AgentKind = .claude, containerName: String, workdir: String, home: String,
+         mcpURL: URL?, resumeID: String? = nil, sbxProxyAuth: Bool = false, sessionID: UUID = UUID(),
+         unavailable: String? = nil) {
         self.title = title
+        self.agent = agent
+        self.unavailable = unavailable
         self.tag = SbxCommand.ProcessTag(session: sessionID)
         self.sbxProxyAuth = sbxProxyAuth
         self.resumeID = resumeID
@@ -134,15 +148,25 @@ final class ChatSession: ObservableObject {
     // MARK: Lifecycle
 
     func start() {
-        let args = SbxCommand.acpArguments(containerName: containerName, workdir: workdir, home: home, mcpURL: mcpURL,
-                                           sbxProxyAuth: sbxProxyAuth, tag: tag)
+        if let unavailable {
+            notice(unavailable, isError: true)
+            phase = .closed("\(title) can’t start — see above.")
+            return
+        }
+        guard let args = SbxCommand.acpArguments(agent: agent, containerName: containerName, workdir: workdir,
+                                                 home: home, mcpURL: mcpURL, sbxProxyAuth: sbxProxyAuth, tag: tag)
+        else {
+            phase = .closed("\(title) can’t run as a chat (no ACP support).")
+            return
+        }
         let conn = ACPConnection(executable: PathFixer.sbxPath(), arguments: args)
         connection = conn
         do { try conn.start() } catch {
             phase = .closed("Couldn’t launch sbx: \(error.localizedDescription)")
             return
         }
-        Log.info(.sbx, "chat: launched ACP adapter in “\(containerName)” at \(workdir) (auth: \(sbxProxyAuth ? "sbx proxy" : "~/.claude credentials"))")
+        let auth = agent == .claude ? (sbxProxyAuth ? "sbx proxy" : "~/.claude credentials") : "sbx proxy"
+        Log.info(.sbx, "chat: launched \(agent.rawValue) ACP agent in “\(containerName)” at \(workdir) (auth: \(auth))")
         pumpTask = Task { [weak self] in
             for await event in conn.incoming { self?.handle(event) }
         }
@@ -154,6 +178,7 @@ final class ChatSession: ObservableObject {
                 ])
                 let result = try await openSession(conn)
                 applyModes(result["modes"])
+                applyModels(result["models"])
                 applyConfig(result["configOptions"])
                 if let sid = sessionID { onSessionID?(sid) }
                 phase = .ready
@@ -162,8 +187,58 @@ final class ChatSession: ObservableObject {
                     send(text: text, attachments: attachments)
                 }
             } catch {
-                phase = .closed("Agent failed to start: \(error.localizedDescription)")
+                if Self.isAuthRequired(error), let help = Self.credentialHelp(for: agent) {
+                    notice(help, isError: true)
+                    phase = .closed("\(title) isn’t signed in — see above.")
+                } else if case .closed = phase {
+                    // The process already exited and said why.
+                } else {
+                    phase = .closed("Agent failed to start: \(launchError ?? error.localizedDescription)")
+                }
+                connection?.terminate()
             }
+        }
+    }
+
+    /// ACP's "authentication required" error (the agent has no usable credential).
+    static func isAuthRequired(_ error: Error) -> Bool {
+        guard let rpc = error as? ACPConnection.RPCError else { return false }
+        return rpc.code == -32000 || rpc.message.localizedCaseInsensitiveContains("authentication required")
+    }
+
+    /// A prompt failure that means the provider refused the (missing or placeholder) credential.
+    static func isCredentialRejection(_ message: String) -> Bool {
+        ["API key not valid", "API_KEY_INVALID", "invalid_api_key", "Incorrect API key", "401 Unauthorized"]
+            .contains { message.localizedCaseInsensitiveContains($0) }
+    }
+
+    /// The sbx secret service an agent's API traffic is authenticated with
+    /// (sbx's proxy injects the real credential; nothing secret enters the sandbox).
+    static func credentialService(for agent: AgentKind) -> String? {
+        switch agent {
+        case .claude: return "anthropic"
+        case .codex: return "openai"
+        case .gemini: return "google"
+        default: return nil
+        }
+    }
+
+    /// What to tell the user when an agent has no credential: how to give sbx one.
+    static func credentialHelp(for agent: AgentKind) -> String? {
+        let rebuild = " A sandbox picks up a new credential when it’s created, so then rebuild this agent’s sandbox "
+            + "(Settings ▸ Sandboxes ▸ Rebuild) and restart the chat."
+        switch agent {
+        case .claude:
+            return "Claude isn’t signed in for this sandbox. Run `sbx secret set anthropic --oauth` in Terminal "
+                + "(or sign in to Claude Code on this Mac)." + rebuild
+        case .codex:
+            return "Codex has no OpenAI credential for this sandbox. Run `sbx secret set openai --oauth` in Terminal "
+                + "to sign in with ChatGPT, or `sbx secret set openai` to store an API key." + rebuild
+        case .gemini:
+            return "Gemini has no Google credential for this sandbox. Run `sbx secret set google` in Terminal "
+                + "and paste a Gemini API key (aistudio.google.com/apikey)." + rebuild
+        default:
+            return nil
         }
     }
 
@@ -230,7 +305,11 @@ final class ChatSession: ObservableObject {
                 // ("Failed to refresh…" then "Internal error: Failed to refresh…");
                 // only add the notice when it says something new.
                 let message = error.localizedDescription
-                if case .agentText(_, let said)? = items.last,
+                if agent != .claude, Self.isAuthRequired(error) || Self.isCredentialRejection(message),
+                   let help = Self.credentialHelp(for: agent) {
+                    // e.g. Gemini's raw 400 "API key not valid" JSON: say how to fix it.
+                    notice(help, isError: true)
+                } else if case .agentText(_, let said)? = items.last,
                    message.hasSuffix(said.trimmingCharacters(in: .whitespacesAndNewlines)) {
                     // already shown as the reply
                 } else {
@@ -274,6 +353,10 @@ final class ChatSession: ObservableObject {
         currentModel = id
         Task {
             do {
+                if modelViaSetModel {
+                    _ = try await conn.request("session/set_model", ["sessionId": .string(sid), "modelId": .string(id)])
+                    return
+                }
                 let result = try await conn.request("session/set_config_option", [
                     "sessionId": .string(sid), "configId": "model", "value": .string(id)])
                 applyConfig(result["configOptions"])
@@ -310,9 +393,15 @@ final class ChatSession: ObservableObject {
             connection?.respondError(id: id, code: -32601, message: "\(method) is not supported by Sandshell")
         case .stderr(let line):
             Log.info(.sbx, "chat[acp]: \(line)")
+            if line.hasPrefix("sandshell: ") { launchError = String(line.dropFirst("sandshell: ".count)) }
         case .closed(let status):
-            phase = .closed(status == 0 ? "The agent exited." : "The agent exited (\(status)).")
             permission = nil
+            if case .closed = phase { return }   // already explained (e.g. not signed in)
+            if let launchError {
+                phase = .closed(launchError.prefix(1).uppercased() + launchError.dropFirst())
+            } else {
+                phase = .closed(status == 0 ? "The agent exited." : "The agent exited (\(status)).")
+            }
         }
     }
 
@@ -433,6 +522,18 @@ final class ChatSession: ObservableObject {
         currentMode = m["currentModeId"]?.string
     }
 
+    /// ACP's older session `models` field (`availableModels` + `currentModelId`),
+    /// still what Gemini CLI sends; a `model` config option, when present, wins.
+    private func applyModels(_ m: JSONValue?) {
+        guard let list = m?["availableModels"]?.array, !list.isEmpty else { return }
+        models = list.compactMap {
+            guard let id = $0["modelId"]?.string else { return nil }
+            return Choice(id: id, name: $0["name"]?.string ?? id)
+        }
+        currentModel = m?["currentModelId"]?.string
+        modelViaSetModel = true
+    }
+
     /// Session config options (ACP); only the model selector is surfaced so far.
     private func applyConfig(_ options: JSONValue?) {
         guard let model = options?.array?.first(where: { $0["id"]?.string == "model" }) else { return }
@@ -441,6 +542,7 @@ final class ChatSession: ObservableObject {
             return Choice(id: id, name: $0["name"]?.string ?? id)
         }
         currentModel = model["currentValue"]?.string
+        modelViaSetModel = false
     }
 }
 
