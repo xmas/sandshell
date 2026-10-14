@@ -1603,7 +1603,10 @@ extension WorkspaceController {
             name: record.title,
             order: nextSessionOrder(in: target),
             workdir: record.cwd ?? workdir(for: folder),
-            transcriptID: record.id)
+            transcriptID: record.id,
+            // A conversation from a chat (or the Claude app) comes back as one.
+            isChat: SbxCommand.supportsACP(record.agent)
+                && TranscriptReader.startedAsChat(at: record.url, agent: record.agent))
         state.sessions.append(session)
         saveState()
         return session

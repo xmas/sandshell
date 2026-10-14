@@ -47,6 +47,26 @@ enum TranscriptReader {
         }
     }
 
+    /// Whether a past conversation should come back as a chat: written by
+    /// anything but Claude Code in a terminal (`entrypoint` "cli") — a
+    /// Sandshell chat (sdk-ts), the Claude app — or, for Codex, by an ACP
+    /// client rather than its own CLI. Reads only the transcript's head.
+    static func startedAsChat(at url: URL, agent: AgentKind) -> Bool {
+        guard let fh = try? FileHandle(forReadingFrom: url) else { return false }
+        defer { try? fh.close() }
+        let head = String(decoding: (try? fh.read(upToCount: 256 * 1024)) ?? Data(), as: UTF8.self)
+        for line in head.split(separator: "\n") {
+            guard let obj = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any] else { continue }
+            if agent == .codex {
+                guard obj["type"] as? String == "session_meta" else { continue }
+                let originator = ((obj["payload"] as? [String: Any])?["originator"] as? String ?? "").lowercased()
+                return originator.contains("acp")
+            }
+            if let entrypoint = obj["entrypoint"] as? String { return entrypoint != "cli" }
+        }
+        return false
+    }
+
     /// Live polling state: whether the agent is mid-turn plus its latest prompt.
     struct LiveState { var working: Bool; var latestPrompt: String? }
     static func liveState(in url: URL) -> LiveState? {
@@ -319,7 +339,7 @@ enum TranscriptReader {
     private static func claudeSummary(at url: URL) -> ConversationSummary? {
         guard let data = try? String(contentsOf: url, encoding: .utf8) else { return nil }
         var first: String?, cwd: String?, count = 0
-        var text = ""
+        var text = SearchText()
         for line in data.split(separator: "\n", omittingEmptySubsequences: true) {
             guard let obj = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any]
             else { continue }
@@ -330,11 +350,11 @@ enum TranscriptReader {
                   let raw = rawText(msg["content"]), !raw.isEmpty else { continue }
             count += 1
             if type == "user", first == nil { first = clean(raw) }
-            if text.count < 60_000 { text += raw + "\n" }
+            text.append(raw)
         }
         guard count > 0 else { return nil }
         return ConversationSummary(firstPrompt: first, cwd: cwd, messageCount: count,
-                                   searchText: text, sessionID: nil)
+                                   searchText: text.joined, sessionID: nil)
     }
 
     private static func claudeMessages(at url: URL) -> [(role: String, text: String)] {
@@ -359,7 +379,7 @@ enum TranscriptReader {
         var latestPrompt: String?
         var lastRole: String?
         var messageCount = 0
-        var searchText = ""
+        var searchText = SearchText()
         var sawConversation: Bool { messageCount > 0 }
     }
 
@@ -401,7 +421,7 @@ enum TranscriptReader {
                     if meta.firstPrompt == nil { meta.firstPrompt = prompt }
                     meta.latestPrompt = prompt
                 }
-                if meta.searchText.count < 60_000 { meta.searchText += raw + "\n" }
+                meta.searchText.append(raw)
             default:
                 continue
             }
@@ -419,7 +439,7 @@ enum TranscriptReader {
         guard meta.messageCount > 0 else { return nil }
         return ConversationSummary(firstPrompt: meta.firstPrompt, cwd: meta.cwd,
                                    messageCount: meta.messageCount,
-                                   searchText: meta.searchText,
+                                   searchText: meta.searchText.joined,
                                    sessionID: meta.sessionID)
     }
 
@@ -465,6 +485,26 @@ enum TranscriptReader {
             return texts.isEmpty ? nil : texts.joined(separator: " ")
         }
         return nil
+    }
+
+    /// A conversation's text for body search, bounded: its opening (what it
+    /// was about) and its latest stretch, ~200 KB in all.
+    struct SearchText {
+        private var head = "", tail: [String] = [], tailCount = 0
+        private var headFull = false
+        static let headLimit = 40_000, tailLimit = 160_000
+
+        mutating func append(_ text: String) {
+            if !headFull {
+                if head.count + text.count <= Self.headLimit { head += text + "\n"; return }
+                headFull = true
+            }
+            tail.append(text)
+            tailCount += text.count + 1
+            while tailCount > Self.tailLimit, tail.count > 1 { tailCount -= tail.removeFirst().count + 1 }
+        }
+
+        var joined: String { tail.isEmpty ? head : head + "…\n" + tail.joined(separator: "\n") + "\n" }
     }
 
     // MARK: - Claude helpers

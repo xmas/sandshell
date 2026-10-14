@@ -88,9 +88,10 @@ final class HistoryCache: @unchecked Sendable {
         var err: UnsafeMutablePointer<Int8>?
         sqlite3_exec(db, sql, nil, nil, &err)
         // v2 stores search_text in its original case (for display snippets);
-        // drop v1's lowercased rows so they're re-parsed on the next scan.
-        if userVersion() < 2 {
-            sqlite3_exec(db, "DELETE FROM records; PRAGMA user_version = 2;", nil, nil, &err)
+        // v3 keeps the conversation's latest stretch too, not just its first 60 KB.
+        // Drop older rows so they're re-parsed on the next scan.
+        if userVersion() < 3 {
+            sqlite3_exec(db, "DELETE FROM records; PRAGMA user_version = 3;", nil, nil, &err)
         }
     }
 

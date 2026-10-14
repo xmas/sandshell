@@ -102,11 +102,13 @@ final class HistoryStore: ObservableObject {
     /// Scan `~/.claude/projects/*/*.jsonl` and `~/.codex/sessions/**/*.jsonl`,
     /// newest first, capped so a machine with thousands of transcripts stays
     /// responsive. Only conversations within the workspace mounts are kept
-    /// (others can't be restored). Cache hits avoid re-parsing unchanged files.
+    /// (others can't be restored) — Claude's are picked by project folder before
+    /// any parsing, so other projects' don't use up the cap. Cache hits avoid
+    /// re-parsing unchanged files.
     private nonisolated static func scan(home: URL, roots: [String],
                                          cache: HistoryCache?) -> [ConversationRecord] {
-        let scanLimit = 400
-        let files = claudeFiles(home: home).map { ($0.0, $0.1, AgentKind.claude) }
+        let scanLimit = 2_000
+        let files = claudeFiles(home: home, roots: roots).map { ($0.0, $0.1, AgentKind.claude) }
             + TranscriptReader.codexFiles(home: home).map { ($0.url, $0.date, AgentKind.codex) }
         return files
             .sorted { $0.1 > $1.1 }
@@ -115,12 +117,17 @@ final class HistoryStore: ObservableObject {
             .filter { isMounted($0.cwd, in: roots) }
     }
 
-    private nonisolated static func claudeFiles(home: URL) -> [(URL, Date)] {
+    /// Transcripts in project folders that can be under one of `roots`: a
+    /// project folder is its cwd encoded character by character, so a cwd
+    /// under a root encodes to a name starting with the root's.
+    private nonisolated static func claudeFiles(home: URL, roots: [String]) -> [(URL, Date)] {
         let fm = FileManager.default
         let projects = home.appendingPathComponent(".claude/projects")
         guard let dirs = try? fm.contentsOfDirectory(
             at: projects, includingPropertiesForKeys: nil) else { return [] }
-        return dirs.flatMap { dir -> [(URL, Date)] in
+        let prefixes = roots.map { TranscriptReader.claudeEncodedDir(for: $0) }
+        return dirs.filter { dir in prefixes.contains { dir.lastPathComponent.hasPrefix($0) } }
+            .flatMap { dir -> [(URL, Date)] in
             guard let entries = try? fm.contentsOfDirectory(
                 at: dir, includingPropertiesForKeys: [.contentModificationDateKey]) else { return [] }
             return entries.compactMap { url -> (URL, Date)? in

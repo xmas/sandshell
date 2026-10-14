@@ -780,20 +780,26 @@ enum SelfTest {
 
         // Fixture transcripts (Claude JSONL) in a fake home.
         let home = base.appendingPathComponent("home")
-        let project = home.appendingPathComponent(".claude/projects/fixtures")
-        try? FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
+        // Each in its project folder (the cwd, encoded), as Claude files them.
+        func project(_ cwd: String) -> URL {
+            let dir = home.appendingPathComponent(".claude/projects/" + TranscriptReader.claudeEncodedDir(for: cwd))
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            return dir
+        }
         let ids = (title: "22222222-2222-4222-8222-222222222222", body: "33333333-3333-4333-8333-333333333333",
                    elsewhere: "44444444-4444-4444-8444-444444444444", folder: "55555555-5555-4555-8555-555555555555")
-        func transcript(_ id: String, cwd: String, prompt: String, reply: String, age: TimeInterval) {
+        func transcript(_ id: String, cwd: String, prompt: String, reply: String, age: TimeInterval,
+                        entrypoint: String = "cli") {
             func line(_ obj: [String: Any]) -> String {
                 String(data: try! JSONSerialization.data(withJSONObject: obj), encoding: .utf8)!
             }
             let text = [
-                line(["type": "user", "cwd": cwd, "message": ["role": "user", "content": prompt]]),
-                line(["type": "assistant", "cwd": cwd,
+                line(["type": "user", "cwd": cwd, "entrypoint": entrypoint,
+                      "message": ["role": "user", "content": prompt]]),
+                line(["type": "assistant", "cwd": cwd, "entrypoint": entrypoint,
                       "message": ["role": "assistant", "content": [["type": "text", "text": reply]]]]),
             ].joined(separator: "\n") + "\n"
-            let url = project.appendingPathComponent(id + ".jsonl")
+            let url = project(cwd).appendingPathComponent(id + ".jsonl")
             try? text.write(to: url, atomically: true, encoding: .utf8)
             try? FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-age)],
                                                    ofItemAtPath: url.path)
@@ -801,7 +807,9 @@ enum SelfTest {
         transcript(zebraID, cwd: root, prompt: "Plan the zebra migration",
                    reply: "We should feed the quokka first, then move the herd.", age: 400)
         transcript(ids.title, cwd: root, prompt: "Fix alpha bug in the parser", reply: "Done.", age: 300)
-        transcript(ids.folder, cwd: root + "/alpha-dir", prompt: "Tidy up imports", reply: "Done.", age: 200)
+        // A long one: its last words are past what body search used to keep (60 KB).
+        transcript(ids.folder, cwd: root + "/alpha-dir", prompt: "Tidy up imports",
+                   reply: String(repeating: "filler text ", count: 8_000) + "and finally the narwhal plan.", age: 200)
         transcript(ids.body, cwd: root + "/sub", prompt: "Refactor the lexer",
                    reply: "Refactored it, and updated the Alpha release notes to match.", age: 100)
         transcript(ids.elsewhere, cwd: "/private/tmp/sandshell-search-elsewhere",
@@ -853,6 +861,9 @@ enum SelfTest {
                 && store.results.first?.snippet?.contains("quokka") == true,
               "a body hit in an open chat's transcript ranks the chat (live), not a duplicate past entry")
 
+        check(await settle("narwhal"), "query 'narwhal' settles")
+        check(titles() == ["past:Tidy up imports"], "a body hit 96 KB into a conversation is found (\(titles()))")
+
         check(await settle("deploy"), "query 'deploy' settles")
         check(titles() == ["live:deploy notes"], "live sessions match by name")
 
@@ -883,7 +894,8 @@ enum SelfTest {
         // doesn't launch it (its fixture transcript isn't in the real ~/.claude).
         let otherRoot = base.appendingPathComponent("restore-ws")
         let restoreID = "66666666-6666-4666-8666-666666666666"
-        transcript(restoreID, cwd: otherRoot.path, prompt: "Restore me please", reply: "Sure.", age: 10)
+        transcript(restoreID, cwd: otherRoot.path, prompt: "Restore me please", reply: "Sure.", age: 10,
+                   entrypoint: "claude-desktop")
         guard let ws2 = try? WorkspaceController.open(root: otherRoot) else { return check(false, "open restore-ws") }
         let wc2 = SearchWindowController(workspace: ws2, mainWindow: nil, home: home,
                                          cacheDirectory: base.appendingPathComponent("cache"))
@@ -902,6 +914,7 @@ enum SelfTest {
                   "opening a past result restores it as a session and selects it")
             check(restored?.workdir == otherRoot.path && restored?.name == "Restore me please",
                   "restored into the conversation's cwd, named for it")
+            check(restored?.isChat == true, "a conversation from the Claude app comes back as a chat")
             check(await until(5) { store2.results.map(\.isLive) == [true] },
                   "the restored conversation now lists once, as open")
         } else {

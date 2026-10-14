@@ -246,8 +246,9 @@ final class MainWindowController: NSWindowController {
         // Identifier is versioned so an item-set change discards the stale
         // autosaved arrangement (which otherwise pins items to old positions).
         // Bump the version when default items change: autosaved configurations
-        // would otherwise hide new items (v3 added the Chat/Terminal toggle).
-        let toolbar = NSToolbar(identifier: "MainWindowToolbar.v4")
+        // would otherwise hide new items (v3 added the Chat/Terminal toggle, v5
+        // Search).
+        let toolbar = NSToolbar(identifier: "MainWindowToolbar.v5")
         toolbar.delegate = self
         toolbar.allowsUserCustomization = true
         toolbar.autosavesConfiguration = true
