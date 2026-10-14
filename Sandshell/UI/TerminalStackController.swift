@@ -315,10 +315,29 @@ final class TerminalStackController: NSViewController {
     /// Focused pane: the one the sidebar selection and toolbar act on.
     var isFocused = true { didSet { updateFocusRing() } }
     /// Draw the focus ring only when there's more than one pane.
-    var showsFocusRing = false { didSet { updateFocusRing(); closePaneButton.isHidden = !showsFocusRing } }
+    var showsFocusRing = false {
+        didSet {
+            updateFocusRing()
+            closePaneButton.isHidden = !showsFocusRing
+            emptyCloseButton.isHidden = !showsFocusRing
+        }
+    }
     /// Close this pane (title-strip ✕, shown when split).
     var onClosePane: (() -> Void)?
+    /// Split this pane (title-strip buttons): a new empty pane on that side.
+    var onSplit: ((PaneTreeController.Edge) -> Void)?
+    /// Show this pane's session folder (or the workspace) as Files beside it.
+    var onOpenFiles: (() -> Void)?
     private let closePaneButton = NSButton()
+    private let filesPaneButton = NSButton()
+    private let splitRightButton = NSButton()
+    private let splitDownButton = NSButton()
+    /// Title-strip pane controls: Files, Split Right, Split Down, Close.
+    private let paneControls = NSStackView()
+    /// An empty pane's own way out: Show Files / Close Pane, under its hint.
+    private let emptyActions = NSStackView()
+    private let emptyFilesButton = NSButton(title: "Show Files", target: nil, action: nil)
+    private let emptyCloseButton = NSButton(title: "Close Pane", target: nil, action: nil)
     /// Zero-width the Claude readout while it's hidden so it doesn't squeeze
     /// the title in a narrow pane.
     private lazy var claudeStatsCollapsed = claudeStats.widthAnchor.constraint(equalToConstant: 0)
@@ -452,6 +471,7 @@ final class TerminalStackController: NSViewController {
         activeSessionID = nil
         titleLabel.stringValue = "Files — \(title)"
         backgroundPill.isHidden = true
+        filesPaneButton.isHidden = true
         claudeStats.isHidden = true
         claudeStatsCollapsed.isActive = true
         frameView.isHidden = false
@@ -514,6 +534,9 @@ final class TerminalStackController: NSViewController {
     }
 
     @objc private func closePaneClicked() { onClosePane?() }
+    @objc private func splitRightClicked() { onSplit?(.trailing) }
+    @objc private func splitDownClicked() { onSplit?(.bottom) }
+    @objc private func openFilesClicked() { onOpenFiles?() }
 
     @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
 
@@ -619,15 +642,28 @@ final class TerminalStackController: NSViewController {
         backgroundPill.setAccessibilityIdentifier("background-tasks-pill")
         backgroundPill.isHidden = true
         titleStrip.addSubview(backgroundPill)
-        closePaneButton.translatesAutoresizingMaskIntoConstraints = false
-        closePaneButton.isBordered = false
-        closePaneButton.image = NSImage(systemSymbolName: "xmark", accessibilityDescription: "Close Pane")?
-            .withSymbolConfiguration(.init(pointSize: 10, weight: .semibold))
-        closePaneButton.toolTip = "Close Pane (⌥⌘W)"
-        closePaneButton.target = self
-        closePaneButton.action = #selector(closePaneClicked)
+        for (button, symbol, tip, action, id) in [
+            (filesPaneButton, "folder", "Show Files beside this pane (⇧⌥⌘0)", #selector(openFilesClicked), "pane-files"),
+            (splitRightButton, "rectangle.split.2x1", "Split Right (⌘D)", #selector(splitRightClicked), "pane-split-right"),
+            (splitDownButton, "rectangle.split.1x2", "Split Down (⇧⌘D)", #selector(splitDownClicked), "pane-split-down"),
+            (closePaneButton, "xmark", "Close Pane (⌥⌘W)", #selector(closePaneClicked), "pane-close"),
+        ] {
+            button.isBordered = false
+            button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: tip)?
+                .withSymbolConfiguration(.init(pointSize: 11, weight: .medium))
+            button.imagePosition = .imageOnly
+            button.toolTip = tip
+            button.target = self
+            button.action = action
+            button.setAccessibilityLabel(tip)
+            button.setAccessibilityIdentifier(id)
+        }
         closePaneButton.isHidden = true
-        titleStrip.addSubview(closePaneButton)
+        paneControls.orientation = .horizontal
+        paneControls.spacing = 10
+        paneControls.translatesAutoresizingMaskIntoConstraints = false
+        paneControls.setViews([filesPaneButton, splitRightButton, splitDownButton, closePaneButton], in: .leading)
+        titleStrip.addSubview(paneControls)
         frameView.addSubview(titleStrip)
         frameView.addSubview(host)
 
@@ -653,6 +689,24 @@ final class TerminalStackController: NSViewController {
         statusStack.addArrangedSubview(spinner)
         statusStack.addArrangedSubview(statusLabel)
         statusStack.addArrangedSubview(restartButton)
+        // An empty pane (just split, or its session closed): say how to fill
+        // it, and offer Files / Close right there.
+        emptyFilesButton.bezelStyle = .rounded
+        emptyFilesButton.image = NSImage(systemSymbolName: "folder", accessibilityDescription: nil)
+        emptyFilesButton.imagePosition = .imageLeading
+        emptyFilesButton.target = self
+        emptyFilesButton.action = #selector(openFilesClicked)
+        emptyFilesButton.setAccessibilityIdentifier("empty-pane-files")
+        emptyCloseButton.bezelStyle = .rounded
+        emptyCloseButton.target = self
+        emptyCloseButton.action = #selector(closePaneClicked)
+        emptyCloseButton.isHidden = true
+        emptyCloseButton.setAccessibilityIdentifier("empty-pane-close")
+        emptyActions.orientation = .horizontal
+        emptyActions.spacing = 10
+        emptyActions.setViews([emptyFilesButton, emptyCloseButton], in: .leading)
+        emptyActions.isHidden = true
+        statusStack.addArrangedSubview(emptyActions)
 
         // The session identity + actions now live in the window's native
         // NSToolbar (see MainWindowController); the detail pane is just the framed
@@ -692,9 +746,9 @@ final class TerminalStackController: NSViewController {
             titleStrip.heightAnchor.constraint(equalToConstant: 30),
             titleLabel.leadingAnchor.constraint(equalTo: titleStrip.leadingAnchor, constant: 14),
             titleLabel.centerYAnchor.constraint(equalTo: titleStrip.centerYAnchor),
-            closePaneButton.trailingAnchor.constraint(equalTo: titleStrip.trailingAnchor, constant: -10),
-            closePaneButton.centerYAnchor.constraint(equalTo: titleStrip.centerYAnchor),
-            claudeStats.trailingAnchor.constraint(equalTo: closePaneButton.leadingAnchor, constant: -8),
+            paneControls.trailingAnchor.constraint(equalTo: titleStrip.trailingAnchor, constant: -12),
+            paneControls.centerYAnchor.constraint(equalTo: titleStrip.centerYAnchor),
+            claudeStats.trailingAnchor.constraint(equalTo: paneControls.leadingAnchor, constant: -12),
             claudeStats.centerYAnchor.constraint(equalTo: titleStrip.centerYAnchor),
             claudeStats.leadingAnchor.constraint(greaterThanOrEqualTo: titleLabel.trailingAnchor, constant: 12),
             backgroundPill.trailingAnchor.constraint(equalTo: claudeStats.leadingAnchor, constant: -8),
@@ -796,7 +850,7 @@ final class TerminalStackController: NSViewController {
         titleLabel.textColor = c.termDim
         claudeStats.applyTheme(c)
         kitBanner.applyTheme(c)
-        closePaneButton.contentTintColor = c.termDim
+        for b in [closePaneButton, filesPaneButton, splitRightButton, splitDownButton] { b.contentTintColor = c.termDim }
         updateFocusRing()
         headerName.textColor = c.text
         sidebarToggle.contentTintColor = c.text2
@@ -818,7 +872,8 @@ final class TerminalStackController: NSViewController {
         guard let id = shownSession, let session = controller.session(id: id) else {
             onChromeChange?(nil)   // no session → window title falls back to folder
             onStatusChange?("", false)
-            showStatus("Select a session", busy: false)
+            showStatus("Pick a session in the sidebar, or drag one here", busy: false)
+            emptyActions.isHidden = false
             // No session: still surface the primary container's kit problems.
             kitBannerFallbackAgent = controller.primaryAgent
             updateKitBanner()
@@ -844,6 +899,7 @@ final class TerminalStackController: NSViewController {
         headerBar.isHidden = true
         frameView.isHidden = true
         restartButton.isHidden = true
+        emptyActions.isHidden = true
         statusLabel.stringValue = text
         if busy { spinner.startAnimation(nil) } else { spinner.stopAnimation(nil) }
         updateFocusRing()
@@ -1005,6 +1061,7 @@ final class TerminalStackController: NSViewController {
         titleLabel.stringValue = "\(program) — \(container)" + (session.isChat ? " · chat (ACP)" : "")
         updateClaudeStats(session.id)
         updateBackgroundPill()
+        filesPaneButton.isHidden = false
         onChromeChange?(Chrome(agent: session.agent, title: session.name,
                                subtitle: "\(container) · \(shortHome(session.workdir))"))
     }

@@ -89,6 +89,7 @@ enum SelfTest {
         case "building": await building(window)
         case "alerts": alerts()
         case "background": await background(window)
+        case "pane-buttons": await paneButtons(window)
         case "files": await files(window)
         case "files-relaunch": await filesRelaunch(window)
         case "kits": await kits(window)
@@ -921,6 +922,72 @@ enum SelfTest {
         window.showBackgroundTasks()
         await wait(0.5)
         check(NSApp.windows.contains { $0.title.hasPrefix("Background Tasks") && $0.isVisible }, "Window ▸ Background Tasks opens")
+    }
+
+    // MARK: Pane buttons
+
+    /// The title strip's Split Right / Split Down / Files / Close buttons and an
+    /// empty pane's Show Files / Close Pane, pressed like a user would.
+    private static func paneButtons(_ window: MainWindowController) async {
+        guard let tree = window.paneTree, let ws = window.workspaceController else { return log("no window") }
+        guard let a = ws.orderedSessions.first?.id else { return log("need a session") }
+        func button(_ id: String, in pane: TerminalStackController) -> NSButton? {
+            func find(_ v: NSView) -> NSButton? {
+                if let b = v as? NSButton, b.accessibilityIdentifier() == id { return b }
+                for s in v.subviews { if let b = find(s) { return b } }
+                return nil
+            }
+            return find(pane.view)
+        }
+        func press(_ id: String, _ pane: TerminalStackController) -> Bool {
+            guard let b = button(id, in: pane), !b.isHiddenOrHasHiddenAncestor else { return false }
+            b.performClick(nil)
+            return true
+        }
+        ws.selection = .session(a)
+        check(await until(90) { tree.surfaces.terminals[a] != nil }, "session launches")
+        let first = tree.panes[0]
+        check(button("pane-files", in: first).map { !$0.isHiddenOrHasHiddenAncestor } ?? false
+              && button("pane-split-right", in: first) != nil && button("pane-split-down", in: first) != nil,
+              "title strip shows Files / Split Right / Split Down")
+        check(button("pane-close", in: first)?.isHidden ?? false, "Close is hidden with a single pane")
+        await wait(0.6)
+        snapshot(window, "pane-buttons-single")
+
+        check(press("pane-split-right", first), "Split Right pressed")
+        await wait()
+        check(tree.panes.count == 2 && tree.panes[1].shownSession == nil, "an empty pane opens on the right")
+        let empty = tree.panes[1]
+        check(button("empty-pane-files", in: empty).map { !$0.isHiddenOrHasHiddenAncestor } ?? false,
+              "the empty pane offers Show Files")
+        check(button("empty-pane-close", in: empty).map { !$0.isHiddenOrHasHiddenAncestor } ?? false,
+              "the empty pane offers Close Pane")
+        await wait(0.4)
+        snapshot(window, "pane-buttons-empty")
+
+        check(press("empty-pane-files", empty), "Show Files pressed in the empty pane")
+        await wait(0.6)
+        check(tree.panes.count == 2 && empty.shownFiles != nil, "the empty pane becomes Files")
+
+        check(press("pane-split-down", first), "Split Down pressed")
+        await wait()
+        check(tree.panes.count == 3, "Split Down adds a pane")
+        if let added = tree.panes.first(where: { $0.shownSession == nil && $0.shownFiles == nil }) {
+            check(press("empty-pane-close", added), "Close Pane pressed")
+            await wait()
+        }
+        check(tree.panes.count == 2, "the empty pane closes")
+
+        // The workspace Files pane isn't this session's: Files opens one beside it.
+        check(press("pane-files", first), "Files pressed on the session's pane")
+        await wait(0.6)
+        check(tree.panes.contains { $0.shownFiles?.session == a }, "Files for the session opens beside it")
+        let count = tree.panes.count
+        _ = press("pane-files", first)
+        await wait(0.4)
+        check(tree.panes.count == count, "pressing Files again focuses it instead of opening another")
+        await wait(0.6)
+        snapshot(window, "pane-buttons-final")
     }
 }
 #endif

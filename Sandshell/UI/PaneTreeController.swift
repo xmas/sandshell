@@ -108,6 +108,24 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
             if let self, pane === self.focused { self.onStatusChange?(text, working) }
         }
         pane.onClosePane = { [weak self, weak pane] in if let pane { self?.close(pane) } }
+        pane.onSplit = { [weak self, weak pane] edge in
+            if let self, let pane { self.split(pane, edge: edge, showing: nil) }
+        }
+        pane.onOpenFiles = { [weak self, weak pane] in
+            guard let self, let pane else { return }
+            let target = pane.shownSession.flatMap { id in
+                self.controller.session(id: id).map { FilesTarget(session: id, folder: $0.workdir) }
+            } ?? FilesTarget(session: nil, folder: self.controller.rootURL.path)
+            if let existing = self.panes.first(where: { $0.shownFiles == target }) { return self.focus(existing) }
+            // An empty pane becomes the Files pane; otherwise open one beside it.
+            if pane.shownSession == nil && pane.shownFiles == nil {
+                pane.showFiles(target)
+                self.focus(pane)
+                self.scheduleSave()
+            } else {
+                self.split(pane, edge: .trailing, showing: nil, files: target)
+            }
+        }
         pane.onFilesAddToChat = { [weak self] urls, target in
             guard let self else { return }
             if let id = target.session ?? self.selectedSession { self.dropFiles(urls, on: id) }
