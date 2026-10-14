@@ -2,6 +2,19 @@
 
 A running log of what changed, newest first. Yes, we actually write these.
 
+## v0.2.20 — "Talk To Me"
+- **Claude sessions can be a real chat now, not a terminal.** Press ⌃⌘N (or **+ ▸ New Claude Chat**) for a native chat: proper text, tool calls as tidy cards, images inline, code highlighted, tables lined up. Any Claude session flips between chat and terminal from the toolbar and keeps the same conversation either way.
+- **The composer is a real Mac text field**: emacs keys, spelling, Writing Tools and undo all work. Return sends, ⇧Return adds a line, ⎋ stops Claude mid-answer. Type `/` for Claude's commands and skills, `@` to pick a file from the workspace, or just drop files and images in.
+- **It plays well with the rest of your Mac.** Click an image for Quick Look or drag it out as a file. Select text anywhere and use **Services ▸ New Sandshell Chat**. Ask Shortcuts or Spotlight to start a Claude chat. Drop files on a session in the sidebar. Edit ▸ Find (⌘F/⌘G/⌘E) searches the conversation.
+- **A notification when a chat finishes** while you're looking at something else, same as terminals.
+- **Pick how current your sandboxes' Claude Code is**: Settings ▸ General ▸ Sandbox Image offers Stable (Docker's release), Nightly (rebuilt daily with the current Claude Code), or any custom image.
+- **No more "Failed to refresh OAuth token".** When Docker Sandboxes holds your Claude sign-in (it does after `sbx login`), every sandboxed Claude now signs in through it, so sessions stop fighting over your `~/.claude` token.
+- **Quitting cleans up.** Closing, restarting or quitting a session now stops its processes inside the sandbox; they used to keep running, and a relaunch could put two Claudes on one conversation.
+- **Works with sbx 0.47**, which changed `sbx ls --json` and dropped `sbx create -q`. Both had broken listing and creating sandboxes.
+- **Folders are back in the inspector**: Settings ▸ Folders renames, removes, trashes and adds working directories.
+- **Fixes:** opening a workspace no longer starts two `sbx create`s for the same sandbox, and a resumed Claude conversation's cost no longer reads $0.
+- **Install with Homebrew**: `brew install --cask docker/tap/sbx xmas/xmas/sandshell`. Sandshell now requires macOS 27 on Apple Silicon.
+
 ## v0.2.16 — "Know Your Tokens"
 - **Claude's vitals live above the terminal.** Every Claude session's title strip now shows a context-window gauge and percent, session tokens in/out, cost, and the model — the same numbers Claude Code's own footer shows, fed straight from Claude Code. Colors come from your terminal theme (and turn red as the context window fills), and each piece can be switched off.
 - **Pick the model from the strip.** The model name is a menu: Fable 5.1, Opus 5.5, Sonnet 5, Haiku 4.5, or Claude's default. The choice sticks for the workspace; changing it on a live session offers to restart it on the new model and pick the conversation right back up.
