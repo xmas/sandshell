@@ -122,7 +122,9 @@ enum ChatRenderer {
         URL(string: "sandshell-chat://toggle/\(id.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? id)")!
     }
 
-    static func render(_ item: ChatItem, expanded: Bool) -> NSAttributedString {
+    /// `isExpanded` answers for the cards inside a tool group.
+    static func render(_ item: ChatItem, expanded: Bool,
+                       isExpanded: (String) -> Bool = { _ in false }) -> NSAttributedString {
         switch item {
         case .user(_, let text, let attachments):
             var paras = text.isEmpty ? [] : plainParagraphs(text, font: body)
@@ -135,6 +137,8 @@ enum ChatRenderer {
             return spaced(thought(id: id, text: text, expanded: expanded), before: 2, after: 2)
         case .tool(let call):
             return spaced(tool(call, expanded: expanded), before: 4, after: 4)
+        case .toolGroup(let calls):
+            return spaced(toolGroup(calls, id: item.id, expanded: expanded, isExpanded: isExpanded), before: 4, after: 4)
         case .plan(_, let entries):
             let paras = entries.map { e -> NSAttributedString in
                 let mark = e.status == "completed" ? "☑" : e.status == "in_progress" ? "◐" : "☐"
@@ -219,6 +223,100 @@ enum ChatRenderer {
         out.append(line(shown.joined(separator: "\n"), font: italic, color: .tertiaryLabelColor))
         if lines.count > 2 { out.append(link(expanded ? "Show less" : "Show more", id: "thought-\(id)")) }
         return out
+    }
+
+    // MARK: Tool groups
+
+    /// One quiet line for a run of tool calls ("Ran git status…", "Ran 3
+    /// commands, read 2 files ›"); clicked, it opens to the cards.
+    private static func toolGroup(_ calls: [ChatItem.ToolCall], id: String, expanded: Bool,
+                                  isExpanded: (String) -> Bool) -> NSAttributedString {
+        let running = calls.contains { $0.status == "pending" || $0.status == "in_progress" }
+        let failed = calls.filter { $0.status == "failed" }.count
+        let head = NSMutableAttributedString(string: groupSummary(calls, running: running) + (expanded ? "  ⌄" : "  ›"),
+                                             attributes: [.font: NSFont.systemFont(ofSize: 12.5),
+                                                          .foregroundColor: NSColor.secondaryLabelColor,
+                                                          .link: toggleURL(id),
+                                                          .toolTip: expanded ? "Hide the tool calls" : "Show the tool calls"])
+        if failed > 0 {
+            head.append(NSAttributedString(string: failed == calls.count && failed == 1 ? "  · failed" : "  · \(failed) failed",
+                                           attributes: [.font: NSFont.systemFont(ofSize: 12.5),
+                                                        .foregroundColor: NSColor.systemRed]))
+        }
+        head.append(NSAttributedString(string: "\n", attributes: [.font: NSFont.systemFont(ofSize: 12.5)]))
+        guard expanded else { return head }
+        for call in calls {
+            head.append(spaced(tool(call, expanded: isExpanded("tool-\(call.id)")), before: 4, after: 4))
+        }
+        return head
+    }
+
+    /// What a tool call does, as a verb + object: (past, present, one, many).
+    private enum ToolVerb: Equatable {
+        case run, read, edit, search, fetch, other
+
+        init(_ kind: String) {
+            switch kind.lowercased() {
+            case "execute", "bash", "bashoutput": self = .run
+            case "read", "notebookread": self = .read
+            case "edit", "delete", "move", "write", "multiedit", "notebookedit": self = .edit
+            case "search", "grep", "glob", "ls": self = .search
+            case "fetch", "webfetch", "websearch": self = .fetch
+            default: self = .other
+            }
+        }
+
+        var words: (past: String, present: String, one: String, many: String) {
+            switch self {
+            case .run: ("Ran", "Running", "a command", "commands")
+            case .read: ("Read", "Reading", "a file", "files")
+            case .edit: ("Edited", "Editing", "a file", "files")
+            case .search: ("Searched", "Searching", "once", "times")
+            case .fetch: ("Fetched", "Fetching", "a page", "pages")
+            case .other: ("Used", "Using", "a tool", "tools")
+            }
+        }
+    }
+
+    static func groupSummary(_ calls: [ChatItem.ToolCall], running: Bool) -> String {
+        func clean(_ s: String) -> String { s.replacingOccurrences(of: "`", with: "").trimmingCharacters(in: .whitespaces) }
+        if calls.count == 1, let call = calls.first {
+            let verb = ToolVerb(call.kind)
+            let words = verb.words
+            let lead = running ? words.present : words.past
+            let raw = clean(call.input.isEmpty ? call.title : call.input)
+            let firstLine = raw.split(separator: "\n").first.map(String.init) ?? raw
+            switch verb {
+            case .run:
+                let short = firstLine.count > 48 ? String(firstLine.prefix(45)) : firstLine
+                let cut = short != raw
+                return short.isEmpty ? "\(lead) \(words.one)" : "\(lead) \(short)\(cut ? "…" : "")"
+            case .read, .edit:
+                let name = (firstLine as NSString).lastPathComponent
+                return name.isEmpty ? "\(lead) \(words.one)" : "\(lead) \(name)"
+            case .search:
+                return firstLine.isEmpty ? "\(lead)" : "\(lead) for \(firstLine.count > 40 ? firstLine.prefix(37) + "…" : firstLine)"
+            case .fetch:
+                return "\(lead) \(URL(string: firstLine)?.host ?? words.one)"
+            case .other:
+                let title = clean(call.title.isEmpty ? call.kind.capitalized : call.title)
+                return title.count > 60 ? String(title.prefix(57)) + "…" : title
+            }
+        }
+        var order: [ToolVerb] = []
+        var counts: [ToolVerb: Int] = [:]
+        for call in calls {
+            let verb = ToolVerb(call.kind)
+            if counts[verb] == nil { order.append(verb) }
+            counts[verb, default: 0] += 1
+        }
+        let phrases = order.enumerated().map { i, verb -> String in
+            let w = verb.words, n = counts[verb] ?? 0
+            let lead = running ? w.present : w.past
+            let object = n == 1 ? w.one : verb == .search ? "\(n) times" : "\(n) \(w.many)"
+            return "\(i == 0 ? lead : lead.lowercased()) \(object)"
+        }
+        return phrases.joined(separator: ", ") + (running ? "…" : "")
     }
 
     // MARK: Tool cards

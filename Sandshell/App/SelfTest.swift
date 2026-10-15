@@ -95,6 +95,7 @@ enum SelfTest {
         case "launch-failure": await launchFailure(window)
         case "fork": await fork(window)
         case "links": links()
+        case "tool-groups": await toolGroups()
         case "title-strip": await titleStrip(window)
         case "follow": await follow(window)
         case "reconnect": await reconnect(window)
@@ -1337,6 +1338,50 @@ enum SelfTest {
               "the reply knows the other app's turn (\(said(c).suffix(80)))")
         check(said(c).contains("PONG"), "the reloaded transcript still has the first reply")
         snapshot(window, "follow-final")
+    }
+
+    // MARK: Tool groups
+
+    /// Consecutive tool calls read as one quiet line that opens to the cards.
+    private static func toolGroups() async {
+        typealias Call = ChatItem.ToolCall
+        func call(_ id: String, _ kind: String, _ title: String, _ input: String, _ status: String = "completed",
+                  output: String = "") -> ChatItem {
+            .tool(Call(id: id, title: title, kind: kind, status: status, output: output, diffs: [], input: input))
+        }
+        let items: [ChatItem] = [
+            .user(id: UUID(), text: "What changed?", attachments: []),
+            call("t1", "execute", "`git status`", "git status --short", output: " M Sandshell/App/SelfTest.swift"),
+            .agentText(id: "a1", text: "One file changed. Let me look closer."),
+            call("t2", "execute", "`git diff`", "git diff --stat"),
+            call("t3", "read", "Read SelfTest.swift", "/Users/me/repo/Sandshell/App/SelfTest.swift"),
+            call("t4", "execute", "`swift build`", "swift build", "failed", output: "error: no Package.swift"),
+            .agentText(id: "a2", text: "The build failed; here is why."),
+            call("t5", "execute", "`sed -n 1,40p Sandshell/Chat/ChatTranscriptView.swift`",
+                 "sed -n 1,40p Sandshell/Chat/ChatTranscriptView.swift | head -20", "in_progress"),
+        ]
+        let view = ChatTranscriptView(frame: NSRect(x: 0, y: 0, width: 640, height: 520))
+        let host = NSWindow(contentRect: view.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        host.alphaValue = 0
+        host.contentView = view
+        view.update(items)
+        await wait(0.4)
+        let text = view.debugText
+        log("collapsed:\n\(text)")
+        check(text.contains("Ran git status --short  ›"), "one command reads as “Ran git status --short ›”")
+        check(text.contains("Ran 2 commands, read a file  ›  · 1 failed"), "a mixed run is summed up, with its failure")
+        check(text.contains("Running sed -n 1,40p Sandshell/Chat/ChatTranscriptVie…  ›"), "a running command says Running, cut short")
+        check(!text.contains("M Sandshell/App/SelfTest.swift") && !text.contains("no Package.swift"),
+              "cards stay closed until asked")
+        snapshot(view, "tool-groups-collapsed")
+        view.debugToggle("group-t2")
+        await wait(0.3)
+        let open = view.debugText
+        check(open.contains("Ran 2 commands, read a file  ⌄") && open.contains("no Package.swift"),
+              "clicking a group opens its cards")
+        check(!open.contains("M Sandshell/App/SelfTest.swift"), "other groups stay closed")
+        snapshot(view, "tool-groups-open")
+        host.close()
     }
 
     // MARK: Title strip

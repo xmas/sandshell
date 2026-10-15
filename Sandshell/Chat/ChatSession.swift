@@ -12,6 +12,9 @@ enum ChatItem: Identifiable, Equatable {
     case notice(id: UUID, text: String, isError: Bool)
     /// An image the agent sent as message content.
     case image(id: UUID, data: Data)
+    /// Display only (the transcript view makes these): a run of consecutive
+    /// tool calls, shown as one "Ran 3 commands ›" line.
+    case toolGroup([ToolCall])
 
     var id: String {
         switch self {
@@ -22,6 +25,7 @@ enum ChatItem: Identifiable, Equatable {
         case .plan(let id, _): return "plan-\(id)"
         case .notice(let id, _, _): return "notice-\(id)"
         case .image(let id, _): return "image-\(id)"
+        case .toolGroup(let calls): return "group-\(calls.first?.id ?? "")"
         }
     }
 

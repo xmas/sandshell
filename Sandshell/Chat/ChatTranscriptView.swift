@@ -62,7 +62,8 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
         tv.isIncrementalSearchingEnabled = true
         tv.textContainerInset = NSSize(width: 20, height: 16)
         tv.delegate = self
-        tv.linkTextAttributes = [.foregroundColor: NSColor.linkColor, .cursor: NSCursor.pointingHand]
+        // Links color themselves (linkify): a tool group's line stays gray.
+        tv.linkTextAttributes = [.cursor: NSCursor.pointingHand]
         tv.textLayoutManager?.delegate = fragments
         tv.setAccessibilityIdentifier("chat-transcript")
 
@@ -103,7 +104,20 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
         }
     }
 
+    /// Runs of consecutive tool calls become one group each.
+    static func grouped(_ items: [ChatItem]) -> [ChatItem] {
+        var out: [ChatItem] = []
+        var run: [ChatItem.ToolCall] = []
+        func flush() { if !run.isEmpty { out.append(.toolGroup(run)); run = [] } }
+        for item in items {
+            if case .tool(let call) = item { run.append(call) } else { flush(); out.append(item) }
+        }
+        flush()
+        return out
+    }
+
     private func apply(_ items: [ChatItem], force: Set<String> = []) {
+        let items = Self.grouped(items)
         guard let storage = textView.textStorage else { return }
         // Items are append-only with in-place updates; anything else (a new
         // session's history, removals) is a full rebuild.
@@ -116,13 +130,13 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
         var location = 0
         for (i, item) in items.enumerated() {
             if i < segments.count {
-                if segments[i].item != item || force.contains(item.id) {
-                    let rendered = linkify(ChatRenderer.render(item, expanded: expanded.contains(item.id)))
+                if segments[i].item != item || force.contains(item.id) || Self.contains(item, force) {
+                    let rendered = render(item)
                     storage.replaceCharacters(in: NSRange(location: location, length: segments[i].length), with: rendered)
                     segments[i] = Segment(id: item.id, item: item, length: rendered.length)
                 }
             } else {
-                let rendered = linkify(ChatRenderer.render(item, expanded: expanded.contains(item.id)))
+                let rendered = render(item)
                 storage.append(rendered)
                 segments.append(Segment(id: item.id, item: item, length: rendered.length))
             }
@@ -130,6 +144,17 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
         }
         storage.endEditing()
         if stickToBottom { scrollToBottom() }
+    }
+
+    private func render(_ item: ChatItem) -> NSAttributedString {
+        linkify(ChatRenderer.render(item, expanded: expanded.contains(item.id),
+                                    isExpanded: { [expanded] in expanded.contains($0) }))
+    }
+
+    /// A group holding one of `ids` (a card inside it was toggled).
+    private static func contains(_ item: ChatItem, _ ids: Set<String>) -> Bool {
+        guard !ids.isEmpty, case .toolGroup(let calls) = item else { return false }
+        return calls.contains { ids.contains("tool-\($0.id)") }
     }
 
     private func scrollToBottom() {
@@ -185,9 +210,15 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
             out.enumerateAttribute(.link, in: r) { v, _, stop in if v != nil { linked = true; stop.pointee = true } }
             return !linked
         }
+        // Markdown links arrive uncolored; color every link but a tool group's line.
+        out.enumerateAttribute(.link, in: whole) { value, range, _ in
+            guard let value else { return }
+            let toggle = (value as? URL).map { $0.scheme == "sandshell-chat" && $0.path.hasPrefix("/group-") } ?? false
+            if !toggle { out.addAttribute(.foregroundColor, value: NSColor.linkColor, range: range) }
+        }
         Self.urlDetector?.enumerateMatches(in: text, range: whole) { m, _, _ in
             guard let m, let url = m.url, ["http", "https"].contains(url.scheme ?? ""), free(m.range) else { return }
-            out.addAttribute(.link, value: url, range: m.range)
+            out.addAttributes([.link: url, .foregroundColor: NSColor.linkColor], range: m.range)
         }
         guard let workdir, let pattern = Self.pathPattern else { return out }
         let fm = FileManager.default
@@ -204,7 +235,7 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
             guard free(range) else { return }
             var link = URLComponents(url: URL(fileURLWithPath: path), resolvingAgainstBaseURL: false)
             if let line { link?.fragment = "L" + line }
-            if let url = link?.url { out.addAttribute(.link, value: url, range: range) }
+            if let url = link?.url { out.addAttributes([.link: url, .foregroundColor: NSColor.linkColor], range: range) }
         }
         func trimmed(_ token: String) -> String {
             var token = token
@@ -365,6 +396,12 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
         return out
     }
     func debugApplyNow(_ items: [ChatItem]) { apply(items) }
+    /// Self-test: the transcript's text.
+    var debugText: String { textView.string }
+    /// Self-test: click a "Show more" / group link by id.
+    func debugToggle(_ id: String) {
+        _ = textView(textView, clickedOnLink: ChatRenderer.toggleURL(id), at: 0)
+    }
     #endif
 
     @objc private func copyReply() {
