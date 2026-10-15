@@ -16,7 +16,7 @@ settings:
     SWIFT_VERSION: "6.0"
     ARCHS: arm64
     ONLY_ACTIVE_ARCH: YES
-    MARKETING_VERSION: "0.2.22"
+    MARKETING_VERSION: "0.2.23"
     # The process name. scripts/run-ui-tests.sh overrides it so System Events
     # (which re-resolves processes by name) can't confuse its test instance
     # with a Sandshell you have open.
