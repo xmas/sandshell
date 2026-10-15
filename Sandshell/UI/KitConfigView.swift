@@ -100,6 +100,7 @@ final class KitConfigModel: ObservableObject {
     private func enrich(_ ref: String, fillMetadata: Bool) {
         Task { @MainActor in
             guard let info = await SbxClient.shared.kitInspect(ref) else { return }
+            KitStore.learn(ref, from: info)
             if info.kind == "sandbox" {
                 KitStore.remove(ref)
                 registry = KitStore.all

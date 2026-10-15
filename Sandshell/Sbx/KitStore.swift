@@ -61,6 +61,37 @@ enum KitStore {
                isDefault: true),
     ]
 
+    // MARK: Agent requirements
+
+    private static let requirementsKey = "kitRequiredAgents"
+    /// Known up front, so the official default works offline.
+    private static let knownRequirements = ["docker.io/sbx/code-server-kit:latest": "claude"]
+
+    /// The agent a kit is made for (`requires.agent` in its spec): `.some(nil)`
+    /// for any agent, `nil` while not yet known.
+    static func requiredAgent(_ ref: String) -> String?? {
+        if let known = knownRequirements[ref] { return .some(known) }
+        let cache = UserDefaults.standard.dictionary(forKey: requirementsKey) as? [String: String] ?? [:]
+        guard let agent = cache[ref] else { return nil }
+        return .some(agent.isEmpty ? nil : agent)
+    }
+
+    /// Remember what `sbx kit inspect` said a kit requires.
+    static func learn(_ ref: String, from info: KitInspection) {
+        var cache = UserDefaults.standard.dictionary(forKey: requirementsKey) as? [String: String] ?? [:]
+        cache[ref] = info.requires?.agent ?? ""
+        UserDefaults.standard.set(cache, forKey: requirementsKey)
+    }
+
+    /// Which of `refs` a sandbox for `agent` can take: a kit made for another
+    /// agent is left out (sbx refuses to compose it). Unknown ones stay in.
+    static func kits(_ refs: [String], for agent: AgentKind) -> [String] {
+        refs.filter { ref in
+            guard let required = requiredAgent(ref), let agentName = required else { return true }
+            return agentName == agent.rawValue
+        }
+    }
+
     /// Kits flagged as defaults for new workspaces, in registry order.
     static var defaults: [KitRef] { all.filter(\.isDefault) }
     static var defaultRefs: [String] { defaults.map(\.ref) }

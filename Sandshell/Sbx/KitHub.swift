@@ -85,6 +85,9 @@ struct KitInspection: Decodable {
     /// `sandbox` (defines an agent; the create positional) or `mixin` (`--kit`).
     var kind: String?
     var sandbox: SandboxSpec?
+    /// A mixin made for one agent only (`requires: { agent: claude }`).
+    var requires: Requires?
+    struct Requires: Decodable { var agent: String? }
 
     struct SandboxSpec: Decodable { var image: String?; var entrypoint: [String]? }
     struct Permissions: Decodable {

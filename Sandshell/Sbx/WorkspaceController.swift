@@ -594,12 +594,30 @@ final class WorkspaceController: ObservableObject {
         workspace.kits.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
     }
 
+    /// Look up (with `sbx kit inspect`) which agent each kit is made for, where
+    /// not known yet, so a sandbox only gets the kits it can take.
+    func learnKitRequirements(_ refs: [String]) async {
+        for ref in refs where KitStore.requiredAgent(ref) == nil {
+            if let info = await SbxClient.shared.kitInspect(ref) { KitStore.learn(ref, from: info) }
+        }
+    }
+
+    /// The workspace's kits a sandbox for `agent` takes, logging any left out.
+    private func kits(for agent: AgentKind, from refs: [String]) -> [String] {
+        let kept = KitStore.kits(refs, for: agent)
+        let skipped = refs.filter { !kept.contains($0) }
+        if !skipped.isEmpty {
+            Log.info(.workspace, "\(agent.rawValue) sandbox: skipping kit(s) made for another agent: \(skipped.joined(separator: ", "))")
+        }
+        return kept
+    }
+
     /// Combined create-time signature (mounts + kits + base image). A change in
     /// any drives a container rebuild, since all are fixed at `sbx create`.
     /// A custom agent ignores the base-image channel (its kit names the image),
     /// so a channel change doesn't rebuild it.
     func configSignature(mounts: [MountSpec], kits: [String], agent: AgentKind) -> String {
-        mountSignature(mounts) + "\n--kits--\n" + kits.joined(separator: "\n")
+        mountSignature(mounts) + "\n--kits--\n" + KitStore.kits(kits, for: agent).joined(separator: "\n")
             + "\n--image--\n" + (agent.isBuiltin ? imageSignature : "")
     }
 
@@ -683,12 +701,13 @@ final class WorkspaceController: ObservableObject {
     /// (declined rebuild prompt), a mismatch is expected and the rebuild settles it.
     func refreshKitDrift(for agent: AgentKind) {
         let name = containerName(for: agent)
-        let configured = resolvedKits()
+        let configured = KitStore.kits(resolvedKits(), for: agent)
         let expected = configSignature(mounts: resolvedMounts(), kits: configured, agent: agent)
         let root = workspace.rootURL
         Task { @MainActor in
             guard let actual = await SbxClient.shared.inspect(name)?.kits else { return }
-            guard self.state.appliedMountSignatures[name] == expected, self.resolvedKits() == configured else {
+            guard self.state.appliedMountSignatures[name] == expected,
+                  KitStore.kits(self.resolvedKits(), for: agent) == configured else {
                 self.kitDrift[agent] = nil
                 return
             }
@@ -866,6 +885,13 @@ final class WorkspaceController: ObservableObject {
               state.appliedMountSignatures[name] == configSignature(mounts: mounts, kits: previousKits, agent: agent) else {
             return try await performBringUp(for: agent, onMismatch: .rebuild, force: true)
         }
+        await learnKitRequirements(refs)
+        let refs = kits(for: agent, from: refs)
+        guard !refs.isEmpty else {
+            // None of them is for this agent's sandbox: it's already as configured.
+            recordSignature(configSignature(mounts: mounts, kits: resolvedKits(), agent: agent), for: name)
+            return
+        }
         Log.info(.workspace, "adding \(refs.count) kit(s) to '\(name)' with sbx kit add")
         // "Rebuilding…": the recreate swaps the container, so its sessions end
         // just as in a rebuild (the detail pane drops their terminals on this prefix).
@@ -918,7 +944,8 @@ final class WorkspaceController: ObservableObject {
         }.value
 
         let mounts = resolvedMounts()
-        let kits = resolvedKits()
+        await learnKitRequirements(resolvedKits())
+        let kits = kits(for: agent, from: resolvedKits())
         let signature = configSignature(mounts: mounts, kits: kits, agent: agent)
         let mcp = await effectiveMCPServers()
 
