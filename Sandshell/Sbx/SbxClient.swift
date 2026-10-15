@@ -503,6 +503,34 @@ actor SbxClient {
     /// `sbx kit inspect <ref> --json` — metadata for a directory, zip, or OCI kit
     /// reference (pulls the kit for OCI refs, so this can take a few seconds).
     /// Returns nil when the reference can't be inspected.
+    // MARK: - Files into a sandbox
+
+    /// Where pasted images go inside a sandbox: its own /tmp, so nothing lands
+    /// in the user's project (gone when the sandbox is recreated).
+    nonisolated static let pasteDirectory = "/tmp/sandshell-paste"
+
+    /// Write `data` to `name` in `pasteDirectory` inside `container` (as its
+    /// agent user), pruning pastes older than a week. True once it's there.
+    /// The bytes go in through a temp file on stdin, not a pipe.
+    nonisolated static func writePaste(_ data: Data, named name: String, container: String) async -> Bool {
+        let staged = FileManager.default.temporaryDirectory.appendingPathComponent("sandshell-paste-\(UUID().uuidString)")
+        guard (try? data.write(to: staged)) != nil, let input = try? FileHandle(forReadingFrom: staged) else { return false }
+        defer { try? input.close(); try? FileManager.default.removeItem(at: staged) }
+        let dir = pasteDirectory
+        let script = "mkdir -p \(dir) && find \(dir) -type f -mtime +7 -delete 2>/dev/null; "
+            + "cat > \(dir)/\(SbxCommand.shellQuote(name))"
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: PathFixer.sbxPath())
+        p.arguments = ["exec", "-i", container, "sh", "-c", script]
+        p.standardInput = input
+        p.standardOutput = FileHandle.nullDevice
+        p.standardError = FileHandle.nullDevice
+        return await withCheckedContinuation { (done: CheckedContinuation<Bool, Never>) in
+            p.terminationHandler = { done.resume(returning: $0.terminationStatus == 0) }
+            do { try p.run() } catch { done.resume(returning: false) }
+        }
+    }
+
     // MARK: - Session process reaping
 
     /// Kill a session's processes inside its sandbox (by `SbxCommand.ProcessTag`

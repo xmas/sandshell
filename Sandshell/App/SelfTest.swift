@@ -102,6 +102,7 @@ enum SelfTest {
         case "reconnect": await reconnect(window)
         case "chat-model": await chatModel(window)
         case "kit-agents": await kitAgents(window)
+        case "paste": await paste(window)
         case "open-quickly": await openQuickly()
         case "files": await files(window)
         case "files-relaunch": await filesRelaunch(window)
@@ -1214,6 +1215,55 @@ enum SelfTest {
             check(c.brightnessComponent > 0.25 && c.saturationComponent > 0.2, "the selected row is accent-colored, not black")
         }
         host.close()
+    }
+
+    // MARK: Pasting an image into a terminal
+
+    /// An image pasted into a terminal session goes into the sandbox's /tmp
+    /// (where Claude Code can read it), not the project. Needs a shell session.
+    private static func paste(_ window: MainWindowController) async {
+        guard let tree = window.paneTree, let ws = window.workspaceController,
+              let s = ws.orderedSessions.first(where: { !$0.isChat }) else { return log("need a terminal session") }
+        ws.selection = .session(s.id)
+        check(await until(120) { tree.surfaces.terminals[s.id] != nil }, "the session launches")
+        await wait(1)
+        let projectPastes = { (try? FileManager.default.contentsOfDirectory(atPath: s.workdir + "/.sbx"))?
+            .filter { $0.hasPrefix("paste-") }.count ?? 0 }
+        let before = projectPastes()
+        // A private pasteboard: the user's clipboard stays theirs.
+        let board = NSPasteboard(name: .init("sandshell-selftest-\(UUID().uuidString)"))
+        board.clearContents()
+        let image = NSImage(size: NSSize(width: 8, height: 8), flipped: false) { r in
+            NSColor.systemTeal.setFill(); r.fill(); return true
+        }
+        board.writeObjects([image])
+        guard let pane = tree.panes.first(where: { $0.shownSession == s.id }) else { return check(false, "a pane shows it") }
+        check(pane.debugPaste(board), "the paste is taken")
+        let container = ws.containerName(for: s.containerAgentKind)
+        func sandboxPastes() async -> String {
+            await Task.detached {
+                let p = Process()
+                p.executableURL = URL(fileURLWithPath: PathFixer.sbxPath())
+                p.arguments = ["exec", container, "sh", "-c", "ls -1 \(SbxClient.pasteDirectory) 2>/dev/null"]
+                let pipe = Pipe()
+                p.standardOutput = pipe
+                p.standardError = FileHandle.nullDevice
+                guard (try? p.run()) != nil else { return "" }
+                let text = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+                p.waitUntilExit()
+                return text
+            }.value
+        }
+        var listing = ""
+        for _ in 0..<20 {
+            listing = await sandboxPastes()
+            if listing.contains("paste-") { break }
+            await wait(1)
+        }
+        log("sandbox pastes: \(listing.split(separator: "\n"))")
+        check(listing.contains("paste-"), "the image is in the sandbox's \(SbxClient.pasteDirectory)")
+        check(projectPastes() == before, "and nothing new in the project's .sbx/")
+        board.releaseGlobally()
     }
 
     // MARK: Kits per agent

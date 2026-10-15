@@ -1751,8 +1751,9 @@ extension TerminalStackController {
 
     private func handlePaste(_ event: NSEvent, id: UUID, tv: AppTerminalView) -> NSEvent? {
         guard let session = controller.session(id: id),
-              shouldInterceptPasteboard(NSPasteboard.general),
-              let text = terminalInput(from: NSPasteboard.general, workdir: session.workdir),
+              shouldInterceptPasteboard(NSPasteboard.general) else { return event }
+        if pasteImages(NSPasteboard.general, session: session, into: tv) { return nil }
+        guard let text = terminalInput(from: NSPasteboard.general, workdir: session.workdir),
               !text.isEmpty else { return event }
         tv.insertText(text, replacementRange: NSRange(location: NSNotFound, length: 0))
         return nil
@@ -1768,8 +1769,9 @@ extension TerminalStackController {
     @discardableResult
     private func insertPasteboard(_ pasteboard: NSPasteboard) -> Bool {
         if let id = activeSessionID, let chat = chats[id] { return chat.addAttachments(from: pasteboard) }
-        guard let context = activeTerminalContext(),
-              let text = terminalInput(from: pasteboard, workdir: context.session.workdir),
+        guard let context = activeTerminalContext() else { return false }
+        if pasteImages(pasteboard, session: context.session, into: context.view) { return true }
+        guard let text = terminalInput(from: pasteboard, workdir: context.session.workdir),
               !text.isEmpty else { return false }
         context.view.insertText(text, replacementRange: NSRange(location: NSNotFound, length: 0))
         return true
@@ -1789,7 +1791,7 @@ extension TerminalStackController {
         }
         if let images = pasteboard.readObjects(forClasses: [NSImage.self], options: nil) as? [NSImage],
            !images.isEmpty {
-            let paths = images.compactMap { saveClipboardImage($0, workdir: workdir) }
+            let paths = images.compactMap(Self.png).compactMap { saveClipboardImage($0, workdir: workdir) }
             return paths.isEmpty ? nil : paths.map(SbxCommand.shellQuote).joined(separator: " ")
         }
         if let string = pasteboard.string(forType: .string), !string.isEmpty {
@@ -1815,10 +1817,43 @@ extension TerminalStackController {
         return paths.map(SbxCommand.shellQuote).joined(separator: " ")
     }
 
-    private func saveClipboardImage(_ image: NSImage, workdir: String) -> String? {
-        guard let tiff = image.tiffRepresentation,
-              let rep = NSBitmapImageRep(data: tiff),
-              let png = rep.representation(using: .png, properties: [:]) else { return nil }
+    /// Images pasted into a terminal: Claude Code reads the clipboard of the
+    /// machine it runs on, which can't see the Mac's, so each image is written
+    /// into the sandbox's own /tmp and its path typed (a moment later). Only if
+    /// that fails does it land in the project's `.sbx/`. False: no images here.
+    private func pasteImages(_ pasteboard: NSPasteboard, session: Session, into tv: AppTerminalView) -> Bool {
+        guard pasteboardFileURLs(pasteboard) == nil, pasteboard.string(forType: .URL) == nil,
+              let images = pasteboard.readObjects(forClasses: [NSImage.self], options: nil) as? [NSImage],
+              !images.isEmpty else { return false }
+        let pngs = images.compactMap(Self.png)
+        guard !pngs.isEmpty else { return false }
+        let container = controller.containerName(for: session.containerAgentKind)
+        let workdir = session.workdir
+        Task { [weak self, weak tv] in
+            var paths: [String] = []
+            for (i, png) in pngs.enumerated() {
+                let name = "paste-\(Int(Date().timeIntervalSince1970))-\(i).png"
+                if await SbxClient.writePaste(png, named: name, container: container) {
+                    paths.append(SbxClient.pasteDirectory + "/" + name)
+                } else if let path = self?.saveClipboardImage(png, workdir: workdir) {
+                    Log.info(.app, "image paste: couldn't write into “\(container)”; saved to the project instead")
+                    paths.append(path)
+                }
+            }
+            guard !paths.isEmpty else { return }
+            tv?.insertText(paths.map(SbxCommand.shellQuote).joined(separator: " "),
+                           replacementRange: NSRange(location: NSNotFound, length: 0))
+        }
+        return true
+    }
+
+    private static func png(_ image: NSImage) -> Data? {
+        guard let tiff = image.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff) else { return nil }
+        return rep.representation(using: .png, properties: [:])
+    }
+
+    /// The fallback: `.sbx/` in the session's folder (shared with the sandbox).
+    private func saveClipboardImage(_ png: Data, workdir: String) -> String? {
         let sbxDir = URL(fileURLWithPath: workdir, isDirectory: true).appendingPathComponent(".sbx")
         do {
             try FileManager.default.createDirectory(at: sbxDir, withIntermediateDirectories: true)
@@ -2063,6 +2098,8 @@ extension TerminalStackController {
     var debugReadoutFitting: String { claudeStats.debugFitting }
     var debugReadoutShown: Bool { !claudeStats.isHidden }
     func debugShowLaunchFailure(_ message: String) { showLaunchFailure(message) }
+    /// Self-test: paste from `pasteboard` into the shown terminal (as ⌘V would).
+    func debugPaste(_ pasteboard: NSPasteboard) -> Bool { insertPasteboard(pasteboard) }
     /// Self-test: pick a model in the readout, as its menu would.
     func debugPickModel(_ id: String?) { modelPicked(id) }
 
