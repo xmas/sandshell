@@ -101,6 +101,7 @@ enum SelfTest {
         case "follow": await follow(window)
         case "reconnect": await reconnect(window)
         case "chat-model": await chatModel(window)
+        case "kit-agents": await kitAgents(window)
         case "open-quickly": await openQuickly()
         case "files": await files(window)
         case "files-relaunch": await filesRelaunch(window)
@@ -1202,6 +1203,36 @@ enum SelfTest {
             check(c.brightnessComponent > 0.25 && c.saturationComponent > 0.2, "the selected row is accent-colored, not black")
         }
         host.close()
+    }
+
+    // MARK: Kits per agent
+
+    /// A kit made for one agent (code-server needs claude) stays out of other
+    /// agents' sandboxes instead of failing them. Expects the workspace's kits
+    /// to include docker.io/sbx/code-server-kit:latest.
+    private static func kitAgents(_ window: MainWindowController) async {
+        guard let ws = window.workspaceController, let tree = window.paneTree else { return log("no window") }
+        let codeServer = "docker.io/sbx/code-server-kit:latest"
+        check(KitStore.kits([codeServer, "/some/kit"], for: .codex) == ["/some/kit"]
+              && KitStore.kits([codeServer, "/some/kit"], for: .claude) == [codeServer, "/some/kit"],
+              "code-server is for Claude's sandbox only")
+        check(ws.kits.contains(codeServer), "the workspace has code-server")
+        let name = await ws.ensureContainerReady(for: .codex)
+        check(name != nil, "the Codex sandbox builds (\(ws.lastError ?? "ok"))")
+        if let name {
+            let kits = await SbxClient.shared.inspect(name)?.kits ?? []
+            log("codex sandbox kits: \(kits)")
+            check(!kits.contains { $0.contains("code-server") }, "without code-server")
+            await wait(2)
+            check(ws.kitDrift[.codex] == nil, "and no kit drift is reported for it")
+        }
+        // A long failure wraps inside the pane.
+        if let pane = tree.panes.first {
+            pane.debugShowLaunchFailure("✓ OpenAI — using stored OAuth credentials\nerror: request failed: 400 Bad Request: "
+                + "kit_artifacts: compose: kit \"code-server\" requires base agent \"claude\" but was composed with \"codex\"")
+            await wait(0.5)
+            snapshot(window, "kit-agents-failure")
+        }
     }
 
     // MARK: Chat model

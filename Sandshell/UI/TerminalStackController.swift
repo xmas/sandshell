@@ -747,8 +747,13 @@ final class TerminalStackController: NSViewController {
         statusLabel.alignment = .center
         statusLabel.textColor = .secondaryLabelColor
         statusLabel.font = .systemFont(ofSize: 15)
-        // Selectable so errors (e.g. sbx create failures) can be copied out.
+        // Selectable so errors (e.g. sbx create failures) can be copied out;
+        // long ones wrap within the pane instead of running off both sides.
         statusLabel.isSelectable = true
+        statusLabel.maximumNumberOfLines = 0
+        statusLabel.lineBreakMode = .byWordWrapping
+        statusLabel.cell?.wraps = true
+        statusLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         statusStack.orientation = .vertical
         statusStack.alignment = .centerX
         statusStack.spacing = 12
@@ -851,6 +856,8 @@ final class TerminalStackController: NSViewController {
             host.bottomAnchor.constraint(equalTo: frameView.bottomAnchor),
 
             statusStack.centerXAnchor.constraint(equalTo: frameView.centerXAnchor),
+            statusStack.widthAnchor.constraint(lessThanOrEqualTo: frameView.widthAnchor, constant: -48),
+            statusLabel.widthAnchor.constraint(lessThanOrEqualToConstant: 560),
             statusStack.centerYAnchor.constraint(equalTo: container.centerYAnchor),
         ])
         // Topmost: dims the pane while another one has focus (clicks pass through).
@@ -2055,6 +2062,7 @@ extension TerminalStackController {
 
     var debugReadoutFitting: String { claudeStats.debugFitting }
     var debugReadoutShown: Bool { !claudeStats.isHidden }
+    func debugShowLaunchFailure(_ message: String) { showLaunchFailure(message) }
     /// Self-test: pick a model in the readout, as its menu would.
     func debugPickModel(_ id: String?) { modelPicked(id) }
 

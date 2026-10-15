@@ -417,6 +417,13 @@ struct KitConfigView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 6) {
                         Text(kit.title).fontWeight(.medium)
+                        if case let agent?? = KitStore.requiredAgent(kit.ref) {
+                            Text("\(AgentKind(rawValue: agent).displayName) only")
+                                .font(.caption2.weight(.medium)).foregroundStyle(.secondary)
+                                .padding(.horizontal, 5).padding(.vertical, 1)
+                                .background(Color.secondary.opacity(0.12), in: Capsule())
+                                .help("Made for \(AgentKind(rawValue: agent).displayName): other agents' sandboxes leave it out.")
+                        }
                         if let entry = startup?.entries.first(where: { $0.ref == kit.ref }) {
                             statusPill(entry.outcome)
                         }
