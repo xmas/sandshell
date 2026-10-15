@@ -2,6 +2,11 @@
 
 A running log of what changed, newest first. Yes, we actually write these.
 
+## v0.2.24 — "Tables Turned"
+- **Tables read properly in chat.** A small table is a tidy grid in the chat's own font, header in bold over a rule. A wide one, with long cells, becomes one entry per row, its first cell as the heading and each column as a labelled line that wraps on its own. Bold, `code` and escaped pipes render in both, and it's all still selectable text. (Markdown previews in Files get the same tables.)
+- **The sea follows your pointer.** Move over the empty chat's sea creatures and the ones nearby color in and swim round in a bubble, no click needed. The sea now spans the whole empty chat, so bubbles aren't cut off at the edge.
+- **A long session name no longer runs over the toolbar.** It's cut short with an ellipsis instead of drawing across the status and the buttons beside it.
+
 ## v0.2.23 — "Same Model, Both Ways"
 - **A chat and a terminal agree on the model.** Claude chats now use the same model and effort menus as terminals, up in the pane's title strip, and start on the model you picked for the workspace — including ones the chat didn't list before, like Sonnet 5.5. Switching models picks the conversation right back up; effort changes take effect immediately.
 - **Usage in chat mode.** The context gauge, cost and model readout now show for chats too, same as terminals.
