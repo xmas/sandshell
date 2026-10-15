@@ -30,7 +30,7 @@ final class MainWindowController: NSWindowController {
     /// re-parent its shared subviews and leave the live item blank.
     private lazy var identityItemView: NSStackView = {
         for label in [toolbarName, toolbarSubtitle] {
-            label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+            label.setContentCompressionResistancePriority(.init(40), for: .horizontal)
             label.setContentHuggingPriority(.defaultLow, for: .horizontal)
         }
         let text = NSStackView(views: [toolbarName, toolbarSubtitle])
@@ -43,8 +43,14 @@ final class MainWindowController: NSWindowController {
         stack.spacing = 8
         // 200–360 pt, as wide as it can be: a long session name truncates
         // instead of blowing the whole toolbar into the overflow menu.
+        // Priorities sit under fittingSizeCompression (50), so the toolbar
+        // measures the item at its 200 pt minimum, yet once laid out the labels
+        // (40) truncate before they spill past the stack's edge (45) over the
+        // status and buttons beside it. Clipping is the last resort.
         stack.setHuggingPriority(.init(1), for: .horizontal)
-        stack.setClippingResistancePriority(.init(1), for: .horizontal)
+        stack.setClippingResistancePriority(.init(45), for: .horizontal)
+        text.setClippingResistancePriority(.init(45), for: .horizontal)
+        stack.clipsToBounds = true
         NSLayoutConstraint.activate([
             stack.widthAnchor.constraint(greaterThanOrEqualToConstant: 200),
             stack.widthAnchor.constraint(lessThanOrEqualToConstant: 360),
@@ -341,6 +347,16 @@ final class MainWindowController: NSWindowController {
     var debugToolbarWidths: (identity: CGFloat, status: CGFloat, visible: Int, items: Int) {
         (identityItemView.frame.width, toolbarStatus.frame.width,
          window?.toolbar?.visibleItems?.count ?? -1, window?.toolbar?.items.count ?? -1)
+    }
+    /// Self-test: set the toolbar's session name, then the name label's width
+    /// against the identity item's.
+    func debugToolbarName(_ name: String) -> (label: CGFloat, identity: CGFloat) {
+        toolbarName.stringValue = name
+        identityItemView.layoutSubtreeIfNeeded()
+        // The alignment rect: a label's frame runs 2 pt past its text each side.
+        let text = toolbarName.alignmentRect(forFrame: toolbarName.frame)
+        let label = toolbarName.superview?.convert(text, to: identityItemView) ?? text
+        return (label.maxX, identityItemView.bounds.width)
     }
     #endif
     var inspectorFiles: FilesPaneController? { filesPane }
