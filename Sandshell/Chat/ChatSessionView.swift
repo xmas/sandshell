@@ -162,9 +162,11 @@ final class ChatSessionView: NSView {
             addSubview(v)
         }
         NSLayoutConstraint.activate([
-            emptyState.centerXAnchor.constraint(equalTo: transcript.centerXAnchor),
-            emptyState.centerYAnchor.constraint(equalTo: transcript.centerYAnchor),
-            emptyState.widthAnchor.constraint(lessThanOrEqualTo: transcript.widthAnchor, constant: -48),
+            // Edge to edge over the transcript: the sea is full bleed.
+            emptyState.topAnchor.constraint(equalTo: transcript.topAnchor),
+            emptyState.bottomAnchor.constraint(equalTo: transcript.bottomAnchor),
+            emptyState.leadingAnchor.constraint(equalTo: transcript.leadingAnchor),
+            emptyState.trailingAnchor.constraint(equalTo: transcript.trailingAnchor),
         ])
         NSLayoutConstraint.activate([
             transcript.topAnchor.constraint(equalTo: topAnchor),
@@ -354,8 +356,7 @@ private struct ChatEmptyState: View {
     let folder: String
 
     var body: some View {
-        VStack(spacing: 14) {
-            SeaField()
+        SeaBackdrop {
             VStack(spacing: 14) {
                 Text("What should \(agent) work on?")
                     .font(.title3.weight(.medium))
@@ -367,7 +368,7 @@ private struct ChatEmptyState: View {
                     .frame(maxWidth: 360)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            .allowsHitTesting(false)
+            .padding(.horizontal, 24)
             .accessibilityElement(children: .combine)
         }
     }

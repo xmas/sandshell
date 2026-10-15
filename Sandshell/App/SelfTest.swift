@@ -96,6 +96,7 @@ enum SelfTest {
         case "fork": await fork(window)
         case "links": links()
         case "tool-groups": await toolGroups()
+        case "tables": await tables()
         case "sea": await sea(window)
         case "title-strip": await titleStrip(window)
         case "follow": await follow(window)
@@ -1484,11 +1485,13 @@ enum SelfTest {
             snapshot(window, "sea-empty-chat")
         }
         for (name, look) in [("light", NSAppearance.Name.aqua), ("dark", .darkAqua)] {
-            for splash in [nil, CGPoint(x: 200, y: 84)] as [CGPoint?] {
-                let host = NSHostingView(rootView: SeaField(initialSplash: splash).padding(10)
+            for splash in [nil, CGPoint(x: 40, y: 20)] as [CGPoint?] {
+                let host = NSHostingView(rootView: SeaBackdrop(initialSplash: splash) {
+                        Text("What should Claude work on?").font(.title3.weight(.medium)).foregroundStyle(.secondary)
+                    }
                     .background(Color(nsColor: .textBackgroundColor)))
                 host.appearance = NSAppearance(named: look)
-                host.frame = NSRect(origin: .zero, size: host.fittingSize)
+                host.frame = NSRect(x: 0, y: 0, width: 520, height: 300)
                 let w = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
                 w.isReleasedWhenClosed = false
                 w.alphaValue = 0
@@ -1549,6 +1552,45 @@ enum SelfTest {
         host.close()
     }
 
+    // MARK: Tables
+
+    /// Markdown tables: a small one is a grid in the prose face; a wide one
+    /// becomes a record per row. Either way, no stray ** or table pipes.
+    private static func tables() async {
+        let small = """
+            | Size | Price | Note |
+            |------|------:|------|
+            | S | $1 | **cheap** |
+            | XL | $120 | `big` |
+            """
+        let wide = """
+            What each one is
+
+            | | **Unsloth Studio** | **Hatch** (`feat/approval-gate`) |
+            |---|---|---|
+            | **Problem** | A local model runs shell and Python tool calls on the user's machine. Contain the blast radius. | A sandboxed agent (Docker `sbx`) needs host-native tools (xcodebuild, GUI automation, screen capture). Control what crosses the boundary. |
+            | **Where the boundary sits** | Around the tool process, on the same machine as the user's files. | Between the sandbox and the host, at the MCP `tools/call` layer. |
+            | **Default posture** | Run, but confined. | Ask, except for inspect-only tools. If no approver answers within 120 s, deny. |
+            | **Escaped \\| pipe** | a \\| b | |
+            """
+        let view = ChatTranscriptView(frame: NSRect(x: 0, y: 0, width: 720, height: 560))
+        let host = NSWindow(contentRect: view.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        host.isReleasedWhenClosed = false
+        host.alphaValue = 0
+        host.contentView = view
+        view.update([.agentText(id: "s", text: small), .agentText(id: "w", text: wide)])
+        await wait(0.4)
+        let text = view.debugText
+        log("rendered:\n\(text)")
+        check(!text.contains("**") && !text.contains("|---"), "no raw Markdown in tables")
+        check(text.contains("S\t$1\tcheap") && text.contains("Size\tPrice\tNote"), "a small table is a grid on tab stops")
+        check(text.contains("Problem\nUnsloth Studio\tA local model runs"), "a wide table reads as records: heading, then labelled values")
+        check(text.contains("Hatch (feat/approval-gate)\tA sandboxed agent"), "labels keep their inline code")
+        check(text.contains("Escaped | pipe") && text.contains("a | b"), "escaped pipes stay in their cell")
+        snapshot(view, "tables")
+        host.close()
+    }
+
     // MARK: Title strip
 
     /// A Claude readout beside the context chips: as the window narrows the
@@ -1556,7 +1598,7 @@ enum SelfTest {
     /// (Uses a shell session with a fake status; the strip doesn't care.)
     private static func titleStrip(_ window: MainWindowController) async {
         guard let tree = window.paneTree, let ws = window.workspaceController,
-              let a = ws.orderedSessions.first, let w = window.window else { return log("need a session") }
+              let a = ws.orderedSessions.first(where: { $0.agent == .shell }), let w = window.window else { return log("need a shell session") }
         ws.selection = .session(a.id)
         check(await until(300) { tree.surfaces.terminals[a.id] != nil }, "session launches")
         await wait(1.0)
@@ -1589,6 +1631,11 @@ enum SelfTest {
             check(t.visible == t.items && t.identity >= 199 && t.identity <= 361,
                   "at \(Int(width)) the toolbar fits every item; the identity flexes within 200–360")
         }
+        // A long session name truncates inside the identity item instead of
+        // drawing over the status and buttons beside it.
+        let long = window.debugToolbarName("https://unsloth.ai/docs/new/studio/sandboxing-in-unsloth compare what they're doing to what we're doing.")
+        log("long name: label ends at \(Int(long.label)) of \(Int(long.identity))")
+        check(long.label <= long.identity + 1 && long.identity <= 361, "a long session name stays inside the identity item")
         // A narrow split pane: the readout is down to its model chooser.
         tree.split(pane, edge: .trailing, showing: nil)
         await measure("split", folderAtLeast: 80)

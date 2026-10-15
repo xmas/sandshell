@@ -1,24 +1,31 @@
 import SwiftUI
 
-/// The empty chat's sea: a quiet field of sea creatures in black and white.
-/// Click it and the ones near the click take on color and swim round it in a
-/// bubble for a moment, then drift home and fade back to gray. Nothing moves
-/// until then; under Reduce Motion they only color in.
+/// The empty chat's sea: a quiet band of sea creatures in black and white.
+/// Pass the pointer over them and the ones near it take on color and swim round
+/// it in a bubble for a moment, then drift home and fade back to gray. The
+/// field fills its whole frame (bubbles reach past the band to the pane's
+/// edges); the creatures rest in `band`. Nothing moves until then; under Reduce
+/// Motion they only color in.
 struct SeaField: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
-    /// Self-tests: start with a click here (then nothing else moves on its own).
+    /// Where the creatures rest, in this view's coordinates (`size` big).
+    var band: CGRect
+    /// Self-tests: start with a splash here, in band coordinates.
     var initialSplash: CGPoint?
 
-    private struct Splash { let point: CGPoint; let start: Date }
+    /// A bubble and the creatures it caught (each swims in one at a time).
+    private struct Splash { let point: CGPoint; let start: Date; let members: Set<Int> }
     @State private var splashes: [Splash] = []
+    @State private var lastSpawn: CGPoint?
 
-    private static let size = CGSize(width: 400, height: 168)
+    static let size = CGSize(width: 400, height: 168)
     private static let swim: Double = 1.2      // seconds in the bubble
     private static let settle: Double = 0.7    // back home and fading to gray
-    private static let reach: Double = 74      // how far a click reaches
+    private static let reach: Double = 74      // how far the pointer reaches
+    private static let stride: Double = 36     // pointer travel between bubbles
 
-    /// Where each creature rests, scattered over a loose grid.
+    /// Where each creature rests, scattered over a loose grid (band coordinates).
     private struct Creature { let glyph: String; let home: CGPoint; let size: Double; let seed: Double }
     private static let creatures: [Creature] = {
         let glyphs = ["🐳", "🐬", "🐟", "🦀", "🐙", "🐠", "🦈", "🪼", "🐚", "🦑", "🐡", "🦞",
@@ -45,16 +52,38 @@ struct SeaField: View {
         TimelineView(.animation(minimumInterval: 1 / 60, paused: !animating)) { timeline in
             Canvas { context, _ in draw(in: context, now: timeline.date) }
         }
-        .frame(width: Self.size.width, height: Self.size.height)
         .contentShape(Rectangle())
-        .onTapGesture(coordinateSpace: .local) { splash(at: $0) }
-        .onAppear { if let p = initialSplash { splash(at: p) } }
-        .accessibilityLabel("Sea creatures")
-        .accessibilityHint("Click to stir them up")
+        .onContinuousHover(coordinateSpace: .local) { phase in
+            switch phase {
+            case .active(let point): hover(point)
+            case .ended: lastSpawn = nil
+            }
+        }
+        .onAppear {
+            if let p = initialSplash { spawn(at: CGPoint(x: p.x + band.minX, y: p.y + band.minY), force: true) }
+        }
+        .accessibilityHidden(true)
     }
 
-    private func splash(at point: CGPoint) {
-        let s = Splash(point: point, start: Date())
+    private func home(_ i: Int) -> CGPoint {
+        CGPoint(x: band.minX + Self.creatures[i].home.x, y: band.minY + Self.creatures[i].home.y)
+    }
+
+    /// A bubble wherever the pointer has travelled far enough since the last
+    /// one and finds creatures that aren't already swimming.
+    private func hover(_ point: CGPoint) {
+        if let last = lastSpawn, hypot(point.x - last.x, point.y - last.y) < Self.stride { return }
+        spawn(at: point, force: false)
+    }
+
+    private func spawn(at point: CGPoint, force: Bool) {
+        let busy = splashes.reduce(into: Set<Int>()) { $0.formUnion($1.members) }
+        let members = Set(Self.creatures.indices.filter {
+            !busy.contains($0) && hypot(home($0).x - point.x, home($0).y - point.y) < Self.reach
+        })
+        guard force || !members.isEmpty else { return }
+        lastSpawn = point
+        let s = Splash(point: point, start: Date(), members: members)
         splashes.append(s)
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.swim + Self.settle + 0.05) {
             splashes.removeAll { $0.start == s.start }
@@ -81,29 +110,28 @@ struct SeaField: View {
         }
 
         for (i, c) in Self.creatures.enumerated() {
-            var point = c.home
+            let rest = home(i)
+            var point = rest
             var color = 0.0        // 0 = gray, 1 = full color
             var heading = -1.0     // emoji face left; -1 = as drawn, 1 = mirrored
-            for s in splashes {
-                let distance = hypot(c.home.x - s.point.x, c.home.y - s.point.y)
-                guard distance < Self.reach else { continue }
+            if let s = splashes.last(where: { $0.members.contains(i) }) {
                 let age = now.timeIntervalSince(s.start)
                 // Color in fast, hold, fade back out once home.
-                let fade = age < Self.swim ? min(1, age / 0.15) : max(0, 1 - (age - Self.swim) / Self.settle)
-                color = max(color, fade)
-                guard !reduceMotion else { continue }
-                // Into an orbit round the click, a lap or so, then home again.
-                let orbit = Self.reach * (0.3 + 0.35 * c.seed)
-                let start = atan2(c.home.y - s.point.y, c.home.x - s.point.x)
-                let angle = start + age * (2.2 + c.seed) * (i % 2 == 0 ? 1 : -1)
-                let target = CGPoint(x: s.point.x + cos(angle) * orbit, y: s.point.y + sin(angle) * orbit * 0.8)
-                let into = Self.easeInOut(min(1, age / 0.35))
-                let out = Self.easeInOut(max(0, min(1, (age - Self.swim) / Self.settle)))
-                let mix = into * (1 - out)
-                point = CGPoint(x: c.home.x + (target.x - c.home.x) * mix, y: c.home.y + (target.y - c.home.y) * mix)
-                // Face the way it's swimming round.
-                let vx = -sin(angle) * (i % 2 == 0 ? 1 : -1)
-                if mix > 0.2 { heading = vx > 0 ? 1 : -1 }
+                color = age < Self.swim ? min(1, age / 0.15) : max(0, 1 - (age - Self.swim) / Self.settle)
+                if !reduceMotion {
+                    // Into an orbit round the pointer, a lap or so, then home again.
+                    let orbit = Self.reach * (0.3 + 0.35 * c.seed)
+                    let start = atan2(rest.y - s.point.y, rest.x - s.point.x)
+                    let angle = start + age * (2.2 + c.seed) * (i % 2 == 0 ? 1 : -1)
+                    let target = CGPoint(x: s.point.x + cos(angle) * orbit, y: s.point.y + sin(angle) * orbit * 0.8)
+                    let into = Self.easeInOut(min(1, age / 0.35))
+                    let out = Self.easeInOut(max(0, min(1, (age - Self.swim) / Self.settle)))
+                    let mix = into * (1 - out)
+                    point = CGPoint(x: rest.x + (target.x - rest.x) * mix, y: rest.y + (target.y - rest.y) * mix)
+                    // Face the way it's swimming round.
+                    let vx = -sin(angle) * (i % 2 == 0 ? 1 : -1)
+                    if mix > 0.2 { heading = vx > 0 ? 1 : -1 }
+                }
             }
             var g = context
             g.translateBy(x: point.x, y: point.y)
@@ -124,6 +152,33 @@ struct SeaField: View {
 
     private static func easeOut(_ t: Double) -> Double { 1 - pow(1 - t, 3) }
     private static func easeInOut(_ t: Double) -> Double { t < 0.5 ? 4 * t * t * t : 1 - pow(-2 * t + 2, 3) / 2 }
+}
+
+/// The empty chat: the sea's band above the prompt, the sea itself spread over
+/// the whole pane so bubbles never meet an edge.
+struct SeaBackdrop<Content: View>: View {
+    var initialSplash: CGPoint?
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        VStack(spacing: 14) {
+            Color.clear
+                .frame(width: SeaField.size.width, height: SeaField.size.height)
+                .anchorPreference(key: SeaBandKey.self, value: .bounds) { $0 }
+            content.allowsHitTesting(false)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .backgroundPreferenceValue(SeaBandKey.self) { anchor in
+            GeometryReader { proxy in
+                if let anchor { SeaField(band: proxy[anchor], initialSplash: initialSplash) }
+            }
+        }
+    }
+}
+
+private struct SeaBandKey: PreferenceKey {
+    static let defaultValue: Anchor<CGRect>? = nil
+    static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) { value = value ?? nextValue() }
 }
 
 /// Small deterministic generator, so the field looks the same every time.
