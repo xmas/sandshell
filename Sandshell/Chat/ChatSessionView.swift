@@ -215,12 +215,18 @@ final class ChatSessionView: NSView {
             }
             self.showPhase(phase)
         }.store(in: &bag)
-        session.$usage.sink { [weak self] in self?.showUsage($0) }.store(in: &bag)
+        // A Claude chat's usage and model live in the pane's title-strip readout.
+        session.$usage.sink { [weak self] in
+            guard let self, self.session.agent != .claude else { return }
+            self.showUsage($0)
+        }.store(in: &bag)
         session.$modes.combineLatest(session.$currentMode).sink { [weak self] modes, current in
             self?.fill(self?.modePopup, modes, current)
         }.store(in: &bag)
         session.$models.combineLatest(session.$currentModel).sink { [weak self] models, current in
-            self?.fill(self?.modelPopup, models, current)
+            guard let self else { return }
+            self.fill(self.modelPopup, models, current)
+            if self.session.agent == .claude { self.modelPopup.isHidden = true }
         }.store(in: &bag)
     }
 

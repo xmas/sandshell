@@ -100,6 +100,7 @@ enum SelfTest {
         case "title-strip": await titleStrip(window)
         case "follow": await follow(window)
         case "reconnect": await reconnect(window)
+        case "chat-model": await chatModel(window)
         case "open-quickly": await openQuickly()
         case "files": await files(window)
         case "files-relaunch": await filesRelaunch(window)
@@ -1201,6 +1202,44 @@ enum SelfTest {
             check(c.brightnessComponent > 0.25 && c.saturationComponent > 0.2, "the selected row is accent-colored, not black")
         }
         host.close()
+    }
+
+    // MARK: Chat model
+
+    /// A Claude chat runs the workspace's model (even one the adapter's own
+    /// list lacks), shows the title-strip readout, and picking a model there
+    /// relaunches it on that model with the conversation. Two tiny turns.
+    private static func chatModel(_ window: MainWindowController) async {
+        guard let tree = window.paneTree, let ws = window.workspaceController else { return log("no window") }
+        ws.setClaudeModel("claude-sonnet-5-5")
+        guard let s = ws.newChatInCurrentContext() else { return log("no folder to start a chat in") }
+        func chat() -> ChatSession? { tree.surfaces.chats[s.id]?.session }
+        func said(_ c: ChatSession) -> String {
+            c.items.compactMap { if case .agentText(_, let t) = $0 { t } else { nil } }.joined(separator: "\n")
+        }
+        check(await until(600) { chat()?.phase == .ready }, "chat reaches ready")
+        guard let first = chat() else { return }
+        first.send(text: "Remember the word HERON. Reply with exactly the word OK.", attachments: [])
+        check(await until(180) { first.phase == .ready && said(first).contains("OK") }, "first reply")
+        check(await until(10) { first.liveModel != nil }, "the chat reports its model")
+        log("live model: \(first.liveModel ?? "-"), usage \(String(describing: first.usage))")
+        check(first.liveModel.map { ClaudePriceBook.normalize($0) } == "claude-sonnet-5-5",
+              "it answers on the workspace's model, Sonnet 5.5")
+        guard let pane = tree.panes.first(where: { $0.shownSession == s.id }) else { return check(false, "a pane shows the chat") }
+        check(pane.debugReadoutShown, "the title strip shows the Claude readout for the chat")
+        log(pane.debugReadoutFitting)
+        snapshot(window, "chat-model-sonnet")
+
+        pane.debugPickModel("claude-haiku-4-5")
+        check(ws.claudeModel == "claude-haiku-4-5", "the pick is the workspace's model")
+        check(await until(180) { chat() !== first && chat()?.phase == .ready }, "the chat relaunches")
+        guard let second = chat() else { return }
+        second.send(text: "What word did I ask you to remember? Reply with just the word.", attachments: [])
+        check(await until(180) { second.phase == .ready && said(second).contains("HERON") }, "with its conversation")
+        check(await until(10) { second.liveModel.map { ClaudePriceBook.normalize($0).hasPrefix("claude-haiku-4-5") } ?? false },
+              "and answers on Haiku 4.5 (\(second.liveModel ?? "-"))")
+        snapshot(window, "chat-model-haiku")
+        ws.setClaudeModel(nil)
     }
 
     // MARK: Reconnect

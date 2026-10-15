@@ -88,6 +88,10 @@ final class ChatSession: ObservableObject {
         didSet {
             if (oldValue == .running) != (phase == .running) { onWorkingChange?(phase == .running) }
             if phase != .starting { isCatchingUp = false }
+            if oldValue == .running, phase == .ready, let next = afterTurn {
+                afterTurn = nil
+                DispatchQueue.main.async { next() }
+            }
             if case .closed(let why) = phase, oldValue != phase { onClosed?(why) }
         }
     }
@@ -97,7 +101,16 @@ final class ChatSession: ObservableObject {
     @Published private(set) var models: [Choice] = []
     @Published private(set) var currentModel: String?
     /// Context window fill and session cost, from `usage_update`.
-    @Published private(set) var usage: Usage?
+    @Published private(set) var usage: Usage? { didSet { onUsage?() } }
+    /// The model the agent last answered with (the adapter's `_claude/model`).
+    private(set) var liveModel: String?
+    /// The workspace's model and effort this agent was launched with (Claude).
+    let launchModel: String?
+    private(set) var launchEffort: String?
+    /// Usage or the live model changed (the pane's Claude readout follows).
+    var onUsage: (() -> Void)?
+    /// Run once when the current turn ends (a model change waiting to relaunch).
+    var afterTurn: (() -> Void)?
     /// Slash commands and skills the agent advertises (`available_commands_update`).
     struct Command: Equatable { let name: String; let description: String; let hint: String? }
     @Published private(set) var commands: [Command] = []
@@ -139,7 +152,7 @@ final class ChatSession: ObservableObject {
     private let home: String
     private let mcpURL: URL?
     private var connection: ACPConnection?
-    private var sessionID: String?
+    private(set) var sessionID: String?
     private var pumpTask: Task<Void, Never>?
     /// The model list came as ACP's older `models` field (Gemini CLI), which is
     /// switched with `session/set_model` rather than a config option.
@@ -168,7 +181,9 @@ final class ChatSession: ObservableObject {
 
     init(title: String, agent: AgentKind = .claude, containerName: String, workdir: String, home: String,
          mcpURL: URL?, resumeID: String? = nil, sbxProxyAuth: Bool = false, sessionID: UUID = UUID(),
-         unavailable: String? = nil) {
+         unavailable: String? = nil, model: String? = nil, effort: String? = nil) {
+        self.launchModel = model
+        self.launchEffort = effort
         self.title = title
         self.agent = agent
         self.unavailable = unavailable
@@ -192,7 +207,8 @@ final class ChatSession: ObservableObject {
             return
         }
         guard let args = SbxCommand.acpArguments(agent: agent, containerName: containerName, workdir: workdir,
-                                                 home: home, mcpURL: mcpURL, sbxProxyAuth: sbxProxyAuth, tag: tag)
+                                                 home: home, mcpURL: mcpURL, sbxProxyAuth: sbxProxyAuth, tag: tag,
+                                                 claudeModel: agent == .claude ? launchModel : nil)
         else {
             phase = .closed("\(title) can’t run as a chat (no ACP support).")
             return
@@ -218,6 +234,16 @@ final class ChatSession: ObservableObject {
                 applyModes(result["modes"])
                 applyModels(result["models"])
                 applyConfig(result["configOptions"])
+                // The workspace's effort, like a terminal's `--effort` (Claude).
+                if agent == .claude, let effort = launchEffort, let sid = sessionID {
+                    do {
+                        let r = try await conn.request("session/set_config_option", [
+                            "sessionId": .string(sid), "configId": "effort", "value": .string(effort)])
+                        applyConfig(r["configOptions"])
+                    } catch {
+                        Log.info(.sbx, "chat: couldn't set effort \(effort): \(error.localizedDescription)")
+                    }
+                }
                 if let sid = sessionID { onSessionID?(sid) }
                 phase = .ready
                 startFollowing()
@@ -421,6 +447,22 @@ final class ChatSession: ObservableObject {
         }
     }
 
+    /// Claude's effort level, live (`nil` = Claude's default).
+    func setEffort(_ level: String?) {
+        launchEffort = level
+        onUsage?()
+        guard let conn = connection, let sid = sessionID else { return }
+        Task {
+            do {
+                let r = try await conn.request("session/set_config_option", [
+                    "sessionId": .string(sid), "configId": "effort", "value": .string(level ?? "default")])
+                applyConfig(r["configOptions"])
+            } catch {
+                notice("Couldn’t change the effort level: \(error.localizedDescription)", isError: true)
+            }
+        }
+    }
+
     func setMode(_ id: String) {
         guard let conn = connection, let sid = sessionID else { return }
         currentMode = id
@@ -599,6 +641,7 @@ final class ChatSession: ObservableObject {
                 items.append(.user(id: UUID(), text: text, attachments: []))
             }
         case "usage_update":
+            if let model = u["_meta"]?["_claude/model"]?.string { liveModel = model }
             if let used = u["used"]?.int, let size = u["size"]?.int {
                 usage = Usage(used: used, size: size, cost: u["cost"]?["amount"]?.double)
             }

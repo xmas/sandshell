@@ -71,6 +71,9 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
         surfaces.onTerminalExit = { [weak self] id in
             self?.panes.filter { $0.shownSession == id }.forEach { $0.terminalRuntimeDidExit(id) }
         }
+        surfaces.onChatStatus = { [weak self] id in
+            self?.panes.filter { $0.shownSession == id }.forEach { $0.updateClaudeStats(id) }
+        }
         surfaces.onChatAgentExit = { [weak self] id in
             self?.panes.first { $0.shownSession == id }?.chatAgentExited(id)
         }

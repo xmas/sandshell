@@ -246,14 +246,20 @@ enum SbxCommand {
 
     /// `sbx` argv for a chat session: the agent's ACP entry point over plain
     /// stdio (`-i`, no TTY). Nil when the agent has no ACP support.
+    /// `claudeModel`: the workspace's model for a Claude chat — the adapter
+    /// starts on it (`ANTHROPIC_MODEL`) and lists it even when its own catalog
+    /// lacks it (`ANTHROPIC_CUSTOM_MODEL_OPTION`), so chats run what terminals do.
     static func acpArguments(agent: AgentKind = .claude, containerName: String, workdir: String,
                              home: String, mcpURL: URL?, sbxProxyAuth: Bool = false,
-                             tag: ProcessTag? = nil) -> [String]? {
+                             tag: ProcessTag? = nil, claudeModel: String? = nil) -> [String]? {
         guard let program = acpProgram(for: agent, sbxProxyAuth: sbxProxyAuth) else { return nil }
         var args = ["exec", "-i"]
         if !workdir.isEmpty { args += ["-w", workdir] }
         args += [containerName, "env", "-u", "MCP_GATEWAY_URL"]
         args += envPairs(home: home, mcpURL: mcpURL, claude: nil, tag: tag)
+        if agent == .claude, let model = claudeModel, !model.isEmpty {
+            args += ["ANTHROPIC_MODEL=\(model)", "ANTHROPIC_CUSTOM_MODEL_OPTION=\(model)"]
+        }
         args += ["bash", "-c", pathSetup + " " + program]
         return args
     }

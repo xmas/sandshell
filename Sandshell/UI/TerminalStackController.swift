@@ -257,6 +257,8 @@ final class SessionSurfaces {
     var onTerminalExit: (UUID) -> Void = { _ in }
     /// A chat's agent exited on its own (routed to the pane showing it).
     var onChatAgentExit: (UUID) -> Void = { _ in }
+    /// A chat's usage or model changed (routed to the pane showing it).
+    var onChatStatus: (UUID) -> Void = { _ in }
     /// When each chat was last reconnected without being asked (at most once a minute).
     var lastAutoReconnect: [UUID: Date] = [:]
 
@@ -1216,15 +1218,38 @@ final class TerminalStackController: NSViewController {
 
     /// Title-strip readout: shown for Claude sessions only; numbers fill in as
     /// status reports arrive, the model falls back to the workspace's choice.
-    private func updateClaudeStats(_ id: UUID) {
+    func updateClaudeStats(_ id: UUID) {
         guard let session = controller.session(id: id) else { return }
-        // Chat sessions show context/cost in their own footer (from ACP usage).
-        claudeStats.isHidden = session.agent != .claude || session.isChat
+        // A chat reports through ACP (usage updates, the model it answered
+        // with); a terminal through Claude Code's status line. Same readout.
+        let chat = session.isChat ? chats[id]?.session : nil
+        claudeStats.isHidden = session.agent != .claude || (session.isChat && chat == nil)
         claudeStatsCollapsed.isActive = claudeStats.isHidden
-        guard session.agent == .claude, !session.isChat else { return }
-        claudeStats.update(status: controller.claudeStatus(id), defaultModel: controller.claudeModel,
-                           defaultEffort: controller.claudeEffort)
+        guard session.agent == .claude else { return }
+        if let chat {
+            claudeStats.update(status: Self.chatStatus(chat), defaultModel: chat.launchModel,
+                               defaultEffort: chat.launchEffort)
+        } else if !session.isChat {
+            claudeStats.update(status: controller.claudeStatus(id), defaultModel: controller.claudeModel,
+                               defaultEffort: controller.claudeEffort)
+        }
         shareTitleStrip()
+    }
+
+    /// A chat's readout, in the status line's terms.
+    private static func chatStatus(_ chat: ChatSession) -> ClaudeSessionStatus {
+        var status = ClaudeSessionStatus()
+        status.sessionID = chat.sessionID
+        if let model = chat.liveModel ?? chat.launchModel {
+            status.model = .init(id: model, displayName: ClaudeModelChoice.title(forID: ClaudePriceBook.normalize(model)))
+        }
+        if let effort = chat.launchEffort { status.effort = .init(level: effort) }
+        if let usage = chat.usage, usage.size > 0 {
+            status.contextWindow = .init(contextWindowSize: usage.size,
+                                         usedPercentage: Double(usage.used) / Double(usage.size) * 100)
+        }
+        if let cost = chat.usage?.cost { status.cost = .init(totalCostUSD: cost) }
+        return status
     }
 
     /// Shown while the session has background tasks running, or finished ones
@@ -1266,6 +1291,18 @@ final class TerminalStackController: NSViewController {
     /// we never type `/model` into the PTY).
     private func modelPicked(_ modelID: String?) {
         controller.setClaudeModel(modelID)
+        // A chat takes its model at launch too: relaunch it (resuming the
+        // conversation) — now, or when the current turn ends.
+        if let id = activeSessionID, let chat = chats[id]?.session {
+            defer { updateClaudeStats(id) }
+            guard ClaudePriceBook.normalize(modelID ?? "") != ClaudePriceBook.normalize(chat.launchModel ?? "") else { return }
+            if case .running = chat.phase {
+                chat.afterTurn = { [weak self] in self?.reconnectChat(id) }
+            } else {
+                reconnectChat(id)
+            }
+            return
+        }
         offerClaudeRestart(changed: modelID != liveClaudeStatus?.model?.id,
                            title: "Restart with \(ClaudeModelChoice.title(forID: modelID))?",
                            what: "model")
@@ -1274,6 +1311,12 @@ final class TerminalStackController: NSViewController {
     /// Effort chooser: same deal as the model — fixed at launch via `--effort`.
     private func effortPicked(_ level: String?) {
         controller.setClaudeEffort(level)
+        // A chat changes effort live.
+        if let id = activeSessionID, let chat = chats[id]?.session {
+            chat.setEffort(level)
+            updateClaudeStats(id)
+            return
+        }
         offerClaudeRestart(changed: level != liveClaudeStatus?.effort?.level,
                            title: "Restart with \(ClaudeEffortChoice.title(forID: level)) effort?",
                            what: "effort level")
@@ -1495,10 +1538,13 @@ final class TerminalStackController: NSViewController {
                                    containerName: containerName,
                                    workdir: current.workdir, home: controller.home.path,
                                    mcpURL: controller.mcpURL, resumeID: resumeID, sbxProxyAuth: proxyAuth,
-                                   sessionID: id, unavailable: unavailable)
+                                   sessionID: id, unavailable: unavailable,
+                                   model: current.agent == .claude ? controller.claudeModel : nil,
+                                   effort: current.agent == .claude ? controller.claudeEffort : nil)
             chat.onSessionID = { [controller] sid in controller.setTranscriptID(id, sid) }
             chat.onClosed = { [controller] why in controller.setStopped(id, why) }
             chat.onUnexpectedExit = { [surfaces] in surfaces.onChatAgentExit(id) }
+            chat.onUsage = { [surfaces] in surfaces.onChatStatus(id) }
             controller.setStopped(id, nil)
             var lastPrompt: String?
             chat.onPrompt = { [controller] prompt in
@@ -2008,6 +2054,9 @@ extension TerminalStackController {
     }
 
     var debugReadoutFitting: String { claudeStats.debugFitting }
+    var debugReadoutShown: Bool { !claudeStats.isHidden }
+    /// Self-test: pick a model in the readout, as its menu would.
+    func debugPickModel(_ id: String?) { modelPicked(id) }
 
     /// Self-test: the strip's width, the folder chip's, and the readout's.
     var debugTitleStripWidths: (strip: CGFloat, folder: CGFloat, folderWanted: CGFloat, readout: CGFloat, budget: CGFloat) {
