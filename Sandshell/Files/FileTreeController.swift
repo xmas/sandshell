@@ -94,7 +94,7 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
         let footer = NSStackView(views: [sandboxButton, branchLabel])
         footer.orientation = .vertical
         footer.alignment = .leading
-        footer.spacing = 3
+        footer.spacing = 5
         updateSandboxLine()
 
         changedButton.setButtonType(.pushOnPushOff)
@@ -113,18 +113,21 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
             root.addSubview(v)
         }
         NSLayoutConstraint.activate([
-            filter.topAnchor.constraint(equalTo: root.topAnchor, constant: 8),
+            // Below the window's toolbar (the inspector runs under it), the filter
+            // on a row of its own, the changed-files toggle beneath it.
+            filter.topAnchor.constraint(equalTo: root.safeAreaLayoutGuide.topAnchor, constant: 8),
             filter.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 8),
-            filter.trailingAnchor.constraint(equalTo: changedButton.leadingAnchor, constant: -6),
-            changedButton.centerYAnchor.constraint(equalTo: filter.centerYAnchor),
-            changedButton.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -8),
-            scroll.topAnchor.constraint(equalTo: filter.bottomAnchor, constant: 6),
+            filter.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -8),
+            changedButton.topAnchor.constraint(equalTo: filter.bottomAnchor, constant: 6),
+            changedButton.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 8),
+            changedButton.trailingAnchor.constraint(lessThanOrEqualTo: root.trailingAnchor, constant: -8),
+            scroll.topAnchor.constraint(equalTo: changedButton.bottomAnchor, constant: 6),
             scroll.leadingAnchor.constraint(equalTo: root.leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: root.trailingAnchor),
-            footer.topAnchor.constraint(equalTo: scroll.bottomAnchor, constant: 4),
+            footer.topAnchor.constraint(equalTo: scroll.bottomAnchor, constant: 8),
             footer.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 10),
             footer.trailingAnchor.constraint(lessThanOrEqualTo: root.trailingAnchor, constant: -10),
-            footer.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -6),
+            footer.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -12),
             branchLabel.widthAnchor.constraint(lessThanOrEqualTo: root.widthAnchor, constant: -20),
             sandboxButton.widthAnchor.constraint(lessThanOrEqualTo: root.widthAnchor, constant: -20),
         ])
@@ -224,8 +227,8 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
                 self.onGitStatus?(status)
             }
             let changed = status.changes.count
-            self.changedButton.title = changed > 0 ? "\(changed)" : ""
-            self.changedButton.imagePosition = changed > 0 ? .imageLeading : .imageOnly
+            self.changedButton.title = status.repoRoot == nil ? "No git" : changed > 0 ? "\(changed) changed" : "No changes"
+            self.changedButton.imagePosition = .imageLeading
             self.changedButton.isEnabled = status.repoRoot != nil
             self.changedButton.toolTip = status.repoRoot == nil ? "Not a git repository"
                 : "Show only changed files (\(changed))"
@@ -627,3 +630,10 @@ final class MatchCell: NSTableCellView {
         snippet.attributedStringValue = s
     }
 }
+
+#if DEBUG
+extension FileTreeController {
+    /// Self-test: the filter field's frame in window coordinates.
+    var debugFilterFrameInWindow: NSRect { filter.convert(filter.bounds, to: nil) }
+}
+#endif

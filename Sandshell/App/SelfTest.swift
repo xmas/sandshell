@@ -634,6 +634,17 @@ enum SelfTest {
         let saved = UserDefaults.standard.data(forKey: key).map { String(decoding: $0, as: UTF8.self) } ?? ""
         log("saved layout: \(saved)")
         check(saved.contains("\"files\"") && saved.contains(a.uuidString), "layout saved with the Files pane")
+
+        // The trailing inspector runs under the toolbar: its filter must sit below it.
+        window.toggleFiles()
+        await wait(0.8)
+        if let inspector = window.inspectorFiles, let w = window.window {
+            let filter = inspector.tree.debugFilterFrameInWindow
+            log("inspector filter \(filter), content layout \(w.contentLayoutRect)")
+            check(filter.maxY <= w.contentLayoutRect.maxY + 1, "the inspector's filter sits below the toolbar")
+            snapshot(window, "files-inspector")
+        }
+        window.toggleFiles()
     }
 
     /// Second launch after `files`: the Files pane comes back beside the session.
