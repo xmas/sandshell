@@ -2,6 +2,14 @@
 
 A running log of what changed, newest first. Yes, we actually write these.
 
+## v0.2.23 — "Same Model, Both Ways"
+- **A chat and a terminal agree on the model.** Claude chats now use the same model and effort menus as terminals, up in the pane's title strip, and start on the model you picked for the workspace — including ones the chat didn't list before, like Sonnet 5.5. Switching models picks the conversation right back up; effort changes take effect immediately.
+- **Usage in chat mode.** The context gauge, cost and model readout now show for chats too, same as terminals.
+- **Codex, Gemini and shell sandboxes no longer fail on the code-server kit.** Kits made for one agent (code-server needs Claude) are left out of other agents' sandboxes instead of breaking them, and the Kits pane marks them "Claude only". A long error now wraps inside the pane.
+- **The empty chat is a quiet sea** of black-and-white sea creatures. Click it and the ones nearby take on color and swim round in a bubble for a moment.
+- **Pasted images stay out of your project.** An image pasted into a terminal session is saved inside the sandbox now, not as a `paste-*.png` in your folder (chats never needed a file).
+- **Files reads better in a narrow pane:** the filter has its own row, clear of the toolbar, with the changed-files toggle ("33 changed") below it and more room around the footer.
+
 ## v0.2.22 — "Pick Up Where It Left Off"
 - **Chat is the default.** ⌘N and + ▸ New Claude / Codex / Gemini start a chat; the terminal versions live under + ▸ In Terminal. Each pane has its own Chat ⇄ Terminal switch in its title strip, same conversation either way.
 - **A chat follows a conversation that's still going elsewhere.** Open a conversation you're also having in the Claude app (or Claude Code in a terminal) and its new turns show up in Sandshell as they're written, under "Continued in the Claude app". When you reply from Sandshell, Claude reloads the conversation first so it knows what was said there; if the other app is still mid-answer, Sandshell asks before starting a second line of conversation alongside it.
