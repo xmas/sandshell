@@ -59,6 +59,9 @@ final class ChatSessionView: NSView {
         set { transcript.onOpenFile = newValue }
     }
 
+    /// Relaunch the agent on this conversation (the pane wires it).
+    var onReconnect: (() -> Void)?
+
     /// A reply's "Fork to New Chat" (the window wires it to the controller).
     var onFork: ((String) -> Void)? {
         get { transcript.onFork }
@@ -237,7 +240,10 @@ final class ChatSessionView: NSView {
             sendButton.title = "Stop"; sendButton.isEnabled = true
         case .closed(let why):
             statusLabel.stringValue = why
-            sendButton.title = "Send"; sendButton.isEnabled = false
+            // An agent that died on its own (e.g. over sleep) can come back.
+            let reconnect = session.canReconnect && onReconnect != nil
+            sendButton.title = reconnect ? "Reconnect" : "Send"
+            sendButton.isEnabled = reconnect
             composer.setEnabled(false)
         }
     }
@@ -310,7 +316,11 @@ final class ChatSessionView: NSView {
     }
 
     @objc private func sendOrStop() {
-        if case .running = session.phase { session.cancel() } else { composer.submitFromButton() }
+        switch session.phase {
+        case .running: session.cancel()
+        case .closed where session.canReconnect: onReconnect?()
+        default: composer.submitFromButton()
+        }
     }
 
     @objc private func permissionChosen(_ sender: NSButton) {

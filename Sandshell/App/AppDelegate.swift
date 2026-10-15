@@ -114,6 +114,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Patch PATH first so `sbx`/`docker`/`brew` resolve when launched from
         // Finder/Spotlight, and so libghostty's spawned subprocess inherits it.
         PathFixer.patchProcessPath()
+        SystemSleep.start()
         // Handle `sandshell://open?workspace=…&ro=…&rw=…` URLs from the CLI.
         // Must be registered before any queued events fire (right after launch).
         NSAppleEventManager.shared().setEventHandler(

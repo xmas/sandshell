@@ -71,6 +71,9 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
         surfaces.onTerminalExit = { [weak self] id in
             self?.panes.filter { $0.shownSession == id }.forEach { $0.terminalRuntimeDidExit(id) }
         }
+        surfaces.onChatAgentExit = { [weak self] id in
+            self?.panes.first { $0.shownSession == id }?.chatAgentExited(id)
+        }
         root = restoreLayout() ?? Node(.leaf(makePane()))
         // Focus the pane holding the selected session, if the layout has it.
         if case .session(let id)? = controller.selection, let holder = panes.first(where: { $0.shownSession == id }) {

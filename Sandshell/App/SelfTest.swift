@@ -97,6 +97,7 @@ enum SelfTest {
         case "links": links()
         case "title-strip": await titleStrip(window)
         case "follow": await follow(window)
+        case "reconnect": await reconnect(window)
         case "open-quickly": await openQuickly()
         case "files": await files(window)
         case "files-relaunch": await filesRelaunch(window)
@@ -1197,6 +1198,46 @@ enum SelfTest {
             check(c.brightnessComponent > 0.25 && c.saturationComponent > 0.2, "the selected row is accent-colored, not black")
         }
         host.close()
+    }
+
+    // MARK: Reconnect
+
+    /// A chat whose agent dies on its own (as over a long sleep) comes back by
+    /// itself with its conversation; a second death within the minute waits
+    /// for the Reconnect button. Uses the signed-in account (two tiny turns).
+    private static func reconnect(_ window: MainWindowController) async {
+        guard let tree = window.paneTree, let ws = window.workspaceController else { return log("no window") }
+        guard let s = ws.newChatInCurrentContext() else { return log("no folder to start a chat in") }
+        func view() -> ChatSessionView? { tree.surfaces.chats[s.id] }
+        func chat() -> ChatSession? { view()?.session }
+        func said(_ c: ChatSession) -> String {
+            c.items.compactMap { if case .agentText(_, let t) = $0 { t } else { nil } }.joined(separator: "\n")
+        }
+        check(await until(600) { chat()?.phase == .ready }, "chat reaches ready")
+        guard let first = chat() else { return }
+        first.send(text: "Remember the word OTTER. Reply with exactly the word OK.", attachments: [])
+        check(await until(180) { first.phase == .ready && said(first).contains("OK") }, "first reply")
+        let container = ws.containerName(for: s.containerAgentKind)
+        func killAgent() async {
+            await SbxClient.reapSessionProcessesAndWait(container: container, match: "SANDSHELL_SESSION=\(s.id.uuidString)")
+        }
+
+        await killAgent()
+        check(await until(30) { if case .closed = first.phase { true } else { false } }, "killing the agent closes the chat")
+        check(await until(120) { chat() !== first && chat()?.phase == .ready }, "the shown chat reconnects by itself")
+        guard let second = chat() else { return }
+        check(said(second).contains("OK"), "the reconnected chat has its conversation")
+        second.send(text: "What word did I ask you to remember? Reply with just the word.", attachments: [])
+        check(await until(180) { second.phase == .ready && said(second).contains("OTTER") }, "and the agent remembers it")
+
+        await killAgent()
+        check(await until(30) { if case .closed = second.phase { true } else { false } }, "a second death closes it again")
+        await wait(5)
+        check(chat() === second && second.needsReconnect, "within the minute it waits for Reconnect")
+        snapshot(window, "reconnect-button")
+        view()?.onReconnect?()
+        check(await until(120) { chat() !== second && chat()?.phase == .ready }, "Reconnect brings it back")
+        snapshot(window, "reconnect-final")
     }
 
     // MARK: Following another app

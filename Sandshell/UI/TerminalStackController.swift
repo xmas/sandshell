@@ -255,6 +255,10 @@ final class SessionSurfaces {
     var isShown: (UUID) -> Bool = { _ in false }
     /// A terminal's process exited (routed to the pane showing it).
     var onTerminalExit: (UUID) -> Void = { _ in }
+    /// A chat's agent exited on its own (routed to the pane showing it).
+    var onChatAgentExit: (UUID) -> Void = { _ in }
+    /// When each chat was last reconnected without being asked (at most once a minute).
+    var lastAutoReconnect: [UUID: Date] = [:]
 
     fileprivate lazy var runtime = TerminalRuntimeController(
         controller: controller,
@@ -875,6 +879,8 @@ final class TerminalStackController: NSViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
+        NotificationCenter.default.addObserver(self, selector: #selector(systemDidWake),
+                                               name: SystemSleep.didWake, object: nil)
         // Intercept Cmd+V (image paste) and Cmd+F (search) before AppTerminalView
         // processes them. Both actions need a focused terminal view to activate.
         // Must not use `?? event` here: returning nil is how we consume the event;
@@ -987,6 +993,9 @@ final class TerminalStackController: NSViewController {
         }
         if session.isChat {
             if terminals[id] != nil { dropTerminal(id) }   // switched terminal → chat
+            if let chat = chats[id], chat.session.needsReconnect, !SystemSleep.isAsleep, autoReconnect(id) {
+                return   // its agent died off screen (e.g. while the Mac slept): bring it back
+            }
             if let chat = chats[id] { showChat(id, chat) } else { launchChat(session) }
             return
         }
@@ -1489,6 +1498,7 @@ final class TerminalStackController: NSViewController {
                                    sessionID: id, unavailable: unavailable)
             chat.onSessionID = { [controller] sid in controller.setTranscriptID(id, sid) }
             chat.onClosed = { [controller] why in controller.setStopped(id, why) }
+            chat.onUnexpectedExit = { [surfaces] in surfaces.onChatAgentExit(id) }
             controller.setStopped(id, nil)
             var lastPrompt: String?
             chat.onPrompt = { [controller] prompt in
@@ -1507,6 +1517,7 @@ final class TerminalStackController: NSViewController {
                 }
             }
             let view = ChatSessionView(session: chat)
+            view.onReconnect = { [weak self] in self?.reconnectChat(id) }
             view.onOpenFile = { [weak self] url, line in self?.onOpenFileInFiles?(url, line) }
             view.onFork = { [weak self] reply in
                 guard let self else { return }
@@ -1560,6 +1571,40 @@ final class TerminalStackController: NSViewController {
         updateKitBanner()
         updateFocusRing()
         if isFocused { chat.focusComposer() }
+    }
+
+    // MARK: Reconnecting chats
+
+    /// A shown chat's agent exited on its own. While the Mac sleeps, wait for
+    /// the wake; otherwise relaunch it (sandbox up, conversation resumed).
+    func chatAgentExited(_ id: UUID) {
+        guard !SystemSleep.isAsleep, shownSession == id else { return }
+        _ = autoReconnect(id)
+    }
+
+    /// After a wake: the shown chat, if its agent died meanwhile.
+    @objc private func systemDidWake() {
+        guard let id = shownSession, chats[id]?.session.needsReconnect == true else { return }
+        _ = autoReconnect(id)
+    }
+
+    /// Reconnect without being asked, at most once a minute per chat (a chat
+    /// whose agent keeps dying waits for the Reconnect button instead).
+    private func autoReconnect(_ id: UUID) -> Bool {
+        if let last = surfaces.lastAutoReconnect[id], Date().timeIntervalSince(last) < 60 { return false }
+        surfaces.lastAutoReconnect[id] = Date()
+        reconnectChat(id)
+        return true
+    }
+
+    /// What switching to Terminal and back did by hand: drop the dead chat and
+    /// launch it again, resuming its conversation.
+    func reconnectChat(_ id: UUID) {
+        guard let session = controller.session(id: id), session.isChat, !pending.contains(id) else { return }
+        Log.info(.workspace, "reconnecting chat “\(session.name)”")
+        closeChat(id)
+        surfaces.launchFailures[id] = nil
+        launchChat(session)
     }
 
     private func closeChat(_ id: UUID) {

@@ -111,6 +111,14 @@ final class ChatSession: ObservableObject {
     var onPrompt: ((String) -> Void)?
     /// The agent stopped for good (not signed in, exited): why.
     var onClosed: ((String) -> Void)?
+    /// A ready agent's process went away on its own (e.g. the Mac slept and its
+    /// `sbx exec` connection died): relaunching would pick the conversation up.
+    var onUnexpectedExit: (() -> Void)?
+    /// Closed, but not for a reason a relaunch can't fix (no credentials, no
+    /// ACP): the chat can offer Reconnect.
+    private(set) var canReconnect = false
+    /// Down, and a relaunch would bring it back.
+    var needsReconnect: Bool { if case .closed = phase { canReconnect } else { false } }
 
     let title: String
     /// Which agent's ACP entry point runs (`SbxCommand.acpAgents`).
@@ -220,6 +228,7 @@ final class ChatSession: ObservableObject {
                 } else if case .closed = phase {
                     // The process already exited and said why.
                 } else {
+                    canReconnect = true
                     phase = .closed("Agent failed to start: \(launchError ?? error.localizedDescription)")
                 }
                 connection?.terminate()
@@ -556,10 +565,16 @@ final class ChatSession: ObservableObject {
         case .closed(let status):
             permission = nil
             if case .closed = phase { return }   // already explained (e.g. not signed in)
+            let wasUp = phase == .ready || phase == .running
+            canReconnect = true
             if let launchError {
                 phase = .closed(launchError.prefix(1).uppercased() + launchError.dropFirst())
             } else {
                 phase = .closed(status == 0 ? "The agent exited." : "The agent exited (\(status)).")
+            }
+            if wasUp, !isClosed {
+                Log.info(.sbx, "chat: agent for \(sessionID ?? "?") exited unexpectedly (\(status))")
+                onUnexpectedExit?()
             }
         }
     }
