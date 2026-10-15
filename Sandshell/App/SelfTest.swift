@@ -96,7 +96,7 @@ enum SelfTest {
         case "fork": await fork(window)
         case "links": links()
         case "tool-groups": await toolGroups()
-        case "dolphins": await dolphins(window)
+        case "sea": await sea(window)
         case "title-strip": await titleStrip(window)
         case "follow": await follow(window)
         case "reconnect": await reconnect(window)
@@ -1381,29 +1381,33 @@ enum SelfTest {
         snapshot(window, "follow-final")
     }
 
-    // MARK: Dolphins
+    // MARK: Sea
 
-    /// The empty chat's sea, light and dark, at a few moments.
-    private static func dolphins(_ window: MainWindowController) async {
+    /// The empty chat's sea at rest and stirred by a click, light and dark;
+    /// with a window, the real empty chat too.
+    private static func sea(_ window: MainWindowController) async {
         if let ws = window.workspaceController, let tree = window.paneTree, let s = ws.newChatInCurrentContext() {
             _ = await until(180) { tree.surfaces.chats[s.id] != nil }
             await wait(2)
-            snapshot(window, "dolphins-empty-chat")
+            snapshot(window, "sea-empty-chat")
         }
         for (name, look) in [("light", NSAppearance.Name.aqua), ("dark", .darkAqua)] {
-            let host = NSHostingView(rootView: DolphinPod().padding(10).background(Color(nsColor: .textBackgroundColor)))
-            host.appearance = NSAppearance(named: look)
-            host.frame = NSRect(origin: .zero, size: host.fittingSize)
-            let window = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
-            window.isReleasedWhenClosed = false
-            window.alphaValue = 0
-            window.contentView = host
-            window.orderBack(nil)
-            for frame in 0..<3 {
-                await wait(1.1)
-                snapshot(host, "dolphins-\(name)-\(frame)")
+            for splash in [nil, CGPoint(x: 200, y: 84)] as [CGPoint?] {
+                let host = NSHostingView(rootView: SeaField(initialSplash: splash).padding(10)
+                    .background(Color(nsColor: .textBackgroundColor)))
+                host.appearance = NSAppearance(named: look)
+                host.frame = NSRect(origin: .zero, size: host.fittingSize)
+                let w = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+                w.isReleasedWhenClosed = false
+                w.alphaValue = 0
+                w.contentView = host
+                w.orderBack(nil)
+                for (i, delay) in (splash == nil ? [0.3] : [0.25, 0.45, 0.45]).enumerated() {
+                    await wait(delay)
+                    snapshot(host, "sea-\(name)-\(splash == nil ? "rest" : "splash\(i)")")
+                }
+                w.close()
             }
-            window.close()
         }
         check(true, "rendered")
     }

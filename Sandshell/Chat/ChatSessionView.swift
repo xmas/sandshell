@@ -10,7 +10,7 @@ final class ChatSessionView: NSView {
     let session: ChatSession
 
     private let transcript = ChatTranscriptView()
-    /// Until the first message: a little sea of dolphins, and where this runs.
+    /// Until the first message: a sea of creatures, and where this runs.
     private lazy var emptyState = NSHostingView(rootView: ChatEmptyState(
         agent: session.title.capitalized, folder: (session.workdir as NSString).lastPathComponent))
     private let composer = ChatComposerView()
@@ -230,11 +230,8 @@ final class ChatSessionView: NSView {
         }.store(in: &bag)
     }
 
-    /// The empty chat's sea swims only while it's shown.
     private func showEmptyState(_ show: Bool) {
-        guard emptyState.isHidden == show else { return }
         emptyState.isHidden = !show
-        emptyState.rootView.swimming = show
     }
 
     private func showPhase(_ phase: ChatSession.Phase) {
@@ -351,26 +348,27 @@ final class ChatSessionView: NSView {
     }
 }
 
-/// An empty chat: a little sea of dolphins over what to do next.
+/// An empty chat: a sea of creatures to stir up, over what to do next.
 private struct ChatEmptyState: View {
     let agent: String
     let folder: String
-    var swimming = true
 
     var body: some View {
         VStack(spacing: 14) {
-            DolphinPod(paused: !swimming)
-            Text("What should \(agent) work on?")
-                .font(.title3.weight(.medium))
-                .foregroundStyle(.secondary)
-            Text("It works in \(folder), inside its sandbox. Type / for commands, @ to mention a file, or drop files here.")
-                .font(.callout)
-                .foregroundStyle(.tertiary)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 360)
-                .fixedSize(horizontal: false, vertical: true)
+            SeaField()
+            VStack(spacing: 14) {
+                Text("What should \(agent) work on?")
+                    .font(.title3.weight(.medium))
+                    .foregroundStyle(.secondary)
+                Text("It works in \(folder), inside its sandbox. Type / for commands, @ to mention a file, or drop files here.")
+                    .font(.callout)
+                    .foregroundStyle(.tertiary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 360)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .allowsHitTesting(false)
+            .accessibilityElement(children: .combine)
         }
-        .allowsHitTesting(false)
-        .accessibilityElement(children: .combine)
     }
 }
