@@ -96,6 +96,7 @@ enum SelfTest {
         case "fork": await fork(window)
         case "links": links()
         case "tool-groups": await toolGroups()
+        case "dolphins": await dolphins(window)
         case "title-strip": await titleStrip(window)
         case "follow": await follow(window)
         case "reconnect": await reconnect(window)
@@ -1182,6 +1183,7 @@ enum SelfTest {
         let finder = OpenQuicklyController(root: dir)
         let host = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 520, height: 360), styleMask: [.borderless],
                             backing: .buffered, defer: false)
+        host.isReleasedWhenClosed = false
         host.alphaValue = 0
         host.contentViewController = finder
         _ = await until(5) { finder.search("apy"); return !finder.results.isEmpty }
@@ -1340,6 +1342,33 @@ enum SelfTest {
         snapshot(window, "follow-final")
     }
 
+    // MARK: Dolphins
+
+    /// The empty chat's sea, light and dark, at a few moments.
+    private static func dolphins(_ window: MainWindowController) async {
+        if let ws = window.workspaceController, let tree = window.paneTree, let s = ws.newChatInCurrentContext() {
+            _ = await until(180) { tree.surfaces.chats[s.id] != nil }
+            await wait(2)
+            snapshot(window, "dolphins-empty-chat")
+        }
+        for (name, look) in [("light", NSAppearance.Name.aqua), ("dark", .darkAqua)] {
+            let host = NSHostingView(rootView: DolphinPod().padding(10).background(Color(nsColor: .textBackgroundColor)))
+            host.appearance = NSAppearance(named: look)
+            host.frame = NSRect(origin: .zero, size: host.fittingSize)
+            let window = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.alphaValue = 0
+            window.contentView = host
+            window.orderBack(nil)
+            for frame in 0..<3 {
+                await wait(1.1)
+                snapshot(host, "dolphins-\(name)-\(frame)")
+            }
+            window.close()
+        }
+        check(true, "rendered")
+    }
+
     // MARK: Tool groups
 
     /// Consecutive tool calls read as one quiet line that opens to the cards.
@@ -1362,6 +1391,7 @@ enum SelfTest {
         ]
         let view = ChatTranscriptView(frame: NSRect(x: 0, y: 0, width: 640, height: 520))
         let host = NSWindow(contentRect: view.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        host.isReleasedWhenClosed = false
         host.alphaValue = 0
         host.contentView = view
         view.update(items)

@@ -10,7 +10,7 @@ final class ChatSessionView: NSView {
     let session: ChatSession
 
     private let transcript = ChatTranscriptView()
-    /// Until the first message: the whale from the icon, and where this runs.
+    /// Until the first message: a little sea of dolphins, and where this runs.
     private lazy var emptyState = NSHostingView(rootView: ChatEmptyState(
         agent: session.title.capitalized, folder: (session.workdir as NSString).lastPathComponent))
     private let composer = ChatComposerView()
@@ -191,7 +191,7 @@ final class ChatSessionView: NSView {
                 self.heldForCatchUp = true
                 return
             }
-            self.emptyState.isHidden = !items.isEmpty
+            self.showEmptyState(items.isEmpty)
             // Resuming replays the whole history before the session is ready:
             // draw it once at the end (already at the bottom), not message by
             // message as a long scroll.
@@ -210,7 +210,7 @@ final class ChatSessionView: NSView {
                 self.transcript.update(self.session.items.isEmpty ? held : self.session.items)
             } else if self.heldForCatchUp {
                 self.heldForCatchUp = false
-                self.emptyState.isHidden = !self.session.items.isEmpty
+                self.showEmptyState(self.session.items.isEmpty)
                 self.transcript.update(self.session.items)
             }
             self.showPhase(phase)
@@ -222,6 +222,13 @@ final class ChatSessionView: NSView {
         session.$models.combineLatest(session.$currentModel).sink { [weak self] models, current in
             self?.fill(self?.modelPopup, models, current)
         }.store(in: &bag)
+    }
+
+    /// The empty chat's sea swims only while it's shown.
+    private func showEmptyState(_ show: Bool) {
+        guard emptyState.isHidden == show else { return }
+        emptyState.isHidden = !show
+        emptyState.rootView.swimming = show
     }
 
     private func showPhase(_ phase: ChatSession.Phase) {
@@ -338,19 +345,15 @@ final class ChatSessionView: NSView {
     }
 }
 
-/// An empty chat: the app's whale, faded, over what to do next.
+/// An empty chat: a little sea of dolphins over what to do next.
 private struct ChatEmptyState: View {
     let agent: String
     let folder: String
+    var swimming = true
 
     var body: some View {
         VStack(spacing: 14) {
-            Image(nsImage: NSWorkspace.shared.icon(forFile: Bundle.main.bundlePath))
-                .resizable()
-                .interpolation(.high)
-                .frame(width: 132, height: 132)
-                .opacity(0.9)
-                .shadow(color: .black.opacity(0.08), radius: 10, y: 4)
+            DolphinPod(paused: !swimming)
             Text("What should \(agent) work on?")
                 .font(.title3.weight(.medium))
                 .foregroundStyle(.secondary)
@@ -359,6 +362,7 @@ private struct ChatEmptyState: View {
                 .foregroundStyle(.tertiary)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 360)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .allowsHitTesting(false)
         .accessibilityElement(children: .combine)
