@@ -441,12 +441,12 @@ enum ChatRenderer {
                 continue
             }
             if trimmed.hasPrefix("|"), i + 1 < lines.count, isTableSeparator(lines[i + 1]) {
-                var rows: [String] = [lines[i]]
+                var rows: [String] = [lines[i], lines[i + 1]]
                 i += 2
                 while i < lines.count, lines[i].trimmingCharacters(in: .whitespaces).hasPrefix("|") {
                     rows.append(lines[i]); i += 1
                 }
-                out.append(table(rows))
+                out.append(table(rows, prose: prose))
                 continue
             }
             out.append(block(lines[i], trimmed: trimmed, prose: prose))
@@ -483,35 +483,146 @@ enum ChatRenderer {
         return t.hasPrefix("|") && t.range(of: #"^\|?(\s*:?-{2,}:?\s*\|)+\s*:?-*:?\s*\|?$"#, options: .regularExpression) != nil
     }
 
-    /// Tables as an aligned monospaced grid on a block, header in semibold.
-    private static func table(_ rows: [String]) -> NSAttributedString {
-        let cells = rows.map { row -> [String] in
-            var t = row.trimmingCharacters(in: .whitespaces)
-            if t.hasPrefix("|") { t.removeFirst() }
-            if t.hasSuffix("|") { t.removeLast() }
-            return t.components(separatedBy: "|").map { $0.trimmingCharacters(in: .whitespaces) }
-        }
+    /// A Markdown table on a card. One that fits a narrow transcript is a grid
+    /// on tab stops in the prose face, header in semibold above a rule; a wider
+    /// one (long cells, many columns) becomes one record per row, its first cell
+    /// as a heading over "header  value" lines that wrap on their own, since
+    /// cells can't wrap inside a grid of tab stops. Inline Markdown renders in
+    /// both; the text stays selectable and findable.
+    private static func table(_ rows: [String], prose: Prose) -> NSAttributedString {
+        let cells = rows.map(tableCells)
+        let separator = rows.count > 1 ? tableCells(rows[1]) : []
+        let body = Array(cells.dropFirst(2))
+        let header = cells.first ?? []
         let columns = cells.map(\.count).max() ?? 0
-        var widths = [Int](repeating: 0, count: columns)
-        for row in cells { for (c, cell) in row.enumerated() { widths[c] = max(widths[c], cell.count) } }
-        let bold = NSFont.monospacedSystemFont(ofSize: 12, weight: .semibold)
-        var paras: [NSAttributedString] = []
-        for (r, row) in cells.enumerated() {
-            let text = (0..<columns).map { c -> String in
-                let cell = c < row.count ? row[c] : ""
-                return cell.padding(toLength: widths[c], withPad: " ", startingAt: 0)
-            }.joined(separator: "   ")
-            paras.append(line(text, font: r == 0 ? bold : mono, color: .labelColor))
-            if r == 0 {
-                paras.append(line(widths.map { String(repeating: "─", count: $0) }.joined(separator: "   "),
-                                  font: mono, color: .tertiaryLabelColor))
+        guard columns > 0 else { return NSAttributedString() }
+        let headFont = prose.font(weight: .semibold)
+        func render(_ cell: String, _ font: NSFont, _ color: NSColor = .labelColor) -> NSAttributedString {
+            inline(cell.replacingOccurrences(of: #"<br\s*/?>"#, with: "\u{2028}", options: [.regularExpression, .caseInsensitive]),
+                   font: font, color: color)
+        }
+        func cell(_ row: [String], _ c: Int) -> String { c < row.count ? row[c] : "" }
+
+        // Measure each column as one line; a grid only if it all fits.
+        let gap: CGFloat = 18
+        var widths = [CGFloat](repeating: 0, count: columns)
+        var breaks = false
+        for (r, row) in ([header] + body).enumerated() {
+            for c in 0..<columns {
+                let text = cell(row, c)
+                breaks = breaks || text.range(of: #"<br\s*/?>"#, options: [.regularExpression, .caseInsensitive]) != nil
+                widths[c] = max(widths[c], ceil(render(text, r == 0 ? headFont : prose.font()).size().width))
             }
         }
+        let total = widths.reduce(0, +) + gap * CGFloat(columns - 1)
+        var paras: [NSAttributedString] = []
+        if !breaks, total <= 520, widths.allSatisfy({ $0 <= 260 }) {
+            let alignments = (0..<columns).map { c -> NSTextAlignment in
+                let spec = cell(separator, c)
+                return spec.hasSuffix(":") ? (spec.hasPrefix(":") ? .center : .right) : .left
+            }
+            let para = NSMutableParagraphStyle()
+            var x = pad
+            para.tabStops = (0..<columns).compactMap { c -> NSTextTab? in
+                defer { x += widths[c] + gap }
+                guard c > 0 else { return nil }
+                switch alignments[c] {
+                case .right: return NSTextTab(textAlignment: .right, location: x + widths[c])
+                case .center: return NSTextTab(textAlignment: .center, location: x + widths[c] / 2)
+                default: return NSTextTab(textAlignment: .left, location: x)
+                }
+            }
+            para.lineBreakMode = .byTruncatingTail
+            func gridRow(_ row: [String], _ font: NSFont) -> NSAttributedString {
+                let line = NSMutableAttributedString()
+                for c in 0..<columns {
+                    if c > 0 { line.append(NSAttributedString(string: "\t", attributes: [.font: font])) }
+                    line.append(render(cell(row, c), font))
+                }
+                line.append(NSAttributedString(string: "\n", attributes: [.font: font]))
+                line.addAttribute(.paragraphStyle, value: para, range: NSRange(location: 0, length: line.length))
+                return line
+            }
+            paras.append(gridRow(header, headFont))
+            let ruleFont = NSFont.systemFont(ofSize: 7)
+            let dash = max(1, ("─" as NSString).size(withAttributes: [.font: ruleFont]).width)
+            paras.append(line(String(repeating: "─", count: max(1, Int((total / dash).rounded(.up)))), font: ruleFont, color: .tertiaryLabelColor))
+            paras += body.map { gridRow($0, prose.font()) }
+            return spacedBlock(paras)
+        }
+
+        // Records: the first cell heads each row; the other columns follow as
+        // labelled lines, values hanging past the widest label.
+        let labelFont = prose.font(prose.size - 1.5, weight: .medium)
+        let labels = (0..<columns).map { render(cell(header, $0).trimmingCharacters(in: .whitespaces), labelFont, .secondaryLabelColor) }
+        let labelWidth = labels.dropFirst().map { ceil($0.size().width) }.max() ?? 0
+        let stacked = labelWidth > 170
+        let gapLine = NSAttributedString(string: "\n", attributes: [.font: NSFont.systemFont(ofSize: 6)])
+        for (r, row) in body.enumerated() {
+            if r > 0 { paras.append(gapLine) }
+            let title = NSMutableAttributedString(attributedString: render(cell(row, 0), headFont))
+            if title.length > 0 {
+                title.append(NSAttributedString(string: "\n", attributes: [.font: headFont]))
+                let p = NSMutableParagraphStyle()
+                p.paragraphSpacing = 2
+                title.addAttribute(.paragraphStyle, value: p, range: NSRange(location: 0, length: title.length))
+                paras.append(title)
+            }
+            for c in 1..<max(columns, 1) {
+                let value = cell(row, c)
+                guard !value.isEmpty else { continue }
+                let p = NSMutableParagraphStyle()
+                p.lineSpacing = 1.5
+                let field = NSMutableAttributedString()
+                if labels[c].length == 0 {
+                    p.headIndent = 12
+                    p.firstLineHeadIndent = 12
+                } else if stacked {
+                    field.append(labels[c])
+                    field.append(NSAttributedString(string: "\u{2028}", attributes: [.font: labelFont]))
+                    p.headIndent = 12
+                    p.firstLineHeadIndent = 12
+                } else {
+                    field.append(labels[c])
+                    field.append(NSAttributedString(string: "\t", attributes: [.font: labelFont]))
+                    p.headIndent = labelWidth + 12
+                    p.tabStops = [NSTextTab(textAlignment: .left, location: pad + labelWidth + 12)]
+                }
+                field.append(render(value, prose.font()))
+                field.append(NSAttributedString(string: "\n", attributes: [.font: prose.font()]))
+                field.addAttribute(.paragraphStyle, value: p, range: NSRange(location: 0, length: field.length))
+                paras.append(field)
+            }
+        }
+        return spacedBlock(paras)
+    }
+
+    private static func spacedBlock(_ paras: [NSAttributedString]) -> NSAttributedString {
         let out = NSMutableAttributedString()
         out.append(spacer(4))
-        out.append(blocked(paras, .code))
+        out.append(blocked(paras, .card))
         out.append(spacer(4))
         return out
+    }
+
+    /// A table row's cells: split on pipes that aren't escaped or in code.
+    private static func tableCells(_ row: String) -> [String] {
+        var t = row.trimmingCharacters(in: .whitespaces)
+        if t.hasPrefix("|") { t.removeFirst() }
+        if t.hasSuffix("|"), !t.hasSuffix("\\|") { t.removeLast() }
+        var cells: [String] = [], current = "", inCode = false, escaped = false
+        for ch in t {
+            if escaped { current.append(ch == "|" ? "|" : "\\\(ch)"); escaped = false; continue }
+            switch ch {
+            case "\\": escaped = true
+            case "`": inCode.toggle(); current.append(ch)
+            case "|" where !inCode: cells.append(current); current = ""
+            default: current.append(ch)
+            }
+        }
+        if escaped { current.append("\\") }
+        cells.append(current)
+        return cells.map { $0.trimmingCharacters(in: .whitespaces) }
     }
 
     private static func block(_ raw: String, trimmed: String, prose: Prose) -> NSAttributedString {
