@@ -1520,8 +1520,13 @@ enum SelfTest {
             return Date().timeIntervalSince(stillSince) >= 6
         }
         let lines = (try? String(contentsOf: url, encoding: .utf8))?.split(separator: "\n") ?? []
+        // Chain onto the last real message (Claude Code also writes other lines
+        // with uuids — titles, progress — that aren't part of the conversation).
         let last = lines.reversed().lazy.compactMap { line -> String? in
-            (try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any])?["uuid"] as? String
+            guard let o = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
+                  ["user", "assistant"].contains(o["type"] as? String ?? ""),
+                  o["isSidechain"] as? Bool != true, o["isMeta"] as? Bool != true else { return nil }
+            return o["uuid"] as? String
         }.first
         check(last != nil, "transcript at \(url.path) has turns")
         let now = ISO8601DateFormatter().string(from: Date())
@@ -1540,13 +1545,31 @@ enum SelfTest {
                                  "model": "claude-opus-5-5", "content": [["type": "text", "text": "OK, noted."]],
                                  "stop_reason": "end_turn", "stop_sequence": NSNull(),
                                  "usage": ["input_tokens": 1, "output_tokens": 3]]]) { $1 }
-        if let fh = try? FileHandle(forWritingTo: url) {
+        func inject() {
+            guard let fh = try? FileHandle(forWritingTo: url) else { return }
             // Claude Code may leave its last line (cost-state) without a newline.
             let endsWithNewline = (try? Data(contentsOf: url))?.last == 0x0A
             fh.seekToEndOfFile()
             fh.write(Data(((endsWithNewline ? "" : "\n") + line(user) + line(reply)).utf8))
             try? fh.close()
         }
+        /// Both injected lines are there, whole (a cost-state rewrite in place
+        /// by our own still-running agent can land on top of them).
+        func injectedIntact() -> Bool {
+            let text = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+            let ids = text.split(separator: "\n").compactMap { l -> String? in
+                (try? JSONSerialization.jsonObject(with: Data(l.utf8)) as? [String: Any])?["uuid"] as? String
+            }
+            return ids.contains(userID) && ids.contains(replyID)
+        }
+        inject()
+        for _ in 0..<3 {
+            await wait(8)
+            if injectedIntact() { break }
+            log("injected turn was overwritten (cost-state rewrite); writing it again")
+            inject()
+        }
+        check(injectedIntact(), "the other app's turn is in the transcript")
         check(await until(10) {
             c.items.contains { if case .user(_, let t, _) = $0 { t.contains("ZEBRA-42") } else { false } }
                 && said(c).contains("OK, noted.")
