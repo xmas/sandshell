@@ -116,7 +116,11 @@ final class ChatSessionView: NSView {
         permissionBar.isHidden = true
         permissionBar.setAccessibilityIdentifier("chat-permission")
 
-        composer.onSubmit = { [weak self] text, attachments in self?.session.send(text: text, attachments: attachments) }
+        composer.onSubmit = { [weak self] text, attachments in
+            guard let self else { return false }
+            self.sendingWhenOtherAppIdles = false   // sent (or queued) by hand
+            return self.session.submit(text: text, attachments: attachments)
+        }
         composer.shouldSubmit = { [weak self] in self?.confirmSendWhileOtherAppWorks() ?? true }
         composer.commands = { [weak session] in session?.commands ?? [] }
         composer.onFind = { [weak self] sender in self?.transcript.performFind(sender) }
@@ -228,6 +232,10 @@ final class ChatSessionView: NSView {
         }.store(in: &bag)
         session.$permission.sink { [weak self] in self?.showPermission($0) }.store(in: &bag)
         session.$mcpServers.sink { [weak self] in self?.showMCPSummary($0) }.store(in: &bag)
+        session.$hasQueued.dropFirst().sink { [weak self] _ in
+            guard let self else { return }
+            DispatchQueue.main.async { self.showPhase(self.session.phase) }
+        }.store(in: &bag)
         session.$hasExtras.sink { [weak self] on in
             self?.mcpButton.isHidden = !on
             if on { self?.refreshMCPQuietly() }
@@ -279,7 +287,8 @@ final class ChatSessionView: NSView {
             composer.setEnabled(true)
             if window?.firstResponder === window { composer.focus() }
         case .running:
-            statusLabel.stringValue = "Working…  ⎋ to stop"
+            statusLabel.stringValue = session.hasQueued ? "Working… your message sends when it’s done  ⎋ to stop"
+                : "Working…  ⎋ to stop"
             sendButton.title = "Stop"; sendButton.isEnabled = true
         case .closed(let why):
             statusLabel.stringValue = why
@@ -414,9 +423,7 @@ final class ChatSessionView: NSView {
 
     /// Hold the message until the other app's turn ends (the registry says idle).
     func sendWhenOtherAppIdles() {
-        sendingWhenOtherAppIdles = true
-        statusLabel.stringValue = "Sends when \(session.otherWriterName) finishes…"
-        session.onOtherAppIdle = { [weak self] in
+        let send = { [weak self] in
             guard let self, self.sendingWhenOtherAppIdles else { return }
             self.sendingWhenOtherAppIdles = false
             self.session.onOtherAppIdle = nil
@@ -426,6 +433,18 @@ final class ChatSessionView: NSView {
                 self.sendDespiteOtherApp = true
                 self.composer.submitFromButton()
             }
+        }
+        sendingWhenOtherAppIdles = true
+        // It may have finished while the question was up.
+        guard session.otherAppIsWorking else { return send() }
+        statusLabel.stringValue = "Sends when \(session.otherWriterName) finishes…"
+        session.onOtherAppIdle = send
+        // Don't wait forever on an app that never says it's done.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 30 * 60) { [weak self] in
+            guard let self, self.sendingWhenOtherAppIdles else { return }
+            self.sendingWhenOtherAppIdles = false
+            self.session.onOtherAppIdle = nil
+            self.showPhase(self.session.phase)
         }
     }
 

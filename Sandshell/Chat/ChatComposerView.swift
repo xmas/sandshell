@@ -8,7 +8,8 @@ import UniformTypeIdentifiers
 /// pasted become attachment chips above the text. `/` at the start opens the
 /// agent's commands; `@` opens the workspace's files (inserted as chips).
 final class ChatComposerView: NSView, NSTextViewDelegate {
-    var onSubmit: ((String, [ChatAttachment]) -> Void)?
+    /// Send (or queue) a message; false keeps the draft (nothing took it).
+    var onSubmit: ((String, [ChatAttachment]) -> Bool)?
     /// Asked before sending; false keeps the draft (e.g. while it asks the user).
     var shouldSubmit: (() -> Bool)?
     /// ⎋ in the composer; return true if handled (e.g. stopped a running turn).
@@ -270,7 +271,7 @@ final class ChatComposerView: NSView, NSTextViewDelegate {
         }
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty,
               shouldSubmit?() ?? true else { return }
-        onSubmit?(text, attachments + files)
+        guard onSubmit?(text, attachments + files) == true else { return }
         textView.string = ""
         attachments = []
         resize()

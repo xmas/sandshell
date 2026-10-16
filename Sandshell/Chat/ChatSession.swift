@@ -95,11 +95,21 @@ final class ChatSession: ObservableObject {
             if oldValue == .running, phase == .ready, let next = afterTurn {
                 afterTurn = nil
                 DispatchQueue.main.async { next() }
+            } else if oldValue == .running, phase == .ready, queued != nil {
+                // A message sent while the turn ran goes now.
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.phase == .ready, let (text, files) = self.queued else { return }
+                    self.queued = nil
+                    self.send(text: text, attachments: files)
+                }
             }
             if case .closed(let why) = phase, oldValue != phase { onClosed?(why) }
         }
     }
     @Published private(set) var permission: PendingPermission?
+    /// Permission requests that came in while one was already being asked:
+    /// each gets its turn (an unanswered one would hang the agent's turn).
+    private var waitingPermissions: [PendingPermission] = []
     @Published private(set) var modes: [Choice] = []
     @Published private(set) var currentMode: String?
     @Published private(set) var models: [Choice] = []
@@ -152,6 +162,9 @@ final class ChatSession: ObservableObject {
     /// Seconds from launch to ready, and whether it started from a warm spare.
     private(set) var readyAfter: TimeInterval?
     private(set) var startedWarm = false
+    /// What its processes carry in their environment, to reap them by (a
+    /// claimed spare's tag, which isn't the session's own).
+    var processMatch: String { tag.pairs[1] }
     /// Tags the agent's processes for reaping (a claimed spare brings its own).
     private var tag: SbxCommand.ProcessTag
     private let containerName: String
@@ -222,6 +235,7 @@ final class ChatSession: ObservableObject {
     func start() {
         guard !isClosed else { return }
         launchError = nil
+        stopped = false   // a reload after a stopped turn replays every reply
         if let unavailable {
             notice(unavailable, isError: true)
             phase = .closed("\(title) can’t start — see above.")
@@ -302,6 +316,8 @@ final class ChatSession: ObservableObject {
                         Log.info(.sbx, "chat: couldn't set effort \(effort): \(error.localizedDescription)")
                     }
                 }
+                // Closed (or relaunched) while it was starting: it isn't ours any more.
+                guard !isClosed, connection === conn else { conn.terminate(); return }
                 if let sid = sessionID { onSessionID?(sid) }
                 readyAfter = Date().timeIntervalSince(launchedAt)
                 startedWarm = spare != nil
@@ -315,6 +331,7 @@ final class ChatSession: ObservableObject {
                     send(text: text, attachments: attachments)
                 }
             } catch {
+                guard !isClosed, connection === conn else { return }
                 if Self.isAuthRequired(error), let help = Self.credentialHelp(for: agent) {
                     notice(help, isError: true)
                     phase = .closed("\(title) isn’t signed in — see above.")
@@ -413,6 +430,11 @@ final class ChatSession: ObservableObject {
 
     func close() {
         isClosed = true
+        // Nothing it does from here on is news to anyone (a send or a start
+        // still finishing would otherwise report "finished" or "stopped").
+        onUsage = nil; onSessionID = nil; onWorkingChange = nil; onPrompt = nil
+        onClosed = nil; onUnexpectedExit = nil; onOtherAppIdle = nil
+        queued = nil
         stopFollowing()
         pumpTask?.cancel()
         let wasRunning = connection != nil
@@ -458,7 +480,8 @@ final class ChatSession: ObservableObject {
         if agent == .claude {
             // Ask for the turn's file-change report, keyed by our own id.
             let turn = "t" + UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
-            turns[turn] = Turn(id: turn, prompt: trimmed)
+            turns[turn] = Turn(id: turn, prompt: trimmed,
+                               transcriptOffset: transcriptURL.map(ClaudeTranscriptTail.fileSize) ?? 0)
             params = ["sessionId": .string(sid), "prompt": .array(blocks),
                       "_meta": ["jetbrains": ["air": ["version": 1,
                                 "agentFileChangeReportRequest": ["version": 1, "requestId": .string(turn)]]]]]
@@ -470,6 +493,7 @@ final class ChatSession: ObservableObject {
                     notice("Stopped: \(reason)", isError: false)
                 }
             } catch {
+                guard !isClosed, connection === conn else { return }
                 // The agent often streams the same failure as its reply first
                 // ("Failed to refresh…" then "Internal error: Failed to refresh…");
                 // only add the notice when it says something new.
@@ -485,6 +509,7 @@ final class ChatSession: ObservableObject {
                     notice(message, isError: true)
                 }
             }
+            guard !isClosed, connection === conn else { return }
             if case .running = phase { phase = .ready }
         }
     }
@@ -499,7 +524,26 @@ final class ChatSession: ObservableObject {
             queued = (text, attachments)
         }
     }
-    private var queued: (String, [ChatAttachment])?
+    private var queued: (String, [ChatAttachment])? { didSet { hasQueued = queued != nil } }
+    /// Hand over the message waiting to be sent (a reconnect carries it over).
+    func takeQueued() -> (text: String, files: [URL])? {
+        guard let (text, attachments) = queued else { return nil }
+        queued = nil
+        return (text, attachments.compactMap { if case .file(let url) = $0.kind { url } else { nil } })
+    }
+
+    /// A message is waiting for the turn (or the start) to finish.
+    @Published private(set) var hasQueued = false
+
+    /// From the composer: send now, or queue it behind the running turn (or a
+    /// start); false when the chat can't take it (closed), so the draft stays.
+    func submit(text: String, attachments: [ChatAttachment]) -> Bool {
+        switch phase {
+        case .ready: send(text: text, attachments: attachments); return true
+        case .running, .starting: sendWhenReady(text: text, attachments: attachments); return true
+        case .closed: return false
+        }
+    }
 
     /// The user stopped the current turn. The adapter answers the prompt as
     /// cancelled before it has flushed the text it already had buffered; those
@@ -519,7 +563,8 @@ final class ChatSession: ObservableObject {
         let outcome: JSONValue = optionID.map { ["outcome": "selected", "optionId": .string($0)] }
             ?? ["outcome": "cancelled"]
         connection?.respond(id: p.id, result: ["outcome": outcome])
-        if permission == p { permission = nil }
+        waitingPermissions.removeAll { $0 == p }
+        if permission == p { permission = waitingPermissions.isEmpty ? nil : waitingPermissions.removeFirst() }
     }
 
     func setModel(_ id: String) {
@@ -566,7 +611,7 @@ final class ChatSession: ObservableObject {
 
     /// One prompt we sent: our file-report id, its text (to find its uuid in
     /// the transcript, which is what Claude Code rewinds to).
-    struct Turn { let id: String; let prompt: String; var uuid: String? }
+    struct Turn { let id: String; let prompt: String; var transcriptOffset: UInt64 = 0; var uuid: String? }
     private var turns: [String: Turn] = [:]
 
     /// A background task the agent reported (shell, subagent, monitor).
@@ -656,15 +701,18 @@ final class ChatSession: ObservableObject {
     /// The transcript's uuid for the prompt of `turn` (the adapter stamps each
     /// prompt with one; Claude Code checkpoints files per prompt uuid).
     private func promptUUID(_ turn: String) async -> String? {
-        guard var t = turns[turn], let sid = sessionID else { return nil }
+        guard var t = turns[turn], let url = transcriptURL else { return nil }
         if let uuid = t.uuid { return uuid }
-        let url = URL(fileURLWithPath: home)
-            .appendingPathComponent(".claude/projects/\(TranscriptReader.claudeEncodedDir(for: workdir))/\(sid).jsonl")
         let taken = Set(turns.values.compactMap(\.uuid))
-        let prompt = t.prompt
+        let (prompt, offset) = (t.prompt, t.transcriptOffset)
         let uuid = await Task.detached(priority: .utility) { () -> String? in
-            guard let text = try? String(contentsOf: url, encoding: .utf8) else { return nil }
-            var found: String?
+            // The prompt's line comes after where the transcript ended when it
+            // was sent: the first user line there that's a prompt (not a tool
+            // result or meta), matching its text when it has some.
+            // (From the start if the offset finds nothing: Claude rewrites its
+            // last line in place, so the file can shift a little.)
+            for start in offset > 0 ? [offset, 0] : [0] {
+            guard let (text, _) = ClaudeTranscriptTail.readLines(url, from: start) else { continue }
             for line in text.split(separator: "\n") where line.contains("\"type\":\"user\"") {
                 guard let o = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
                       o["isMeta"] as? Bool != true, let id = o["uuid"] as? String, !taken.contains(id),
@@ -672,15 +720,24 @@ final class ChatSession: ObservableObject {
                 let content: String
                 if let s = message["content"] as? String { content = s }
                 else if let blocks = message["content"] as? [[String: Any]] {
+                    if blocks.contains(where: { $0["type"] as? String == "tool_result" }) { continue }
                     content = blocks.compactMap { $0["type"] as? String == "text" ? $0["text"] as? String : nil }.joined(separator: "\n")
                 } else { continue }
-                if content.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix(String(prompt.prefix(200))) { found = id }
+                let said = content.trimmingCharacters(in: .whitespacesAndNewlines)
+                if prompt.isEmpty || said.hasPrefix(String(prompt.prefix(200))) { return id }
             }
-            return found
+            }
+            return nil
         }.value
         t.uuid = uuid
         turns[turn] = t
         return uuid
+    }
+
+    /// This conversation's Claude transcript on the host.
+    private var transcriptURL: URL? {
+        sessionID.map { URL(fileURLWithPath: home)
+            .appendingPathComponent(".claude/projects/\(TranscriptReader.claudeEncodedDir(for: workdir))/\($0).jsonl") }
     }
 
     /// Ask Claude Code which MCP servers this session has, and how they're doing.
@@ -821,6 +878,11 @@ final class ChatSession: ObservableObject {
             return
         }
         guard phase == .ready else { return }
+        // A new conversation's transcript appears with its first turn: watch it then.
+        if fileWatch == nil, FileManager.default.fileExists(atPath: url.path) {
+            watchTranscript()
+            followFileID = ClaudeTranscriptTail.fileID(url)
+        }
         // Replaced, or rewritten shorter (Claude rewrites its trailing
         // cost-state line in place): pick up from the end of what's there now.
         let size = ClaudeTranscriptTail.fileSize(url), fileID = ClaudeTranscriptTail.fileID(url)
@@ -921,7 +983,8 @@ final class ChatSession: ObservableObject {
             let call = params["toolCall"]
             let title = call?["title"]?.string ?? toolTitle(id: call?["toolCallId"]?.string) ?? "Allow this action?"
             if let call { apply(call.merging(["sessionUpdate": "tool_call_update"])) }
-            permission = PendingPermission(id: id, title: title, options: opts)
+            let request = PendingPermission(id: id, title: title, options: opts)
+            if permission == nil { permission = request } else { waitingPermissions.append(request) }
         case .request(let id, let method, _):
             connection?.respondError(id: id, code: -32601, message: "\(method) is not supported by Sandshell")
         case .stderr(let line):
@@ -930,7 +993,7 @@ final class ChatSession: ObservableObject {
             if line == SbxCommand.installingMarker { installingAdapter = true; return }
             if line.hasPrefix("sandshell: ") { launchError = String(line.dropFirst("sandshell: ".count)) }
         case .closed(let status):
-            permission = nil
+            permission = nil; waitingPermissions = []
             if case .closed = phase { return }   // already explained (e.g. not signed in)
             let wasUp = phase == .ready || phase == .running
             canReconnect = true
@@ -946,8 +1009,15 @@ final class ChatSession: ObservableObject {
         }
     }
 
+    /// The kind of the update before this one (consecutive user chunks are
+    /// one prompt; a user chunk after anything else starts a new one).
+    private var lastUpdateKind = ""
+
     private func apply(_ u: JSONValue) {
-        switch u["sessionUpdate"]?.string ?? "" {
+        let kind = u["sessionUpdate"]?.string ?? ""
+        let previousKind = lastUpdateKind
+        lastUpdateKind = kind
+        switch kind {
         case "agent_message_chunk":
             if !stopped { appendText(u, thought: false) }
         case "agent_thought_chunk":
@@ -956,7 +1026,7 @@ final class ChatSession: ObservableObject {
             // Our own prompts are shown when sent (and echoed mid-turn); outside a
             // turn these are a `session/load` history replay.
             guard phase != .running, let text = u["content"]?["text"]?.string else { return }
-            if case .user(let id, let t, let a)? = items.last {
+            if previousKind == "user_message_chunk", case .user(let id, let t, let a)? = items.last {
                 items[items.count - 1] = .user(id: id, text: t + text, attachments: a)
             } else {
                 items.append(.user(id: UUID(), text: text, attachments: []))

@@ -29,7 +29,9 @@ final class ACPSparePool {
     func claim(_ arguments: [String]) -> Spare? {
         let key = Self.key(arguments)
         guard let spare = spares.removeValue(forKey: key) else { return nil }
-        guard spare.ready, spare.connection.isRunning else { retire(spare); return nil }
+        guard spare.connection.isRunning else { retire(spare); return nil }
+        // Still in its handshake: leave it for the next chat, start this one cold.
+        guard spare.ready else { spares[key] = spare; return nil }
         Log.info(.sbx, "chat: claimed a warm agent in “\(spare.container)” (\(Int(Date().timeIntervalSince(spare.created)))s old)")
         return spare
     }

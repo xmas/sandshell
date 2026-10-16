@@ -53,15 +53,21 @@ final class ACPConnection: @unchecked Sendable {
         let out = stdoutPipe.fileHandleForReading.fileDescriptor
         let err = stderrPipe.fileHandleForReading.fileDescriptor
         // Close only after stdout is drained, so no trailing message is lost.
-        Thread.detachNewThread { [weak self] in
-            Self.readLines(fd: out) { self?.handleLine($0) }
-            self?.process.waitUntilExit()
-            self?.didClose(status: self?.process.terminationStatus ?? -1)
+        // The readers keep the connection (and so its pipes and fds) alive
+        // until they're done; close reports only after stderr is drained too,
+        // so its last line (often the reason it exited) isn't lost.
+        let stderrDone = DispatchSemaphore(value: 0)
+        Thread.detachNewThread {
+            Self.readLines(fd: out) { self.handleLine($0) }
+            self.process.waitUntilExit()
+            _ = stderrDone.wait(timeout: .now() + 2)
+            self.didClose(status: self.process.terminationStatus)
         }
-        Thread.detachNewThread { [weak self] in
+        Thread.detachNewThread {
             Self.readLines(fd: err) { line in
-                self?.yield.yield(.stderr(String(decoding: line, as: UTF8.self)))
+                self.yield.yield(.stderr(String(decoding: line, as: UTF8.self)))
             }
+            stderrDone.signal()
         }
     }
 

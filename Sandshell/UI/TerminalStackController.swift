@@ -247,6 +247,9 @@ final class SessionSurfaces {
     var chats: [UUID: ChatSessionView] = [:]
     var drafts: [UUID: (text: String, urls: [URL], send: Bool)] = [:]
     var pending: Set<UUID> = []
+    /// A closed chat's process tag, when it isn't the session's own (a warm
+    /// spare's): reaped before the session launches again.
+    var leftoverProcesses: [UUID: String] = [:]
     /// Sessions whose sandbox couldn't be brought up, with why: not retried
     /// until the user says so (a refresh used to relaunch — and fail — forever).
     var launchFailures: [UUID: String] = [:]
@@ -1422,8 +1425,7 @@ final class TerminalStackController: NSViewController {
             // The session may have been closed while the container came up.
             guard controller.session(id: id) != nil, terminals[id] == nil else { return }
             // Leftovers from a crash/kill would share this conversation.
-            await SbxClient.reapSessionProcessesAndWait(container: containerName,
-                                                        match: "SANDSHELL_SESSION=\(id.uuidString)")
+            await reapLeftovers(id, in: containerName)
 
             await runtime.prepareLaunch(id, containerName: containerName)
 
@@ -1549,8 +1551,7 @@ final class TerminalStackController: NSViewController {
                 resumeID = tid
             }
             Log.info(.workspace, "launching \(current.agent.rawValue) chat in “\(containerName)” at \(current.workdir)\(resumeID.map { " (resume \($0))" } ?? "")")
-            await SbxClient.reapSessionProcessesAndWait(container: containerName,
-                                                        match: "SANDSHELL_SESSION=\(id.uuidString)")
+            await reapLeftovers(id, in: containerName)
             let proxyAuth = await SbxClient.shared.hasAnthropicSecret(sandbox: containerName)
             let unavailable = await Self.missingCredential(for: current.agent, container: containerName,
                                                            home: controller.home)
@@ -1679,14 +1680,31 @@ final class TerminalStackController: NSViewController {
     func reconnectChat(_ id: UUID) {
         guard let session = controller.session(id: id), session.isChat, !pending.contains(id) else { return }
         Log.info(.workspace, "reconnecting chat “\(session.name)”")
+        // A message waiting to go goes from the new agent instead.
+        if let waiting = chats[id]?.session.takeQueued() {
+            surfaces.drafts[id] = (waiting.text, waiting.files, true)
+        }
         closeChat(id)
         surfaces.launchFailures[id] = nil
         launchChat(session)
     }
 
+    /// Before (re)launching a session: end anything a crash, kill or earlier
+    /// launch of it left running — by its own tag and, for a chat that ran on
+    /// a warm spare, by that spare's.
+    private func reapLeftovers(_ id: UUID, in container: String) async {
+        await SbxClient.reapSessionProcessesAndWait(container: container, match: "SANDSHELL_SESSION=\(id.uuidString)")
+        if let match = surfaces.leftoverProcesses.removeValue(forKey: id) {
+            await SbxClient.reapSessionProcessesAndWait(container: container, match: match)
+        }
+    }
+
     private func closeChat(_ id: UUID) {
         guard let chat = chats.removeValue(forKey: id) else { return }
         chat.session.close()
+        // Its processes may not carry this session's tag (a warm spare's):
+        // the next launch for this session reaps them by theirs too.
+        surfaces.leftoverProcesses[id] = chat.session.processMatch
         chat.removeFromSuperview()
         controller.setLive(id, false)
         controller.setStopped(id, nil)   // a stopped chat's reason doesn't follow it to Terminal
