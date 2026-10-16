@@ -307,7 +307,7 @@ actor SbxClient {
         // Base image channel: nil = sbx's default (stable) template; the tag is
         // pulled fresh either way (sbx defaults to --pull always).
         if let template = workspace.templateImage(for: agent) { args += ["-t", template] }
-        args += kits.flatMap { ["--kit", $0] }
+        args += kits.flatMap { ["--kit", KitStore.resolve($0)] }
         args.append(agent.createReference)   // a custom agent is created from its kit
         args += mounts.map(\.spec)
         return try await createAndPoll(args, cwd: workspace.rootURL.path,
@@ -378,11 +378,24 @@ actor SbxClient {
             throw SbxError.spawn("\(sbx) \(args.joined(separator: " ")): \(error)")
         }
 
+        let failure: @Sendable () -> String? = {
+            guard let code = state.exitCode, code != 0 else { return nil }
+            let err = Self.clean((try? String(contentsOf: errURL, encoding: .utf8)) ?? "")
+            return err.isEmpty ? "sbx create failed (exit \(code))." : err
+        }
         do {
-            let sandbox = try await waitUntilRunning(name: name) {
-                guard let code = state.exitCode, code != 0 else { return nil }
-                let err = Self.clean((try? String(contentsOf: errURL, encoding: .utf8)) ?? "")
-                return err.isEmpty ? "sbx create failed (exit \(code))." : err
+            var sandbox = try await waitUntilRunning(name: name, failureMessage: failure)
+            // A kit's install steps run after the sandbox first shows as
+            // running, and sbx restarts it when they're done: anything started
+            // in it before then dies with it. So it's up once `sbx create` is done.
+            if state.exitCode == nil {
+                Log.info(.sbx, "“\(name)” is running; waiting for sbx create to finish (kit setup)")
+                let deadline = Date().addingTimeInterval(15 * 60)
+                while state.exitCode == nil, Date() < deadline {
+                    try await Task.sleep(nanoseconds: 500_000_000)
+                }
+                if let message = failure() { throw SbxError.command(message) }
+                sandbox = try await waitUntilRunning(name: name, failureMessage: failure)
             }
             cleanup()
             return sandbox
@@ -602,7 +615,7 @@ actor SbxClient {
     }
 
     func kitInspect(_ ref: String) async -> KitInspection? {
-        guard let out = try? await run(["kit", "inspect", ref, "--json"], timeout: 90), out.ok,
+        guard let out = try? await run(["kit", "inspect", KitStore.resolve(ref), "--json"], timeout: 90), out.ok,
               let json = Self.firstJSONObject(in: out.stdout),
               let data = json.data(using: .utf8) else { return nil }
         return try? JSONDecoder().decode(KitInspection.self, from: data)
@@ -627,7 +640,7 @@ actor SbxClient {
     /// `createAndPoll`: the recreate (re)starts the sandbox, and a helper that
     /// inherits a pipe fd would stall Foundation's shared callback queue.
     func kitAdd(sandbox name: String, ref: String, cwd: String, mcpURL: URL) async throws -> CommandOutput {
-        let args = ["kit", "add", name, ref]
+        let args = ["kit", "add", name, KitStore.resolve(ref)]
         Log.info(.sbx, "$ sbx \(args.joined(separator: " "))")
         let started = Date()
         let proc = makeProcess(args, env: ["SBX_MCP_URL": mcpURL.absoluteString])
