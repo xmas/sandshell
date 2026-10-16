@@ -34,6 +34,14 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
     /// Show only changed files (a flat list, git's view), not the tree.
     private(set) var changedOnly = false
     private let changedButton = NSButton()
+    /// Whose changes the changed list shows: uncommitted (git status), all
+    /// since the branch's base, or one commit (picked under Commits).
+    private(set) var scope: ChangeScope = .uncommitted
+    /// The scope's files with +/- counts, by absolute path.
+    private var scoped: [String: ScopedFile] = [:]
+    let commits = CommitsListView()
+    /// The changed list's scope changed (the editor diffs against it).
+    var onScope: ((ChangeScope, Set<String>) -> Void)?
     /// "Sandbox “x” · read-write": these are the sandbox's files too.
     private let sandboxButton = NSButton()
     private var sandboxPopover: NSPopover?
@@ -108,7 +116,12 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
         changedButton.setAccessibilityIdentifier("files-changed-toggle")
         changedButton.setContentHuggingPriority(.required, for: .horizontal)
 
-        for v in [filter, changedButton, scroll, footer] as [NSView] {
+        commits.onPick = { [weak self] scope in
+            guard let self else { return }
+            if let scope { self.pick(scope) } else if self.changedOnly { self.pick(.uncommitted) }
+        }
+
+        for v in [filter, changedButton, scroll, commits, footer] as [NSView] {
             v.translatesAutoresizingMaskIntoConstraints = false
             root.addSubview(v)
         }
@@ -124,7 +137,10 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
             scroll.topAnchor.constraint(equalTo: changedButton.bottomAnchor, constant: 6),
             scroll.leadingAnchor.constraint(equalTo: root.leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: root.trailingAnchor),
-            footer.topAnchor.constraint(equalTo: scroll.bottomAnchor, constant: 8),
+            commits.topAnchor.constraint(equalTo: scroll.bottomAnchor, constant: 4),
+            commits.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            commits.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+            footer.topAnchor.constraint(equalTo: commits.bottomAnchor, constant: 8),
             footer.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 10),
             footer.trailingAnchor.constraint(lessThanOrEqualTo: root.trailingAnchor, constant: -10),
             footer.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -12),
@@ -171,6 +187,9 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
         searchGroups = nil
         changedOnly = false
         changedButton.state = .off
+        scope = .uncommitted
+        scoped = [:]
+        commits.select(nil)
         guard let url else {
             rootNode = nil
             outline.reloadData()
@@ -227,29 +246,95 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
                 self.onGitStatus?(status)
             }
             let changed = status.changes.count
-            self.changedButton.title = status.repoRoot == nil ? "No git" : changed > 0 ? "\(changed) changed" : "No changes"
+            self.updateChangedTitle()
             self.changedButton.imagePosition = .imageLeading
             self.changedButton.isEnabled = status.repoRoot != nil
             self.changedButton.toolTip = status.repoRoot == nil ? "Not a git repository"
                 : "Show only changed files (\(changed))"
             self.branchLabel.stringValue = status.repoRoot == nil ? "Not a git repository"
                 : "\(status.branch ?? "detached")" + (changed > 0 ? " · \(changed) changed" : " · clean")
+            self.refreshHistory()
+            if self.changedOnly { self.loadScope() }
+        }
+    }
+
+    // MARK: Commits
+
+    /// "3 changed" for the working tree; "4 files in ea0f97b" while a commit's
+    /// files are listed, "9 changed on branch" for all of them.
+    private func updateChangedTitle() {
+        let changed = git.changes.count
+        switch (changedOnly, scope) {
+        case (true, .commit(let c)): changedButton.title = "\(scoped.count) files in \(c.short)"
+        case (true, .all): changedButton.title = "\(scoped.count) changed on branch"
+        default:
+            changedButton.title = git.repoRoot == nil ? "No git" : changed > 0 ? "\(changed) changed" : "No changes"
+        }
+    }
+
+    /// The branch's commits for the Commits section (hidden outside a repo).
+    private func refreshHistory() {
+        guard let repo = git.repoRoot else { commits.isHidden = true; return }
+        commits.isHidden = false
+        Task { [weak self] in
+            let history = await Task.detached(priority: .utility) { GitHistory.commits(repo: repo) }.value
+            guard let self, self.git.repoRoot == repo else { return }
+            // "All changes" follows the base if it moved (a rebase, a pull).
+            if case .all = self.scope, let base = history.base, self.scope != .all(base: base) { self.pick(.all(base: base)) }
+            self.commits.update(base: history.base, commits: history.commits, picked: self.changedOnly ? self.scope : nil)
+        }
+    }
+
+    /// Show `scope`'s files as the changed list.
+    private func pick(_ scope: ChangeScope) {
+        self.scope = scope
+        if !changedOnly { showChanges(true, scope: scope) } else { commits.select(scope); loadScope() }
+    }
+
+    /// Load the scope's files and counts, then refresh the list and the editor.
+    private func loadScope() {
+        guard let repo = git.repoRoot else { return }
+        let scope = scope
+        let untracked = git.changes.filter { $0.value == .untracked }.map(\.key)
+        Task { [weak self] in
+            let files = await Task.detached(priority: .utility) {
+                GitHistory.files(repo: repo, scope: scope, untracked: untracked)
+            }.value
+            guard let self, self.scope == scope, self.changedOnly else { return }
+            let new = Dictionary(files.map { ($0.path, $0) }, uniquingKeysWith: { a, _ in a })
+            let changedSet = Set(new.keys) != Set(self.scoped.keys)
+            self.scoped = new
+            self.updateChangedTitle()
+            if self.filter.stringValue.isEmpty { self.showChangedList() }
+            self.outline.reloadData()
+            if changedSet, self.outline.selectedRow < 0, self.outline.numberOfRows > 0 {
+                self.outline.selectRowIndexes([0], byExtendingSelection: false)
+            }
+            self.onScope?(scope, Set(new.keys))
         }
     }
 
     // MARK: Changed files
 
     /// Toggle the flat "changed files" list (also from the branch chip / footer).
-    func showChanges(_ on: Bool) {
+    func showChanges(_ on: Bool) { showChanges(on, scope: .uncommitted) }
+
+    private func showChanges(_ on: Bool, scope: ChangeScope) {
         _ = view
         changedOnly = on && git.repoRoot != nil
         changedButton.state = changedOnly ? .on : .off
+        self.scope = changedOnly ? scope : .uncommitted
+        commits.select(changedOnly ? self.scope : nil)
         if changedOnly {
             filter.stringValue = ""
             searchGroups = nil
             showChangedList()
+            loadScope()
         } else {
             filterResults = nil
+            scoped = [:]
+            updateChangedTitle()
+            onScope?(.uncommitted, [])
         }
         outline.reloadData()
         if changedOnly, outline.numberOfRows > 0 { outline.selectRowIndexes([0], byExtendingSelection: false) }
@@ -263,7 +348,8 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
     private func showChangedList() {
         guard let root else { filterResults = []; return }
         let real = root.resolvingSymlinksInPath().path
-        filterResults = git.changes.keys.sorted().compactMap { path in
+        let paths = scope == .uncommitted ? Array(git.changes.keys) : Array(scoped.keys)
+        filterResults = paths.sorted().compactMap { path in
             let suffix: Substring
             if path.hasPrefix(root.path + "/") { suffix = path.dropFirst(root.path.count) }
             else if path.hasPrefix(real + "/") { suffix = path.dropFirst(real.count) }
@@ -427,11 +513,15 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
         guard let node = item as? FileNode else { return nil }
         let cell = outlineView.makeView(withIdentifier: FileCell.id, owner: nil) as? FileCell ?? FileCell()
         let path = node.url.path
-        let change = git.changes[path] ?? git.changes[node.url.resolvingSymlinksInPath().path]
+        let real = node.url.resolvingSymlinksInPath().path
+        let inScope = changedOnly ? scoped[path] ?? scoped[real] : nil
+        let change = scope == .uncommitted || !changedOnly
+            ? git.changes[path] ?? git.changes[real] : inScope?.change
         let title = filterResults != nil && root != nil
             ? String(path.dropFirst(root!.path.count + 1)) : node.name
         cell.configure(icon: NSWorkspace.shared.icon(forFile: path), title: title, change: change,
-                       dirtyFolder: node.isDirectory && git.dirtyFolders.contains(path))
+                       dirtyFolder: node.isDirectory && git.dirtyFolders.contains(path),
+                       counts: inScope.map { ($0.added, $0.removed) })
         return cell
     }
 
@@ -546,11 +636,23 @@ final class FileCell: NSTableCellView {
 
     required init?(coder: NSCoder) { fatalError() }
 
-    func configure(icon image: NSImage, title: String, change: GitStatus.Change?, dirtyFolder: Bool) {
+    func configure(icon image: NSImage, title: String, change: GitStatus.Change?, dirtyFolder: Bool,
+                   counts: (added: Int?, removed: Int?)? = nil) {
         icon.image = image
         name.stringValue = title
         name.textColor = change.map { $0 == .deleted ? NSColor.secondaryLabelColor : $0.color } ?? .labelColor
-        if let change {
+        if let counts {
+            // "+22 −1" in the changed list, in place of the status letter.
+            let out = NSMutableAttributedString()
+            let font = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .medium)
+            if let a = counts.added, let r = counts.removed {
+                out.append(NSAttributedString(string: "+\(a)", attributes: [.font: font, .foregroundColor: NSColor.systemGreen]))
+                out.append(NSAttributedString(string: " −\(r)", attributes: [.font: font, .foregroundColor: NSColor.systemRed]))
+            } else {
+                out.append(NSAttributedString(string: "bin", attributes: [.font: font, .foregroundColor: NSColor.secondaryLabelColor]))
+            }
+            badge.attributedStringValue = out
+        } else if let change {
             badge.stringValue = change.badge
             badge.textColor = change.color
         } else {
@@ -635,5 +737,19 @@ final class MatchCell: NSTableCellView {
 extension FileTreeController {
     /// Self-test: the filter field's frame in window coordinates.
     var debugFilterFrameInWindow: NSRect { filter.convert(filter.bounds, to: nil) }
+    /// Self-test: the changed list's rows as "path +a −r" (or the badge).
+    var debugListRows: [String] {
+        (0..<outline.numberOfRows).compactMap { row in
+            guard let cell = outline.view(atColumn: 0, row: row, makeIfNecessary: true) as? NSTableCellView else { return nil }
+            let badge = cell.subviews.compactMap { $0 as? NSTextField }.last?.stringValue ?? ""
+            return "\(cell.textField?.stringValue ?? "") \(badge)"
+        }
+    }
+    var debugChangedTitle: String { changedButton.title }
+    /// Self-test: open the changed list's row like a click.
+    func debugOpenRow(_ row: Int) {
+        guard let node = outline.item(atRow: row) as? FileNode else { return }
+        onOpen?(node.url)
+    }
 }
 #endif

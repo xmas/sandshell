@@ -83,6 +83,10 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
     private var files: [OpenFile] = []
     private var current: OpenFile?
     private var git = GitStatus.empty
+    /// What Changes diffs against: uncommitted (with stage/revert), or a
+    /// commit / everything since the base (read-only), picked under Commits.
+    private var scope: ChangeScope = .uncommitted
+    private var scopeFiles: Set<String> = []
     private var changes = LineChanges()
     private var highlightPending = false
     /// The Changes view's hunks (unstaged vs the index, staged vs HEAD) and the
@@ -325,6 +329,27 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
     }
     #endif
 
+    /// The tree's changed list switched scope: diff files against it.
+    func setScope(_ scope: ChangeScope, files: Set<String>) {
+        guard scope != self.scope || files != scopeFiles else { return }
+        self.scope = scope
+        scopeFiles = files
+        if let current { show(current) }
+    }
+
+    /// Open from the changed list: straight to its Changes when it has some.
+    func open(_ url: URL, showingChanges: Bool) {
+        open(url)
+        guard showingChanges, let file = current, file.isText, file.mode != .changes, hasChanges(file.url) else { return }
+        file.mode = .changes
+        show(file)
+    }
+
+    private func hasChanges(_ url: URL) -> Bool {
+        if scope == .uncommitted { return git.changes[url.path] != nil }
+        return scopeFiles.contains(url.path) || scopeFiles.contains(url.resolvingSymlinksInPath().path)
+    }
+
     func updateGit(_ status: GitStatus) {
         git = status
         rebuildTabs()
@@ -394,7 +419,7 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
             quickLook.isHidden = false
             return
         }
-        let changed = git.changes[file.url.path] != nil
+        let changed = hasChanges(file.url)
         modeControl.isHidden = false
         modeControl.setEnabled(OpenFile.isMarkdown(file.url), forSegment: OpenFile.Mode.preview.rawValue)
         modeControl.setEnabled(changed, forSegment: OpenFile.Mode.changes.rawValue)
@@ -439,6 +464,7 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
     /// shows as all added, with Stage File.
     private func showDiff(_ file: OpenFile) {
         previewScroll.isHidden = false
+        if scope != .uncommitted { return showScopedDiff(file) }
         let untracked = git.changes[file.url.path] == .untracked
         let repo = git.repoRoot
         let path = file.url.path
@@ -462,6 +488,26 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
             self.shownPatches = patches
             self.preview.textStorage?.setAttributedString(
                 Self.renderChanges(unstaged: patches.unstaged, staged: patches.staged, editable: !file.isDirty))
+        }
+    }
+
+    /// A commit's (or the branch's) changes to the file: read-only.
+    private func showScopedDiff(_ file: OpenFile) {
+        guard let repo = git.repoRoot else { return }
+        let scope = scope
+        let path = scopeFiles.contains(file.url.path) ? file.url.path : file.url.resolvingSymlinksInPath().path
+        shownPatches = nil
+        Task { [weak self] in
+            let diff = await Task.detached(priority: .utility) { GitHistory.diff(repo: repo, scope: scope, path: path) }.value
+            guard let self, self.current === file, file.mode == .changes, self.scope == scope else { return }
+            let out = NSMutableAttributedString()
+            switch scope {
+            case .commit(let c): out.append(Self.sectionTitle("\(c.short) \(c.subject)"))
+            case .all: out.append(Self.sectionTitle("All changes on this branch"))
+            case .uncommitted: break
+            }
+            out.append(Self.renderDiff(diff))
+            self.preview.textStorage?.setAttributedString(out)
         }
     }
 

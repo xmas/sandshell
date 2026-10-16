@@ -98,6 +98,7 @@ enum SelfTest {
         case "tool-groups": await toolGroups()
         case "tables": await tables()
         case "codex-chat": await codexChat(window)
+        case "commits": await commitsView(window)
         case "sea": await sea(window)
         case "title-strip": await titleStrip(window)
         case "follow": await follow(window)
@@ -1618,6 +1619,71 @@ enum SelfTest {
         check(!open.contains("M Sandshell/App/SelfTest.swift"), "other groups stay closed")
         snapshot(view, "tool-groups-open")
         host.close()
+    }
+
+    // MARK: Commits
+
+    /// Files' Commits list: a branch's commits since its base, and picking a
+    /// commit lists only its files (+/- counts) with its diff in the editor.
+    /// Needs the `files` fixture (a git repo whose history includes "init").
+    private static func commitsView(_ window: MainWindowController) async {
+        // History logic on a scratch repo: a feature branch off main.
+        let scratch = URL(fileURLWithPath: out).appendingPathComponent("commits-repo")
+        try? FileManager.default.removeItem(at: scratch)
+        try? FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+        func sh(_ args: String...) { _ = GitStatus.git(["-C", scratch.path, "-c", "user.name=T", "-c", "user.email=t@t"] + args) }
+        func write(_ name: String, _ text: String) { try? text.write(to: scratch.appendingPathComponent(name), atomically: true, encoding: .utf8) }
+        sh("init", "-q", "-b", "main")
+        write("a.txt", "one\n"); sh("add", "."); sh("commit", "-qm", "base")
+        sh("checkout", "-qb", "feature")
+        write("a.txt", "one\ntwo\n"); write("b.txt", "bee\n"); sh("add", "."); sh("commit", "-qm", "feature work")
+        write("c.txt", "new\n")   // untracked
+        let history = GitHistory.commits(repo: scratch.path)
+        check(history.base != nil && history.commits.map(\.subject) == ["feature work"],
+              "a feature branch lists its own commits since main (\(history.commits.map(\.subject)))")
+        if let base = history.base {
+            let all = GitHistory.files(repo: scratch.path, scope: .all(base: base), untracked: [scratch.path + "/c.txt"])
+            check(all.map { ($0.path as NSString).lastPathComponent } == ["a.txt", "b.txt", "c.txt"]
+                  && all.first?.added == 1 && all.first?.removed == 0,
+                  "All changes: the branch's files plus untracked, with counts")
+        }
+        if let c = history.commits.first {
+            let files = GitHistory.files(repo: scratch.path, scope: .commit(c))
+            check(files.map { ($0.path as NSString).lastPathComponent } == ["a.txt", "b.txt"]
+                  && files.last?.change == .added, "a commit lists just its files (b.txt added)")
+        }
+
+        // The Files UI on the fixture.
+        window.toggleFiles()
+        guard await until(10, { window.inspectorFiles?.tree.git.repoRoot != nil }),
+              let files = window.inspectorFiles else { return check(false, "Files shows the fixture repo") }
+        let tree = files.tree
+        check(await until(10) { !tree.commits.isHidden && tree.commits.rows.count >= 2 }, "the Commits section lists history")
+        log("commit rows: \(tree.commits.rows)")
+        guard let i = tree.commits.rows.firstIndex(where: { if case .commit(let c) = $0 { c.subject == "init" } else { false } }) else {
+            return check(false, "the init commit is listed")
+        }
+        tree.commits.debugPick(i)
+        check(await until(10) { tree.changedOnly && !tree.debugListRows.isEmpty }, "picking a commit shows its files")
+        let rows = tree.debugListRows
+        log("init commit rows: \(rows)")
+        check(rows.contains { $0.hasPrefix("src/app.py +") } && !rows.contains { $0.contains("·") },
+              "its files show +/- counts (src/app.py among them)")
+        if let row = rows.firstIndex(where: { $0.hasPrefix("src/app.py") }) {
+            tree.debugOpenRow(row)
+            check(await until(10) { files.editor.previewText?.string.contains("+def f0():") == true },
+                  "opening one shows the commit's diff")
+            check(tree.debugChangedTitle.hasSuffix("files in ea0f97b") || tree.debugChangedTitle.contains("files in"),
+                  "the toggle says whose files these are (\(tree.debugChangedTitle))")
+            await wait(0.8)
+            snapshot(files.view, "commits-init")
+        }
+        // Back to Uncommitted: the working tree's changes again.
+        if let u = tree.commits.rows.firstIndex(of: .uncommitted) {
+            tree.commits.debugPick(u)
+            check(await until(10) { tree.scope == .uncommitted && tree.debugListRows.contains { $0.hasPrefix("src/app.py +") } },
+                  "Uncommitted changes lists the working tree's edits")
+        }
     }
 
     // MARK: Codex chat

@@ -64,7 +64,11 @@ final class FilesPaneController: NSViewController, NSSplitViewDelegate {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        tree.onOpen = { [weak self] url in self?.editor.open(url) }
+        tree.onOpen = { [weak self] url in
+            guard let self else { return }
+            self.editor.open(url, showingChanges: self.tree.changedOnly)
+        }
+        tree.onScope = { [weak self] scope, files in self?.editor.setScope(scope, files: files) }
         tree.onOpenAtLine = { [weak self] url, line, query in self?.editor.open(url, line: line, highlight: query) }
         tree.onGitStatus = { [weak self] status in self?.editor.updateGit(status) }
         tree.onFilesChanged = { [weak self] in self?.editor.filesChangedOnDisk() }
