@@ -504,7 +504,7 @@ final class TerminalStackController: NSViewController {
         surface.isHidden = false
         activeSessionID = nil
         // Where these files are and what they're shared with — not the session's name.
-        titleLabel.stringValue = "\(shortHome(url.path)) — \(access.titleSummary)"
+        titleLabel.stringValue = "\(url.path.tildeAbbreviated) — \(access.titleSummary)"
         titleLabel.isHidden = false
         contextBar.isHidden = true
         titleLabel.toolTip = "These files are shared with sandbox “\(access.sandbox)” — see the Sandbox line under the file list"
@@ -535,10 +535,10 @@ final class TerminalStackController: NSViewController {
             let (url, title) = files.resolve(in: controller)
             if let id = files.session, let session = controller.session(id: id) {
                 onChromeChange?(Chrome(agent: session.agent, title: session.name,
-                                       subtitle: "Files · \(shortHome(url.path))"))
+                                       subtitle: "Files · \(url.path.tildeAbbreviated)"))
                 updateHeaderStatus(id)
             } else {
-                onChromeChange?(Chrome(agent: nil, title: "Files — \(title)", subtitle: shortHome(url.path)))
+                onChromeChange?(Chrome(agent: nil, title: "Files — \(title)", subtitle: url.path.tildeAbbreviated))
                 onStatusChange?("", false)
             }
         } else {
@@ -1209,7 +1209,7 @@ final class TerminalStackController: NSViewController {
         let container = controller.containerName(for: session.containerAgentKind)
         headerBadge.configure(session.agent)
         headerName.stringValue = session.name
-        headerSub.stringValue = "\(container) · \(shortHome(session.workdir))"
+        headerSub.stringValue = "\(container) · \(session.workdir.tildeAbbreviated)"
         let program = session.agent == .shell ? "bash" : session.agent.rawValue
         titleLabel.stringValue = "\(program) — \(container)" + (session.isChat ? " · chat (ACP)" : "")
         // The strip shows where the session runs: sandbox, folder, branch.
@@ -1231,7 +1231,7 @@ final class TerminalStackController: NSViewController {
         chatModeButton.toolTip = modeTip
         chatModeButton.setAccessibilityLabel(modeTip)
         onChromeChange?(Chrome(agent: session.agent, title: session.name,
-                               subtitle: "\(container) · \(shortHome(session.workdir))"))
+                               subtitle: "\(container) · \(session.workdir.tildeAbbreviated)"))
     }
 
     /// Split the strip between the context chips and the Claude readout: the
@@ -1303,17 +1303,13 @@ final class TerminalStackController: NSViewController {
 
     @objc func showBackgroundTasks() {
         guard let id = activeSessionID, view.window != nil else { return }
-        if let open = backgroundPopover, open.isShown { open.close(); return }
         let list = BackgroundTasksView(controller: controller, sessionIDs: { [id] },
                                        loadOutput: { [controller] sid, task in await controller.backgroundOutput(sid, task) },
                                        stopTask: { [weak self] sid, task in await self?.chats[sid]?.session.stopBackgroundTask(task.id) ?? false },
                                        canStop: { [weak self] sid, _ in self?.chats[sid] != nil })
-        let popover = NSPopover()
-        popover.behavior = .transient
-        popover.contentViewController = NSHostingController(rootView: list.frame(width: 420, height: 380))
-        let anchor: NSView = backgroundPill.isHidden ? titleStrip : backgroundPill
-        popover.show(relativeTo: anchor.bounds, of: anchor, preferredEdge: anchor is NSButton ? .maxY : .minY)   // below (buttons are flipped)
-        backgroundPopover = popover
+        NSPopover.toggle(&backgroundPopover, below: backgroundPill.isHidden ? titleStrip : backgroundPill) {
+            .hosting(list.frame(width: 420, height: 380))
+        }
     }
 
     /// Model chooser: persist for the workspace; offer to restart a live Claude
@@ -1386,12 +1382,6 @@ final class TerminalStackController: NSViewController {
         onStatusChange?(label + time, rt.status == .working)
     }
 
-    private func shortHome(_ path: String) -> String {
-        let h = FileManager.default.homeDirectoryForCurrentUser.path
-        if path == h { return "~" }
-        if path.hasPrefix(h + "/") { return "~" + path.dropFirst(h.count) }
-        return path
-    }
 
     // MARK: Launch
 

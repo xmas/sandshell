@@ -233,8 +233,11 @@ final class MainWindowController: NSWindowController {
             self?.applyWindowTheme(c)
         }
 
-        // First open: configure mounts before bringing the container up.
-        if controller.needsConfiguration {
+        // First open: configure mounts before bringing the container up
+        // (scripted runs take the defaults: nobody's there to answer).
+        if controller.needsConfiguration, AutomatedRun.isActive {
+            controller.applyConfiguration(policy: controller.policy)
+        } else if controller.needsConfiguration {
             presentMountConfig(for: controller)
         } else {
             controller.openPrimaryContainer()

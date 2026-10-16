@@ -292,21 +292,17 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
     /// Edit ▸ Find ▸ Go to Line… (⌘L).
     @objc func goToLine(_ sender: Any?) {
         guard let file = current, file.isText else { return NSSound.beep() }
-        if let open = goToLinePopover, open.isShown { open.close(); return }
+        if let open = goToLinePopover, open.isShown { open.close(); goToLinePopover = nil; return }
         commitEditorText()
         if file.mode != .source { file.mode = .source; show(file) }
         let lines = editor.string.reduce(1) { $1 == "\n" ? $0 + 1 : $0 }
         let prompt = GoToLineController(lineCount: lines, currentLine: caretLine)
-        let popover = NSPopover()
-        popover.behavior = .transient
-        popover.contentViewController = prompt
-        prompt.onGo = { [weak self, weak popover] line, column in
-            popover?.close()
+        prompt.onGo = { [weak self] line, column in
+            self?.goToLinePopover?.close()
             self?.jump(toLine: min(line, lines), column: column)
         }
-        prompt.onCancel = { [weak popover] in popover?.close() }
-        goToLinePopover = popover
-        popover.show(relativeTo: header.bounds, of: header, preferredEdge: .minY)
+        prompt.onCancel = { [weak self] in self?.goToLinePopover?.close() }
+        NSPopover.toggle(&goToLinePopover, below: header) { prompt }
     }
 
     #if DEBUG
@@ -686,14 +682,12 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
             let message = "At \(place) `\(path)`:\n```\n\(code)\n```\n\(comment)"
             self.onAskAgent?(message)
         }
-        let popover = NSPopover()
-        popover.behavior = .transient
-        popover.contentViewController = field
-        askPopover = popover
         var rect = preview.firstRect(forCharacterRange: NSRange(location: charIndex, length: 5), actualRange: nil)
         rect = preview.window?.convertFromScreen(rect) ?? rect
         rect = preview.convert(rect, from: nil)
-        popover.show(relativeTo: rect, of: preview, preferredEdge: .maxY)
+        askPopover?.close()
+        askPopover = nil
+        NSPopover.toggle(&askPopover, below: preview, rect: rect) { field }
         field.focus()
     }
 

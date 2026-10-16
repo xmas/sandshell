@@ -385,7 +385,7 @@ struct KitConfigView: View {
         let skipped = startup.entries.filter { $0.outcome == .skipped }.count
         if skipped > 0 { parts.append("\(skipped) skipped") }
         if let started = startup.report?.startedAt {
-            parts.append("ran " + RelativeDateTimeFormatter().localizedString(for: started, relativeTo: Date()))
+            parts.append("ran " + Format.relative(started))
         }
         return parts.joined(separator: " · ")
     }
@@ -553,7 +553,7 @@ struct KitHubBrowserView: View {
                 HStack(spacing: 10) {
                     Label(formatPulls(kit.pullCount), systemImage: "arrow.down.circle")
                     if let d = kit.lastUpdated {
-                        Label(RelativeDateTimeFormatter().localizedString(for: d, relativeTo: Date()), systemImage: "clock")
+                        Label(Format.relative(d), systemImage: "clock")
                     }
                 }
                 .font(.caption2).foregroundStyle(.tertiary)

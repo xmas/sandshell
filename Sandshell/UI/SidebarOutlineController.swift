@@ -1543,33 +1543,9 @@ final class SessionCellView: NSTableCellView {
 }
 
 /// Coarse relative time for the session subline: "just now" → "2m ago" → "3h ago".
-func relativeActivity(_ date: Date, now: Date = Date()) -> String {
-    let s = Int(max(0, now.timeIntervalSince(date)))
-    switch s {
-    case ..<10: return "just now"
-    case ..<60: return "\(s)s ago"
-    case ..<3600: return "\(s / 60)m ago"
-    case ..<86400: return "\(s / 3600)h ago"
-    default: return "\(s / 86400)d ago"
-    }
-}
-
-/// Compact work-time for the narrow sidebar rail: "1s" → "2m" → "1h".
-func compactWorkTime(_ seconds: TimeInterval) -> String? {
-    let s = Int(ceil(seconds))
-    guard s >= 1 else { return nil }
-    if s < 60 { return "\(s)s" }
-    if s < 3600 { return "\(s / 60)m" }
-    return "\(s / 3600)h"
-}
-
-/// Format a work-time: "1s" → "3m 20s" → "1h 05m".
-func formatWorkTime(_ seconds: TimeInterval) -> String {
-    let s = Int(ceil(seconds))
-    if s < 60 { return "\(s)s" }
-    if s < 3600 { return "\(s / 60)m \(s % 60)s" }
-    return String(format: "%dh %02dm", s / 3600, (s % 3600) / 60)
-}
+func relativeActivity(_ date: Date, now: Date = Date()) -> String { Format.ago(date, now: now) }
+func compactWorkTime(_ seconds: TimeInterval) -> String? { Format.compactWorkTime(seconds) }
+func formatWorkTime(_ seconds: TimeInterval) -> String { Format.workTime(seconds) }
 
 final class SidebarIconButton: NSControl {
     private let imageView = NSImageView()

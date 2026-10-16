@@ -303,11 +303,7 @@ final class ChatSessionView: NSView {
     }
 
     @objc private func showMCP() {
-        let popover = NSPopover()
-        popover.behavior = .transient
-        popover.contentViewController = NSHostingController(rootView: MCPStatusView(session: session))
-        mcpPopover = popover
-        popover.show(relativeTo: mcpButton.bounds, of: mcpButton, preferredEdge: .maxY)
+        NSPopover.toggle(&mcpPopover, below: mcpButton) { .hosting(MCPStatusView(session: session)) }
     }
 
     /// Check MCP once the agent's up (and after each turn: servers come and go).
@@ -354,16 +350,12 @@ final class ChatSessionView: NSView {
 
     private func showUsage(_ usage: ChatSession.Usage?) {
         guard let usage else { usageLabel.stringValue = ""; return }
-        var parts = ["\(Self.compact(usage.used)) / \(Self.compact(usage.size)) ctx"]
+        var parts = ["\(Format.tokens(usage.used)) / \(Format.tokens(usage.size)) ctx"]
         if let cost = usage.cost { parts.append(String(format: "$%.2f", cost)) }
         usageLabel.stringValue = parts.joined(separator: " · ")
         usageLabel.toolTip = "Context: \(usage.used) of \(usage.size) tokens"
     }
 
-    private static func compact(_ n: Int) -> String {
-        n >= 1_000_000 ? String(format: "%gM", (Double(n) / 1_000_000 * 10).rounded() / 10)
-            : n >= 1000 ? String(format: "%.1fk", Double(n) / 1000) : "\(n)"
-    }
 
     private func showPermission(_ p: PendingPermission?) {
         permissionButtons.arrangedSubviews.forEach { $0.removeFromSuperview() }

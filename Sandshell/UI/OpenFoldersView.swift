@@ -144,13 +144,13 @@ struct OpenFoldersView: View {
             RootIconMark(profile: root, side: 28)
             VStack(alignment: .leading, spacing: 2) {
                 Text(root.name).font(.callout).fontWeight(.medium).lineLimit(1)
-                Text(shortHome(root.path)).font(.caption)
+                Text(root.path.tildeAbbreviated).font(.caption)
                     .foregroundStyle(isSelected ? Color.white.opacity(0.8) : Color.secondary)
                     .lineLimit(1).truncationMode(.middle)
             }
             Spacer()
             if let opened = root.lastOpened {
-                Text(RelativeDateTimeFormatter().localizedString(for: opened, relativeTo: Date()))
+                Text(Format.relative(opened))
                     .font(.caption)
                     .foregroundStyle(isSelected ? Color.white.opacity(0.7) : Color(nsColor: .tertiaryLabelColor))
             }
@@ -187,10 +187,6 @@ struct OpenFoldersView: View {
         if !filtered.contains(where: { $0.id == selectedID }) { selectedID = filtered.first?.id }
     }
 
-    private func shortHome(_ path: String) -> String {
-        let h = FileManager.default.homeDirectoryForCurrentUser.path
-        return path.hasPrefix(h) ? "~" + path.dropFirst(h.count) : path
-    }
 }
 
 /// A root folder's colored icon mark (rounded square in its brand color with

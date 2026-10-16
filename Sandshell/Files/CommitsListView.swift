@@ -150,7 +150,7 @@ final class CommitsListView: NSView, NSTableViewDataSource, NSTableViewDelegate 
         case .all: cell.configure(title: "All changes", detail: nil)
         case .uncommitted: cell.configure(title: "Uncommitted changes", detail: nil)
         case .commit(let c):
-            let when = RelativeDateTimeFormatter().localizedString(for: c.date, relativeTo: Date())
+            let when = Format.relative(c.date)
             cell.configure(title: c.subject, detail: "\(c.short) · \(c.author) · \(when)")
             cell.toolTip = "\(c.short) \(c.subject)\n\(c.author), \(c.date.formatted(date: .abbreviated, time: .shortened))"
         }

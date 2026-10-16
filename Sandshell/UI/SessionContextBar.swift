@@ -75,9 +75,7 @@ final class SessionContextBar: NSStackView {
         sandboxChip.set(title: access.system.map { "\($0.shortDistribution ?? "Linux") VM · \(access.sandbox)" }
                         ?? access.sandbox,
                         tip: "Runs in sandbox “\(access.sandbox)”, a Linux VM — click for what it can access")
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        let path = folder.path == home ? "~" : folder.path.hasPrefix(home + "/") ? "~" + folder.path.dropFirst(home.count) : folder.path
-        folderChip.set(title: folder.lastPathComponent, tip: "\(path) — \(access.summary)")
+        folderChip.set(title: folder.lastPathComponent, tip: "\(folder.path.tildeAbbreviated) — \(access.summary)")
         guard folder != self.folder else { onWidthChange?(); return }
         self.folder = folder
         branchChip.isHidden = true
@@ -120,12 +118,7 @@ final class SessionContextBar: NSStackView {
 
     @objc private func sandboxClicked() {
         guard let access else { return }
-        if let open = popover, open.isShown { open.close(); return }
-        let p = NSPopover()
-        p.behavior = .transient
-        p.contentViewController = NSHostingController(rootView: SandboxAccessPopover(access: access))
-        p.show(relativeTo: sandboxChip.bounds, of: sandboxChip, preferredEdge: .maxY)   // NSButton is flipped: maxY is below
-        popover = p
+        NSPopover.toggle(&popover, below: sandboxChip) { .hosting(SandboxAccessPopover(access: access)) }
     }
 
     @objc private func folderClicked() {

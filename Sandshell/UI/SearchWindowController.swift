@@ -210,7 +210,7 @@ private struct SearchView: View {
                         .font(.headline).lineLimit(2)
                     HStack(spacing: 6) {
                         Text(sel.agent.displayName.capitalized)
-                        if let folder = sel.folder { Text("·"); Text(shortPath(folder)).truncationMode(.middle) }
+                        if let folder = sel.folder { Text("·"); Text(folder.tildeAbbreviated).truncationMode(.middle) }
                     }
                     .font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 }
@@ -359,7 +359,7 @@ private struct ResultRow: View {
                 }
                 HStack(spacing: 5) {
                     if let folder = result.folder {
-                        Text(highlighted(shortPath(folder), query))
+                        Text(highlighted(folder.tildeAbbreviated, query))
                             .lineLimit(1).truncationMode(.middle)
                         Text("·")
                     }
@@ -413,9 +413,3 @@ private func highlighted(_ text: String, _ query: String) -> AttributedString {
     return attr
 }
 
-private func shortPath(_ p: String) -> String {
-    let home = FileManager.default.homeDirectoryForCurrentUser.path
-    if p == home { return "~" }
-    if p.hasPrefix(home + "/") { return "~" + p.dropFirst(home.count) }
-    return p
-}

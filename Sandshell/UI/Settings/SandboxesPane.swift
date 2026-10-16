@@ -138,7 +138,7 @@ private struct SandboxRow: View {
                         Image(systemName: ro ? "lock.fill" : "externaldrive.fill")
                             .font(.caption2)
                             .foregroundStyle(ro ? Color.secondary : Color.accentColor)
-                        Text(Self.shortPath(ro ? String(spec.dropLast(3)) : spec))
+                        Text((ro ? String(spec.dropLast(3)) : spec).tildeAbbreviated)
                             .font(.system(size: 11, design: .monospaced))
                             .lineLimit(1).truncationMode(.middle)
                         if ro { Text("ro").font(.caption2).foregroundStyle(.secondary) }
@@ -200,10 +200,4 @@ private struct SandboxRow: View {
     }
 
     /// Collapse `$HOME` to `~` for compact mount display.
-    private static func shortPath(_ p: String) -> String {
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        if p == home { return "~" }
-        if p.hasPrefix(home + "/") { return "~" + p.dropFirst(home.count) }
-        return p
-    }
 }

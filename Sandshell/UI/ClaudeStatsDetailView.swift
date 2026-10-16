@@ -358,9 +358,8 @@ struct ClaudeStatsDetailView: View {
             if let p = rl.sevenDay?.usedPercentage { parts.append("7d \(Int(p))%") }
             if let p = rl.spendLimit?.usedPercentage { parts.append("spend \(Int(p))%") }
             var detail: [String] = []
-            let df = RelativeDateTimeFormatter()
-            if let r = rl.fiveHour?.resetsAt { detail.append("5h resets \(df.localizedString(for: Date(timeIntervalSince1970: r), relativeTo: Date()))") }
-            if let r = rl.sevenDay?.resetsAt { detail.append("7d resets \(df.localizedString(for: Date(timeIntervalSince1970: r), relativeTo: Date()))") }
+            if let r = rl.fiveHour?.resetsAt { detail.append("5h resets \(Format.relative(Date(timeIntervalSince1970: r)))") }
+            if let r = rl.sevenDay?.resetsAt { detail.append("7d resets \(Format.relative(Date(timeIntervalSince1970: r)))") }
             if !parts.isEmpty {
                 rows.append(Row(label: "Plan limits", value: parts.joined(separator: " · "),
                                 detail: detail.isEmpty ? nil : detail.joined(separator: " · ")))
@@ -395,17 +394,7 @@ struct ClaudeStatsDetailView: View {
 
 /// Number formatting shared by the strip and the popover.
 enum ClaudeStatsFormat {
-    /// 15500 → "15.5k", 200000 → "200k", 1_250_000 → "1.25M".
-    static func compact(_ n: Int) -> String {
-        switch n {
-        case ..<1000: return "\(n)"
-        case ..<1_000_000:
-            let k = Double(n) / 1000
-            return k >= 100 || k == k.rounded() ? "\(Int(k.rounded()))k" : String(format: "%.1fk", k)
-        case ..<1_000_000_000: return String(format: "%.2fM", Double(n) / 1_000_000)
-        default: return String(format: "%.2fB", Double(n) / 1_000_000_000)
-        }
-    }
+    static func compact(_ n: Int) -> String { Format.tokens(n) }
     static func duration(_ ms: Double) -> String {
         let s = Int(ms / 1000)
         return s >= 3600 ? "\(s / 3600)h \((s % 3600) / 60)m" : s >= 60 ? "\(s / 60)m \(s % 60)s" : "\(s)s"

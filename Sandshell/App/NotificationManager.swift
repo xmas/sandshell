@@ -35,7 +35,7 @@ final class NotificationManager: NSObject {
         }
         var bodyParts: [String] = []
         if workSeconds >= 1 { bodyParts.append(formatWorkTime(workSeconds)) }
-        bodyParts.append(shortenHome(workdir))
+        bodyParts.append(workdir.tildeAbbreviated)
         content.body = bodyParts.joined(separator: " · ")
         content.sound = .default
         content.userInfo = ["sessionID": sessionID.uuidString]
@@ -79,12 +79,6 @@ final class NotificationManager: NSObject {
             identifier: "bg-\(sessionID.uuidString)-\(task.id)", content: content, trigger: nil))
     }
 
-    private func shortenHome(_ path: String) -> String {
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        if path == home { return "~" }
-        if path.hasPrefix(home + "/") { return "~" + path.dropFirst(home.count) }
-        return path
-    }
 }
 
 extension NotificationManager: @preconcurrency UNUserNotificationCenterDelegate {

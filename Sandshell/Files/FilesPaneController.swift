@@ -134,20 +134,14 @@ final class FilesPaneController: NSViewController, NSSplitViewDelegate {
 
     @objc func openQuickly(_ sender: Any?) {
         guard let root = tree.root else { NSSound.beep(); return }
-        if let open = openQuicklyPopover, open.isShown { open.close(); return }
         let finder = OpenQuicklyController(root: root)
-        let popover = NSPopover()
-        popover.behavior = .transient
-        popover.contentViewController = finder
-        finder.onOpen = { [weak self, weak popover] url in
-            popover?.close()
+        finder.onOpen = { [weak self] url in
+            self?.openQuicklyPopover?.close()
             self?.editor.open(url)
             self?.tree.reveal(url)
         }
-        finder.onCancel = { [weak popover] in popover?.close() }
-        openQuicklyPopover = popover
-        let anchor = editor.headerView
-        popover.show(relativeTo: anchor.bounds, of: anchor, preferredEdge: .minY)
+        finder.onCancel = { [weak self] in self?.openQuicklyPopover?.close() }
+        NSPopover.toggle(&openQuicklyPopover, below: editor.headerView) { finder }
     }
 
     #if DEBUG

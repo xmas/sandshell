@@ -207,20 +207,12 @@ final class ClaudeStatsView: NSView {
     override func mouseDown(with event: NSEvent) { showDetails() }
 
     @objc private func showDetails() {
-        if let popover, popover.isShown { popover.performClose(nil); return }
-        ClaudeUsageStore.shared.refresh()
+        if popover?.isShown != true { ClaudeUsageStore.shared.refresh() }
         let host = NSHostingController(rootView: detailView())
-        let pop = NSPopover()
         // Semitransient (not transient): the colour pickers open NSColorPanel,
         // a separate window, which would dismiss a transient popover.
-        pop.behavior = .semitransient
-        pop.contentViewController = host
-        // Anchor on the ⓘ button and open below the title strip. `.minY` is the
-        // bottom edge only in unflipped coordinates, so pick the edge from the
-        // anchor's own flippedness rather than assuming.
-        let anchor: NSView = infoButton.isHidden ? self : infoButton
-        pop.show(relativeTo: anchor.bounds, of: anchor, preferredEdge: anchor.isFlipped ? .maxY : .minY)
-        popover = pop
+        guard NSPopover.toggle(&popover, below: infoButton.isHidden ? self : infoButton,
+                               behavior: .semitransient, content: { host }) != nil else { return }
         detailHost = host
     }
 

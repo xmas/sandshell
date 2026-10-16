@@ -135,10 +135,6 @@ struct SandboxAccess: Equatable {
 struct SandboxAccessView: View {
     let access: SandboxAccess
 
-    private static func short(_ path: String) -> String {
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        return path == home ? "~" : path.hasPrefix(home + "/") ? "~" + path.dropFirst(home.count) : path
-    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -182,7 +178,7 @@ struct SandboxAccessView: View {
                         Image(systemName: m.readOnly ? "lock" : "lock.open")
                             .foregroundStyle(m.readOnly ? Color.green : Color.orange)
                             .frame(width: 14)
-                        Text(Self.short(m.path)).font(.system(size: 11.5, design: .monospaced))
+                        Text(m.path.tildeAbbreviated).font(.system(size: 11.5, design: .monospaced))
                             .lineLimit(1).truncationMode(.middle)
                         Spacer(minLength: 8)
                         Text(m.readOnly ? "read-only" : "read-write").font(.caption).foregroundStyle(.secondary)
