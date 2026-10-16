@@ -648,16 +648,7 @@ final class SidebarListController: NSViewController {
     /// "Add Folder…" / "Choose Existing Folder…" — register an existing
     /// (possibly nested) subfolder via a picker.
     @objc private func addExistingFolderClicked() {
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.canCreateDirectories = true
-        panel.allowsMultipleSelection = false
-        panel.directoryURL = controller.workspace.rootURL
-        panel.prompt = "Add Folder"
-        panel.message = "Choose a folder inside \(controller.workspace.rootURL.lastPathComponent)."
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        controller.addExistingFolder(at: url)
+        controller.chooseExistingFolder()
     }
 
     private struct NewSessionRequest {

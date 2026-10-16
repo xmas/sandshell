@@ -22,6 +22,10 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
     private(set) var git = GitStatus.empty
     private var rootNode: FileNode?
     private var watcher: FileWatcher?
+    /// The repo's .git, when the root is a folder inside the repo (commits and
+    /// checkouts happen there, outside the root's own watch).
+    private var gitWatcher: FileWatcher?
+    private var gitWatcherPath: String?
     private var refreshPending = false
     private var filterResults: [FileNode]?
     /// "?query" content-search results, grouped by file.
@@ -185,6 +189,9 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
         root = url
         watcher?.stop()
         watcher = nil
+        gitWatcher?.stop()
+        gitWatcher = nil
+        gitWatcherPath = nil
         filter.stringValue = ""
         filterResults = nil
         searchGroups = nil
@@ -247,6 +254,11 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
         Task { [weak self] in
             let status = await GitStatus.load(for: root)
             guard let self, self.root == root else { return }
+            if let repo = status.repoRoot, repo != root.realPath, self.gitWatcherPath != repo + "/.git" {
+                self.gitWatcher?.stop()
+                self.gitWatcherPath = repo + "/.git"
+                self.gitWatcher = FileWatcher(path: repo + "/.git") { [weak self] in self?.scheduleRefresh() }
+            }
             if status != self.git {
                 self.git = status
                 if self.changedOnly && self.filter.stringValue.isEmpty { self.showChangedList() }

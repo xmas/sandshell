@@ -94,6 +94,8 @@ final class SessionContextBar: NSStackView {
             }.value
             guard let self else { return }
             self.gitTask = nil
+            // The bar moved to another folder meanwhile: this is old news; read that one.
+            guard self.folder == folder else { self.refreshGit(); return }
             self.git = status
             if status.repoRoot == nil {
                 self.branchChip.set(title: "No git", tip: "\(folder.lastPathComponent) isn't a git repository")

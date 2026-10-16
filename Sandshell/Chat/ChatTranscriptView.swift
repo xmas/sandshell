@@ -309,14 +309,7 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
     // MARK: Reply hover
 
     private static func actionButton(_ symbol: String, _ label: String, _ action: Selector, _ target: AnyObject) -> NSButton {
-        let b = NSButton(image: NSImage(systemSymbolName: symbol, accessibilityDescription: label)?
-            .withSymbolConfiguration(.init(pointSize: 11, weight: .medium)) ?? NSImage(), target: target, action: action)
-        b.isBordered = false
-        b.toolTip = label
-        b.contentTintColor = .secondaryLabelColor
-        b.widthAnchor.constraint(equalToConstant: 24).isActive = true
-        b.heightAnchor.constraint(equalToConstant: 20).isActive = true
-        return b
+        NSButton.symbol(symbol, label: label, size: NSSize(width: 24, height: 20), target: target, action: action)
     }
 
     /// Which reply (agent text segment) is under `point`, and its frame.

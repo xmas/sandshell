@@ -725,15 +725,8 @@ final class TerminalStackController: NSViewController {
             (splitDownButton, "rectangle.split.1x2", "Split Down (⇧⌘D)", #selector(splitDownClicked), "pane-split-down"),
             (closePaneButton, "xmark", "Close Pane (⌥⌘W)", #selector(closePaneClicked), "pane-close"),
         ] {
-            button.isBordered = false
-            button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: tip)?
-                .withSymbolConfiguration(.init(pointSize: 11, weight: .medium))
-            button.imagePosition = .imageOnly
-            button.toolTip = tip
-            button.target = self
-            button.action = action
-            button.setAccessibilityLabel(tip)
-            button.setAccessibilityIdentifier(id)
+            // Tinted by the theme (applyTheme).
+            button.configureSymbol(symbol, label: tip, tint: nil, target: self, action: action, id: id)
         }
         closePaneButton.isHidden = true
         paneControls.orientation = .horizontal

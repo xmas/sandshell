@@ -734,21 +734,7 @@ extension MainWindowController: NSToolbarDelegate {
     /// Sequoia-style glyph, with no bezel, glass capsule, or focus ring.
     private static func plainToolbarButton(symbol: String, label: String,
                                            target: AnyObject?, action: Selector) -> NSButton {
-        let image = NSImage(systemSymbolName: symbol, accessibilityDescription: label)?
-            .withSymbolConfiguration(.init(pointSize: 15, weight: .medium))
-        let button = NSButton(image: image ?? NSImage(), target: target, action: action)
-        button.isBordered = false
-        button.bezelStyle = .texturedRounded
-        button.imagePosition = .imageOnly
-        button.imageScaling = .scaleProportionallyDown
-        button.focusRingType = .none
-        button.refusesFirstResponder = true
-        button.setButtonType(.momentaryChange)
-        button.contentTintColor = .secondaryLabelColor
-        button.translatesAutoresizingMaskIntoConstraints = false
-        button.widthAnchor.constraint(equalToConstant: 28).isActive = true
-        button.heightAnchor.constraint(equalToConstant: 24).isActive = true
-        return button
+        NSButton.symbol(symbol, label: label, pointSize: 15, size: NSSize(width: 28, height: 24), target: target, action: action)
     }
 
     @objc private func toggleSidebarFromToolbar() { toggleSidebar() }

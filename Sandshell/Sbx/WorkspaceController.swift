@@ -1391,6 +1391,20 @@ extension WorkspaceController {
         return registerFolder(relativePath: relativePath)
     }
 
+    /// "Add Folder…": pick an existing folder inside the workspace and add it.
+    func chooseExistingFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.directoryURL = workspace.rootURL
+        panel.prompt = "Add Folder"
+        panel.message = "Choose a folder inside \(workspace.rootURL.lastPathComponent)."
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        addExistingFolder(at: url)
+    }
+
     /// Register an existing directory (possibly nested) as a folder row. Returns
     /// nil if the directory is not under the workspace root or is already a row.
     @discardableResult
