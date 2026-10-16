@@ -1305,7 +1305,9 @@ final class TerminalStackController: NSViewController {
         guard let id = activeSessionID, view.window != nil else { return }
         if let open = backgroundPopover, open.isShown { open.close(); return }
         let list = BackgroundTasksView(controller: controller, sessionIDs: { [id] },
-                                       loadOutput: { [controller] sid, task in await controller.backgroundOutput(sid, task) })
+                                       loadOutput: { [controller] sid, task in await controller.backgroundOutput(sid, task) },
+                                       stopTask: { [weak self] sid, task in await self?.chats[sid]?.session.stopBackgroundTask(task.id) ?? false },
+                                       canStop: { [weak self] sid, _ in self?.chats[sid] != nil })
         let popover = NSPopover()
         popover.behavior = .transient
         popover.contentViewController = NSHostingController(rootView: list.frame(width: 420, height: 380))

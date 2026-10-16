@@ -12,6 +12,9 @@ struct BackgroundTasksView: View {
     var loadOutput: ((UUID, BackgroundTask) async -> String?)?
     /// Window panel: show that session.
     var onSelectSession: ((UUID) -> Void)?
+    /// Stop a running task (chats only: the agent stops it); nil where it can't.
+    var stopTask: ((UUID, BackgroundTask) async -> Bool)?
+    var canStop: ((UUID, BackgroundTask) -> Bool)?
 
     private var groups: [(session: Session, tasks: [BackgroundTask])] {
         sessionIDs().compactMap { id in
@@ -64,7 +67,11 @@ struct BackgroundTasksView: View {
             }
             if !running.isEmpty {
                 header("Running", running.count)
-                ForEach(running) { BackgroundTaskRow(task: $0, sessionID: session.id, loadOutput: loadOutput) }
+                ForEach(running) { task in
+                    BackgroundTaskRow(task: task, sessionID: session.id, loadOutput: loadOutput,
+                                      stop: canStop?(session.id, task) == true && stopTask != nil
+                                          ? { await stopTask!(session.id, task) } : nil)
+                }
             }
             if !finished.isEmpty {
                 header("Finished", finished.count)
@@ -84,6 +91,9 @@ private struct BackgroundTaskRow: View {
     let task: BackgroundTask
     let sessionID: UUID
     let loadOutput: ((UUID, BackgroundTask) async -> String?)?
+    var stop: (() async -> Bool)?
+    @State private var stopping = false
+    @State private var stopFailed = false
     @State private var output: String?
     @State private var showOutput = false
     @State private var loading = false
@@ -98,6 +108,20 @@ private struct BackgroundTaskRow: View {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
                     Text(task.title).fontWeight(.medium).lineLimit(2)
                     Spacer(minLength: 8)
+                    if task.isRunning, let stop {
+                        if stopping { ProgressView().controlSize(.mini) }
+                        Button("Stop") {
+                            stopping = true
+                            Task {
+                                stopFailed = !(await stop())
+                                stopping = false
+                            }
+                        }
+                        .controlSize(.small)
+                        .disabled(stopping)
+                        .help("Stop this task (the agent is told it was stopped)")
+                        .accessibilityIdentifier("background-task-stop")
+                    }
                     stateBadge
                 }
                 if let detail = task.detail, detail != task.title {
@@ -108,6 +132,9 @@ private struct BackgroundTaskRow: View {
                     Text(line).font(.callout)
                         .foregroundStyle(task.state == .failed ? Color.red : Color.secondary)
                         .lineLimit(3).textSelection(.enabled)
+                }
+                if stopFailed {
+                    Text("Couldn’t stop it — it may have just finished.").font(.caption).foregroundStyle(.red)
                 }
                 if task.kind == .monitor, task.events > 0 {
                     Text("\(task.events) event\(task.events == 1 ? "" : "s")").font(.caption).foregroundStyle(.tertiary)
@@ -193,12 +220,15 @@ private struct BackgroundTaskRow: View {
 final class BackgroundTasksWindowController: NSWindowController {
     init(controller: WorkspaceController, title: String,
          loadOutput: @escaping (UUID, BackgroundTask) async -> String?,
-         onSelectSession: @escaping (UUID) -> Void) {
+         onSelectSession: @escaping (UUID) -> Void,
+         canStop: ((UUID, BackgroundTask) -> Bool)? = nil,
+         stopTask: ((UUID, BackgroundTask) async -> Bool)? = nil) {
         let view = BackgroundTasksView(
             controller: controller,
             sessionIDs: { [weak controller] in controller?.orderedSessions.map(\.id) ?? [] },
             loadOutput: loadOutput,
-            onSelectSession: onSelectSession)
+            onSelectSession: onSelectSession,
+            stopTask: stopTask, canStop: canStop)
         let hosting = NSHostingController(rootView: view.frame(minWidth: 380, minHeight: 260))
         let window = NSPanel(contentViewController: hosting)
         window.styleMask = [.titled, .closable, .resizable, .utilityWindow, .nonactivatingPanel]

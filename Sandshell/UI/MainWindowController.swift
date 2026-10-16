@@ -399,7 +399,9 @@ final class MainWindowController: NSWindowController {
                 onSelectSession: { [weak self] id in
                     self?.workspace?.selection = .session(id)
                     self?.window?.makeKeyAndOrderFront(nil)
-                })
+                },
+                canStop: { [weak self] sid, _ in self?.detail?.surfaces.chats[sid] != nil },
+                stopTask: { [weak self] sid, task in await self?.detail?.surfaces.chats[sid]?.session.stopBackgroundTask(task.id) ?? false })
         }
         backgroundTasksPanel?.showWindow(nil)
     }

@@ -1,0 +1,22 @@
+schemaVersion: "2"
+kind: mixin
+name: sandshell-claude
+displayName: Sandshell chats for Claude
+description: >-
+  Preinstalls the ACP adapter Sandshell's native Claude chats run in this
+  sandbox (@agentclientprotocol/claude-agent-acp), with Sandshell's small
+  wrapper for undoing a turn's file edits and MCP server status.
+requires:
+  agent: claude
+permissions:
+  network:
+    allow:
+      - registry.npmjs.org
+setup:
+  install:
+    - command: >-
+        mkdir -p /home/agent/.sandshell/acp &&
+        npm install --silent --no-audit --no-fund --omit=optional
+        --prefix /home/agent/.sandshell/acp/0.90.0 @agentclientprotocol/claude-agent-acp@0.90.0
+      user: "1000"
+      description: Install the Claude ACP adapter where Sandshell looks for it

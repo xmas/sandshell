@@ -149,6 +149,8 @@ enum ChatRenderer {
                                         color: .secondaryLabelColor)] + paras, .card), before: 4, after: 4)
         case .image(_, let data):
             return image(data)
+        case .fileChanges(let turn, let paths, let restored):
+            return spaced(fileChanges(turn: turn, paths: paths, restored: restored), before: 2, after: 6)
         case .notice(_, let text, let isError):
             return spaced(line(text, font: .systemFont(ofSize: 11.5), color: isError ? .systemRed : .secondaryLabelColor),
                           before: 4, after: 4)
@@ -156,6 +158,31 @@ enum ChatRenderer {
     }
 
     // MARK: Pieces
+
+    static func undoURL(_ turn: String) -> URL { URL(string: "sandshell-chat://undo/\(turn)")! }
+
+    /// "Changed 3 files: a.swift, b.swift, c.swift · Undo", or once undone,
+    /// "Restored 3 files to before this message".
+    private static func fileChanges(turn: String, paths: [String], restored: Bool) -> NSAttributedString {
+        let font = NSFont.systemFont(ofSize: 11.5)
+        let names = paths.map { ($0 as NSString).lastPathComponent }
+        let list = names.prefix(4).joined(separator: ", ") + (names.count > 4 ? " +\(names.count - 4) more" : "")
+        let count = paths.count == 1 ? "1 file" : "\(paths.count) files"
+        let out = NSMutableAttributedString()
+        if restored {
+            out.append(NSAttributedString(string: "↺  Restored \(count) to before this message", attributes: [
+                .font: font, .foregroundColor: NSColor.secondaryLabelColor]))
+        } else {
+            out.append(NSAttributedString(string: "✎  Changed \(count): \(list)", attributes: [
+                .font: font, .foregroundColor: NSColor.secondaryLabelColor, .toolTip: paths.joined(separator: "\n")]))
+            out.append(NSAttributedString(string: "   ", attributes: [.font: font]))
+            out.append(NSAttributedString(string: "Undo", attributes: [
+                .font: NSFont.systemFont(ofSize: 11.5, weight: .semibold), .foregroundColor: NSColor.controlAccentColor,
+                .link: undoURL(turn), .toolTip: "Put these files back as they were before this message"]))
+        }
+        out.append(NSAttributedString(string: "\n", attributes: [.font: font]))
+        return out
+    }
 
     private static func line(_ text: String, font: NSFont, color: NSColor) -> NSAttributedString {
         NSAttributedString(string: text + "\n", attributes: [.font: font, .foregroundColor: color])

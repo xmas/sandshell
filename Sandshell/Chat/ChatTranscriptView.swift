@@ -30,6 +30,8 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
 
     /// Fork the conversation into a new chat, up to and including this reply's text.
     var onFork: ((_ replyText: String) -> Void)?
+    /// "Undo" on a turn's changed-files line.
+    var onUndo: ((_ turn: String) -> Void)?
     /// The reply under the pointer: a soft highlight behind it and Copy / Fork.
     private var hovered: Int?
     private let hoverBackground = NSView()
@@ -424,6 +426,10 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
             var clean = URLComponents(url: url, resolvingAgainstBaseURL: false)
             clean?.fragment = nil
             if let file = clean?.url { onOpenFile?(file, line) }
+            return true
+        }
+        if let url = link as? URL, url.scheme == "sandshell-chat", url.host == "undo" {
+            onUndo?(url.lastPathComponent)
             return true
         }
         guard let url = link as? URL, url.scheme == "sandshell-chat", url.host == "toggle" else { return false }

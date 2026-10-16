@@ -210,10 +210,28 @@ enum SbxCommand {
     /// start vs ~1.3s for npx). Installs into a temp dir then renames into place,
     /// so concurrent first starts can't corrupt it. npm's output goes to stderr:
     /// stdout is the JSON-RPC channel.
-    private static func npmAdapterLaunch(dir: String, package: String, bin: String, omitOptional: Bool) -> String {
+    private static func npmAdapterLaunch(dir: String, package: String, bin: String, omitOptional: Bool,
+                                         wrapper: String? = nil) -> String {
         let omit = omitOptional ? " --omit=optional" : ""
-        return #"D="$HOME/.sandshell/acp/\#(dir)"; B="$D/node_modules/.bin/\#(bin)"; if [ ! -x "$B" ]; then mkdir -p "$HOME/.sandshell/acp"; T=$(mktemp -d "$D.tmp.XXXXXX"); if npm install --silent --no-audit --no-fund\#(omit) --prefix "$T" \#(package) >&2; then mv -T "$T" "$D" 2>/dev/null || rm -rf "$T"; else rm -rf "$T"; echo "sandshell: couldn't install \#(package)" >&2; exit 1; fi; fi; exec "$B""#
+        let install = #"D="$HOME/.sandshell/acp/\#(dir)"; B="$D/node_modules/.bin/\#(bin)"; if [ ! -x "$B" ]; then mkdir -p "$HOME/.sandshell/acp"; T=$(mktemp -d "$D.tmp.XXXXXX"); if npm install --silent --no-audit --no-fund\#(omit) --prefix "$T" \#(package) >&2; then mv -T "$T" "$D" 2>/dev/null || rm -rf "$T"; else rm -rf "$T"; echo "sandshell: couldn't install \#(package)" >&2; exit 1; fi; fi; "#
+        guard let wrapper else { return install + #"exec "$B""# }
+        // Written fresh each launch (it's tiny), so it always matches this app.
+        return install + #"W="$D/sandshell-acp.mjs"; printf '%s' '\#(wrapper)' > "$W" && exec node "$W""#
     }
+
+    /// The bundled copy of Sandshell's kits (`kits/` in the repo).
+    static var bundledKits: URL? { Bundle.main.url(forResource: "kits", withExtension: nil) }
+
+    /// Runs the Claude ACP adapter unchanged, adding what ACP doesn't carry yet
+    /// — rewinding a turn's file edits, MCP server status / reconnect / on-off —
+    /// on the adapter's own `_session/async_task/stop` request: an
+    /// `asyncTaskId` of `sandshell:<base64url JSON>` is ours, the reply's
+    /// `_meta.sandshell` the answer. It lives in the sandshell-claude kit (one
+    /// source); without the kit, the launch writes it next to the adapter.
+    static let claudeACPWrapper: String? = bundledKits
+        .map { $0.appendingPathComponent("sandshell-claude/files/home/.sandshell/acp/\(claudeACPVersion)/sandshell-acp.mjs") }
+        .flatMap { try? String(contentsOf: $0, encoding: .utf8) }
+        .flatMap { $0.contains("'") ? nil : $0 }   // it goes inside '…' in the launch script
 
     /// In-sandbox program (a `bash -c` body after PATH setup) that speaks ACP on
     /// stdio for `agent`, or nil when it has none.
@@ -226,7 +244,7 @@ enum SbxCommand {
             let auth = useProxyAuth(sbxProxyAuth) ? proxyAuthSetup + " " : ""
             return auth + #"export CLAUDE_CODE_EXECUTABLE="$(command -v claude)"; "#
                 + npmAdapterLaunch(dir: claudeACPVersion, package: claudeACPPackage,
-                                   bin: "claude-agent-acp", omitOptional: true)
+                                   bin: "claude-agent-acp", omitOptional: true, wrapper: claudeACPWrapper)
         case .codex:
             // The adapter runs its own pinned codex (a regular dependency, not the
             // image's): it talks to `codex app-server`, whose protocol moves with

@@ -22,6 +22,9 @@ final class ChatSessionView: NSView {
     private let modePopup = NSPopUpButton()
     private let modelPopup = NSPopUpButton()
     private let sendButton = NSButton()
+    /// "MCP 3" (a red dot when one's failing): opens the servers popover.
+    private let mcpButton = NSButton()
+    private var mcpPopover: NSPopover?
     private var bag: Set<AnyCancellable> = []
     /// History replayed while resuming, shown in one go when it's done.
     private var heldReplay: [ChatItem]?
@@ -150,7 +153,18 @@ final class ChatSessionView: NSView {
 
         let spacer = NSView()
         spacer.setContentHuggingPriority(.init(1), for: .horizontal)
-        let footer = NSStackView(views: [modePopup, modelPopup, statusLabel, spacer, usageLabel, sendButton])
+        mcpButton.bezelStyle = .accessoryBarAction
+        mcpButton.controlSize = .small
+        mcpButton.image = NSImage(systemSymbolName: "point.3.connected.trianglepath.dotted", accessibilityDescription: "MCP servers")
+        mcpButton.imagePosition = .imageLeading
+        mcpButton.title = "MCP"
+        mcpButton.toolTip = "MCP servers in this session"
+        mcpButton.target = self
+        mcpButton.action = #selector(showMCP)
+        mcpButton.setAccessibilityIdentifier("chat-mcp")
+        mcpButton.isHidden = !session.hasExtras
+        transcript.onUndo = { [weak self] turn in self?.undo(turn) }
+        let footer = NSStackView(views: [modePopup, modelPopup, mcpButton, statusLabel, spacer, usageLabel, sendButton])
         footer.orientation = .horizontal
         footer.spacing = 8
 
@@ -213,6 +227,7 @@ final class ChatSessionView: NSView {
             self.transcript.update(items)
         }.store(in: &bag)
         session.$permission.sink { [weak self] in self?.showPermission($0) }.store(in: &bag)
+        session.$mcpServers.sink { [weak self] in self?.showMCPSummary($0) }.store(in: &bag)
         session.$phase.sink { [weak self] phase in
             guard let self else { return }
             if case .starting = phase {} else if let held = self.heldReplay {
@@ -254,6 +269,7 @@ final class ChatSessionView: NSView {
             // Nothing to type into until the agent is up.
             composer.setEnabled(false)
         case .ready:
+            refreshMCPQuietly()
             statusLabel.stringValue = "↩ send · ⇧↩ new line"
             sendButton.title = "Send"; sendButton.isEnabled = true
             composer.setEnabled(true)
@@ -269,6 +285,67 @@ final class ChatSessionView: NSView {
             sendButton.isEnabled = reconnect
             composer.setEnabled(false)
         }
+    }
+
+    // MARK: MCP
+
+    private func showMCPSummary(_ servers: [ChatSession.MCPServer]?) {
+        guard let servers else { mcpButton.title = "MCP"; mcpButton.contentTintColor = nil; return }
+        let failing = servers.filter { $0.status == "failed" || $0.status == "needs-auth" }
+        mcpButton.title = servers.isEmpty ? "MCP" : "MCP \(servers.filter { $0.status == "connected" }.count)/\(servers.count)"
+        mcpButton.contentTintColor = failing.isEmpty ? nil : .systemRed
+        mcpButton.toolTip = failing.isEmpty ? "MCP servers in this session"
+            : "\(failing.map(\.name).joined(separator: ", ")) \(failing.count == 1 ? "isn’t" : "aren’t") working"
+    }
+
+    @objc private func showMCP() {
+        let popover = NSPopover()
+        popover.behavior = .transient
+        popover.contentViewController = NSHostingController(rootView: MCPStatusView(session: session))
+        mcpPopover = popover
+        popover.show(relativeTo: mcpButton.bounds, of: mcpButton, preferredEdge: .maxY)
+    }
+
+    /// Check MCP once the agent's up (and after each turn: servers come and go).
+    private func refreshMCPQuietly() {
+        guard session.hasExtras else { return }
+        Task { try? await session.refreshMCP() }
+    }
+
+    // MARK: Undo a turn
+
+    /// Put back the files a turn changed, after saying which.
+    func undo(_ turn: String) {
+        Task { @MainActor in
+            do {
+                let preview = try await session.previewRewind(turn)
+                guard preview.canRewind, !preview.files.isEmpty else {
+                    return alert("Nothing to undo", preview.error ?? "These files are already as they were before this message.")
+                }
+                let names = preview.files.map { ($0 as NSString).lastPathComponent }
+                let a = NSAlert()
+                a.messageText = "Undo the changes from this message?"
+                a.informativeText = "Puts \(names.count == 1 ? "1 file" : "\(names.count) files") back as they were before it "
+                    + "(+\(preview.insertions) −\(preview.deletions) lines):\n\(names.prefix(8).joined(separator: ", "))"
+                    + (names.count > 8 ? " and \(names.count - 8) more" : "")
+                    + "\n\nChanges made by shell commands aren’t tracked and stay as they are. The conversation isn’t changed."
+                a.addButton(withTitle: "Undo Changes")
+                a.addButton(withTitle: "Cancel")
+                guard let window else { return }
+                guard await a.beginSheetModal(for: window) == .alertFirstButtonReturn else { return }
+                let done = try await session.rewind(turn)
+                if !done.canRewind { alert("Couldn’t undo the changes", done.error ?? "Claude Code couldn’t restore the files.") }
+            } catch {
+                alert("Couldn’t undo the changes", error.localizedDescription)
+            }
+        }
+    }
+
+    private func alert(_ title: String, _ text: String) {
+        let a = NSAlert()
+        a.messageText = title
+        a.informativeText = text
+        if let window { a.beginSheetModal(for: window) } else { a.runModal() }
     }
 
     private func showUsage(_ usage: ChatSession.Usage?) {

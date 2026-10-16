@@ -99,6 +99,8 @@ enum SelfTest {
         case "tables": await tables()
         case "codex-chat": await codexChat(window)
         case "commits": await commitsView(window)
+        case "warm": await warmChats(window)
+        case "extras": await chatExtras(window)
         case "sea": await sea(window)
         case "title-strip": await titleStrip(window)
         case "follow": await follow(window)
@@ -1666,6 +1668,87 @@ enum SelfTest {
         check(!open.contains("M Sandshell/App/SelfTest.swift"), "other groups stay closed")
         snapshot(view, "tool-groups-open")
         host.close()
+    }
+
+    // MARK: Chat extras (Undo, background tasks, MCP)
+
+    /// Through the adapter wrapper: a turn's file edits are listed and undone,
+    /// a background command is stopped, and MCP status comes back. Uses the
+    /// signed-in account (a few tiny turns) and Auto mode (no prompts).
+    private static func chatExtras(_ window: MainWindowController) async {
+        guard let tree = window.paneTree, let ws = window.workspaceController,
+              let s = ws.newChatInCurrentContext() else { return log("no window") }
+        func chat() -> ChatSession? { tree.surfaces.chats[s.id]?.session }
+        check(await until(600) { chat()?.phase == .ready }, "chat starts")
+        guard let c = chat() else { return }
+        let name = "extras-\(Int(Date().timeIntervalSince1970)).txt"
+        let file = URL(fileURLWithPath: c.workdir).appendingPathComponent(name)
+        c.send(text: "Use the Write tool to create the file \(name) containing exactly the word hello. Then reply DONE.", attachments: [])
+        check(await until(240) { c.phase == .ready && FileManager.default.fileExists(atPath: file.path) }, "Claude writes \(name)")
+        let changes = await until(20) {
+            c.items.contains { if case .fileChanges(_, let p, false) = $0 { p.contains { $0.hasSuffix(name) } } else { false } }
+        }
+        check(changes, "the turn lists the file it changed")
+        if let turn = c.items.compactMap({ if case .fileChanges(let t, _, _) = $0 { t } else { nil } }).last {
+            do {
+                let preview = try await c.previewRewind(turn)
+                log("rewind preview: can \(preview.canRewind) files \(preview.files) +\(preview.insertions) −\(preview.deletions)")
+                check(preview.canRewind && preview.files.contains { $0.hasSuffix(name) }, "Undo previews putting it back")
+                check(FileManager.default.fileExists(atPath: file.path), "a preview changes nothing")
+                let done = try await c.rewind(turn)
+                check(done.canRewind && !FileManager.default.fileExists(atPath: file.path), "Undo removes the file it created")
+                check(c.items.contains { if case .fileChanges(turn, _, true) = $0 { true } else { false } }, "and the line says Restored")
+            } catch {
+                check(false, "rewind: \(error.localizedDescription)")
+            }
+        }
+        snapshot(window, "extras-undo")
+
+        // MCP: what Claude Code sees.
+        do {
+            try await c.refreshMCP()
+            log("mcp: \((c.mcpServers ?? []).map { "\($0.name)=\($0.status) tools \($0.tools.count)" })")
+            check(c.mcpServers != nil, "MCP status comes back")
+        } catch { check(false, "MCP status: \(error.localizedDescription)") }
+
+        // A background command, stopped from here.
+        c.send(text: "Run the shell command `sleep 300` with the Bash tool's run_in_background option, then reply STARTED. Don't wait for it.", attachments: [])
+        check(await until(240) { c.phase == .ready && c.backgroundTasks.values.contains { $0.isRunning } },
+              "the background command is listed (\(c.backgroundTasks.values.map { "\($0.name):\($0.state)" }))")
+        if let task = c.backgroundTasks.values.first(where: { $0.isRunning }) {
+            let stopped = await c.stopBackgroundTask(task.id)
+            log("stopped \(task.id) (\(task.description)): \(stopped), now \(c.backgroundTasks[task.id]?.state ?? "?")")
+            check(stopped, "Stop stops it")
+        }
+        try? FileManager.default.removeItem(at: file)
+        ws.closeSession(s.id)
+    }
+
+    // MARK: Warm chats
+
+    /// After one chat starts, the next like it claims a spare agent that's
+    /// already up and through `initialize`, and is ready sooner — and works.
+    private static func warmChats(_ window: MainWindowController) async {
+        guard let tree = window.paneTree, let ws = window.workspaceController,
+              let a = ws.newChatInCurrentContext() else { return log("no window") }
+        func chat(_ id: UUID) -> ChatSession? { tree.surfaces.chats[id]?.session }
+        check(await until(600) { chat(a.id)?.phase == .ready }, "the first chat starts")
+        await wait(6)   // the spare comes up behind it
+        guard let b = ws.newChatInCurrentContext() else { return check(false, "a second chat") }
+        check(await until(120) { chat(b.id)?.phase == .ready }, "the second chat starts")
+        let first = chat(a.id)?.readyAfter ?? 0, second = chat(b.id)?.readyAfter ?? 0
+        log(String(format: "ready after: first %.2fs (warm %@), second %.2fs (warm %@)", first,
+                   "\(chat(a.id)?.startedWarm ?? false)", second, "\(chat(b.id)?.startedWarm ?? false)"))
+        check(chat(b.id)?.startedWarm == true, "the second claims the warm spare")
+        check(second < first, "and is ready sooner")
+        if let c = chat(b.id) {
+            c.send(text: "Reply with exactly the word PONG and nothing else.", attachments: [])
+            check(await until(180) {
+                c.phase == .ready && c.items.contains { if case .agentText(_, let t) = $0 { t.contains("PONG") } else { false } }
+            }, "the warm chat answers")
+        }
+        ws.closeSession(a.id)
+        ws.closeSession(b.id)
     }
 
     // MARK: Commits

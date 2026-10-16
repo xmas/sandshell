@@ -35,6 +35,11 @@ targets:
     platform: macOS
     sources:
       - path: Sandshell
+      # Sandshell's sbx kits (also published for other clients): the app reads
+      # the Claude adapter wrapper from here, and can add them to sandboxes.
+      - path: kits
+        type: folder
+        buildPhase: resources
     info:
       path: Sandshell/Resources/Info.plist
       properties:
