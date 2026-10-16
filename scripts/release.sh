@@ -4,7 +4,8 @@
 #   bump MARKETING_VERSION → Release build → DMG → sha256 →
 #   GitHub release `sandshell-v<version>` on xmas/homebrew-xmas (public; the
 #   app repo is private) → update + push Casks/sandshell.rb in the tap →
-#   commit the bump here, tag v<version>, push.
+#   commit the bump here, tag v<version>, push → publish kits/ to
+#   xmas/sandshell-kits (scripts/publish-kits.sh).
 #
 # Usage: scripts/release.sh [--dry-run] <version>      e.g. scripts/release.sh 0.2.20
 #
@@ -222,6 +223,14 @@ run git -C "$TAP_DIR" push origin main
 # 4. This repo.
 run git -C "$ROOT" push origin main
 run git -C "$ROOT" push origin "$APP_TAG"
+# 5. Sandshell's kits, public at xmas/sandshell-kits (for sbx clients and the
+#    cloud; the app uses its bundled copy). A failure here doesn't undo the release.
+if [[ -d "${SANDSHELL_KITS_DIR:-$ROOT/../sandshell-kits}/.git" ]]; then
+  "$ROOT/scripts/publish-kits.sh" $([[ $DRY_RUN == 1 ]] && echo --dry-run) "$VERSION" \
+    || echo "⚠️  publishing kits failed — run scripts/publish-kits.sh $VERSION"
+else
+  echo "    (no ../sandshell-kits clone; kits not published)"
+fi
 
 echo ""
 if [[ $DRY_RUN == 1 ]]; then
