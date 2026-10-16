@@ -523,7 +523,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let home = FileManager.default.homeDirectoryForCurrentUser
         var config = WorkspaceConfig.loadOrDefault(root: url, home: home)
         config.policy = policy
-        config.kits = kits
+        // Sandshell's own kits go in their own field (what's unchecked stays off).
+        config.kits = kits.filter { !KitStore.isSandshellKit($0) }
+        config.sandshellKits = kits.filter(KitStore.isSandshellKit)
         config.configured = true   // wizard collected mounts → skip first-run sheet
         try? config.save(root: url)
         openWorkspace(url)

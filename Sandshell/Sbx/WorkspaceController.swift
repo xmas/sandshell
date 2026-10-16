@@ -730,7 +730,7 @@ final class WorkspaceController: ObservableObject {
                                          configured: configured.filter { !KitStore.isSandshellKit($0) }, root: root)
             // The kit that defines this sandbox's agent isn't drift: it's how
             // the sandbox was made, and adopting it would hand it to every agent.
-            drift.extra.removeAll { KitStore.requiredAgent($0) == .some(agent.rawValue) }
+            drift.extra.removeAll { ref in AgentProfileStore.all.contains { $0.kitRef == ref && $0.agent == agent.rawValue } }
             let ignored = Set((self.state.ignoredKitDrift[name] ?? []).map { KitDrift.normalize($0, root: root) })
             drift.extra.removeAll { ignored.contains(KitDrift.normalize($0, root: root)) }
             let value: KitDrift? = drift.isEmpty ? nil : drift

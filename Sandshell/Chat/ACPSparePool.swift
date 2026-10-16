@@ -41,7 +41,10 @@ final class ACPSparePool {
         // Off for a launch with -SandshellNoSpares YES (diagnosis, tests).
         if UserDefaults.standard.bool(forKey: "SandshellNoSpares") { return }
         let key = Self.key(arguments)
-        if let existing = spares[key], existing.connection.isRunning { return }
+        if let existing = spares[key] {
+            if existing.connection.isRunning { return }
+            retire(existing)   // died: reap what it left
+        }
         let conn = ACPConnection(executable: PathFixer.sbxPath(), arguments: arguments)
         do { try conn.start() } catch { return }
         spares[key] = Spare(connection: conn, tag: tag, container: container, created: Date())

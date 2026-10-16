@@ -252,9 +252,10 @@ enum SbxCommand {
             // NO_BROWSER hides the ChatGPT browser login, which can't work here.
             // `sbx run codex` writes a placeholder auth.json when it starts (sbx's
             // proxy swaps in the real credential); `sbx exec` doesn't, and without
-            // it the adapter reports "Authentication required". Write the same one.
-            return "export NO_BROWSER=1; " + #"H="${CODEX_HOME:-$HOME/.codex}"; "#
-                + #"if [ ! -f "$H/auth.json" ] && [ -n "$SBX_CRED_OPENAI_MODE" ]; then "#
+            // it the adapter reports "Authentication required". Write the same one —
+            // only into the sandbox's own ~/.codex, never a mounted host one.
+            return "export NO_BROWSER=1; " + #"H="$HOME/.codex"; "#
+                + #"if [ "${CODEX_HOME:-$H}" = "$H" ] && [ ! -f "$H/auth.json" ] && [ -n "$SBX_CRED_OPENAI_MODE" ]; then "#
                 + #"mkdir -p "$H" && printf '%s' '{"OPENAI_API_KEY":"proxy-managed"}' > "$H/auth.json"; fi; "#
                 + npmAdapterLaunch(dir: "codex-acp-\(codexACPVersion)", package: codexACPPackage,
                                    bin: "codex-acp", omitOptional: false)

@@ -110,7 +110,10 @@ enum GitHistory {
             for path in untracked where !known.contains(path) {
                 // Lines as git counts them: a trailing newline doesn't start one.
                 let lines = (try? String(contentsOfFile: path, encoding: .utf8))
-                    .map { $0.split(separator: "\n", omittingEmptySubsequences: true).count }
+                    .map { text -> Int in
+                        let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
+                        return lines.count - (text.hasSuffix("\n") ? 1 : 0)
+                    }
                 files.append(ScopedFile(path: path, change: .untracked, added: lines, removed: 0))
             }
         }

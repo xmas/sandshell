@@ -987,9 +987,12 @@ final class TerminalStackController: NSViewController {
     func refresh() {
         // Files don't wait on the container.
         if let files = shownFiles { return presentFiles(files) }
-        // Another sandbox building doesn't hide a session that's already up.
+        // Another sandbox building doesn't hide a session that's already up —
+        // its own being rebuilt does (what's on screen is about to go).
         let live = shownSession.map { terminals[$0] != nil || chats[$0] != nil } ?? false
-        if controller.isBuilding, !live {
+        let ownRebuilding = shownSession.flatMap { controller.session(id: $0) }
+            .map { controller.containerPhases[$0.containerAgentKind] == .rebuilding } ?? false
+        if controller.isBuilding, !live || ownRebuilding {
             showStatus(controller.activity ?? "Building…", busy: true)
             return
         }
@@ -1657,11 +1660,7 @@ final class TerminalStackController: NSViewController {
     func reconnectChat(_ id: UUID) {
         guard let session = controller.session(id: id), session.isChat, !pending.contains(id) else { return }
         Log.info(.workspace, "reconnecting chat “\(session.name)”")
-        // A message waiting to go goes from the new agent instead.
-        if let waiting = chats[id]?.session.takeQueued() {
-            surfaces.drafts[id] = (waiting.text, waiting.files, true)
-        }
-        closeChat(id)
+        closeChat(id)   // (a message waiting to go goes from the new agent)
         surfaces.launchFailures[id] = nil
         launchChat(session)
     }
@@ -1678,7 +1677,15 @@ final class TerminalStackController: NSViewController {
 
     private func closeChat(_ id: UUID) {
         guard let chat = chats.removeValue(forKey: id) else { return }
+        // A message queued behind its turn is kept for the session's next chat
+        // (a reconnect sends it) instead of vanishing.
+        if let waiting = chat.session.takeQueued(), surfaces.drafts[id] == nil {
+            surfaces.drafts[id] = (waiting.text, waiting.files, true)
+        }
+        let wasWorking = chat.session.phase == .running
         chat.session.close()
+        // It won't say it stopped (closed sessions don't report): say so here.
+        if wasWorking { _ = controller.reportActivity(id, working: false, at: Date()) }
         // Its processes may not carry this session's tag (a warm spare's):
         // the next launch for this session reaps them by theirs too.
         surfaces.leftoverProcesses[id] = chat.session.processMatch

@@ -204,6 +204,7 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
         // The last root's status and scope mean nothing here (and the editor
         // mustn't keep diffing the old repo's commit).
         git = .empty
+        onGitStatus?(.empty)
         onScope?(.uncommitted, [])
         guard let url else {
             rootNode = nil

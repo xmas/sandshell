@@ -90,7 +90,7 @@ final class ChatSession: ObservableObject {
     @Published private(set) var items: [ChatItem] = []
     @Published private(set) var phase: Phase = .starting {
         didSet {
-            if (oldValue == .running) != (phase == .running) { onWorkingChange?(phase == .running) }
+            if (oldValue == .running) != (phase == .running), !retryingTurn { onWorkingChange?(phase == .running) }
             if phase != .starting { isCatchingUp = false }
             if oldValue == .running, phase == .ready, let next = afterTurn {
                 afterTurn = nil
@@ -460,7 +460,7 @@ final class ChatSession: ObservableObject {
         inExternalRun = false
         sawOwnTurn = true   // however short the turn, the follower skips past it
         items.append(.user(id: UUID(), text: trimmed, attachments: attachments.map(\.displayName)))
-        if !trimmed.isEmpty { onPrompt?(trimmed) }
+        if !trimmed.isEmpty, !retryingTurn { onPrompt?(trimmed) }
         stopped = false
 
         var blocks: [JSONValue] = []
@@ -506,8 +506,10 @@ final class ChatSession: ObservableObject {
                                    + "with a ChatGPT sign-in — using \(Self.modelBase(next)).", isError: false))
                     if await switchModel(next) {
                         UserDefaults.standard.set(next, forKey: Self.codexModelKey)
+                        retryingTurn = true
                         phase = .ready
                         send(text: text, attachments: attachments)
+                        retryingTurn = false
                         return
                     }
                 }
@@ -579,6 +581,9 @@ final class ChatSession: ObservableObject {
         guard case .running = phase, let sid = sessionID else { return }
         stopped = true
         connection?.notify("session/cancel", ["sessionId": .string(sid)])
+        // Every question the stopped turn was waiting on is answered "cancelled".
+        for p in waitingPermissions { connection?.respond(id: p.id, result: ["outcome": ["outcome": "cancelled"]]) }
+        waitingPermissions = []
         if let p = permission { answerPermission(p, optionID: nil) }
     }
 
@@ -623,6 +628,8 @@ final class ChatSession: ObservableObject {
     private static let codexModelKey = "codexChatModel"
     private static let codexRefusedKey = "codexChatRefusedModels"
     private var codexRetries = 0
+    /// Re-sending a turn on another model: still the same turn to everyone else.
+    private var retryingTurn = false
     /// One notice for a run of refusals, updated as it goes.
     private var codexNotice: (id: UUID, refused: [String])?
 
