@@ -74,6 +74,7 @@ enum SelfTest {
     private static var failures = 0
 
     static func run(_ window: MainWindowController) async {
+        setvbuf(stdout, nil, _IOLBF, 0)   // run.log shows progress even if the run is killed
         // On screen (so terminals' display links tick and redraw after resizes)
         // but fully transparent, click-through and behind other windows.
         if let w = window.window {
@@ -88,6 +89,7 @@ enum SelfTest {
         case "chat": await chat(window)
         case "building": await building(window)
         case "alerts": alerts()
+        case "bootstrap": await bootstrap(window)
         case "background": await background(window)
         case "pane-buttons": await paneButtons(window)
         case "files-alone": await filesAlone(window)
@@ -519,6 +521,16 @@ enum SelfTest {
             + "shown=\(tree.panes.map { $0.shownSession == s.id }) error=\(ws.lastError ?? "nil")")
         check(ok, "the session launches once the sandbox is up")
         snapshot(window, "building-final")
+    }
+
+    // MARK: Bootstrap
+
+    /// For the self-test runner: open a new workspace far enough that it has
+    /// written its config.json (which the runner then edits), and quit.
+    private static func bootstrap(_ window: MainWindowController) async {
+        guard let ws = window.workspaceController else { return log("no window") }
+        let config = ws.rootURL.appendingPathComponent(".sandshell/config.json")
+        check(await until(60) { FileManager.default.fileExists(atPath: config.path) }, "the workspace has a config.json")
     }
 
     // MARK: Alerts

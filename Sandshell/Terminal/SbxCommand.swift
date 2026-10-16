@@ -213,21 +213,25 @@ enum SbxCommand {
     private static func npmAdapterLaunch(dir: String, package: String, bin: String, omitOptional: Bool,
                                          wrapperIfPresent: Bool = false) -> String {
         let omit = omitOptional ? " --omit=optional" : ""
-        let install = #"D="$HOME/.sandshell/acp/\#(dir)"; B="$D/node_modules/.bin/\#(bin)"; if [ ! -x "$B" ]; then mkdir -p "$HOME/.sandshell/acp"; T=$(mktemp -d "$D.tmp.XXXXXX"); if npm install --silent --no-audit --no-fund\#(omit) --prefix "$T" \#(package) >&2; then mv -T "$T" "$D" 2>/dev/null || rm -rf "$T"; else rm -rf "$T"; echo "sandshell: couldn't install \#(package)" >&2; exit 1; fi; fi; "#
+        // A half-finished install (no bin) is cleared before the new one moves
+        // in; the marker tells the chat a first start may take a while.
+        let install = #"D="$HOME/.sandshell/acp/\#(dir)"; B="$D/node_modules/.bin/\#(bin)"; if [ ! -x "$B" ]; then echo "\#(installingMarker)" >&2; mkdir -p "$HOME/.sandshell/acp"; T=$(mktemp -d "$D.tmp.XXXXXX"); if npm install --silent --no-audit --no-fund\#(omit) --prefix "$T" \#(package) >&2; then [ -x "$B" ] || rm -rf "$D"; mv -T "$T" "$D" 2>/dev/null || rm -rf "$T"; else rm -rf "$T"; echo "sandshell: couldn't install \#(package)" >&2; exit 1; fi; fi; "#
         guard wrapperIfPresent else { return install + #"exec "$B""# }
-        // The sandshell-claude kit puts its wrapper next to the adapter; with
-        // it, say so (the chat shows Undo and MCP), without it run plain.
-        return install + #"W="$D/sandshell-acp.mjs"; if [ -f "$W" ]; then echo "\#(extrasMarker)" >&2; exec node "$W"; fi; exec "$B""#
+        // The sandshell-claude kit's wrapper runs whichever adapter version this
+        // is; with it, say so (the chat shows Undo and MCP), without it run plain.
+        return install + #"W="$HOME/.sandshell/sandshell-acp.mjs"; if [ -f "$W" ]; then echo "\#(extrasMarker)" >&2; export SANDSHELL_ACP_DIR="$D"; exec node "$W"; fi; exec "$B""#
     }
 
-    /// What the launch writes to stderr when the kit's wrapper is there.
+    /// What the launch writes to stderr when the kit's wrapper is there, and
+    /// when it's installing the adapter first.
     static let extrasMarker = "sandshell-extras: on"
+    static let installingMarker = "sandshell-installing: adapter"
 
     /// The bundled copy of Sandshell's kits (`kits/` in the repo).
     static var bundledKits: URL? { Bundle.main.url(forResource: "kits", withExtension: nil) }
 
     /// The Claude ACP adapter's wrapper (rewind, MCP status) lives in the
-    /// sandshell-claude kit: `kits/sandshell-claude/files/home/.sandshell/acp/<version>/sandshell-acp.mjs`.
+    /// sandshell-claude kit: `kits/sandshell-claude/files/home/.sandshell/sandshell-acp.mjs`.
 
     /// In-sandbox program (a `bash -c` body after PATH setup) that speaks ACP on
     /// stdio for `agent`, or nil when it has none.

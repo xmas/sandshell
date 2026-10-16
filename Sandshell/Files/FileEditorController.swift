@@ -17,8 +17,12 @@ final class OpenFile {
 
     init(url: URL) {
         self.url = url
-        let data = (try? Data(contentsOf: url)) ?? Data()
-        let decoded = data.count <= 4_000_000 && !data.prefix(8000).contains(0) ? String(data: data, encoding: .utf8) : nil
+        // Over 4 MB isn't read at all (a big log would block the app): it shows
+        // in Quick Look like any other non-text file.
+        let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+        let data = size <= 4_000_000 ? ((try? Data(contentsOf: url)) ?? Data()) : Data()
+        let decoded = size <= 4_000_000 && data.count <= 4_000_000 && !data.prefix(8000).contains(0)
+            ? String(data: data, encoding: .utf8) : nil
         isText = decoded != nil
         text = decoded ?? ""
         savedText = text
@@ -247,14 +251,14 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
             files.append(f)
             return f
         }()
-        show(file)
+        show(file, focus: true)
     }
 
     /// Open at a line (search results), selecting and flashing `highlight`.
     func open(_ url: URL, line: Int, highlight: String) {
         open(url)
         guard let file = current, file.isText else { return }
-        if file.mode != .source { file.mode = .source; show(file) }
+        if file.mode != .source { file.mode = .source; show(file, focus: true) }
         jump(toLine: line, highlight: highlight)
     }
 
@@ -294,7 +298,7 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
         guard let file = current, file.isText else { return NSSound.beep() }
         if let open = goToLinePopover, open.isShown { open.close(); goToLinePopover = nil; return }
         commitEditorText()
-        if file.mode != .source { file.mode = .source; show(file) }
+        if file.mode != .source { file.mode = .source; show(file, focus: true) }
         let lines = editor.string.reduce(1) { $1 == "\n" ? $0 + 1 : $0 }
         let prompt = GoToLineController(lineCount: lines, currentLine: caretLine)
         prompt.onGo = { [weak self] line, column in
@@ -315,7 +319,7 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
         guard let file = current else { return }
         commitEditorText()
         file.mode = mode
-        show(file)
+        show(file, focus: true)
     }
     func performHunkAction(_ action: FilePatch.Action, hunk: Int, staged: Bool) async -> String? {
         await runHunkAction(action, hunk: hunk, staged: staged, confirmed: true)
@@ -342,8 +346,8 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
     }
 
     private func hasChanges(_ url: URL) -> Bool {
-        if scope == .uncommitted { return git.changes[url.path] != nil }
-        return scopeFiles.contains(url.path) || scopeFiles.contains(url.resolvingSymlinksInPath().path)
+        if scope == .uncommitted { return git.change(for: url) != nil }
+        return scopeFiles.contains(url.path) || scopeFiles.contains(url.realPath)
     }
 
     func updateGit(_ status: GitStatus) {
@@ -394,7 +398,10 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
 
     // MARK: Showing
 
-    private func show(_ file: OpenFile?) {
+    /// `focus`: the user picked it (open, a tab, a mode) — only then does the
+    /// editor take the keyboard; refreshes (files changing on disk, git, a new
+    /// scope) never pull it away from where you're typing.
+    private func show(_ file: OpenFile?, focus: Bool = false) {
         current = file
         banner.isHidden = true
         rebuildTabs()
@@ -430,7 +437,7 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
             highlight()
             editorScroll.isHidden = false
             ruler.lineCountChanged()
-            view.window?.makeFirstResponder(editor)
+            if focus { view.window?.makeFirstResponder(editor) }
             refreshChanges(for: file)
         case .preview:
             preview.linkTextAttributes = documentLinkAttributes
@@ -453,7 +460,7 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
         guard let file = current, let mode = OpenFile.Mode(rawValue: modeControl.selectedSegment) else { return }
         commitEditorText()
         file.mode = mode
-        show(file)
+        show(file, focus: true)
     }
 
     /// Changes: unstaged hunks (working tree vs the index) and staged hunks
@@ -462,7 +469,7 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
     private func showDiff(_ file: OpenFile) {
         previewScroll.isHidden = false
         if scope != .uncommitted { return showScopedDiff(file) }
-        let untracked = git.changes[file.url.path] == .untracked
+        let untracked = git.change(for: file.url) == .untracked
         let repo = git.repoRoot
         let path = file.url.path
         let text = file.text
@@ -492,7 +499,7 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
     private func showScopedDiff(_ file: OpenFile) {
         guard let repo = git.repoRoot else { return }
         let scope = scope
-        let path = scopeFiles.contains(file.url.path) ? file.url.path : file.url.resolvingSymlinksInPath().path
+        let path = scopeFiles.contains(file.url.path) ? file.url.path : file.url.realPath
         shownPatches = nil
         Task { [weak self] in
             let diff = await Task.detached(priority: .utility) { GitHistory.diff(repo: repo, scope: scope, path: path) }.value
@@ -515,23 +522,32 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
     struct LineNumber { var line: Int; var old: Bool }
 
     /// Numbers for a diff's lines, following its `@@ -a,b +c,d @@` headers.
-    static func lineNumbers(_ lines: [String]) -> [LineNumber?] {
-        var old = 0, new = 0
-        return lines.map { s in
+    static func lineNumbers(_ lines: [String]) -> [LineNumber?] { annotate(lines).map(\.number) }
+
+    /// Each diff line's number in the new file (the old one for a removed
+    /// line), and whether it's file-header noise. Header lines (index, ---,
+    /// +++, modes) only come before a file's first `@@`: inside a hunk, a
+    /// removed `-- comment` line is content.
+    static func annotate(_ lines: [String]) -> [(number: LineNumber?, header: Bool)] {
+        var old = 0, new = 0, inHunk = false
+        return lines.enumerated().map { i, s in
+            if s.hasPrefix("diff --git") { inHunk = false; return (nil, true) }
             if s.hasPrefix("@@") {
                 let nums = s.split(separator: " ").dropFirst().prefix(2).map {
                     Int($0.dropFirst().split(separator: ",").first ?? "") ?? 1
                 }
                 old = nums.first ?? 1
                 new = nums.count > 1 ? nums[1] : 1
-                return nil
+                inHunk = true
+                return (nil, false)
             }
-            if s.hasPrefix("diff --git") || s.hasPrefix("index ") || s.hasPrefix("--- ") || s.hasPrefix("+++ ") { return nil }
-            if s.hasPrefix("-") { defer { old += 1 }; return LineNumber(line: old, old: true) }
-            if s.hasPrefix("+") { defer { new += 1 }; return LineNumber(line: new, old: false) }
-            if s.hasPrefix("\\") || (s.isEmpty && new == 0) { return nil }
+            if !inHunk { return (nil, true) }
+            if i == lines.count - 1, s.isEmpty { return (nil, true) }   // after the last newline
+            if s.hasPrefix("\\") { return (nil, false) }               // "\ No newline at end of file"
+            if s.hasPrefix("-") { defer { old += 1 }; return (LineNumber(line: old, old: true), false) }
+            if s.hasPrefix("+") { defer { new += 1 }; return (LineNumber(line: new, old: false), false) }
             defer { old += 1; new += 1 }
-            return LineNumber(line: new, old: false)
+            return (LineNumber(line: new, old: false), false)
         }
     }
 
@@ -570,14 +586,15 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
         if untracked {
             out.append(sectionTitle("Untracked File", actions: editable ? [("Stage File", "add/0")] : []))
         }
-        let lines = diff.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-        // An untracked file is all "+" lines with no header: number them from 1.
-        let numbers: [LineNumber?] = untracked
-            ? lines.indices.map { LineNumber(line: $0 + 1, old: false) } : lineNumbers(lines)
-        for (s, number) in zip(lines, numbers) {
-            if s.hasPrefix("diff --git") || s.hasPrefix("index ") || s.hasPrefix("--- ") || s.hasPrefix("+++ ")
-                || s.hasPrefix("new file mode") || s.hasPrefix("deleted file mode") { continue }
-            out.append(diffLine(s, number: number))
+        var lines = diff.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        if untracked {
+            // All "+" lines with no header: number them from 1.
+            if lines.last == "+" || lines.last == "" { lines.removeLast() }
+            for (i, s) in lines.enumerated() { out.append(diffLine(s, number: LineNumber(line: i + 1, old: false))) }
+        } else {
+            for (s, info) in zip(lines, annotate(lines)) where !info.header {
+                out.append(diffLine(s, number: info.number))
+            }
         }
         if out.length == 0 {
             out.append(NSAttributedString(string: "No changes against HEAD.", attributes: [
@@ -805,7 +822,7 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
         let lines = file.text.reduce(1) { $1 == "\n" ? $0 + 1 : $0 }
         Task { [weak self] in
             let c = await LineChanges.load(file: file.url, repoRoot: self?.git.repoRoot,
-                                           untracked: self?.git.changes[file.url.path] == .untracked, lineCount: lines)
+                                           untracked: self?.git.change(for: file.url) == .untracked, lineCount: lines)
             guard let self, self.current === file else { return }
             self.changes = c
             self.ruler.changes = c
@@ -819,7 +836,7 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
         for (i, file) in files.enumerated() {
             let tab = EditorTab(title: file.url.lastPathComponent, icon: NSWorkspace.shared.icon(forFile: file.url.path),
                                 selected: file === current, dirty: file.isDirty,
-                                change: git.changes[file.url.path])
+                                change: git.change(for: file.url))
             tab.onSelect = { [weak self] in self?.select(i) }
             tab.onClose = { [weak self] in self?.close(i) }
             tabBar.addArrangedSubview(tab)
@@ -830,7 +847,7 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
     private func select(_ index: Int) {
         guard files.indices.contains(index) else { return }
         commitEditorText()
-        show(files[index])
+        show(files[index], focus: true)
     }
 
     private func close(_ index: Int) {

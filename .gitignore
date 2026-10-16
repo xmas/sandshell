@@ -34,3 +34,6 @@ build-dev/
 # Compiled UI-test helpers (scripts/run-ui-tests.sh)
 tests/ui/lib/Helpers.scpt
 __pycache__/
+
+# Sandshell kits ship a .sandshell folder
+!kits/**/.sandshell/

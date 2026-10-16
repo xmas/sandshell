@@ -18,7 +18,7 @@ enum AutomatedRun {
     /// scratch workspaces, so a test pointed at a real folder can't take down
     /// its sandbox.
     static func isScratch(_ root: URL) -> Bool {
-        let path = root.resolvingSymlinksInPath().path
+        let path = root.realPath
         return ["/tmp/", "/private/tmp/", "/private/var/folders/"].contains { path.hasPrefix($0) }
     }
 

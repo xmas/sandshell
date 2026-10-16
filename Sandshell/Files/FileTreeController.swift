@@ -37,6 +37,8 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
     /// Whose changes the changed list shows: uncommitted (git status), all
     /// since the branch's base, or one commit (picked under Commits).
     private(set) var scope: ChangeScope = .uncommitted
+    /// Show Changes asked for before git status had loaded.
+    private var wantsChanges: ChangeScope?
     /// The scope's files with +/- counts, by absolute path.
     private var scoped: [String: ScopedFile] = [:]
     let commits = CommitsListView()
@@ -138,6 +140,12 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
             scroll.leadingAnchor.constraint(equalTo: root.leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: root.trailingAnchor),
             commits.topAnchor.constraint(equalTo: scroll.bottomAnchor, constant: 4),
+            {
+                // The tree keeps a few rows however many commits there are.
+                let c = scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 90)
+                c.priority = .init(760)
+                return c
+            }(),
             commits.leadingAnchor.constraint(equalTo: root.leadingAnchor),
             commits.trailingAnchor.constraint(equalTo: root.trailingAnchor),
             footer.topAnchor.constraint(equalTo: commits.bottomAnchor, constant: 8),
@@ -184,7 +192,12 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
         changedButton.state = .off
         scope = .uncommitted
         scoped = [:]
+        wantsChanges = nil
         commits.select(nil)
+        // The last root's status and scope mean nothing here (and the editor
+        // mustn't keep diffing the old repo's commit).
+        git = .empty
+        onScope?(.uncommitted, [])
         guard let url else {
             rootNode = nil
             outline.reloadData()
@@ -249,7 +262,8 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
             self.branchLabel.stringValue = status.repoRoot == nil ? "Not a git repository"
                 : "\(status.branch ?? "detached")" + (changed > 0 ? " · \(changed) changed" : " · clean")
             self.refreshHistory()
-            if self.changedOnly { self.loadScope() }
+            if let wanted = self.wantsChanges, status.repoRoot != nil { self.showChanges(true, scope: wanted) }
+            else if self.changedOnly { self.loadScope() }
         }
     }
 
@@ -295,7 +309,7 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
             let files = await Task.detached(priority: .utility) {
                 GitHistory.files(repo: repo, scope: scope, untracked: untracked)
             }.value
-            guard let self, self.scope == scope, self.changedOnly else { return }
+            guard let self, self.scope == scope, self.changedOnly, self.git.repoRoot == repo else { return }
             let new = Dictionary(files.map { ($0.path, $0) }, uniquingKeysWith: { a, _ in a })
             let changedSet = Set(new.keys) != Set(self.scoped.keys)
             self.scoped = new
@@ -316,6 +330,9 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
 
     private func showChanges(_ on: Bool, scope: ChangeScope) {
         _ = view
+        // Asked for before the status has loaded (a new Files pane): do it then.
+        if on, git.repoRoot == nil, root != nil { wantsChanges = scope; return }
+        wantsChanges = nil
         changedOnly = on && git.repoRoot != nil
         changedButton.state = changedOnly ? .on : .off
         self.scope = changedOnly ? scope : .uncommitted
@@ -342,7 +359,7 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
     /// folder may be reached through a symlink like /tmp).
     private func showChangedList() {
         guard let root else { filterResults = []; return }
-        let real = root.resolvingSymlinksInPath().path
+        let real = root.realPath
         let paths = scope == .uncommitted ? Array(git.changes.keys) : Array(scoped.keys)
         filterResults = paths.sorted().compactMap { path in
             let suffix: Substring
@@ -497,7 +514,7 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
         if let group = item as? SearchGroup {
             let cell = outlineView.makeView(withIdentifier: FileCell.id, owner: nil) as? FileCell ?? FileCell()
             cell.configure(icon: NSWorkspace.shared.icon(forFile: group.url.path), title: group.relative,
-                           change: git.changes[group.url.path], dirtyFolder: false)
+                           change: git.change(for: group.url), dirtyFolder: false)
             return cell
         }
         if let match = item as? MatchNode {
@@ -508,14 +525,14 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
         guard let node = item as? FileNode else { return nil }
         let cell = outlineView.makeView(withIdentifier: FileCell.id, owner: nil) as? FileCell ?? FileCell()
         let path = node.url.path
-        let real = node.url.resolvingSymlinksInPath().path
+        let real = node.url.realPath
         let inScope = changedOnly ? scoped[path] ?? scoped[real] : nil
         let change = scope == .uncommitted || !changedOnly
             ? git.changes[path] ?? git.changes[real] : inScope?.change
         let title = filterResults != nil && root != nil
             ? String(path.dropFirst(root!.path.count + 1)) : node.name
         cell.configure(icon: NSWorkspace.shared.icon(forFile: path), title: title, change: change,
-                       dirtyFolder: node.isDirectory && git.dirtyFolders.contains(path),
+                       dirtyFolder: node.isDirectory && (git.dirtyFolders.contains(path) || git.dirtyFolders.contains(real)),
                        counts: inScope.map { ($0.added, $0.removed) })
         return cell
     }

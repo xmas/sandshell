@@ -61,6 +61,13 @@ enum KitStore {
                isDefault: true),
     ]
 
+    /// Sandshell's kits that are on where a workspace hasn't said: the
+    /// registry's defaults among them.
+    static var defaultSandshellRefs: [String] {
+        let registry = all
+        return sandshellKits.map(\.ref).filter { ref in registry.first { $0.ref == ref }?.isDefault ?? false }
+    }
+
     static func isSandshellKit(_ ref: String) -> Bool {
         sandshellKits.contains { $0.ref == ref } || sandshellKits.contains { ref.hasSuffix("/kits/\($0.ref)") }
     }

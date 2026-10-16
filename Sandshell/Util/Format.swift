@@ -59,3 +59,13 @@ extension String {
         return self
     }
 }
+
+extension URL {
+    /// The path with every symlink resolved, the way git and `realpath` report
+    /// it: /tmp/x is /private/tmp/x (`resolvingSymlinksInPath` strips /private).
+    var realPath: String {
+        guard let resolved = Darwin.realpath(path, nil) else { return standardizedFileURL.path }
+        defer { free(resolved) }
+        return String(cString: resolved)
+    }
+}

@@ -301,8 +301,11 @@ actor SbxClient {
     /// after the container is running. Run from the root so `sbx` derives a
     /// sensible workdir.
     @discardableResult
+    /// `onExists`: called as soon as the sandbox shows up (before any kit
+    /// setup finishes), so a quit meanwhile doesn't leave it unrecorded.
     func create(workspace: Workspace, agent: AgentKind, name: String,
-                mounts: [MountSpec], kits: [String] = []) async throws -> Sandbox {
+                mounts: [MountSpec], kits: [String] = [],
+                onExists: (@MainActor @Sendable () -> Void)? = nil) async throws -> Sandbox {
         var args = ["create", "--no-progress", "--name", name]
         // Base image channel: nil = sbx's default (stable) template; the tag is
         // pulled fresh either way (sbx defaults to --pull always).
@@ -312,7 +315,7 @@ actor SbxClient {
         args += mounts.map(\.spec)
         return try await createAndPoll(args, cwd: workspace.rootURL.path,
                                        env: ["SBX_MCP_URL": workspace.mcpURL.absoluteString],
-                                       name: name)
+                                       name: name, waitForKitSetup: !kits.isEmpty, onExists: onExists)
     }
 
     /// Attach an already-registered MCP server to a running sandbox
@@ -341,7 +344,8 @@ actor SbxClient {
     /// sandbox is running. If the create process dies non-zero before the
     /// sandbox appears, its stderr is thrown instead of waiting out the timeout.
     private func createAndPoll(_ args: [String], cwd: String?, env: [String: String]?,
-                               name: String) async throws -> Sandbox {
+                               name: String, waitForKitSetup: Bool = false,
+                               onExists: (@MainActor @Sendable () -> Void)? = nil) async throws -> Sandbox {
         Log.info(.sbx, "creating “\(name)”: sbx \(args.joined(separator: " "))")
         let proc = makeProcess(args, env: env)
         if let cwd { proc.currentDirectoryURL = URL(fileURLWithPath: cwd) }
@@ -385,13 +389,15 @@ actor SbxClient {
         }
         do {
             var sandbox = try await waitUntilRunning(name: name, failureMessage: failure)
+            if let onExists { await onExists() }
             // A kit's install steps run after the sandbox first shows as
             // running, and sbx restarts it when they're done: anything started
             // in it before then dies with it. So it's up once `sbx create` is done.
-            if state.exitCode == nil {
+            // (The process check backs up the termination handler.)
+            if waitForKitSetup, state.exitCode == nil, proc.isRunning {
                 Log.info(.sbx, "“\(name)” is running; waiting for sbx create to finish (kit setup)")
                 let deadline = Date().addingTimeInterval(15 * 60)
-                while state.exitCode == nil, Date() < deadline {
+                while state.exitCode == nil, proc.isRunning, Date() < deadline {
                     try await Task.sleep(nanoseconds: 500_000_000)
                 }
                 if let message = failure() { throw SbxError.command(message) }

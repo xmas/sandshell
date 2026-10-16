@@ -25,7 +25,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --quick) QUICK=1 ;;
     --skip-build) SKIP_BUILD=1 ;;
-    --only) ONLY=",$2,"; shift ;;
+    --only) [[ $# -ge 2 ]] || { echo "--only needs a list" >&2; exit 2; }; ONLY=",$2,"; shift ;;
     -h|--help) sed -n 2,17p "$0"; exit 0 ;;
     *) echo "unknown option $1" >&2; exit 2 ;;
   esac
@@ -39,9 +39,14 @@ mkdir -p "$RESULTS"
 
 if [[ $SKIP_BUILD == 0 ]]; then
   echo "==> Building the dev app"
-  (cd "$ROOT" && xcodegen generate >/dev/null && xcodebuild -project Sandshell.xcodeproj -scheme Sandshell \
+  BUILD_LOG="$RESULTS/build.log"
+  if ! (cd "$ROOT" && xcodegen generate >/dev/null && xcodebuild -project Sandshell.xcodeproj -scheme Sandshell \
      -configuration Debug -derivedDataPath build-dev -destination 'platform=macOS,arch=arm64' \
-     PRODUCT_BUNDLE_IDENTIFIER=com.xmas.sandshell.dev build 2>&1 | grep -E " error:|\*\* BUILD" ) || true
+     PRODUCT_BUNDLE_IDENTIFIER=com.xmas.sandshell.dev build > "$BUILD_LOG" 2>&1); then
+    grep -E " error:" "$BUILD_LOG" | head -20
+    echo "build failed (log: $BUILD_LOG)" >&2; exit 1
+  fi
+  echo "   built"
 fi
 [[ -x "$APP" ]] || { echo "no dev build at $APP" >&2; exit 2; }
 
@@ -51,10 +56,11 @@ while IFS= read -r line; do KITDIRS+=("$line"); done < <(fixture kitdirs)
 
 # Run the app on a workspace. bootstrap: just open and quit (so the app writes
 # its config.json for a fixture's config edits).
+LIMIT=600   # seconds a scenario may take (set per kind in run)
 launch() {   # launch <scenario> <fixture> <outdir> [extra args…]
   local scenario="$1" ws="$FIX/$2" out="$3"; shift 3
   mkdir -p "$out"; rm -f "$out/selftest.log"
-  perl -e 'alarm 2400; exec @ARGV' "$APP" -SandshellSelfTest "$scenario" -SandshellSelfTestOut "$out" "$@" \
+  perl -e "alarm $LIMIT; exec @ARGV" "$APP" -SandshellSelfTest "$scenario" -SandshellSelfTestOut "$out" "$@" \
     -openWindowRoots "(\"$ws\")" > "$out/run.log" 2>&1
 }
 
@@ -64,6 +70,7 @@ run() {   # run <scenario> <fixture> <kind: quick|account|fresh> [extra args…]
   [[ -n "$ONLY" && "$ONLY" != *",$scenario,"* ]] && return
   [[ $QUICK == 1 && "$kind" != quick ]] && return
   local out="$RESULTS/$scenario"
+  case "$kind" in quick) LIMIT=600 ;; account) LIMIT=1500 ;; *) LIMIT=2400 ;; esac
   printf '%-16s %-10s ' "$scenario" "$fx"
   local started=$SECONDS
   launch "$scenario" "$fx" "$out" "$@"
@@ -83,7 +90,7 @@ run() {   # run <scenario> <fixture> <kind: quick|account|fresh> [extra args…]
 prepare() { fixture prepare "$1" >/dev/null; }
 configure() {   # write the app's config.json once, then apply the fixture's edits
   local fx="$1"
-  [[ -f "$FIX/$fx/.sandshell/config.json" ]] || launch alerts "$fx" "$RESULTS/.bootstrap-$fx"
+  [[ -f "$FIX/$fx/.sandshell/config.json" ]] || { LIMIT=300; launch bootstrap "$fx" "$RESULTS/.bootstrap-$fx"; }
   fixture config "$fx"
 }
 
@@ -110,10 +117,10 @@ run sandbox-access files  quick
 run panes          files  quick
 run pane-buttons   files  quick
 run files-alone    files  quick
-prepare title
-run title-strip    title  quick
-prepare title
-run paste          title  quick
+prepare title-strip-workspace   # a long name: the folder chip test measures it
+run title-strip    title-strip-workspace quick
+prepare title-strip-workspace
+run paste          title-strip-workspace quick
 
 # Kits and agents (sandboxes rebuilt with test kits).
 prepare kits;      configure kits

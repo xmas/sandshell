@@ -82,17 +82,25 @@ enum GitHistory {
         case .all(let base): args = ["diff", base]
         case .commit(let c): args = ["show", "--format=", c.sha]
         }
-        let common = ["-C", repo] + args.prefix(1) + ["--no-color", "--no-renames", "--no-ext-diff"] + args.dropFirst()
+        // -z: paths as they are (no quoting of accents or spaces); merges
+        // against their first parent (git shows nothing for them otherwise).
+        let common = ["-C", repo] + args.prefix(1) + ["--no-color", "--no-renames", "--no-ext-diff", "--diff-merges=first-parent", "-z"]
+            + args.dropFirst()
         let numstat = GitStatus.git(common + ["--numstat"]) ?? ""
         let names = GitStatus.git(common + ["--name-status"]) ?? ""
         var kinds: [String: GitStatus.Change] = [:]
-        for line in names.split(separator: "\n") {
-            let f = line.split(separator: "\t", maxSplits: 1).map(String.init)
-            guard f.count == 2 else { continue }
-            kinds[f[1]] = f[0].hasPrefix("A") ? .added : f[0].hasPrefix("D") ? .deleted : .modified
+        // name-status -z: STATUS NUL PATH NUL …
+        let nameFields = names.split(separator: "\0", omittingEmptySubsequences: false).map(String.init)
+        var i = 0
+        while i + 1 < nameFields.count {
+            let status = nameFields[i].trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !status.isEmpty else { i += 1; continue }
+            kinds[nameFields[i + 1]] = status.hasPrefix("A") ? .added : status.hasPrefix("D") ? .deleted : .modified
+            i += 2
         }
-        var files: [ScopedFile] = numstat.split(separator: "\n").compactMap { line in
-            let f = line.split(separator: "\t", maxSplits: 2).map(String.init)
+        // numstat -z: ADDED TAB REMOVED TAB PATH NUL …
+        var files: [ScopedFile] = names.isEmpty && numstat.isEmpty ? [] : numstat.split(separator: "\0").compactMap { record in
+            let f = record.trimmingCharacters(in: .newlines).split(separator: "\t", maxSplits: 2).map(String.init)
             guard f.count == 3 else { return nil }
             return ScopedFile(path: repo + "/" + f[2], change: kinds[f[2]] ?? .modified,
                               added: Int(f[0]), removed: Int(f[1]))
@@ -100,8 +108,9 @@ enum GitHistory {
         if case .commit = scope {} else {
             let known = Set(files.map(\.path))
             for path in untracked where !known.contains(path) {
+                // Lines as git counts them: a trailing newline doesn't start one.
                 let lines = (try? String(contentsOfFile: path, encoding: .utf8))
-                    .map { $0.split(separator: "\n", omittingEmptySubsequences: false).count }
+                    .map { $0.split(separator: "\n", omittingEmptySubsequences: true).count }
                 files.append(ScopedFile(path: path, change: .untracked, added: lines, removed: 0))
             }
         }
@@ -110,7 +119,7 @@ enum GitHistory {
 
     /// One file's diff in a commit, or since the base (working tree included).
     nonisolated static func diff(repo: String, scope: ChangeScope, path: String) -> String {
-        let flags = ["--no-color", "--no-renames", "--no-ext-diff"]
+        let flags = ["--no-color", "--no-renames", "--no-ext-diff", "--diff-merges=first-parent"]
         switch scope {
         case .uncommitted: return GitStatus.git(["-C", repo, "diff"] + flags + ["HEAD", "--", path]) ?? ""
         case .all(let base): return GitStatus.git(["-C", repo, "diff"] + flags + [base, "--", path]) ?? ""

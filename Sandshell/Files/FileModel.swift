@@ -38,6 +38,10 @@ struct GitStatus: Sendable, Equatable {
 
     static let empty = GitStatus()
 
+    /// The change for a file, by its path as given or as git reports it
+    /// (resolved: /tmp/x is /private/tmp/x).
+    func change(for url: URL) -> Change? { changes[url.path] ?? changes[url.realPath] }
+
     /// `git status --porcelain -z -b` for the repo containing `folder`.
     static func load(for folder: URL) async -> GitStatus {
         await Task.detached(priority: .utility) {
@@ -49,7 +53,11 @@ struct GitStatus: Sendable, Equatable {
             var fields = raw.split(separator: "\0", omittingEmptySubsequences: true).map(String.init)[...]
             while let entry = fields.popFirst() {
                 if entry.hasPrefix("## ") {
-                    status.branch = entry.dropFirst(3).split(separator: ".").first.map(String.init)
+                    // "main...origin/main [ahead 1]", "release-1.2", "No commits yet on main", "HEAD (no branch)".
+                    var head = String(entry.dropFirst(3))
+                    if let r = head.range(of: "...") { head = String(head[..<r.lowerBound]) }
+                    if head.hasPrefix("No commits yet on ") { head = String(head.dropFirst("No commits yet on ".count)) }
+                    status.branch = head.hasPrefix("HEAD (no branch)") ? nil : head.split(separator: " ").first.map(String.init)
                     continue
                 }
                 guard entry.count > 3 else { continue }

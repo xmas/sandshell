@@ -256,11 +256,19 @@ final class ChatSession: ObservableObject {
         // An agent that never answers (its sandbox restarted under it, say)
         // would leave the chat "Starting…" forever: give up on it, so the
         // pane offers Reconnect. The first start may install the adapter.
+        installingAdapter = false
         Task { [weak self, weak conn] in
-            try? await Task.sleep(for: .seconds(240))
+            // 4 minutes, or 12 while it installs the adapter first (slow networks).
+            var waited = 0
+            while waited < 12 * 60 {
+                try? await Task.sleep(for: .seconds(10))
+                waited += 10
+                guard let self, let conn, self.connection === conn, self.phase == .starting else { return }
+                if waited >= 4 * 60, !self.installingAdapter { break }
+            }
             guard let self, let conn, self.connection === conn, self.phase == .starting else { return }
-            Log.error(.sbx, "chat: \(self.agent.rawValue) agent didn't answer in 4 minutes; giving up on it")
-            self.launchError = "The agent didn’t start (no answer in 4 minutes)."
+            Log.error(.sbx, "chat: \(self.agent.rawValue) agent didn't answer; giving up on it")
+            self.launchError = "The agent didn’t start (no answer in \(waited / 60) minutes)."
             conn.terminate()
         }
         pumpTask = Task { [weak self] in
@@ -592,6 +600,8 @@ final class ChatSession: ObservableObject {
     /// The sandshell-claude kit's wrapper is running this chat's agent: Undo
     /// and MCP status work (the launch says so on stderr).
     @Published private(set) var hasExtras = false
+    /// The launch is installing the adapter first (the start deadline waits longer).
+    private var installingAdapter = false
 
     /// One request to the adapter wrapper (in the sandshell-claude kit).
     private func extra(_ request: [String: JSONValue]) async throws -> JSONValue {
@@ -917,6 +927,7 @@ final class ChatSession: ObservableObject {
         case .stderr(let line):
             Log.info(.sbx, "chat[acp]: \(line)")
             if line == SbxCommand.extrasMarker { hasExtras = true; return }
+            if line == SbxCommand.installingMarker { installingAdapter = true; return }
             if line.hasPrefix("sandshell: ") { launchError = String(line.dropFirst("sandshell: ".count)) }
         case .closed(let status):
             permission = nil

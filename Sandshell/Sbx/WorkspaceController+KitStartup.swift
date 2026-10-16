@@ -23,7 +23,7 @@ extension WorkspaceController {
     func refreshKitStartup(for agent: AgentKind) {
         kitStartupTasks[agent]?.cancel()
         let name = containerName(for: agent)
-        let kitRefs = resolvedKits()
+        let kitRefs = kits(for: agent, from: resolvedKits())
         kitStartupTasks[agent] = Task { @MainActor [weak self] in
             let deadline = Date().addingTimeInterval(Self.kitStartupFollowLimit)
             var lastSignature: String?

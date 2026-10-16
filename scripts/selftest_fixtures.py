@@ -69,9 +69,10 @@ def set_sessions(d, specs):
     state.setdefault("expandedFolderIDs", [])
     json.dump(state, open(p, "w"), indent=2)
 
-README = """# Fixture
+README = """# Scratch Notes
 
-Some prose to read in the Markdown preview.
+Sandshell keeps these notes to check the Markdown preview: prose in the
+document face, headings larger, code monospaced.
 
 ## Section
 
@@ -80,7 +81,7 @@ Some prose to read in the Markdown preview.
 
 ```python
 def hello():
-    return "world"
+    print("world")
 ```
 """
 APP = "".join(f"def f{i}():\n    return {i}\n" for i in range(20))
@@ -102,7 +103,7 @@ def _files(d):
     edit(d, "src/app.py", "    return 19\n", '    return "CHANGED-TAIL"\n')
     set_sessions(d, [{"agent": "shell", "name": "Shell A"}, {"agent": "shell", "name": "Shell B"}])
 
-@fixture("title")
+@fixture("title-strip-workspace")
 def _title(d):
     git_repo(d, {"__branch__": "feature/readout-squeeze"}, [("init", {"README.md": README})])
     set_sessions(d, [{"agent": "shell", "name": "Shell A"}])
@@ -149,9 +150,9 @@ def _broken(d):
 
 # config.json edits, applied once the app has written the file.
 CONFIGS = {
-    "kits": lambda root: {"kits": [os.path.join(root, "kitdirs", "a")], "sandshellKitsOffered": True},
-    "kitagents": lambda root: {"kits": ["docker.io/sbx/code-server-kit:latest"], "sandshellKitsOffered": True},
-    "broken": lambda root: {"kits": [os.path.join(root, "kitdirs", "does-not-exist")], "sandshellKitsOffered": True},
+    "kits": lambda root: {"kits": [os.path.join(root, "kitdirs", "a")], "sandshellKits": []},
+    "kitagents": lambda root: {"kits": ["docker.io/sbx/code-server-kit:latest"], "sandshellKits": []},
+    "broken": lambda root: {"kits": [os.path.join(root, "kitdirs", "does-not-exist")], "sandshellKits": []},
 }
 
 def kitdirs(root):

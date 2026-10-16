@@ -66,6 +66,8 @@ final class CommitsListView: NSView, NSTableViewDataSource, NSTableViewDelegate 
             addSubview(v)
         }
         heightConstraint = scroll.heightAnchor.constraint(equalToConstant: 0)
+        // A wish, not a rule: in a short pane the list gives way before the tree.
+        heightConstraint.priority = .defaultHigh
         NSLayoutConstraint.activate([
             line.topAnchor.constraint(equalTo: topAnchor),
             line.leadingAnchor.constraint(equalTo: leadingAnchor),

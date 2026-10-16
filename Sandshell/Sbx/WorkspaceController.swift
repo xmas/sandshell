@@ -196,7 +196,7 @@ final class WorkspaceController: ObservableObject {
         var workspace = Workspace(
             rootURL: root, containerName: slug(for: root), policy: config.policy,
             mcpServers: config.mcpServers, mcpURL: config.mcpURL, primaryAgent: config.primaryAgent,
-            kits: config.kits)
+            kits: config.kits.filter { !KitStore.isSandshellKit($0) })
         workspace.imageChannel = config.imageChannel
         workspace.customImage = config.customImage
         return WorkspaceController(workspace: workspace, state: state, config: config)
@@ -591,7 +591,20 @@ final class WorkspaceController: ObservableObject {
 
     /// The kit references applied to this workspace's sandboxes (dropping blanks).
     func resolvedKits() -> [String] {
-        workspace.kits.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+        workspace.kits.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty && !KitStore.isSandshellKit($0) } + sandshellKits
+    }
+
+    /// Sandshell's own kits that are on for this workspace.
+    var sandshellKits: [String] { config.sandshellKits ?? KitStore.defaultSandshellRefs }
+
+    /// Store a full kit list: Sandshell's own apart from the rest (see
+    /// `WorkspaceConfig.sandshellKits`).
+    private func storeKits(_ kits: [String]) {
+        workspace.kits = kits.filter { !KitStore.isSandshellKit($0) }
+        config.kits = workspace.kits
+        config.sandshellKits = kits.filter(KitStore.isSandshellKit)
+        try? config.save(root: workspace.rootURL)
     }
 
     /// Look up (with `sbx kit inspect`) which agent each kit is made for, where
@@ -603,7 +616,7 @@ final class WorkspaceController: ObservableObject {
     }
 
     /// The workspace's kits a sandbox for `agent` takes, logging any left out.
-    private func kits(for agent: AgentKind, from refs: [String]) -> [String] {
+    func kits(for agent: AgentKind, from refs: [String]) -> [String] {
         let kept = KitStore.kits(refs, for: agent)
         let skipped = refs.filter { !kept.contains($0) }
         if !skipped.isEmpty {
@@ -671,9 +684,7 @@ final class WorkspaceController: ObservableObject {
         // `sbx kit add` appends, so keep the config in the container's order —
         // a later rebuild then composes the kits the same way.
         let final = added.map { previous + $0 } ?? cleaned
-        workspace.kits = final
-        config.kits = final
-        try? config.save(root: workspace.rootURL)
+        storeKits(final)
         var agents = Set(containers.keys)
         agents.insert(workspace.primaryAgent)
         for agent in agents {
@@ -694,7 +705,7 @@ final class WorkspaceController: ObservableObject {
     }
 
     /// Current kit set (for the Kits inspector to edit).
-    var kits: [String] { workspace.kits }
+    var kits: [String] { resolvedKits() }
 
     // MARK: - Kit drift
 
@@ -747,9 +758,7 @@ final class WorkspaceController: ObservableObject {
             }
         }
         let kits = resolvedKits() + drift.extra
-        workspace.kits = kits
-        config.kits = kits
-        try? config.save(root: workspace.rootURL)
+        storeKits(kits)
         if wasInSync { recordSignature(configSignature(mounts: mounts, kits: kits, agent: agent), for: name) }
         Log.info(.workspace, "adopted kit(s) from '\(name)' into the workspace: \(drift.extra.joined(separator: ", "))")
         kitDrift[agent] = nil
@@ -1007,7 +1016,11 @@ final class WorkspaceController: ObservableObject {
             containerPhases[agent] = .creating
             resetKitStartup(for: agent)
             do {
-                built = try await SbxClient.shared.create(workspace: workspace, agent: agent, name: name, mounts: mounts, kits: kits)
+                built = try await SbxClient.shared.create(workspace: workspace, agent: agent, name: name, mounts: mounts, kits: kits) { [weak self] in
+                    // Recorded once it exists: quitting during kit setup mustn't
+                    // read as a changed config next time.
+                    self?.recordSignature(signature, for: name)
+                }
             } catch {
                 containerPhases[agent] = .failed(error.localizedDescription)
                 throw error
