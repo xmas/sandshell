@@ -183,6 +183,10 @@ final class MainWindowController: NSWindowController {
             guard let self, case .session(let id)? = self.workspace?.selection else { return }
             self.detail?.dropFiles(urls, on: id)
         }
+        files.onAskAgent = { [weak self] text in
+            guard let self, case .session(let id)? = self.workspace?.selection else { return NSSound.beep() }
+            self.detail?.askAgent(text, on: id)
+        }
         let filesItem = NSSplitViewItem(inspectorWithViewController: files)
         filesItem.minimumThickness = 480
         filesItem.maximumThickness = 1600

@@ -442,7 +442,8 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
             previewScroll.isHidden = false
         case .changes:
             // Hunk actions read as buttons, not web links.
-            preview.linkTextAttributes = [.foregroundColor: NSColor.controlAccentColor, .cursor: NSCursor.pointingHand]
+            // Links color themselves (accent actions, quiet line numbers).
+            preview.linkTextAttributes = [.cursor: NSCursor.pointingHand]
             showDiff(file)
         }
     }
@@ -512,6 +513,31 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
     }
 
     static let hunkScheme = "sandshell-hunk"
+    static let askScheme = "sandshell-ask"
+
+    /// A diff line's number in the new file (or the old one, for a removed line).
+    struct LineNumber { var line: Int; var old: Bool }
+
+    /// Numbers for a diff's lines, following its `@@ -a,b +c,d @@` headers.
+    static func lineNumbers(_ lines: [String]) -> [LineNumber?] {
+        var old = 0, new = 0
+        return lines.map { s in
+            if s.hasPrefix("@@") {
+                let nums = s.split(separator: " ").dropFirst().prefix(2).map {
+                    Int($0.dropFirst().split(separator: ",").first ?? "") ?? 1
+                }
+                old = nums.first ?? 1
+                new = nums.count > 1 ? nums[1] : 1
+                return nil
+            }
+            if s.hasPrefix("diff --git") || s.hasPrefix("index ") || s.hasPrefix("--- ") || s.hasPrefix("+++ ") { return nil }
+            if s.hasPrefix("-") { defer { old += 1 }; return LineNumber(line: old, old: true) }
+            if s.hasPrefix("+") { defer { new += 1 }; return LineNumber(line: new, old: false) }
+            if s.hasPrefix("\\") || (s.isEmpty && new == 0) { return nil }
+            defer { old += 1; new += 1 }
+            return LineNumber(line: new, old: false)
+        }
+    }
 
     /// Both halves of a file's changes, as sections of hunks with action links.
     static func renderChanges(unstaged: FilePatch, staged: FilePatch, editable: Bool) -> NSAttributedString {
@@ -548,11 +574,14 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
         if untracked {
             out.append(sectionTitle("Untracked File", actions: editable ? [("Stage File", "add/0")] : []))
         }
-        for line in diff.split(separator: "\n", omittingEmptySubsequences: false) {
-            let s = String(line)
+        let lines = diff.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        // An untracked file is all "+" lines with no header: number them from 1.
+        let numbers: [LineNumber?] = untracked
+            ? lines.indices.map { LineNumber(line: $0 + 1, old: false) } : lineNumbers(lines)
+        for (s, number) in zip(lines, numbers) {
             if s.hasPrefix("diff --git") || s.hasPrefix("index ") || s.hasPrefix("--- ") || s.hasPrefix("+++ ")
                 || s.hasPrefix("new file mode") || s.hasPrefix("deleted file mode") { continue }
-            out.append(diffLine(s))
+            out.append(diffLine(s, number: number))
         }
         if out.length == 0 {
             out.append(NSAttributedString(string: "No changes against HEAD.", attributes: [
@@ -563,10 +592,21 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
 
     private static let diffFont = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
 
-    private static func diffLine(_ s: String, trailing: NSAttributedString? = nil) -> NSAttributedString {
+    private static func diffLine(_ s: String, trailing: NSAttributedString? = nil, number: LineNumber? = nil) -> NSAttributedString {
         let kind: BlockStyle.Kind? = s.hasPrefix("@@") ? .hunk : s.hasPrefix("+") ? .added : s.hasPrefix("-") ? .removed : nil
         let color: NSColor = kind == .hunk ? .secondaryLabelColor : .labelColor
-        let piece = NSMutableAttributedString(string: s, attributes: [.font: diffFont, .foregroundColor: color])
+        let piece = NSMutableAttributedString()
+        if let number {
+            // The line's number: click it to ask the agent for a change there.
+            piece.append(NSAttributedString(string: String(format: "%5d ", number.line), attributes: [
+                .font: diffFont, .foregroundColor: NSColor.tertiaryLabelColor,
+                .link: URL(string: "\(askScheme)://\(number.old ? "old" : "new")/\(number.line)")!,
+                .toolTip: "Tell the agent what to change at line \(number.line)",
+            ]))
+        } else if kind != .hunk {
+            piece.append(NSAttributedString(string: "      ", attributes: [.font: diffFont]))
+        }
+        piece.append(NSAttributedString(string: s, attributes: [.font: diffFont, .foregroundColor: color]))
         if let trailing { piece.append(trailing) }
         piece.append(NSAttributedString(string: "\n", attributes: [.font: diffFont]))
         if let kind {
@@ -582,6 +622,7 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
             out.append(NSAttributedString(string: "   ", attributes: [.font: diffFont]))
             out.append(NSAttributedString(string: title, attributes: [
                 .font: NSFont.systemFont(ofSize: 11.5, weight: .semibold),
+                .foregroundColor: NSColor.controlAccentColor,
                 .link: URL(string: "\(hunkScheme)://\(path)")!,
                 .toolTip: title.hasPrefix("Revert") ? "Discard this hunk's changes from the file" : "\(title) this hunk",
             ]))
@@ -593,8 +634,9 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
     /// text rather than wrapping in a narrow pane.
     private static func renderHunk(_ lines: [String], actions: [(String, String)]) -> NSAttributedString {
         let out = NSMutableAttributedString()
+        let numbers = lineNumbers(lines)
         for (n, line) in lines.enumerated() {
-            guard n == 0, !actions.isEmpty else { out.append(diffLine(line)); continue }
+            guard n == 0, !actions.isEmpty else { out.append(diffLine(line, number: numbers[n])); continue }
             let header = NSMutableAttributedString(attributedString: actionLinks(actions))
             header.deleteCharacters(in: NSRange(location: 0, length: 3))   // no leading gap
             header.append(NSAttributedString(string: "   ", attributes: [.font: diffFont]))
@@ -620,9 +662,66 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
         return out
     }
 
+    // MARK: Asking for a change at a line
+
+    /// Sends "change this" text to the session the Files surface belongs to.
+    var onAskAgent: ((String) -> Void)?
+    private var askPopover: NSPopover?
+
+    /// A line number in a diff was clicked: a box under it for what to change.
+    private func askAboutLine(_ line: Int, removed: Bool, at charIndex: Int) {
+        guard let file = current, onAskAgent != nil else { return NSSound.beep() }
+        let text = (preview.string as NSString)
+        let paragraph = text.substring(with: text.paragraphRange(for: NSRange(location: charIndex, length: 0)))
+        // Drop the gutter and the +/-/space marker.
+        var code = String(paragraph.dropFirst(6))
+        if let first = code.first, "+- ".contains(first) { code.removeFirst() }
+        code = code.trimmingCharacters(in: .newlines)
+        let path = displayPath(file.url)
+        let field = AskField(placeholder: "Tell the agent what to change at line \(line)")
+        field.onSubmit = { [weak self] comment in
+            guard let self else { return }
+            self.askPopover?.close()
+            let place = removed ? "the removed line \(line) of" : "line \(line) of"
+            let message = "At \(place) `\(path)`:\n```\n\(code)\n```\n\(comment)"
+            self.onAskAgent?(message)
+        }
+        let popover = NSPopover()
+        popover.behavior = .transient
+        popover.contentViewController = field
+        askPopover = popover
+        var rect = preview.firstRect(forCharacterRange: NSRange(location: charIndex, length: 5), actualRange: nil)
+        rect = preview.window?.convertFromScreen(rect) ?? rect
+        rect = preview.convert(rect, from: nil)
+        popover.show(relativeTo: rect, of: preview, preferredEdge: .maxY)
+        field.focus()
+    }
+
+    #if DEBUG
+    /// Self-test: ask about a line as if its number was clicked and submitted.
+    func debugAsk(line: Int, _ comment: String) -> Bool {
+        let ns = preview.string as NSString
+        var found: Int?
+        preview.textStorage?.enumerateAttribute(.link, in: NSRange(location: 0, length: ns.length)) { value, range, stop in
+            if let url = value as? URL, url.scheme == Self.askScheme, url.host == "new", Int(url.lastPathComponent) == line {
+                found = range.location; stop.pointee = true
+            }
+        }
+        guard let found else { return false }
+        askAboutLine(line, removed: false, at: found)
+        (askPopover?.contentViewController as? AskField)?.submit(comment)
+        return true
+    }
+    #endif
+
     // MARK: Hunk actions
 
     func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
+        if textView === preview, let url = link as? URL, url.scheme == Self.askScheme,
+           let line = Int(url.lastPathComponent) {
+            askAboutLine(line, removed: url.host == "old", at: charIndex)
+            return true
+        }
         guard textView === preview, let url = link as? URL ?? (link as? String).flatMap(URL.init(string:)),
               url.scheme == Self.hunkScheme, let host = url.host,
               let index = Int(url.lastPathComponent) else { return false }
@@ -971,5 +1070,50 @@ final class LineNumberRuler: NSRulerView {
             }
             return true
         }
+    }
+}
+
+/// The "what should change here?" box under a diff line: Return sends it.
+@MainActor
+final class AskField: NSViewController, NSTextFieldDelegate {
+    var onSubmit: ((String) -> Void)?
+    private let field = NSTextField()
+    private let placeholder: String
+
+    init(placeholder: String) {
+        self.placeholder = placeholder
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func loadView() {
+        field.placeholderString = placeholder
+        field.font = .systemFont(ofSize: 13)
+        field.bezelStyle = .roundedBezel
+        field.delegate = self
+        field.target = self
+        field.action = #selector(enter)
+        field.setAccessibilityIdentifier("files-ask-field")
+        let hint = NSTextField(labelWithString: "↩ send to the session · esc to cancel")
+        hint.font = .systemFont(ofSize: 10.5)
+        hint.textColor = .tertiaryLabelColor
+        let stack = NSStackView(views: [field, hint])
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 6
+        stack.edgeInsets = NSEdgeInsets(top: 10, left: 10, bottom: 8, right: 10)
+        field.widthAnchor.constraint(equalToConstant: 340).isActive = true
+        view = stack
+    }
+
+    func focus() { view.window?.makeFirstResponder(field) }
+
+    @objc private func enter() { submit(field.stringValue) }
+
+    func submit(_ text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        onSubmit?(trimmed)
     }
 }

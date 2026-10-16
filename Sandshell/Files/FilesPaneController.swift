@@ -28,6 +28,11 @@ final class FilesPaneController: NSViewController, NSSplitViewDelegate {
     private let compact: Bool
     private var openQuicklyPopover: NSPopover?
     /// "Add to Chat" from the tree's context menu.
+    /// "Change this" text from a diff line, for the session's agent.
+    var onAskAgent: ((String) -> Void)? {
+        get { editor.onAskAgent }
+        set { editor.onAskAgent = newValue }
+    }
     var onAddToChat: (([URL]) -> Void)? {
         get { tree.onAddToChat }
         set { tree.onAddToChat = newValue }

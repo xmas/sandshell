@@ -1675,6 +1675,16 @@ enum SelfTest {
                   "opening one shows the commit's diff")
             check(tree.debugChangedTitle.hasSuffix("files in ea0f97b") || tree.debugChangedTitle.contains("files in"),
                   "the toggle says whose files these are (\(tree.debugChangedTitle))")
+            // Line numbers in the gutter; one clicked asks the agent for a change there.
+            check(files.editor.previewText?.string.contains("    1 +def f0():") == true, "diff lines carry their line numbers")
+            var asked: String?
+            let keep = files.onAskAgent
+            files.onAskAgent = { asked = $0 }
+            check(files.editor.debugAsk(line: 1, "Rename f0 to first."), "line 1's number opens the ask box")
+            log("asked: \(asked ?? "nil")")
+            check(asked?.contains("line 1 of `src/app.py`") == true && asked?.contains("def f0():") == true
+                  && asked?.hasSuffix("Rename f0 to first.") == true, "the agent gets the file, line, its code and the ask")
+            files.onAskAgent = keep
             await wait(0.8)
             snapshot(files.view, "commits-init")
         }

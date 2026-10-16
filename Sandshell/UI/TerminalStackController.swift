@@ -321,6 +321,8 @@ final class TerminalStackController: NSViewController {
     private(set) var filesPane: FilesPaneController?
     /// "Add to Chat" from this pane's Files tree.
     var onFilesAddToChat: (([URL], FilesTarget) -> Void)?
+    /// A diff line's "change this" from this pane's Files surface.
+    var onFilesAsk: ((String, FilesTarget) -> Void)?
     /// Focused pane: the one the sidebar selection and toolbar act on.
     var isFocused = true { didSet { updateFocusRing() } }
     /// Draw the focus ring only when there's more than one pane.
@@ -474,6 +476,10 @@ final class TerminalStackController: NSViewController {
             files.onAddToChat = { [weak self] urls in
                 guard let self, let target = self.shownFiles else { return }
                 self.onFilesAddToChat?(urls, target)
+            }
+            files.onAskAgent = { [weak self] text in
+                guard let self, let target = self.shownFiles else { return }
+                self.onFilesAsk?(text, target)
             }
             addChild(files)
             // The editor paints the system text background, not the terminal's.
@@ -1613,6 +1619,17 @@ final class TerminalStackController: NSViewController {
             queueDraft("", urls: urls, send: false, for: id)
         } else if activeSessionID == id {
             insertExternalItems(urls)
+        }
+    }
+
+    /// Ask the session's agent for a change: sent in a chat; typed (not
+    /// entered) into a terminal agent's prompt.
+    func askAgent(_ text: String, on id: UUID) {
+        guard let session = controller.session(id: id) else { return }
+        if session.isChat {
+            queueDraft(text, urls: [], send: true, for: id)
+        } else if activeSessionID == id, let context = activeTerminalContext() {
+            context.view.insertText(text, replacementRange: NSRange(location: NSNotFound, length: 0))
         }
     }
 

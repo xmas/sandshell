@@ -158,6 +158,10 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
             guard let self else { return }
             if let id = target.session ?? self.selectedSession { self.dropFiles(urls, on: id) }
         }
+        pane.onFilesAsk = { [weak self] text, target in
+            guard let self else { return }
+            if let id = target.session ?? self.selectedSession { self.askAgent(text, on: id) } else { NSSound.beep() }
+        }
         addChild(pane)
         return pane
     }
@@ -575,6 +579,11 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
 
     func dropFiles(_ urls: [URL], on id: UUID) {
         (panes.first { $0.shownSession == id } ?? focused)?.dropFiles(urls, on: id)
+    }
+
+    /// "Change this" from a diff line in Files, to the session's agent.
+    func askAgent(_ text: String, on id: UUID) {
+        (panes.first { $0.shownSession == id } ?? focused)?.askAgent(text, on: id)
     }
 
     /// The pane the toolbar speaks for: the focused pane unless it's a Files
