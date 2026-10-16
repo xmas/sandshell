@@ -37,3 +37,4 @@ __pycache__/
 
 # Sandshell kits ship a .sandshell folder
 !kits/**/.sandshell/
+build-dev2/
