@@ -47,10 +47,18 @@ enum AutomatedRun {
         }
     }
 
+    /// The alert's default button: the one Return presses — or, when the
+    /// app isn't active (a test copy never is) and AppKit hasn't given it
+    /// Return, the rightmost button that isn't Cancel (where alerts put it).
     @MainActor private static func defaultButton(in view: NSView?) -> NSButton? {
-        guard let view else { return nil }
-        if let b = view as? NSButton, b.keyEquivalent == "\r", b.isEnabled { return b }
-        for sub in view.subviews { if let b = defaultButton(in: sub) { return b } }
-        return nil
+        let buttons = allButtons(in: view).filter(\.isEnabled)
+        if let b = buttons.first(where: { $0.keyEquivalent == "\r" }) { return b }
+        return buttons.filter { $0.keyEquivalent != "\u{1b}" }
+            .max { $0.convert($0.bounds, to: nil).maxX < $1.convert($1.bounds, to: nil).maxX }
+    }
+
+    @MainActor private static func allButtons(in view: NSView?) -> [NSButton] {
+        guard let view else { return [] }
+        return ((view as? NSButton).map { [$0] } ?? []) + view.subviews.flatMap { allButtons(in: $0) }
     }
 }

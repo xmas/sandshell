@@ -1061,15 +1061,10 @@ final class WorkspaceController: ObservableObject {
             Log.info(.workspace, "automated run: \(ok ? "rebuilding" : "not rebuilding") “\(name)” (mounts changed)")
             return ok
         }
-        let alert = NSAlert()
-        alert.messageText = "Rebuild “\(name)”?"
-        alert.informativeText = killsRunning
+        return Alerts.confirm("Rebuild “\(name)”?", killsRunning
             ? "The workspace mounts changed. Rebuilding stops and recreates the container, ending any running sessions in it."
-            : "The workspace mounts changed. Rebuilding recreates the container with the new mounts."
-        alert.alertStyle = .warning
-        alert.addButton(withTitle: "Rebuild")
-        alert.addButton(withTitle: "Cancel")
-        return alert.runModal() == .alertFirstButtonReturn
+            : "The workspace mounts changed. Rebuilding recreates the container with the new mounts.",
+                              confirm: "Rebuild", destructive: killsRunning)
     }
 
     // MARK: - Action plumbing

@@ -274,7 +274,6 @@ final class Updater {
     }
 
     private func inform(_ title: String, _ body: String) {
-        let a = NSAlert(); a.messageText = title; a.informativeText = body
-        a.addButton(withTitle: "OK"); a.runModal()
+        Alerts.inform(title, body)
     }
 }

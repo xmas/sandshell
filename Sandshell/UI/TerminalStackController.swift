@@ -1073,14 +1073,10 @@ final class TerminalStackController: NSViewController {
     /// then force-recreate so the current kit contents are applied.
     private func confirmKitRebuild(for agent: AgentKind) {
         let name = controller.containerName(for: agent)
-        let alert = NSAlert()
-        alert.messageText = "Rebuild “\(name)”?"
-        alert.informativeText = "The sandbox is recreated with the current kits and mounts, which reloads every "
-            + "kit’s contents. Any session running in it will end. Workspace files are kept."
-        alert.alertStyle = .warning
-        alert.addButton(withTitle: "Rebuild")
-        alert.addButton(withTitle: "Cancel")
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        guard Alerts.confirm("Rebuild “\(name)”?",
+                             "The sandbox is recreated with the current kits and mounts, which reloads every "
+                             + "kit’s contents. Any session running in it will end. Workspace files are kept.",
+                             confirm: "Rebuild", destructive: true) else { return }
         controller.rebuildContainer(for: agent, force: true)
     }
 
@@ -1367,13 +1363,9 @@ final class TerminalStackController: NSViewController {
         defer { if let id = activeSessionID { updateClaudeStats(id) } }
         guard changed, let id = activeSessionID, let session = controller.session(id: id),
               session.agent == .claude, terminals[id] != nil, !runtime.isExited(id) else { return }
-        let alert = NSAlert()
-        alert.messageText = title
-        alert.informativeText = "Claude Code chooses its \(what) at launch. Restarting resumes this "
-            + "conversation with the new \(what). New sessions in this workspace use it either way."
-        alert.addButton(withTitle: "Restart")
-        alert.addButton(withTitle: "Not Now")
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        guard Alerts.confirm(title, "Claude Code chooses its \(what) at launch. Restarting resumes this "
+                             + "conversation with the new \(what). New sessions in this workspace use it either way.",
+                             confirm: "Restart", cancel: "Not Now", style: .informational) else { return }
         restartClicked()
     }
 
@@ -1471,13 +1463,9 @@ final class TerminalStackController: NSViewController {
 
     /// The session's prior history is gone — ask whether to start fresh.
     private func confirmStartFresh(_ session: Session) -> Bool {
-        let alert = NSAlert()
-        alert.messageText = "Couldn’t restore “\(session.name)”."
-        alert.informativeText = "This session’s \(session.agent.displayName) history "
-            + "is no longer available. Start a new session in its place?"
-        alert.addButton(withTitle: "New Session")
-        alert.addButton(withTitle: "Cancel")
-        return alert.runModal() == .alertFirstButtonReturn
+        Alerts.confirm("Couldn’t restore “\(session.name)”.", "This session’s \(session.agent.displayName) history "
+                       + "is no longer available. Start a new session in its place?",
+                       confirm: "New Session", style: .informational)
     }
 
     private func addTerminalView(_ tv: NSView) {

@@ -997,49 +997,32 @@ final class SidebarListController: NSViewController {
     }
 
     @objc private func contextShowChangedDrops(_ sender: NSMenuItem) {
+        guard let stagingDir = exportChangedDrops(sender) else { return }
+        NSWorkspace.shared.open(stagingDir)
+    }
+
+    /// Copy the folder's changed drops out to its staging folder (saying so
+    /// when there are none or it fails); the staging folder, or nil.
+    private func exportChangedDrops(_ sender: NSMenuItem) -> URL? {
         guard let folderID = sender.representedObject as? UUID,
-              let folder = controller.folder(id: folderID) else { return }
+              let folder = controller.folder(id: folderID) else { return nil }
         let (dropDir, stagingDir) = dropsPaths(for: folder)
         let changed = DropsScanner.scan(dropDir: dropDir)
         guard !changed.isEmpty else {
-            let a = NSAlert()
-            a.messageText = "No Modified Files"
-            a.informativeText = "All files in .sbx/drops are unchanged since they were dropped."
-            a.runModal()
-            return
+            Alerts.inform("No Modified Files", "All files in .sbx/drops are unchanged since they were dropped.")
+            return nil
         }
         do {
             try DropsScanner.export(changed, from: dropDir, to: stagingDir)
-            NSWorkspace.shared.open(stagingDir)
+            return stagingDir
         } catch {
-            let a = NSAlert()
-            a.messageText = "Export Failed"
-            a.informativeText = error.localizedDescription
-            a.runModal()
+            Alerts.inform("Export Failed", error.localizedDescription, style: .warning)
+            return nil
         }
     }
 
     @objc private func contextOpenTerminalToDrops(_ sender: NSMenuItem) {
-        guard let folderID = sender.representedObject as? UUID,
-              let folder = controller.folder(id: folderID) else { return }
-        let (dropDir, stagingDir) = dropsPaths(for: folder)
-        let changed = DropsScanner.scan(dropDir: dropDir)
-        guard !changed.isEmpty else {
-            let a = NSAlert()
-            a.messageText = "No Modified Files"
-            a.informativeText = "All files in .sbx/drops are unchanged since they were dropped."
-            a.runModal()
-            return
-        }
-        do {
-            try DropsScanner.export(changed, from: dropDir, to: stagingDir)
-        } catch {
-            let a = NSAlert()
-            a.messageText = "Export Failed"
-            a.informativeText = error.localizedDescription
-            a.runModal()
-            return
-        }
+        guard let stagingDir = exportChangedDrops(sender) else { return }
         let term = HostTerminalWindowController(root: stagingDir, theme: controller.theme)
         term.onClose = { [weak self] in self?.dropsTerminal = nil }
         dropsTerminal = term

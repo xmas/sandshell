@@ -747,10 +747,8 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
             default: error = nil
             }
             if let error {
-                let alert = NSAlert()
-                alert.messageText = "Couldn’t \(host == "add" ? "stage the file" : "\(host) the hunk")"
-                alert.informativeText = error
-                alert.runModal()
+                Alerts.inform("Couldn’t \(host == "add" ? "stage the file" : "\(host) the hunk")", error,
+                              style: .warning, in: self.view.window)
             }
         }
         return true
@@ -762,14 +760,9 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
         let patch = staged ? shown.staged : shown.unstaged
         guard patch.hunks.indices.contains(hunk) else { return nil }
         if action == .revert && !confirmed {
-            let alert = NSAlert()
-            alert.alertStyle = .warning
-            alert.messageText = "Revert this change in “\(shown.file.url.lastPathComponent)”?"
-            alert.informativeText = "The hunk’s edits are removed from the file on disk. This can’t be undone."
-            alert.addButton(withTitle: "Revert")
-            alert.addButton(withTitle: "Cancel")
-            alert.buttons.first?.hasDestructiveAction = true
-            guard alert.runModal() == .alertFirstButtonReturn else { return nil }
+            guard Alerts.confirm("Revert this change in “\(shown.file.url.lastPathComponent)”?",
+                                 "The hunk’s edits are removed from the file on disk. This can’t be undone.",
+                                 confirm: "Revert", destructive: true) else { return nil }
         }
         if let error = await patch.apply(action, hunk: hunk, repo: repo) { return error }
         await afterRepoChange(shown.file, reloadText: action == .revert)
@@ -801,19 +794,12 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
         commitEditorText()
         let dirty = files.filter(\.isDirty)
         guard !dirty.isEmpty else { return true }
-        let alert = NSAlert()
-        alert.messageText = dirty.count == 1 ? "Save changes to “\(dirty[0].url.lastPathComponent)”?"
-            : "Save changes to \(dirty.count) files?"
-        alert.informativeText = "Your changes will be lost if you don’t save them."
-        alert.addButton(withTitle: dirty.count == 1 ? "Save" : "Save All")
-        alert.addButton(withTitle: "Cancel")
-        alert.addButton(withTitle: "Don’t Save")
-        switch alert.runModal() {
-        case .alertFirstButtonReturn:
+        switch Alerts.saveChanges(dirty.map(\.url.lastPathComponent)) {
+        case .save:
             dirty.forEach(save)
             return !files.contains(where: \.isDirty)
-        case .alertSecondButtonReturn: return false
-        default: return true
+        case .cancel: return false
+        case .discard: return true
         }
     }
 
@@ -855,16 +841,10 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
         commitEditorText()
         let file = files[index]
         if file.isDirty {
-            let alert = NSAlert()
-            alert.messageText = "Save changes to “\(file.url.lastPathComponent)”?"
-            alert.informativeText = "Your changes will be lost if you don’t save them."
-            alert.addButton(withTitle: "Save")
-            alert.addButton(withTitle: "Cancel")
-            alert.addButton(withTitle: "Don’t Save")
-            switch alert.runModal() {
-            case .alertFirstButtonReturn: save(file)
-            case .alertSecondButtonReturn: return
-            default: break
+            switch Alerts.saveChanges([file.url.lastPathComponent]) {
+            case .save: save(file)
+            case .cancel: return
+            case .discard: break
             }
         }
         files.remove(at: index)

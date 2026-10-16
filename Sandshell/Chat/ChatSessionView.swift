@@ -329,33 +329,23 @@ final class ChatSessionView: NSView {
             do {
                 let preview = try await session.previewRewind(turn)
                 guard preview.canRewind, !preview.files.isEmpty else {
-                    return alert("Nothing to undo", preview.error ?? "These files are already as they were before this message.")
+                    return Alerts.inform("Nothing to undo", preview.error ?? "These files are already as they were before this message.", in: window)
                 }
                 let names = preview.files.map { ($0 as NSString).lastPathComponent }
-                let a = NSAlert()
-                a.messageText = "Undo the changes from this message?"
-                a.informativeText = "Puts \(names.count == 1 ? "1 file" : "\(names.count) files") back as they were before it "
+                let info = "Puts \(names.count == 1 ? "1 file" : "\(names.count) files") back as they were before it "
                     + "(+\(preview.insertions) −\(preview.deletions) lines):\n\(names.prefix(8).joined(separator: ", "))"
                     + (names.count > 8 ? " and \(names.count - 8) more" : "")
                     + "\n\nChanges made by shell commands aren’t tracked and stay as they are. The conversation isn’t changed."
-                a.addButton(withTitle: "Undo Changes")
-                a.addButton(withTitle: "Cancel")
-                guard let window else { return }
-                guard await a.beginSheetModal(for: window) == .alertFirstButtonReturn else { return }
+                guard await Alerts.confirm("Undo the changes from this message?", info, confirm: "Undo Changes",
+                                           destructive: true, in: window) else { return }
                 let done = try await session.rewind(turn)
-                if !done.canRewind { alert("Couldn’t undo the changes", done.error ?? "Claude Code couldn’t restore the files.") }
+                if !done.canRewind { Alerts.inform("Couldn’t undo the changes", done.error ?? "Claude Code couldn’t restore the files.", in: window) }
             } catch {
-                alert("Couldn’t undo the changes", error.localizedDescription)
+                Alerts.inform("Couldn’t undo the changes", error.localizedDescription, in: window)
             }
         }
     }
 
-    private func alert(_ title: String, _ text: String) {
-        let a = NSAlert()
-        a.messageText = title
-        a.informativeText = text
-        if let window { a.beginSheetModal(for: window) } else { a.runModal() }
-    }
 
     private func showUsage(_ usage: ChatSession.Usage?) {
         guard let usage else { usageLabel.stringValue = ""; return }
