@@ -232,7 +232,12 @@ enum SbxCommand {
             // image's): it talks to `codex app-server`, whose protocol moves with
             // codex releases, and the stable image's codex trails the adapter's.
             // NO_BROWSER hides the ChatGPT browser login, which can't work here.
-            return "export NO_BROWSER=1; "
+            // `sbx run codex` writes a placeholder auth.json when it starts (sbx's
+            // proxy swaps in the real credential); `sbx exec` doesn't, and without
+            // it the adapter reports "Authentication required". Write the same one.
+            return "export NO_BROWSER=1; " + #"H="${CODEX_HOME:-$HOME/.codex}"; "#
+                + #"if [ ! -f "$H/auth.json" ] && [ -n "$SBX_CRED_OPENAI_MODE" ]; then "#
+                + #"mkdir -p "$H" && printf '%s' '{"OPENAI_API_KEY":"proxy-managed"}' > "$H/auth.json"; fi; "#
                 + npmAdapterLaunch(dir: "codex-acp-\(codexACPVersion)", package: codexACPPackage,
                                    bin: "codex-acp", omitOptional: false)
         case .gemini:
