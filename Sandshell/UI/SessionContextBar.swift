@@ -204,9 +204,8 @@ final class ContextChip: NSButton {
         let font = NSFont.systemFont(ofSize: 11, weight: .medium)
         let title = NSMutableAttributedString(string: " " + text, attributes: [.font: font, .foregroundColor: tint])
         if added + removed > 0 {
-            let mono = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .semibold)
-            title.append(NSAttributedString(string: "  +\(added)", attributes: [.font: mono, .foregroundColor: NSColor.systemGreen]))
-            title.append(NSAttributedString(string: " −\(removed)", attributes: [.font: mono, .foregroundColor: NSColor.systemRed]))
+            title.append(NSAttributedString(string: "  ", attributes: [.font: font]))
+            title.append(.diffCounts(added: added, removed: removed))
         }
         attributedTitle = title
         layer?.borderColor = border.cgColor

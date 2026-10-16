@@ -670,8 +670,7 @@ final class FileCell: NSTableCellView {
             let out = NSMutableAttributedString()
             let font = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .medium)
             if let a = counts.added, let r = counts.removed {
-                out.append(NSAttributedString(string: "+\(a)", attributes: [.font: font, .foregroundColor: NSColor.systemGreen]))
-                out.append(NSAttributedString(string: " −\(r)", attributes: [.font: font, .foregroundColor: NSColor.systemRed]))
+                out.append(.diffCounts(added: a, removed: r))
             } else {
                 out.append(NSAttributedString(string: "bin", attributes: [.font: font, .foregroundColor: NSColor.secondaryLabelColor]))
             }
