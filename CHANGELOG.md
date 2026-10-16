@@ -2,6 +2,9 @@
 
 A running log of what changed, newest first. Yes, we actually write these.
 
+## v0.2.27 — "Ripples"
+- **The empty chat's sea is calmer.** No more bubble: move over the sea creatures and the ones you pass color in with a quick swish while rings of water ripple out from under them and fade. A moment later everything is gray and still again.
+
 ## v0.2.26 — "Line by Line"
 - **Commits in Files.** Under the file tree: **All changes** on your branch, **Uncommitted changes**, and each commit since the branch left main (the last 20 when you're on main). Pick one and the tree lists just the files it touched, with +/- counts; open a file for that commit's diff.
 - **Tell the agent what to change, right in a diff.** Diffs show line numbers; click one, type what should change, press Return. The session gets the file, the line, its code and your note — sent in a chat, typed into a terminal agent's prompt.
