@@ -65,6 +65,7 @@ enum SelfTest {
     static func prepare() {
         guard let scenario = requested, !["files-relaunch", "files-alone"].contains(scenario) else { return }
         let defaults = UserDefaults.standard
+        defaults.removeObject(forKey: "filesPaneVisible")   // the inspector starts closed too
         for key in defaults.dictionaryRepresentation().keys where key.hasPrefix("paneLayout:") {
             defaults.removeObject(forKey: key)
         }

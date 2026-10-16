@@ -19,7 +19,17 @@ def sh(*args, cwd=None, check=True):
     return subprocess.run(args, cwd=cwd, check=check, capture_output=True, text=True).stdout
 
 def git_repo(d, files, commits):
-    """Fresh repo at d: `commits` is a list of (message, {path: text}) applied in order."""
+    """Fresh repo at d: `commits` is a list of (message, {path: text}) applied in order.
+    An existing repo is reset to its commits — or rebuilt when the fixture's
+    definition changed since it was made."""
+    import hashlib
+    stamp = hashlib.sha1(json.dumps([files, commits], sort_keys=True).encode()).hexdigest()
+    stamp_file = os.path.join(d, ".git", "selftest-fixture")
+    if os.path.isdir(os.path.join(d, ".git")) and (not os.path.exists(stamp_file) or open(stamp_file).read() != stamp):
+        for name in os.listdir(d):
+            if name != ".sandshell":
+                p = os.path.join(d, name)
+                shutil.rmtree(p) if os.path.isdir(p) else os.remove(p)
     if os.path.isdir(os.path.join(d, ".git")):
         sh("git", "-C", d, "reset", "-q", "--hard")
         sh("git", "-C", d, "clean", "-qfdx", "-e", ".sandshell")
@@ -36,6 +46,7 @@ def git_repo(d, files, commits):
         sh("git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", msg, cwd=d)
     if "__branch__" in files:
         sh("git", "checkout", "-qb", files["__branch__"], cwd=d)
+    open(stamp_file, "w").write(stamp)
 
 def edit(d, path, old, new):
     p = os.path.join(d, path)

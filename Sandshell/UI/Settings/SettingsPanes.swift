@@ -275,9 +275,7 @@ struct GeneralPaneView: View {
         Form {
             Section {
                 HStack(spacing: 10) {
-                    RoundedRectangle(cornerRadius: 6).fill(Color(NSColor.hex(editing.colorHex)))
-                        .frame(width: 24, height: 24)
-                        .overlay(Image(systemName: editing.icon).font(.system(size: 12, weight: .semibold)).foregroundStyle(.white))
+                    BadgeMark(color: .hex(editing.colorHex), content: .symbol(editing.icon), side: 24)
                     VStack(alignment: .leading, spacing: 1) {
                         Text(editing.name).fontWeight(.semibold)
                         Text(controller.rootURL.path).font(.system(size: 10, design: .monospaced))

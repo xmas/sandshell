@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 
 /// Brand glyph + color for each agent, used by the colored badges in the
 /// sidebar session rows and the detail header (design handoff §Agents).
@@ -76,8 +77,11 @@ final class AgentBadgeView: NSView {
 
     func configure(_ agent: AgentKind) {
         layer?.backgroundColor = agent.badgeColor.cgColor
-        let image = agent.badgeImageName.flatMap { NSImage(named: $0) }
-            ?? agent.customSymbol.flatMap { NSImage(systemSymbolName: $0, accessibilityDescription: nil) }
+        let image: NSImage? = switch agent.badgeContent {
+        case .image(let image): image
+        case .symbol(let name): NSImage(systemSymbolName: name, accessibilityDescription: nil)
+        case .glyph: nil
+        }
         if let image {
             image.isTemplate = true
             icon.image = image
@@ -89,5 +93,49 @@ final class AgentBadgeView: NSView {
             label.isHidden = false
             label.stringValue = agent.badgeGlyph
         }
+    }
+}
+
+extension NSColor {
+    /// A session at work (sidebar timer, title-strip status, background pill).
+    static let sessionWorking = NSColor.hex("16a34a")
+}
+
+// MARK: - SwiftUI badges
+
+/// The colored rounded square with a white mark, in SwiftUI: agents (brand
+/// logo, a custom agent's symbol, or its glyph), folders and profiles. One
+/// look everywhere — the AppKit `AgentBadgeView` draws the same.
+struct BadgeMark: View {
+    enum Content { case image(NSImage), symbol(String), glyph(String) }
+    let color: NSColor
+    let content: Content
+    var side: CGFloat = 20
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: side * 0.28, style: .continuous)
+            .fill(Color(nsColor: color))
+            .frame(width: side, height: side)
+            .overlay {
+                switch content {
+                case .image(let image):
+                    Image(nsImage: image).renderingMode(.template).resizable().scaledToFit()
+                        .frame(width: side * 0.6, height: side * 0.6).foregroundStyle(.white)
+                case .symbol(let name):
+                    Image(systemName: name).font(.system(size: side * 0.5, weight: .semibold)).foregroundStyle(.white)
+                case .glyph(let text):
+                    Text(text).font(.system(size: side * 0.45, weight: .bold, design: .monospaced)).foregroundStyle(.white)
+                }
+            }
+    }
+}
+
+extension AgentKind {
+    /// What the agent's badge shows: its logo, else a custom agent's symbol,
+    /// else its glyph.
+    var badgeContent: BadgeMark.Content {
+        if let image = badgeImageName.flatMap({ NSImage(named: $0) }) { return .image(image) }
+        if let symbol = customSymbol { return .symbol(symbol) }
+        return .glyph(badgeGlyph)
     }
 }

@@ -152,10 +152,7 @@ struct AgentConfigView: View {
                 Divider()
                 Button("More Symbols…") { pickingSymbolFor = profile }
             } label: {
-                RoundedRectangle(cornerRadius: 6).fill(Color(NSColor.hex(profile.colorHex)))
-                    .frame(width: 28, height: 28)
-                    .overlay(Image(systemName: profile.icon).font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(.white))
+                BadgeMark(color: .hex(profile.colorHex), content: .symbol(profile.icon), side: 28)
             }
             .menuStyle(.button).buttonStyle(.plain).fixedSize()
             .help("Choose the agent's icon")

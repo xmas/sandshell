@@ -267,7 +267,7 @@ private struct SessionRuntimeRow: View {
                 .frame(width: 36)
 
             Text(rt?.status == .working ? "working" : "ready")
-                .foregroundStyle(rt?.status == .working ? Color.green : Color.secondary)
+                .foregroundStyle(rt?.status == .working ? Color(nsColor: .sessionWorking) : Color.secondary)
                 .frame(width: 70, alignment: .leading)
 
             Text(rt.map { formatWork($0) } ?? "—")

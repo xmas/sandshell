@@ -19,8 +19,8 @@ final class ChatSessionView: NSView {
     private let permissionButtons = NSStackView()
     private let statusLabel = NSTextField(labelWithString: "")
     private let usageLabel = NSTextField(labelWithString: "")
-    private let modePopup = NSPopUpButton()
-    private let modelPopup = NSPopUpButton()
+    private let modePopup = ChoicePopUp(tip: "Permission mode")
+    private let modelPopup = ChoicePopUp(tip: "Model")
     private let sendButton = NSButton()
     /// "MCP 3" (a red dot when one's failing): opens the servers popover.
     private let mcpButton = NSButton()
@@ -139,16 +139,8 @@ final class ChatSessionView: NSView {
         }
         usageLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
         statusLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        for popup in [modePopup, modelPopup] {
-            popup.controlSize = .small
-            popup.font = .systemFont(ofSize: 11)
-            popup.isBordered = false
-            popup.target = self
-        }
-        modePopup.action = #selector(modeChanged)
-        modePopup.toolTip = "Permission mode"
-        modelPopup.action = #selector(modelChanged)
-        modelPopup.toolTip = "Model"
+        modePopup.onPick = { [weak self] id in if let id { self?.session.setMode(id) } }
+        modelPopup.onPick = { [weak self] id in if let id { self?.session.setModel(id) } }
         sendButton.bezelStyle = .rounded
         sendButton.controlSize = .small
         sendButton.target = self
@@ -373,15 +365,8 @@ final class ChatSessionView: NSView {
         permissionBar.isHidden = false
     }
 
-    private func fill(_ popup: NSPopUpButton?, _ choices: [ChatSession.Choice], _ current: String?) {
-        guard let popup else { return }
-        popup.removeAllItems()
-        for c in choices {
-            popup.addItem(withTitle: c.name)
-            popup.lastItem?.representedObject = c.id
-        }
-        if let current, let idx = choices.firstIndex(where: { $0.id == current }) { popup.selectItem(at: idx) }
-        popup.isHidden = choices.isEmpty
+    private func fill(_ popup: ChoicePopUp?, _ choices: [ChatSession.Choice], _ current: String?) {
+        popup?.set(choices.map { ChoicePopUp.Choice(id: $0.id, title: $0.name) }, current: current)
     }
 
     // MARK: Actions
@@ -457,13 +442,6 @@ final class ChatSessionView: NSView {
         composer.focus()
     }
 
-    @objc private func modeChanged() {
-        if let id = modePopup.selectedItem?.representedObject as? String { session.setMode(id) }
-    }
-
-    @objc private func modelChanged() {
-        if let id = modelPopup.selectedItem?.representedObject as? String { session.setModel(id) }
-    }
 }
 
 /// An empty chat: a sea of creatures to stir up, over what to do next.

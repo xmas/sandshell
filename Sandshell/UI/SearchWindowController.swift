@@ -337,7 +337,7 @@ private struct ResultRow: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 9) {
-            AgentBadge(agent: result.agent)
+            BadgeMark(color: result.agent.badgeColor, content: result.agent.badgeContent)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
                     if result.isChat {
@@ -380,23 +380,6 @@ private struct ResultRow: View {
     }
 }
 
-/// The agent's colored badge with its brand logo (glyph fallback).
-private struct AgentBadge: View {
-    let agent: AgentKind
-
-    var body: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 5).fill(Color(agent.badgeColor))
-            if let name = agent.badgeImageName, let img = NSImage(named: name) {
-                Image(nsImage: img).renderingMode(.template).resizable().scaledToFit()
-                    .frame(width: 12, height: 12).foregroundStyle(.white)
-            } else {
-                Text(agent.badgeGlyph).font(.system(size: 9, weight: .bold)).foregroundStyle(.white)
-            }
-        }
-        .frame(width: 20, height: 20)
-    }
-}
 
 // MARK: - Helpers
 

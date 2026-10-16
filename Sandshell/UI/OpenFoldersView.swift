@@ -196,14 +196,7 @@ struct RootIconMark: View {
     var side: CGFloat = 24
 
     var body: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: side * 0.28, style: .continuous)
-                .fill(Color(nsColor: .hex(profile.colorHex)))
-            Image(systemName: profile.icon)
-                .font(.system(size: side * 0.5, weight: .semibold))
-                .foregroundStyle(.white)
-        }
-        .frame(width: side, height: side)
+        BadgeMark(color: .hex(profile.colorHex), content: .symbol(profile.icon), side: side)
     }
 }
 

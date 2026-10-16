@@ -1275,7 +1275,7 @@ final class SidebarSearchField: NSView {
 final class WorkingSweepView: NSView {
     private let trackLayer = CALayer()
     private let pillLayer = CALayer()
-    private static let green = NSColor.hex("16a34a")
+    private static let green = NSColor.sessionWorking
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)

@@ -391,9 +391,6 @@ final class TerminalStackController: NSViewController {
     private let headerSub = NSTextField(labelWithString: "")
     private let headerStatus = NSTextField(labelWithString: "")
     // Session action icons (right of the header): reveal in Finder, stop, restart.
-    private let revealButton = NSButton()
-    private let stopButton = NSButton()
-    private let headerRestartButton = NSButton()
     private let headerActions = NSStackView()
     private let headerLine = NSView()
     private var activeSessionID: UUID?
@@ -670,18 +667,6 @@ final class TerminalStackController: NSViewController {
         sidebarToggle.target = self
         sidebarToggle.action = #selector(toggleSidebarClicked)
 
-        for (button, symbol, action, tip) in [
-            (revealButton, "folder", #selector(revealInFinderClicked), "Reveal folder in Finder"),
-            (stopButton, "stop", #selector(stopClicked), "Stop the session"),
-            (headerRestartButton, "arrow.clockwise", #selector(headerRestartClicked), "Restart the session"),
-        ] {
-            button.isBordered = false
-            button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: tip)
-            button.imagePosition = .imageOnly
-            button.target = self
-            button.action = action
-            button.toolTip = tip
-        }
         headerActions.orientation = .horizontal
         headerActions.spacing = 10
         headerActions.translatesAutoresizingMaskIntoConstraints = false
@@ -999,7 +984,6 @@ final class TerminalStackController: NSViewController {
         updateFocusRing()
         headerName.textColor = c.text
         sidebarToggle.contentTintColor = c.text2
-        for b in [revealButton, stopButton, headerRestartButton] { b.contentTintColor = c.text2 }
     }
 
     // MARK: Display
@@ -1010,7 +994,9 @@ final class TerminalStackController: NSViewController {
     func refresh() {
         // Files don't wait on the container.
         if let files = shownFiles { return presentFiles(files) }
-        if controller.isBuilding {
+        // Another sandbox building doesn't hide a session that's already up.
+        let live = shownSession.map { terminals[$0] != nil || chats[$0] != nil } ?? false
+        if controller.isBuilding, !live {
             showStatus(controller.activity ?? "Building…", busy: true)
             return
         }
@@ -1296,7 +1282,7 @@ final class TerminalStackController: NSViewController {
         }.count
         backgroundPill.isHidden = running == 0 && recent == 0
         defer { shareTitleStrip() }
-        let color: NSColor = running > 0 ? .hex("16a34a") : .secondaryLabelColor
+        let color: NSColor = running > 0 ? .sessionWorking : .secondaryLabelColor
         backgroundPill.attributedTitle = NSAttributedString(
             string: running > 0 ? "\(running) running" : "\(recent) done",
             attributes: [.foregroundColor: color, .font: NSFont.systemFont(ofSize: 11, weight: .medium)])
@@ -1379,7 +1365,7 @@ final class TerminalStackController: NSViewController {
         let live = rt.liveWorkSeconds()
         let time = live > 0 ? "  ◷ \(formatWorkTime(live))" : ""
         headerStatus.stringValue = label + time
-        headerStatus.textColor = rt.status == .working ? .hex("16a34a") : .secondaryLabelColor
+        headerStatus.textColor = rt.status == .working ? .sessionWorking : .secondaryLabelColor
         onStatusChange?(label + time, rt.status == .working)
     }
 

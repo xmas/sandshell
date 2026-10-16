@@ -188,7 +188,7 @@ private struct BackgroundTaskRow: View {
                     ProgressView().controlSize(.mini)
                     time
                 }
-                .foregroundStyle(Color(nsColor: .hex("16a34a")))
+                .foregroundStyle(Color(nsColor: .sessionWorking))
             case .completed:
                 Label { time } icon: { Image(systemName: "checkmark.circle.fill") }
                     .foregroundStyle(.secondary)

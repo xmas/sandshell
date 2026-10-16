@@ -50,11 +50,8 @@ final class ClaudeStatsView: NSView {
             l.setContentCompressionResistancePriority(.required, for: .horizontal)
         }
         for b in [modelButton, effortButton] {
-            b.isBordered = false
-            b.controlSize = .small
-            b.font = .monospacedSystemFont(ofSize: 10.5, weight: .semibold)
+            ChoicePopUp.style(b)
             b.target = self
-            b.setContentCompressionResistancePriority(.required, for: .horizontal)
         }
         modelButton.action = #selector(modelChanged(_:))
         modelButton.toolTip = "Claude model. Changing it offers to restart the session; new sessions use it too."
@@ -106,14 +103,8 @@ final class ClaudeStatsView: NSView {
         render()
     }
 
-    /// Pull-down: item 0 is the visible title; the rest are the choices.
     private static func fill(_ button: NSPopUpButton, with choices: [(id: String?, title: String)]) {
-        button.removeAllItems()
-        button.addItem(withTitle: "")
-        for choice in choices {
-            button.addItem(withTitle: choice.title)
-            button.lastItem?.representedObject = choice.id
-        }
+        ChoicePopUp.fill(button, with: choices.map { ChoicePopUp.Choice(id: $0.id, title: $0.title) })
     }
 
     private static let otherModelTag = 1
@@ -185,22 +176,11 @@ final class ClaudeStatsView: NSView {
         onEffortPicked?(item.representedObject as? String)
     }
 
-    /// Visible title + checkmark on the current choice.
+    /// Visible title + checkmark on the current choice. Live ids can carry
+    /// Claude Code's "[1m]" suffix; menu ids don't.
     private func setChooser(_ button: NSPopUpButton, title: String, currentID: String?, color: NSColor) {
-        button.item(at: 0)?.attributedTitle = NSAttributedString(
-            string: title,
-            attributes: [.foregroundColor: color,
-                         .font: NSFont.monospacedSystemFont(ofSize: 10.5, weight: .semibold)])
-        // Live ids can carry Claude Code's "[1m]" suffix; menu ids don't.
-        let current = currentID.map(ClaudePriceBook.normalize)
-        func mark(_ items: [NSMenuItem]) {
-            for item in items {
-                if let sub = item.submenu { mark(sub.items); continue }
-                if item.isSeparatorItem || item.tag == Self.otherModelTag { continue }
-                item.state = (item.representedObject as? String).map(ClaudePriceBook.normalize) == current ? .on : .off
-            }
-        }
-        mark(Array(button.itemArray.dropFirst()))
+        ChoicePopUp.show(button, title: title, current: currentID, color: color, skipTag: Self.otherModelTag,
+                         normalize: ClaudePriceBook.normalize)
     }
 
     /// Clicks on the readout (anywhere but the choosers) open the details.

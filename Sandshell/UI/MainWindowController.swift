@@ -171,7 +171,7 @@ final class MainWindowController: NSWindowController {
         detail.onStatusChange = { [weak self] text, working in
             guard let self else { return }
             self.toolbarStatus.stringValue = text
-            self.toolbarStatus.textColor = working ? .hex("16a34a") : .secondaryLabelColor
+            self.toolbarStatus.textColor = working ? .sessionWorking : .secondaryLabelColor
         }
         let detailItem = NSSplitViewItem(viewController: detail)
         detailItem.minimumThickness = 420

@@ -452,8 +452,10 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
     }
 
     private func displayPath(_ url: URL) -> String {
-        if let repo = git.repoRoot, url.path.hasPrefix(repo + "/") { return String(url.path.dropFirst(repo.count + 1)) }
-        return (url.path as NSString).abbreviatingWithTildeInPath
+        if let repo = git.repoRoot {
+            for path in [url.path, url.realPath] where path.hasPrefix(repo + "/") { return String(path.dropFirst(repo.count + 1)) }
+        }
+        return url.path.tildeAbbreviated
     }
 
     @objc private func modeChanged() {
