@@ -71,6 +71,9 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
         surfaces.onTerminalExit = { [weak self] id in
             self?.panes.filter { $0.shownSession == id }.forEach { $0.terminalRuntimeDidExit(id) }
         }
+        surfaces.onLaunched = { [weak self] id in
+            self?.panes.filter { $0.shownSession == id }.forEach { $0.refresh() }
+        }
         surfaces.onChatStatus = { [weak self] id in
             self?.panes.filter { $0.shownSession == id }.forEach { $0.updateClaudeStats(id) }
         }
@@ -306,6 +309,7 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
     func close(_ pane: TerminalStackController) {
         guard panes.count > 1, let leaf = node(for: pane), let parent = leaf.parent,
               case .split(let axis, var kids) = parent.kind, pane.confirmLeavingFiles() else { return }
+        pane.paneClosed()
         kids.removeAll { $0 === leaf }
         if kids.count == 1 {
             let only = kids[0]

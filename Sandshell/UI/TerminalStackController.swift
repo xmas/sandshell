@@ -262,6 +262,9 @@ final class SessionSurfaces {
     var onChatAgentExit: (UUID) -> Void = { _ in }
     /// A chat's usage or model changed (routed to the pane showing it).
     var onChatStatus: (UUID) -> Void = { _ in }
+    /// A session's terminal or chat is up (or failed to start): every pane
+    /// showing it shows it now.
+    var onLaunched: (UUID) -> Void = { _ in }
     /// When each chat was last reconnected without being asked (at most once a minute).
     var lastAutoReconnect: [UUID: Date] = [:]
 
@@ -1046,6 +1049,9 @@ final class TerminalStackController: NSViewController {
     }
 
     private func showStatus(_ text: String, busy: Bool) {
+        // Nothing live here now: toolbar Stop/Restart mustn't reach a session
+        // this pane no longer shows.
+        activeSessionID = nil
         hideHostContents()
         headerBar.isHidden = true
         frameView.isHidden = true
@@ -1391,7 +1397,10 @@ final class TerminalStackController: NSViewController {
     /// Bring the session's container up (async), then create + show its terminal.
     private func launch(_ session: Session) {
         let id = session.id
-        guard !pending.contains(id), terminals[id] == nil else { return }
+        // Already starting (from another pane): say so here; it shows in
+        // every pane showing it once it's up (`surfaces.onLaunched`).
+        if pending.contains(id) { return showStatus("Starting \(session.agent.displayName)…", busy: true) }
+        guard terminals[id] == nil else { return }
 
         // Restore prior history: if this session ran before, resume that
         // conversation when its transcript still exists; if it's gone, ask
@@ -1419,7 +1428,7 @@ final class TerminalStackController: NSViewController {
             guard let containerName else {
                 let message = controller.lastError ?? "Failed to start the sandbox."
                 surfaces.launchFailures[id] = message
-                if shownSession == id { showLaunchFailure(message) }
+                surfaces.onLaunched(id)
                 return
             }
             // The session may have been closed while the container came up.
@@ -1456,7 +1465,7 @@ final class TerminalStackController: NSViewController {
             runtime.terminalStarted(id)
             runtime.startTracking(session, resumeID: resumeID)
 
-            if shownSession == id { showActive(id) }
+            surfaces.onLaunched(id)
         }
     }
 
@@ -1524,7 +1533,8 @@ final class TerminalStackController: NSViewController {
     /// chat. Resumes the prior conversation when its transcript still exists.
     private func launchChat(_ session: Session) {
         let id = session.id
-        guard !pending.contains(id), chats[id] == nil else { return }
+        if pending.contains(id) { return showStatus("Starting \(session.agent.displayName) chat…", busy: true) }
+        guard chats[id] == nil else { return }
         pending.insert(id)
         showStatus("Starting \(session.agent.displayName) chat…", busy: true)
         Task { [weak self] in
@@ -1536,7 +1546,7 @@ final class TerminalStackController: NSViewController {
             guard let containerName else {
                 let message = controller.lastError ?? "Failed to start the sandbox."
                 surfaces.launchFailures[id] = message
-                if shownSession == id { showLaunchFailure(message) }
+                surfaces.onLaunched(id)
                 return
             }
             guard let current = controller.session(id: id), current.isChat, chats[id] == nil else { return }
@@ -1597,7 +1607,7 @@ final class TerminalStackController: NSViewController {
             chats[id] = view
             controller.setLive(id, true)
             chat.start()
-            if shownSession == id { showChat(id, view) }
+            surfaces.onLaunched(id)
             if let draft = drafts.removeValue(forKey: id) {
                 view.applyDraft(text: draft.text, urls: draft.urls, send: draft.send)
             }
@@ -1738,6 +1748,15 @@ final class TerminalStackController: NSViewController {
     /// Tear down every terminal when the window closes — kills each session's
     /// `sbx exec` (libghostty closes the PTY on surface teardown) and removes its
     /// temp launch script. Without this, closing a window leaks the scripts.
+    /// The pane closed (its sessions live on in other panes): stop its timer,
+    /// event monitor and windows, but leave the shared terminals alone.
+    func paneClosed() {
+        contextBar.stop()
+        if let m = pasteEventMonitor { NSEvent.removeMonitor(m); pasteEventMonitor = nil }
+        for wc in searchWindows.values { wc.close() }
+        searchWindows.removeAll()
+    }
+
     func teardown() {
         contextBar.stop()
         if let m = pasteEventMonitor { NSEvent.removeMonitor(m); pasteEventMonitor = nil }

@@ -104,6 +104,7 @@ enum SelfTest {
         case "warm": await warmChats(window)
         case "extras": await chatExtras(window)
         case "kit-extras": await kitExtras(window)
+        case "queue": await queueWhileWorking(window)
         case "sea": await sea(window)
         case "title-strip": await titleStrip(window)
         case "follow": await follow(window)
@@ -1734,6 +1735,28 @@ enum SelfTest {
             check(stopped, "Stop stops it")
         }
         try? FileManager.default.removeItem(at: file)
+        ws.closeSession(s.id)
+    }
+
+    // MARK: Queue
+
+    /// A message sent while a turn runs isn't lost: it queues (the composer
+    /// keeps nothing, the footer says so) and goes when the turn ends. Uses
+    /// the signed-in account (two tiny turns).
+    private static func queueWhileWorking(_ window: MainWindowController) async {
+        guard let tree = window.paneTree, let ws = window.workspaceController,
+              let s = ws.newChatInCurrentContext() else { return log("no window") }
+        func chat() -> ChatSession? { tree.surfaces.chats[s.id]?.session }
+        check(await until(600) { chat()?.phase == .ready }, "chat starts")
+        guard let c = chat() else { return }
+        func said() -> String { c.items.compactMap { if case .agentText(_, let t) = $0 { t } else { nil } }.joined(separator: "\n") }
+        c.send(text: "Count from 1 to 40, one number per line, nothing else.", attachments: [])
+        check(await until(60) { c.phase == .running }, "a turn is running")
+        check(c.submit(text: "Now reply with exactly the word QUEUED and nothing else.", attachments: []),
+              "a message sent mid-turn is taken")
+        check(c.hasQueued, "and waits its turn")
+        check(await until(240) { c.phase == .ready && said().contains("QUEUED") }, "then goes when the turn ends")
+        check(!c.hasQueued, "and nothing is left waiting")
         ws.closeSession(s.id)
     }
 

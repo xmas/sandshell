@@ -610,6 +610,8 @@ extension MainWindowController: NSWindowDelegate {
     func windowWillClose(_ notification: Notification) {
         detail?.teardown()
         searchWindow?.close()
+        backgroundTasksPanel?.close()   // it shows (and stops) this window's sessions
+        backgroundTasksPanel = nil
         onClose?()
     }
 }
