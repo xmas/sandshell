@@ -52,6 +52,14 @@ Tests live in `tests/ui/`. The runner launches a headless test copy (own bundle 
 
 ### DEBUG self-tests
 
+```bash
+scripts/run-self-tests.sh                # every scenario, each on a fixture made fresh (≈30–60 min)
+scripts/run-self-tests.sh --quick        # no agent turns, no sandboxes created from scratch
+scripts/run-self-tests.sh --only files,commits --skip-build
+```
+
+The runner builds the dev bundle, makes or resets each scenario's fixture under `/tmp/sandshell-selftests` (`scripts/selftest_fixtures.py`: git repos, session lists in `state.json`, kit dirs, removed sandboxes), runs it, and prints a summary (results in `<root>/results/<time>/<scenario>/`). Add a scenario's fixture there when you add a scenario.
+
 Scripted end-to-end checks inside the real app (`App/SelfTest.swift`): launch a Debug binary with `-SandshellSelfTest <scenario> -SandshellSelfTestOut <dir> -openWindowRoots '("<workspace>")'`; it drives the window offscreen (transparent, click-through, never activates), writes PASS/FAIL lines to `<dir>/selftest.log` plus snapshots, and quits. Scenarios: `panes`, `pane-buttons`, `files-alone`, `files`, `files-relaunch`, `chat`, `fork`, `follow`, `links`, `open-quickly`, `title-strip`, `building`, `alerts`, `background`, `sandbox-access`, `launch-failure`, `kits`, `agents`, `search` — each documents the workspace fixture it expects. Build a separate bundle id for these (`PRODUCT_BUNDLE_IDENTIFIER=com.xmas.sandshell.dev`, `-derivedDataPath build-dev`) so they don't touch your own app's defaults. Chat scenarios use the signed-in account (a few tiny turns).
 
 **No dialogs during tests**: `Diagnostics/AutomatedRun.swift` is active under `-SandshellSelfTest` / `-SandshellUITestHeadless` — no Keychain or notification prompts, alerts answer themselves, destructive steps only for `/tmp` scratch workspaces.
@@ -128,6 +136,15 @@ AppDelegate (@main)
 - **Apple Event scripting API.** The companion CLI (`scripts/sandshell`) queries status as JSON and opens new sessions via custom Apple Events. The `sandshell://open?workspace=…&ro=…&rw=…` URL scheme is also handled in `AppDelegate`.
 - **Appearance.** `UIDesignRequiresCompatibility = true` in Info.plist opts out of macOS 26 Tahoe Liquid Glass (renders as Sequoia style).
 - **XcodeGen is the source of truth.** `project.yml` controls everything: targets, build settings, `MARKETING_VERSION`, post-build copy of `scripts/sandshell` into the bundle.
+
+## Sandshell's kits
+
+`kits/` holds Sandshell's own sbx kits, bundled in the app (`Contents/Resources/kits`) and published to the public repo `xmas/sandshell-kits` on release (`scripts/publish-kits.sh`):
+
+- `sandshell-claude` (claude sandboxes): preinstalls the Claude ACP adapter and `sandshell-acp.mjs`, a wrapper that adds rewind (Undo) and MCP status/reconnect/toggle on the adapter's `_session/async_task/stop` request (`asyncTaskId` `sandshell:<base64url JSON>`).
+- `sandshell-codex` (codex sandboxes): preinstalls codex-acp and writes Codex's proxy sign-in placeholder.
+
+Workspaces reference them by name (`KitStore.sandshellKits`); `KitStore.resolve` turns that into the bundled path for sbx. They're on by default (added once per workspace, `sandshellKitsOffered`), don't count toward the create signature or kit drift (existing sandboxes get them at their next rebuild), and the chat shows Undo/MCP only when the launch reports the wrapper (`sandshell-extras: on`). sbx only allows `docker.io/` and `github.com/docker/` kit sources by default, so the published git refs need `kit.allowedSources` to include `github.com/xmas/`.
 
 ## Reference
 
