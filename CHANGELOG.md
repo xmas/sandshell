@@ -2,6 +2,9 @@
 
 A running log of what changed, newest first. Yes, we actually write these.
 
+## v0.2.25 — "Room to Breathe"
+- **Windows resize again.** In 0.2.24 a window with a chat could get stuck very tall and refuse to shrink, because the empty chat's sea asked for far more height than it needed, even after the conversation started. It now just fills whatever space the chat has.
+
 ## v0.2.24 — "Tables Turned"
 - **Tables read properly in chat.** A small table is a tidy grid in the chat's own font, header in bold over a rule. A wide one, with long cells, becomes one entry per row, its first cell as the heading and each column as a labelled line that wraps on its own. Bold, `code` and escaped pipes render in both, and it's all still selectable text. (Markdown previews in Files get the same tables.)
 - **The sea follows your pointer.** Move over the empty chat's sea creatures and the ones nearby color in and swim round in a bubble, no click needed. The sea now spans the whole empty chat, so bubbles aren't cut off at the edge.
