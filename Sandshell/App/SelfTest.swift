@@ -228,8 +228,12 @@ enum SelfTest {
         func agentText(_ chat: ChatSession) -> String {
             chat.items.compactMap { if case .agentText(_, let t) = $0 { t } else { nil } }.joined()
         }
+        if await until(120, { session()?.phase == .starting }), let view = tree.surfaces.chats[s.id] {
+            check(!view.debugComposerEnabled, "no typing while the agent starts")
+        }
         check(await until(600) { session()?.phase == .ready }, "chat reaches ready (sandbox + adapter up)")
         guard let chat = session(), chat.phase == .ready else { return log("chat phase: \(String(describing: session()?.phase))") }
+        check(tree.surfaces.chats[s.id]?.debugComposerEnabled == true, "the composer opens once it's ready")
         log("model \(chat.currentModel ?? "-"), mode \(chat.currentMode ?? "-"), \(chat.commands.count) commands")
         check(!chat.commands.isEmpty, "agent advertises slash commands")
 
@@ -1525,6 +1529,22 @@ enum SelfTest {
                 w.close()
             }
         }
+        // A narrow pane: the hint wraps inside it instead of being cut off.
+        let narrow = NSHostingView(rootView: SeaBackdrop {
+                Text("It works in msdgc, inside its sandbox. Type / for commands, @ to mention a file, or drop files here.")
+                    .font(.callout).multilineTextAlignment(.center).frame(maxWidth: 360)
+                    .fixedSize(horizontal: false, vertical: true).padding(.horizontal, 24)
+            }
+            .background(Color(nsColor: .textBackgroundColor)))
+        narrow.sizingOptions = []
+        narrow.frame = NSRect(x: 0, y: 0, width: 260, height: 360)
+        let nw = NSWindow(contentRect: narrow.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        nw.isReleasedWhenClosed = false
+        nw.alphaValue = 0
+        nw.contentView = narrow
+        await wait(0.3)
+        snapshot(narrow, "sea-narrow")
+        nw.close()
         check(true, "rendered")
     }
 

@@ -121,7 +121,11 @@ final class ChatComposerView: NSView, NSTextViewDelegate {
         }
     }
 
-    func setEnabled(_ enabled: Bool) { textView.isEditable = enabled }
+    func setEnabled(_ enabled: Bool) {
+        textView.isEditable = enabled
+        alphaValue = enabled ? 1 : 0.55
+    }
+    var isEnabled: Bool { textView.isEditable }
 
     /// Where ⌘F/⌘G go while the composer has focus.
     var onFind: ((Any?) -> Void)? {

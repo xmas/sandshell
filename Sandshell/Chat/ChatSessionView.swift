@@ -51,6 +51,7 @@ final class ChatSessionView: NSView {
 
     #if DEBUG
     var debugTranscript: ChatTranscriptView { transcript }
+    var debugComposerEnabled: Bool { composer.isEnabled }
     #endif
 
     /// A file path in the conversation was clicked.
@@ -247,6 +248,8 @@ final class ChatSessionView: NSView {
             statusLabel.stringValue = session.isCatchingUp
                 ? "Catching up with \(session.otherWriterName)…" : "Starting \(session.title)…"
             sendButton.title = "Send"; sendButton.isEnabled = false
+            // Nothing to type into until the agent is up.
+            composer.setEnabled(false)
         case .ready:
             statusLabel.stringValue = "↩ send · ⇧↩ new line"
             sendButton.title = "Send"; sendButton.isEnabled = true
