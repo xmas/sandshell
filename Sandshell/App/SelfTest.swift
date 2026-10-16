@@ -1040,6 +1040,9 @@ enum SelfTest {
         check(press("pane-split-right", first), "Split Right pressed")
         await wait()
         check(tree.panes.count == 2 && tree.panes[1].shownSession == nil, "an empty pane opens on the right")
+        guard tree.panes.count == 2 else {
+            return log("panes after Split Right: \(tree.panes.map { ($0.shownSession != nil, $0.shownFiles != nil) })")
+        }
         let empty = tree.panes[1]
         check(button("empty-pane-files", in: empty).map { !$0.isHiddenOrHasHiddenAncestor } ?? false,
               "the empty pane offers Show Files")
