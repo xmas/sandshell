@@ -48,6 +48,10 @@ final class MainWindowController: NSWindowController {
         // (40) truncate before they spill past the stack's edge (45) over the
         // status and buttons beside it. Clipping is the last resort.
         stack.setHuggingPriority(.init(1), for: .horizontal)
+        // The name column takes all the room after the badge; hugging its
+        // content, it shrank to the subtitle's width and cut a name that fit.
+        stack.distribution = .fill
+        text.setHuggingPriority(.init(1), for: .horizontal)
         stack.setClippingResistancePriority(.init(45), for: .horizontal)
         text.setClippingResistancePriority(.init(45), for: .horizontal)
         stack.clipsToBounds = true
@@ -351,8 +355,12 @@ final class MainWindowController: NSWindowController {
     }
     /// Self-test: set the toolbar's session name, then the name label's width
     /// against the identity item's.
-    func debugToolbarName(_ name: String) -> (label: CGFloat, identity: CGFloat) {
+    var debugToolbarNameFits: Bool {
+        toolbarName.alignmentRect(forFrame: toolbarName.frame).width >= toolbarName.intrinsicContentSize.width - 6
+    }
+    func debugToolbarName(_ name: String, subtitle: String? = nil) -> (label: CGFloat, identity: CGFloat) {
         toolbarName.stringValue = name
+        if let subtitle { toolbarSubtitle.stringValue = subtitle }
         identityItemView.layoutSubtreeIfNeeded()
         // The alignment rect: a label's frame runs 2 pt past its text each side.
         let text = toolbarName.alignmentRect(forFrame: toolbarName.frame)

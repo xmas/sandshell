@@ -349,7 +349,9 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
         view.addSubview(top, positioned: .below, relativeTo: dropOverlay.superview === view ? dropOverlay : nil)
         if dropOverlay.superview !== view { view.addSubview(dropOverlay) }
         NSLayoutConstraint.activate([
-            top.topAnchor.constraint(equalTo: view.topAnchor),
+            // Below the toolbar: the header is one strip across the window, and
+            // pane dividers only split the content under it.
+            top.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
             top.bottomAnchor.constraint(equalTo: view.bottomAnchor),
             top.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             top.trailingAnchor.constraint(equalTo: view.trailingAnchor),
