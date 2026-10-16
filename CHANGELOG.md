@@ -2,6 +2,16 @@
 
 A running log of what changed, newest first. Yes, we actually write these.
 
+## v0.2.26 — "Line by Line"
+- **Commits in Files.** Under the file tree: **All changes** on your branch, **Uncommitted changes**, and each commit since the branch left main (the last 20 when you're on main). Pick one and the tree lists just the files it touched, with +/- counts; open a file for that commit's diff.
+- **Tell the agent what to change, right in a diff.** Diffs show line numbers; click one, type what should change, press Return. The session gets the file, the line, its code and your note — sent in a chat, typed into a terminal agent's prompt.
+- **Codex chats sign in.** A Codex chat now signs in through sbx the way `sbx run codex` does, instead of saying it has no OpenAI credential.
+- **New chats start in Auto mode** where the agent offers it; a resumed conversation keeps its own mode. And you can't type into a chat until its agent is ready.
+- **An empty pane has New Session**, the same menu as the sidebar's +, opening right there.
+- **Agent kits stay with their agent.** A sandbox's own agent kit (Droid, say) no longer shows up as a kit to adopt, and never goes into other agents' sandboxes — which had Kiro and OpenCode failing to start.
+- **Browse Docker Hub works again** (Hub refused the second page of results).
+- **Fixes:** the session name in the toolbar uses its full width; pane dividers start below the toolbar; the sidebar's "Building…" no longer sits on top of your sessions; the sea of creatures fits a narrow pane.
+
 ## v0.2.25 — "Room to Breathe"
 - **Windows resize again.** In 0.2.24 a window with a chat could get stuck very tall and refuse to shrink, because the empty chat's sea asked for far more height than it needed, even after the conversation started. It now just fills whatever space the chat has.
 
