@@ -29,6 +29,8 @@ final class ChatSessionView: NSView {
     private var heldForCatchUp = false
     /// The user chose to send while another app is mid-turn.
     private var sendDespiteOtherApp = false
+    /// "Send When It Finishes": the composer's message goes once the other app is idle.
+    private(set) var sendingWhenOtherAppIdles = false
 
     /// Maps dropped/pasted file URLs to paths the sandbox can read (files outside
     /// the mounts are copied into the workspace's drops dir by the host).
@@ -52,6 +54,7 @@ final class ChatSessionView: NSView {
     #if DEBUG
     var debugTranscript: ChatTranscriptView { transcript }
     var debugComposerEnabled: Bool { composer.isEnabled }
+    func debugSetDraft(_ text: String) { composer.setDraft(text) }
     #endif
 
     /// A file path in the conversation was clicked.
@@ -319,15 +322,38 @@ final class ChatSessionView: NSView {
         let alert = NSAlert()
         alert.messageText = "\(session.otherWriterName.prefix(1).uppercased() + session.otherWriterName.dropFirst()) is still working in this conversation"
         alert.informativeText = "Sending now starts a second line of conversation alongside it, and neither side "
-            + "sees the other’s replies. Wait for it to finish, or send anyway."
-        alert.addButton(withTitle: "Wait")
+            + "sees the other’s replies. Send yours when it finishes, or send it now anyway."
+        alert.addButton(withTitle: "Send When It Finishes")
         alert.addButton(withTitle: "Send Anyway")
+        alert.addButton(withTitle: "Cancel")
         alert.beginSheetModal(for: window) { [weak self] response in
-            guard let self, response == .alertSecondButtonReturn else { return }
-            self.sendDespiteOtherApp = true
-            self.composer.submitFromButton()
+            guard let self else { return }
+            switch response {
+            case .alertFirstButtonReturn: self.sendWhenOtherAppIdles()
+            case .alertSecondButtonReturn:
+                self.sendDespiteOtherApp = true
+                self.composer.submitFromButton()
+            default: break
+            }
         }
         return false
+    }
+
+    /// Hold the message until the other app's turn ends (the registry says idle).
+    func sendWhenOtherAppIdles() {
+        sendingWhenOtherAppIdles = true
+        statusLabel.stringValue = "Sends when \(session.otherWriterName) finishes…"
+        session.onOtherAppIdle = { [weak self] in
+            guard let self, self.sendingWhenOtherAppIdles else { return }
+            self.sendingWhenOtherAppIdles = false
+            self.session.onOtherAppIdle = nil
+            // Give its last lines a moment to land, so the reload sees them.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+                guard let self else { return }
+                self.sendDespiteOtherApp = true
+                self.composer.submitFromButton()
+            }
+        }
     }
 
     /// ⎋ stops a running turn (standard Cocoa cancel).

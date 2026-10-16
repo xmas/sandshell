@@ -178,6 +178,19 @@ final class ChatSession: ObservableObject {
     private var otherWriterLastWrite: Date?
     /// The transcript's last items came from another app (one "Continued in" notice per run).
     private var inExternalRun = false
+    /// Another live writer of this conversation, from Claude Code's session
+    /// registry (nil: none, or no registry to read).
+    @Published private(set) var otherWriter: ClaudeSessionRegistry.Entry?
+    /// The registry could be read at all (else fall back to the transcript's word).
+    private var registryReadable = false
+    /// Where to read the registry from (self-tests point it at a scratch copy).
+    var registryHome: String?
+    /// Called when another app that was mid-turn here finishes (or quits).
+    var onOtherAppIdle: (() -> Void)?
+    /// Wakes the follower as soon as the transcript changes on disk.
+    private var fileWatch: DispatchSourceFileSystemObject?
+    private var followFileID: UInt64?
+    private var tickScheduled = false
 
     init(title: String, agent: AgentKind = .claude, containerName: String, workdir: String, home: String,
          mcpURL: URL?, resumeID: String? = nil, sbxProxyAuth: Bool = false, sessionID: UUID = UUID(),
@@ -221,6 +234,7 @@ final class ChatSession: ObservableObject {
         }
         let auth = agent == .claude ? (sbxProxyAuth ? "sbx proxy" : "~/.claude credentials") : "sbx proxy"
         Log.info(.sbx, "chat: launched \(agent.rawValue) ACP agent in “\(containerName)” at \(workdir) (auth: \(auth))")
+        let launchedAt = Date()
         pumpTask = Task { [weak self] in
             for await event in conn.incoming { self?.handle(event) }
         }
@@ -256,6 +270,7 @@ final class ChatSession: ObservableObject {
                     }
                 }
                 if let sid = sessionID { onSessionID?(sid) }
+                Log.info(.sbx, String(format: "chat: %@ ready %.1fs after launch", agent.rawValue, Date().timeIntervalSince(launchedAt)))
                 phase = .ready
                 startFollowing()
                 if let (text, attachments) = queued {
@@ -485,7 +500,10 @@ final class ChatSession: ObservableObject {
     /// Another app is mid-turn in this conversation (wrote in the last two
     /// minutes and hasn't finished): sending now would fork it.
     var otherAppIsWorking: Bool {
-        otherWriterWorking && (otherWriterLastWrite.map { Date().timeIntervalSince($0) < 120 } ?? false)
+        // The registry knows; the transcript only hints (it said "working" and
+        // wrote in the last two minutes).
+        if registryReadable { return otherWriter?.isBusy ?? false }
+        return otherWriterWorking && (otherWriterLastWrite.map { Date().timeIntervalSince($0) < 120 } ?? false)
     }
 
     /// Who else is writing, for messages ("the Claude app").
@@ -497,13 +515,18 @@ final class ChatSession: ObservableObject {
             .appendingPathComponent(".claude/projects/\(TranscriptReader.claudeEncodedDir(for: workdir))/\(sid).jsonl")
         followURL = url
         followOffset = ClaudeTranscriptTail.fileSize(url)
+        followFileID = ClaudeTranscriptTail.fileID(url)
         ownTurnEnded = nil
         sawOwnTurn = false
+        watchTranscript()
+        // A steady poll under the file watch: it also reads the registry, and
+        // covers changes a watch can miss.
         follower = Task { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(1))
+                try? await Task.sleep(for: .seconds(1.5))
                 guard let self else { return }
                 await self.followTick()
+                await self.refreshOtherWriter()
             }
         }
     }
@@ -511,6 +534,64 @@ final class ChatSession: ObservableObject {
     private func stopFollowing() {
         follower?.cancel()
         follower = nil
+        fileWatch?.cancel()
+        fileWatch = nil
+    }
+
+    /// Tick (coalesced over 250 ms) whenever the transcript is written; follow
+    /// it to a new file if it's replaced.
+    private func watchTranscript() {
+        fileWatch?.cancel()
+        fileWatch = nil
+        guard let url = followURL else { return }
+        let fd = Darwin.open(url.path, O_EVTONLY)
+        guard fd >= 0 else { return }
+        let source = DispatchSource.makeFileSystemObjectSource(fileDescriptor: fd, eventMask: [.write, .extend, .delete, .rename], queue: .main)
+        source.setEventHandler { [weak self] in
+            guard let self else { return }
+            let replaced = !source.data.isDisjoint(with: [.delete, .rename])
+            MainActor.assumeIsolated {
+                if replaced {
+                    // Rewritten by rename: watch the new file once it's there.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                        guard let self, self.follower != nil else { return }
+                        self.watchTranscript()
+                        self.scheduleTick()
+                    }
+                } else {
+                    self.scheduleTick()
+                }
+            }
+        }
+        source.setCancelHandler { Darwin.close(fd) }
+        source.resume()
+        fileWatch = source
+    }
+
+    private func scheduleTick() {
+        guard !tickScheduled else { return }
+        tickScheduled = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+            guard let self else { return }
+            self.tickScheduled = false
+            Task { await self.followTick() }
+        }
+    }
+
+    /// Who else has this conversation open, from the registry.
+    private func refreshOtherWriter() async {
+        guard let sid = sessionID else { return }
+        let home = registryHome ?? home
+        let (readable, writer) = await Task.detached(priority: .utility) {
+            let dir = URL(fileURLWithPath: home).appendingPathComponent(".claude/sessions").path
+            let readable = FileManager.default.fileExists(atPath: dir)
+            return (readable, readable ? ClaudeSessionRegistry.otherWriter(home: home, sessionID: sid) : nil)
+        }.value
+        registryReadable = readable
+        let wasBusy = otherWriter?.isBusy ?? false
+        if writer != otherWriter { otherWriter = writer }
+        if let e = writer?.entrypoint { otherWriterName = ClaudeTranscriptTail.writerName(e) }
+        if wasBusy, !(writer?.isBusy ?? false) { onOtherAppIdle?() }
     }
 
     private func followTick() async {
@@ -526,6 +607,15 @@ final class ChatSession: ObservableObject {
             return
         }
         guard phase == .ready else { return }
+        // Replaced, or rewritten shorter (Claude rewrites its trailing
+        // cost-state line in place): pick up from the end of what's there now.
+        let size = ClaudeTranscriptTail.fileSize(url), fileID = ClaudeTranscriptTail.fileID(url)
+        if size < followOffset || (fileID != nil && followFileID != nil && fileID != followFileID) {
+            Log.info(.sbx, "chat: transcript replaced or shrank; resyncing at \(size)")
+            followOffset = size
+            followFileID = fileID
+            return
+        }
         let offset = followOffset
         guard let (text, newOffset) = await Task.detached(priority: .utility, operation: {
             ClaudeTranscriptTail.readLines(url, from: offset)
@@ -541,7 +631,11 @@ final class ChatSession: ObservableObject {
         guard batch.sawConversation else { return }
         agentIsBehind = true
         otherWriterLastWrite = Date()
-        if let working = batch.working { otherWriterWorking = working }
+        if let working = batch.working {
+            // Without a registry to say so, the transcript's turn end is the signal.
+            if otherWriterWorking, !working, !registryReadable { onOtherAppIdle?() }
+            otherWriterWorking = working
+        }
         if let e = batch.entrypoint { otherWriterName = ClaudeTranscriptTail.writerName(e) }
         guard !batch.events.isEmpty else { return }
         if !inExternalRun {

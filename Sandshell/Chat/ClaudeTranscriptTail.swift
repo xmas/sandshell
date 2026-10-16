@@ -137,6 +137,11 @@ struct ClaudeTranscriptTail {
         return (text, offset + UInt64(complete.count))
     }
 
+    /// The file's inode, to notice it being replaced rather than appended to.
+    static func fileID(_ url: URL) -> UInt64? {
+        (try? FileManager.default.attributesOfItem(atPath: url.path))?[.systemFileNumber] as? UInt64
+    }
+
     static func fileSize(_ url: URL) -> UInt64 {
         ((try? FileManager.default.attributesOfItem(atPath: url.path))?[.size] as? NSNumber)?.uint64Value ?? 0
     }

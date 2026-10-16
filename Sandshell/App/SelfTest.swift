@@ -1447,6 +1447,37 @@ enum SelfTest {
         check(TranscriptReader.claudeEncodedDir(for: "/Users/Zoë/a.b c") == "-Users-Zo--a-b-c",
               "project folder names match Claude Code's (ASCII letters and digits only)")
 
+        // The session registry (~/.claude/sessions), on a scratch copy: who's live.
+        let me = ProcessInfo.processInfo.processIdentifier
+        let started = ClaudeSessionRegistry.processStart(me) ?? ""
+        let registry = URL(fileURLWithPath: out).appendingPathComponent("registry")
+        let sessionsDir = registry.appendingPathComponent(".claude/sessions")
+        try? FileManager.default.removeItem(at: registry)
+        try? FileManager.default.createDirectory(at: sessionsDir, withIntermediateDirectories: true)
+        func register(pid: Int32, sid: String, entrypoint: String, status: String, domain: String = "darwin",
+                      procStart: String? = nil, file: String? = nil) {
+            let ms = Date().timeIntervalSince1970 * 1000
+            var o: [String: Any] = ["pid": pid, "sessionId": sid, "entrypoint": entrypoint, "status": status,
+                                    "pidDomain": domain, "updatedAt": ms, "statusUpdatedAt": ms]
+            if let procStart { o["procStart"] = procStart }
+            try? JSONSerialization.data(withJSONObject: o).write(to: sessionsDir.appendingPathComponent("\(file ?? "\(pid)").json"))
+        }
+        let fake = "00000000-0000-0000-0000-000000000001"
+        register(pid: 999_999, sid: fake, entrypoint: "cli", status: "busy", procStart: started, file: "dead")
+        register(pid: me, sid: fake, entrypoint: "cli", status: "busy", procStart: "Mon Jan 1 00:00:00 2001", file: "reused")
+        register(pid: 7, sid: fake, entrypoint: "sdk-ts", status: "busy", domain: "linux::pid:[1]", file: "own")
+        check(ClaudeSessionRegistry.otherWriter(home: registry.path, sessionID: fake) == nil,
+              "registry: a dead pid, a reused pid and our own sandboxed agent aren't other writers")
+        register(pid: 8, sid: fake, entrypoint: "cli", status: "busy", domain: "linux::pid:[1]", file: "sandbox-cli")
+        check(ClaudeSessionRegistry.otherWriter(home: registry.path, sessionID: fake)?.entrypoint == "cli",
+              "registry: a terminal in a sandbox, heard from just now, is")
+        register(pid: me, sid: fake, entrypoint: "claude-desktop", status: "busy", procStart: started, file: "live")
+        check(ClaudeSessionRegistry.otherWriter(home: registry.path, sessionID: fake)?.entrypoint == "claude-desktop",
+              "registry: a live process on this Mac (pid + start time) is, busiest first")
+        for f in ["dead", "reused", "own", "sandbox-cli", "live"] {
+            try? FileManager.default.removeItem(at: sessionsDir.appendingPathComponent("\(f).json"))
+        }
+
         guard let tree = window.paneTree, let ws = window.workspaceController else { return log("no window") }
         guard let s = ws.newChatInCurrentContext() else { return log("no folder to start a chat in") }
         func chat() -> ChatSession? { tree.surfaces.chats[s.id]?.session }
@@ -1515,6 +1546,21 @@ enum SelfTest {
               "the reply knows the other app's turn (\(said(c).suffix(80)))")
         check(said(c).contains("PONG"), "the reloaded transcript still has the first reply")
         snapshot(window, "follow-final")
+
+        // Another app mid-turn (per the registry): the message waits, then goes.
+        guard let view = tree.surfaces.chats[s.id], let sid2 = c.sessionID else { return }
+        c.registryHome = registry.path
+        register(pid: me, sid: sid2, entrypoint: "cli", status: "busy", procStart: started)
+        check(await until(6) { c.otherAppIsWorking }, "the registry says another app is working here")
+        log("other writer: \(String(describing: c.otherWriter)) as “\(c.otherWriterName)”")
+        view.debugSetDraft("Reply with exactly the word DONE and nothing else.")
+        view.sendWhenOtherAppIdles()
+        await wait(4)
+        check(!said(c).contains("DONE") && c.phase == .ready, "the message waits while it's busy")
+        register(pid: me, sid: sid2, entrypoint: "cli", status: "idle", procStart: started)
+        check(await until(180) { c.phase == .ready && said(c).contains("DONE") }, "then sends once it's idle")
+        try? FileManager.default.removeItem(at: registry)
+        ws.closeSession(s.id)
     }
 
     // MARK: Sea
