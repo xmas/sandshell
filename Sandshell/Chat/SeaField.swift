@@ -9,7 +9,7 @@ import SwiftUI
 struct SeaField: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
-    /// Where the creatures rest, in this view's coordinates (`size` big).
+    /// Where the creatures rest, in this view's coordinates (up to `size`).
     var band: CGRect
     /// Self-tests: start with a splash here, in band coordinates.
     var initialSplash: CGPoint?
@@ -60,13 +60,17 @@ struct SeaField: View {
             }
         }
         .onAppear {
-            if let p = initialSplash { spawn(at: CGPoint(x: p.x + band.minX, y: p.y + band.minY), force: true) }
+            if let p = initialSplash { spawn(at: CGPoint(x: p.x + origin.x, y: p.y + origin.y), force: true) }
         }
         .accessibilityHidden(true)
     }
 
+    /// The creatures' 400-pt field, centred on the band: in a narrow pane the
+    /// band is narrower and the outer creatures just run off the edges.
+    private var origin: CGPoint { CGPoint(x: band.midX - Self.size.width / 2, y: band.minY) }
+
     private func home(_ i: Int) -> CGPoint {
-        CGPoint(x: band.minX + Self.creatures[i].home.x, y: band.minY + Self.creatures[i].home.y)
+        CGPoint(x: origin.x + Self.creatures[i].home.x, y: origin.y + Self.creatures[i].home.y)
     }
 
     /// A bubble wherever the pointer has travelled far enough since the last
@@ -163,7 +167,8 @@ struct SeaBackdrop<Content: View>: View {
     var body: some View {
         VStack(spacing: 14) {
             Color.clear
-                .frame(width: SeaField.size.width, height: SeaField.size.height)
+                .frame(maxWidth: SeaField.size.width)
+                .frame(height: SeaField.size.height)
                 .anchorPreference(key: SeaBandKey.self, value: .bounds) { $0 }
             content.allowsHitTesting(false)
         }
