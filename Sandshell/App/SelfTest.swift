@@ -500,6 +500,9 @@ enum SelfTest {
         check(await until(30) { ws.isBuilding }, "fresh workspace starts building its sandbox")
         guard let s = ws.newSessionInCurrentContext() else { return log("no folder for a session") }
         check(ws.isBuilding, "New Session added while building")
+        await wait(0.5)
+        check(window.sidebarList?.emptyStateText == nil,
+              "with a row in the list, the build placeholder stays off it (\(window.sidebarList?.emptyStateText ?? "hidden"))")
         let ok = await until(240) { tree.surfaces.terminals[s.id] != nil }
         log("building=\(ws.isBuilding) activity=\(ws.activity ?? "nil") pending=\(tree.surfaces.pending.contains(s.id)) "
             + "shown=\(tree.panes.map { $0.shownSession == s.id }) error=\(ws.lastError ?? "nil")")

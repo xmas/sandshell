@@ -483,19 +483,22 @@ final class SidebarListController: NSViewController {
     var emptyStateText: String? { emptyStateStack.isHidden ? nil : emptyStateLabel.stringValue }
 
     private func updateEmptyState() {
-        if controller.isBuilding, let activity = controller.activity {
+        // Only ever in place of an empty list: with rows showing, the build
+        // status belongs to the pane (it says "Building …" there), and the
+        // placeholder would sit on top of the rows.
+        if !displayedSessionIDs.isEmpty {
+            emptyStateSpinner.stopAnimation(nil)
+            emptyStateStack.isHidden = true
+        } else if controller.isBuilding, let activity = controller.activity {
             emptyStateSpinner.isHidden = false
             emptyStateSpinner.startAnimation(nil)
             emptyStateLabel.stringValue = activity
             emptyStateStack.isHidden = false
-        } else if displayedSessionIDs.isEmpty {
+        } else {
             emptyStateSpinner.stopAnimation(nil)
             emptyStateSpinner.isHidden = true
             emptyStateLabel.stringValue = searchQuery.isEmpty ? "No sessions yet" : "No matches"
             emptyStateStack.isHidden = false
-        } else {
-            emptyStateSpinner.stopAnimation(nil)
-            emptyStateStack.isHidden = true
         }
     }
 
