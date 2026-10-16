@@ -838,9 +838,15 @@ final class SidebarListController: NSViewController {
         // newSessionInCurrentContext() already does this safely) — the button
         // used to disable itself during a build and silently swallow clicks,
         // which read as "the button doesn't work."
+        newSessionMenu().popUp(positioning: nil, at: NSPoint(x: 0, y: newSessionButton.bounds.height + 4),
+                               in: newSessionButton)
+    }
+
+    /// The "+ New Session" menu, also popped by an empty pane's New Session.
+    func newSessionMenu() -> NSMenu {
         let menu = NSMenu()
         for item in newSessionMenuItems() { menu.addItem(item) }
-        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: newSessionButton.bounds.height + 4), in: newSessionButton)
+        return menu
     }
 
     /// Shared "+ New Session" menu content. The top items are actions —

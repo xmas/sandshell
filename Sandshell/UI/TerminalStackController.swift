@@ -333,6 +333,8 @@ final class TerminalStackController: NSViewController {
     }
     /// Close this pane (title-strip ✕, shown when split).
     var onClosePane: (() -> Void)?
+    /// The sidebar's "+ New Session" menu (an empty pane's New Session).
+    var newSessionMenu: (() -> NSMenu?)?
     /// Split this pane (title-strip buttons): a new empty pane on that side.
     var onSplit: ((PaneTreeController.Edge) -> Void)?
     /// Show this pane's session folder (or the workspace) as Files beside it.
@@ -349,6 +351,7 @@ final class TerminalStackController: NSViewController {
     private let paneControls = NSStackView()
     /// An empty pane's own way out: Show Files / Close Pane, under its hint.
     private let emptyActions = NSStackView()
+    private let emptyNewButton = NSButton(title: "New Session", target: nil, action: nil)
     private let emptyFilesButton = NSButton(title: "Show Files", target: nil, action: nil)
     private let emptyCloseButton = NSButton(title: "Close Pane", target: nil, action: nil)
     /// A session that couldn't start: Try Again, and the settings that broke it.
@@ -599,6 +602,12 @@ final class TerminalStackController: NSViewController {
     @objc private func splitRightClicked() { onSplit?(.trailing) }
     @objc private func splitDownClicked() { onSplit?(.bottom) }
     @objc private func openFilesClicked() { onOpenFiles?(false) }
+    /// The sidebar's "+ New Session" menu, under the button; what's picked opens
+    /// here (this pane has focus from the click).
+    @objc private func newSessionClicked() {
+        newSessionMenu?()?.popUp(positioning: nil, at: NSPoint(x: 0, y: emptyNewButton.bounds.height + 4),
+                                 in: emptyNewButton)
+    }
 
     @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
 
@@ -769,6 +778,12 @@ final class TerminalStackController: NSViewController {
         statusStack.addArrangedSubview(restartButton)
         // An empty pane (just split, or its session closed): say how to fill
         // it, and offer Files / Close right there.
+        emptyNewButton.bezelStyle = .rounded
+        emptyNewButton.image = NSImage(systemSymbolName: "plus", accessibilityDescription: nil)
+        emptyNewButton.imagePosition = .imageLeading
+        emptyNewButton.target = self
+        emptyNewButton.action = #selector(newSessionClicked)
+        emptyNewButton.setAccessibilityIdentifier("empty-pane-new")
         emptyFilesButton.bezelStyle = .rounded
         emptyFilesButton.image = NSImage(systemSymbolName: "folder", accessibilityDescription: nil)
         emptyFilesButton.imagePosition = .imageLeading
@@ -782,7 +797,7 @@ final class TerminalStackController: NSViewController {
         emptyCloseButton.setAccessibilityIdentifier("empty-pane-close")
         emptyActions.orientation = .horizontal
         emptyActions.spacing = 10
-        emptyActions.setViews([emptyFilesButton, emptyCloseButton], in: .leading)
+        emptyActions.setViews([emptyNewButton, emptyFilesButton, emptyCloseButton], in: .leading)
         emptyActions.isHidden = true
         statusStack.addArrangedSubview(emptyActions)
         for b in [retryButton, editSettingsButton] { b.bezelStyle = .rounded; b.target = self }

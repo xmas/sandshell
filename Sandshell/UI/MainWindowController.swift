@@ -140,6 +140,7 @@ final class MainWindowController: NSWindowController {
         let detail = PaneTreeController(controller: controller)
         self.detail = detail
         detail.onToggleSidebar = { [weak self] in self?.toggleSidebar() }
+        detail.newSessionMenu = { [weak self] in self?.sidebar?.newSessionMenu() }
         // Drive the toolbar identity (badge + name/subtitle) from the active
         // session; fall back to the folder name when nothing is selected.
         detail.onChromeChange = { [weak self] chrome in

@@ -1010,7 +1010,7 @@ enum SelfTest {
     /// empty pane's Show Files / Close Pane, pressed like a user would.
     private static func paneButtons(_ window: MainWindowController) async {
         guard let tree = window.paneTree, let ws = window.workspaceController else { return log("no window") }
-        guard let a = ws.orderedSessions.first?.id else { return log("need a session") }
+        guard let a = ws.orderedSessions.first(where: { $0.agent == .shell })?.id else { return log("need a shell session") }
         func button(_ id: String, in pane: TerminalStackController) -> NSButton? {
             func find(_ v: NSView) -> NSButton? {
                 if let b = v as? NSButton, b.accessibilityIdentifier() == id { return b }
@@ -1042,6 +1042,8 @@ enum SelfTest {
               "the empty pane offers Show Files")
         check(button("empty-pane-close", in: empty).map { !$0.isHiddenOrHasHiddenAncestor } ?? false,
               "the empty pane offers Close Pane")
+        check(button("empty-pane-new", in: empty).map { !$0.isHiddenOrHasHiddenAncestor } ?? false,
+              "the empty pane offers New Session")
         await wait(0.4)
         snapshot(window, "pane-buttons-empty")
 
@@ -1072,6 +1074,25 @@ enum SelfTest {
         check(tree.panes.count == count, "pressing Files again focuses it instead of opening another")
         await wait(0.6)
         snapshot(window, "pane-buttons-final")
+
+        // New Session is the sidebar's + menu; what's picked opens in that pane.
+        tree.split(first, edge: .bottom, showing: nil)
+        await wait()
+        if let fresh = tree.panes.first(where: { $0.shownSession == nil && $0.shownFiles == nil }),
+           let menu = fresh.newSessionMenu?() {
+            let titles = menu.items.map(\.title)
+            log("empty pane New Session menu: \(titles)")
+            check(titles == window.sidebarList?.newSessionMenu().items.map(\.title), "the same menu as the sidebar's +")
+            if let i = menu.items.firstIndex(where: { $0.title == "New Shell" }) {
+                tree.focus(fresh)
+                let before = Set(ws.orderedSessions.map(\.id))
+                menu.performActionForItem(at: i)
+                await wait(0.6)
+                let added = ws.orderedSessions.first { !before.contains($0.id) }
+                check(added != nil && fresh.shownSession == added?.id, "picking New Shell opens it in the empty pane")
+                if let added { ws.closeSession(added.id) }
+            } else { check(false, "the menu has New Shell") }
+        } else { check(false, "the empty pane has the New Session menu") }
 
         // Leave only a Files pane (what an earlier build could save) for `files-alone`.
         while let session = tree.panes.first(where: { $0.shownFiles == nil }), tree.panes.count > 1 {

@@ -108,6 +108,9 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
 
     // MARK: Panes
 
+    /// The sidebar's "+ New Session" menu, for an empty pane's New Session.
+    var newSessionMenu: (() -> NSMenu?)?
+
     private func makePane() -> TerminalStackController {
         let pane = TerminalStackController(controller: controller, surfaces: surfaces)
         pane.onToggleSidebar = { [weak self] in self?.onToggleSidebar?() }
@@ -118,6 +121,7 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
             if let self, pane === self.toolbarPane { self.onStatusChange?(text, working) }
         }
         pane.onClosePane = { [weak self, weak pane] in if let pane { self?.close(pane) } }
+        pane.newSessionMenu = { [weak self] in self?.newSessionMenu?() }
         pane.onSplit = { [weak self, weak pane] edge in
             if let self, let pane { self.split(pane, edge: edge, showing: nil) }
         }
