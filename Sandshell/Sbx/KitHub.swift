@@ -39,7 +39,9 @@ enum KitHub {
 
     /// All `*-kit` repositories in `namespace`, most pulled first.
     static func fetchKits(namespace: String = officialNamespace) async throws -> [HubKit] {
-        var url: URL? = URL(string: "https://hub.docker.com/v2/namespaces/\(namespace)/repositories/?page_size=100")
+        // Filtered to kits server-side: Hub refuses anonymous requests past the
+        // first page (HTTP 403), and a namespace's images outnumber its kits.
+        var url: URL? = URL(string: "https://hub.docker.com/v2/namespaces/\(namespace)/repositories/?page_size=100&name=-kit")
         var kits: [HubKit] = []
         let iso = ISO8601DateFormatter()
         iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -49,6 +51,7 @@ enum KitHub {
             pages += 1
             let (data, response) = try await URLSession.shared.data(from: u)
             if let http = response as? HTTPURLResponse, http.statusCode != 200 {
+                if pages > 1, !kits.isEmpty { break }   // keep the pages we got
                 throw HubError(message: "Docker Hub returned HTTP \(http.statusCode) for \(namespace).")
             }
             let page = try JSONDecoder().decode(Page.self, from: data)
