@@ -45,6 +45,32 @@ struct KitRef: Codable, Hashable, Identifiable {
 enum KitStore {
     private static let key = "kitRegistry"
     private static let seededKey = "kitRegistrySeededOfficialDefaults.v1"
+    private static let sandshellSeededKey = "kitRegistrySeededSandshell.v1"
+
+    /// Sandshell's own kits (`kits/` in the repo, bundled in the app, published
+    /// at github.com/xmas/sandshell-kits): the chat adapters preinstalled, and
+    /// the wrapper behind Undo and MCP status in Claude chats. On by default;
+    /// turned off, those features hide. Referred to by name, resolved to the
+    /// app's bundled copy when sbx is called (`resolve`).
+    static let sandshellKits: [KitRef] = [
+        KitRef(ref: "sandshell-claude", displayName: "Sandshell chats for Claude",
+               summary: "Undo a turn's file edits and MCP server status in Claude chats; preinstalls the chat adapter so chats start sooner.",
+               isDefault: true),
+        KitRef(ref: "sandshell-codex", displayName: "Sandshell chats for Codex",
+               summary: "Preinstalls the Codex chat adapter and its sign-in through sbx's credential proxy.",
+               isDefault: true),
+    ]
+
+    static func isSandshellKit(_ ref: String) -> Bool {
+        sandshellKits.contains { $0.ref == ref } || sandshellKits.contains { ref.hasSuffix("/kits/\($0.ref)") }
+    }
+
+    /// What sbx is given for `ref`: Sandshell's own kits are the app's bundled copies.
+    static func resolve(_ ref: String) -> String {
+        guard sandshellKits.contains(where: { $0.ref == ref }),
+              let dir = SbxCommand.bundledKits?.appendingPathComponent(ref) else { return ref }
+        return dir.path
+    }
 
     /// Official kits worth having in every sandbox: cheap, no ports, and they
     /// fix real gaps (unsigned in-sandbox commits, SSH host-key prompts). Seeded
@@ -65,7 +91,8 @@ enum KitStore {
 
     private static let requirementsKey = "kitRequiredAgents"
     /// Known up front, so the official default works offline.
-    private static let knownRequirements = ["docker.io/sbx/code-server-kit:latest": "claude"]
+    private static let knownRequirements = ["docker.io/sbx/code-server-kit:latest": "claude",
+                                            "sandshell-claude": "claude", "sandshell-codex": "codex"]
 
     /// The agent a kit is made for (`requires.agent` in its spec, or the agent
     /// a `kind: sandbox` kit defines): `.some(nil)` for any agent, `nil` while
@@ -100,6 +127,14 @@ enum KitStore {
     static var defaultRefs: [String] { defaults.map(\.ref) }
 
     /// One-time: register the official default kits (runs at launch).
+    static func seedSandshellKitsIfNeeded() {
+        guard !UserDefaults.standard.bool(forKey: sandshellSeededKey) else { return }
+        var kits = all
+        for kit in sandshellKits where !kits.contains(where: { $0.ref == kit.ref }) { kits.append(kit) }
+        save(kits)
+        UserDefaults.standard.set(true, forKey: sandshellSeededKey)
+    }
+
     static func seedOfficialDefaultsIfNeeded() {
         guard !UserDefaults.standard.bool(forKey: seededKey) else { return }
         var kits = all

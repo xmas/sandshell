@@ -162,7 +162,7 @@ final class ChatSessionView: NSView {
         mcpButton.target = self
         mcpButton.action = #selector(showMCP)
         mcpButton.setAccessibilityIdentifier("chat-mcp")
-        mcpButton.isHidden = !session.hasExtras
+        mcpButton.isHidden = true   // until the kit's wrapper says it's there
         transcript.onUndo = { [weak self] turn in self?.undo(turn) }
         let footer = NSStackView(views: [modePopup, modelPopup, mcpButton, statusLabel, spacer, usageLabel, sendButton])
         footer.orientation = .horizontal
@@ -228,6 +228,10 @@ final class ChatSessionView: NSView {
         }.store(in: &bag)
         session.$permission.sink { [weak self] in self?.showPermission($0) }.store(in: &bag)
         session.$mcpServers.sink { [weak self] in self?.showMCPSummary($0) }.store(in: &bag)
+        session.$hasExtras.sink { [weak self] on in
+            self?.mcpButton.isHidden = !on
+            if on { self?.refreshMCPQuietly() }
+        }.store(in: &bag)
         session.$phase.sink { [weak self] phase in
             guard let self else { return }
             if case .starting = phase {} else if let held = self.heldReplay {

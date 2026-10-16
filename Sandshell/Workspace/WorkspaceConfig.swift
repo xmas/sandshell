@@ -20,6 +20,9 @@ struct WorkspaceConfig: Codable {
     var theme: ThemePreferences?
     /// Kit references applied to this workspace's sandboxes (`sbx create --kit`).
     var kits: [String]
+    /// Sandshell's own kits have been added to `kits` once (so turning them
+    /// off sticks; see `KitStore.sandshellKits`).
+    var sandshellKitsOffered = false
     /// Which template tag sandboxes are created from (see `ImageChannel`).
     var imageChannel: ImageChannel
     /// `-t` reference when `imageChannel == .custom`.
@@ -64,7 +67,7 @@ struct WorkspaceConfig: Codable {
 
     enum CodingKeys: String, CodingKey {
         case schemaVersion, policy, mcpServers, mcpURL, primaryAgent, configured, archiveInterval, theme, kits
-        case imageChannel, customImage, claudeModel, claudeEffort, customAgents
+        case imageChannel, customImage, claudeModel, claudeEffort, customAgents, sandshellKitsOffered
     }
 
     init(from decoder: Decoder) throws {
@@ -84,6 +87,7 @@ struct WorkspaceConfig: Codable {
         claudeModel = try c.decodeIfPresent(String.self, forKey: .claudeModel)
         claudeEffort = try c.decodeIfPresent(String.self, forKey: .claudeEffort)
         customAgents = try c.decodeIfPresent([AgentKind].self, forKey: .customAgents) ?? []
+        sandshellKitsOffered = try c.decodeIfPresent(Bool.self, forKey: .sandshellKitsOffered) ?? false
     }
 
     // MARK: - Persistence
@@ -102,7 +106,16 @@ struct WorkspaceConfig: Codable {
     /// Load the config or build a default one seeded from `home` — and, for a
     /// root that has never been configured, with the registry's default kits.
     static func loadOrDefault(root: URL, home: URL) -> WorkspaceConfig {
-        (try? load(root: root)) ?? WorkspaceConfig(policy: .makeDefault(home: home), kits: KitStore.defaultRefs)
+        var config = (try? load(root: root)) ?? WorkspaceConfig(policy: .makeDefault(home: home), kits: KitStore.defaultRefs)
+        // Sandshell's own kits join every workspace once; after that they're
+        // the user's to turn off (Settings ▸ Kits). An existing sandbox gets
+        // them at its next rebuild, not by surprise.
+        if !config.sandshellKitsOffered {
+            config.kits += KitStore.sandshellKits.map(\.ref).filter { !config.kits.contains($0) }
+            config.sandshellKitsOffered = true
+            try? config.save(root: root)
+        }
+        return config
     }
 
     /// Atomically write to `<root>/.sandshell/config.json`.

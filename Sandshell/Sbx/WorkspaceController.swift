@@ -617,7 +617,10 @@ final class WorkspaceController: ObservableObject {
     /// A custom agent ignores the base-image channel (its kit names the image),
     /// so a channel change doesn't rebuild it.
     func configSignature(mounts: [MountSpec], kits: [String], agent: AgentKind) -> String {
-        mountSignature(mounts) + "\n--kits--\n" + KitStore.kits(kits, for: agent).joined(separator: "\n")
+        // Sandshell's own kits don't count: an existing sandbox picks them up
+        // at its next rebuild instead of being rebuilt for them on open.
+        mountSignature(mounts) + "\n--kits--\n"
+            + KitStore.kits(kits, for: agent).filter { !KitStore.isSandshellKit($0) }.joined(separator: "\n")
             + "\n--image--\n" + (agent.isBuiltin ? imageSignature : "")
     }
 
@@ -711,7 +714,9 @@ final class WorkspaceController: ObservableObject {
                 self.kitDrift[agent] = nil
                 return
             }
-            var drift = KitDrift.compute(containerName: name, actual: actual, configured: configured, root: root)
+            // Nor are they drift, either way (they come and go with rebuilds).
+            var drift = KitDrift.compute(containerName: name, actual: actual.filter { !KitStore.isSandshellKit($0) },
+                                         configured: configured.filter { !KitStore.isSandshellKit($0) }, root: root)
             // The kit that defines this sandbox's agent isn't drift: it's how
             // the sandbox was made, and adopting it would hand it to every agent.
             drift.extra.removeAll { KitStore.requiredAgent($0) == .some(agent.rawValue) }

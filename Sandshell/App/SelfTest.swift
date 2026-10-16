@@ -101,6 +101,7 @@ enum SelfTest {
         case "commits": await commitsView(window)
         case "warm": await warmChats(window)
         case "extras": await chatExtras(window)
+        case "kit-extras": await kitExtras(window)
         case "sea": await sea(window)
         case "title-strip": await titleStrip(window)
         case "follow": await follow(window)
@@ -1722,6 +1723,38 @@ enum SelfTest {
         }
         try? FileManager.default.removeItem(at: file)
         ws.closeSession(s.id)
+    }
+
+    // MARK: Sandshell kits
+
+    /// A new workspace gets Sandshell's own kits; its Claude sandbox is created
+    /// with sandshell-claude, so chats have Undo and MCP. Turned off, a rebuilt
+    /// sandbox runs chats plain and those features hide. Needs a fresh folder.
+    private static func kitExtras(_ window: MainWindowController) async {
+        guard let ws = window.workspaceController, let tree = window.paneTree else { return log("no window") }
+        check(ws.kits.contains("sandshell-claude") && ws.kits.contains("sandshell-codex"),
+              "the workspace lists Sandshell's kits (\(ws.kits))")
+        check(KitStore.resolve("sandshell-claude").hasSuffix("Contents/Resources/kits/sandshell-claude"),
+              "they resolve to the app's bundled copies")
+        guard let a = ws.newChatInCurrentContext() else { return check(false, "a chat") }
+        func chat(_ id: UUID) -> ChatSession? { tree.surfaces.chats[id]?.session }
+        check(await until(900) { chat(a.id)?.phase == .ready }, "the chat starts (sandbox created with the kit)")
+        check(chat(a.id)?.hasExtras == true, "its agent runs under the kit's wrapper")
+        if let c = chat(a.id) {
+            let mcp = await until(20) { c.mcpServers != nil }
+            check(mcp, "MCP status loads by itself")
+        }
+        // The full Undo / Stop / MCP round trip.
+        ws.closeSession(a.id)
+        await chatExtras(window)
+
+        // Off: the sandbox is rebuilt without it, and chats run plain.
+        ws.applyKits(ws.kits.filter { $0 != "sandshell-claude" })
+        guard let b = ws.newChatInCurrentContext() else { return check(false, "a chat after turning it off") }
+        check(await until(900) { chat(b.id)?.phase == .ready }, "a chat starts in the rebuilt sandbox")
+        check(chat(b.id)?.hasExtras == false, "without the kit there's no wrapper, so no Undo or MCP")
+        ws.closeSession(b.id)
+        ws.applyKits(ws.kits + ["sandshell-claude"])   // leave it as a new workspace would be
     }
 
     // MARK: Warm chats

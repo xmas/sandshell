@@ -253,6 +253,16 @@ final class ChatSession: ObservableObject {
         let auth = agent == .claude ? (sbxProxyAuth ? "sbx proxy" : "~/.claude credentials") : "sbx proxy"
         Log.info(.sbx, "chat: launched \(agent.rawValue) ACP agent in “\(containerName)” at \(workdir) (auth: \(auth))")
         let launchedAt = Date()
+        // An agent that never answers (its sandbox restarted under it, say)
+        // would leave the chat "Starting…" forever: give up on it, so the
+        // pane offers Reconnect. The first start may install the adapter.
+        Task { [weak self, weak conn] in
+            try? await Task.sleep(for: .seconds(240))
+            guard let self, let conn, self.connection === conn, self.phase == .starting else { return }
+            Log.error(.sbx, "chat: \(self.agent.rawValue) agent didn't answer in 4 minutes; giving up on it")
+            self.launchError = "The agent didn’t start (no answer in 4 minutes)."
+            conn.terminate()
+        }
         pumpTask = Task { [weak self] in
             for await event in conn.incoming { self?.handle(event) }
         }
@@ -579,10 +589,11 @@ final class ChatSession: ObservableObject {
 
     struct RewindResult { var canRewind: Bool; var error: String?; var files: [String]; var insertions: Int; var deletions: Int }
 
-    /// Whether this chat has the wrapper's extras (Undo, MCP).
-    var hasExtras: Bool { agent == .claude }
+    /// The sandshell-claude kit's wrapper is running this chat's agent: Undo
+    /// and MCP status work (the launch says so on stderr).
+    @Published private(set) var hasExtras = false
 
-    /// One request to the adapter wrapper (see `SbxCommand.claudeACPWrapper`).
+    /// One request to the adapter wrapper (in the sandshell-claude kit).
     private func extra(_ request: [String: JSONValue]) async throws -> JSONValue {
         guard let conn = connection, let sid = sessionID else { throw ExtraError("The chat isn’t connected.") }
         let json = try JSONEncoder().encode(JSONValue.object(request))
@@ -905,6 +916,7 @@ final class ChatSession: ObservableObject {
             connection?.respondError(id: id, code: -32601, message: "\(method) is not supported by Sandshell")
         case .stderr(let line):
             Log.info(.sbx, "chat[acp]: \(line)")
+            if line == SbxCommand.extrasMarker { hasExtras = true; return }
             if line.hasPrefix("sandshell: ") { launchError = String(line.dropFirst("sandshell: ".count)) }
         case .closed(let status):
             permission = nil
@@ -940,7 +952,7 @@ final class ChatSession: ObservableObject {
             }
         case "session_info_update":
             // A turn's file-change report (AIR): which files it changed.
-            if let report = u["_meta"]?["jetbrains"]?["air"]?["agentFileChangeReport"],
+            if hasExtras, let report = u["_meta"]?["jetbrains"]?["air"]?["agentFileChangeReport"],
                report["status"]?.string == "reported", let turn = report["requestId"]?.string,
                let paths = report["paths"]?.array?.compactMap(\.string), !paths.isEmpty {
                 upsert(.fileChanges(turn: turn, paths: paths, restored: false))
