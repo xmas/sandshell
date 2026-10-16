@@ -70,10 +70,7 @@ final class LinkOpeningTerminalView: AppTerminalView {
             ("Open", #selector(openInDefaultApp(_:))),
             ("Open With…", #selector(openWithChooser(_:))),
         ] {
-            let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
-            item.target = self
-            item.representedObject = url
-            menu.addItem(item)
+            menu.addItem(NSMenuItem(title, action: action, target: self, object: url))
         }
         menu.addItem(.separator())
         // Re-parent the superclass items (Copy, …) onto our menu.

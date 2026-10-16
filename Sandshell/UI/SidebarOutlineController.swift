@@ -78,7 +78,7 @@ final class SidebarListController: NSViewController {
     /// Without this the list was just blank during a first-time build, which
     /// read as broken rather than in progress.
     private let emptyStateStack = NSStackView()
-    private let emptyStateSpinner = NSProgressIndicator()
+    private let emptyStateSpinner = NSProgressIndicator.spinner()
     private let emptyStateLabel = NSTextField(wrappingLabelWithString: "")
 
     private let appMark = NSImageView()
@@ -262,10 +262,6 @@ final class SidebarListController: NSViewController {
         footerBorder.translatesAutoresizingMaskIntoConstraints = false
         footerBorder.wantsLayer = true
 
-        emptyStateSpinner.style = .spinning
-        emptyStateSpinner.controlSize = .small
-        emptyStateSpinner.isDisplayedWhenStopped = false
-        emptyStateSpinner.translatesAutoresizingMaskIntoConstraints = false
         emptyStateLabel.alignment = .center
         emptyStateLabel.font = .systemFont(ofSize: 12)
         emptyStateLabel.translatesAutoresizingMaskIntoConstraints = false
@@ -683,9 +679,7 @@ final class SidebarListController: NSViewController {
         let current = controller.workspace.rootURL.standardizedFileURL.path
 
         // The current folder first, checked, as a header for context.
-        let here = NSMenuItem(title: controller.workspace.rootURL.lastPathComponent,
-                              action: nil, keyEquivalent: "")
-        here.image = controller.rootProfile.menuImage()
+        let here = NSMenuItem(controller.workspace.rootURL.lastPathComponent, image: controller.rootProfile.menuImage())
         here.state = .on
         here.isEnabled = false
         menu.addItem(here)
@@ -696,35 +690,18 @@ final class SidebarListController: NSViewController {
         if !others.isEmpty {
             menu.addItem(.separator())
             for profile in others.prefix(RecentRootsMenu.shortListCount) {
-                let item = NSMenuItem(title: profile.name,
-                                      action: #selector(openRecentRoot(_:)), keyEquivalent: "")
-                item.target = self
-                item.image = profile.menuImage()
-                item.toolTip = profile.path
-                item.representedObject = profile.url
-                menu.addItem(item)
+                menu.addItem(profile.menuItem(action: #selector(openRecentRoot(_:)), target: self))
             }
-            let more = NSMenuItem(title: others.count > RecentRootsMenu.shortListCount
-                                    ? "See More… (\(others.count))" : "See More…",
-                                  action: #selector(seeMoreFromMenu), keyEquivalent: "o")
-            more.target = self
-            more.image = NSImage(systemSymbolName: "ellipsis.circle", accessibilityDescription: nil)
-            menu.addItem(more)
+            menu.addItem(NSMenuItem(others.count > RecentRootsMenu.shortListCount
+                                        ? "See More… (\(others.count))" : "See More…",
+                                    action: #selector(seeMoreFromMenu), target: self, symbol: "ellipsis.circle", key: "o"))
         }
 
         menu.addItem(.separator())
-        let dup = NSMenuItem(title: "Duplicate Window", action: #selector(duplicateWindowFromMenu),
-                             keyEquivalent: "n")
-        dup.keyEquivalentModifierMask = [.command, .shift]
-        dup.target = self
-        dup.image = NSImage(systemSymbolName: "plus.square.on.square", accessibilityDescription: nil)
-        menu.addItem(dup)
-        let open = NSMenuItem(title: "Open Folder…", action: #selector(openFolderFromMenu),
-                              keyEquivalent: "n")
-        open.keyEquivalentModifierMask = [.command, .option]
-        open.target = self
-        open.image = NSImage(systemSymbolName: "plus", accessibilityDescription: nil)
-        menu.addItem(open)
+        menu.addItem(NSMenuItem("Duplicate Window", action: #selector(duplicateWindowFromMenu), target: self,
+                                symbol: "plus.square.on.square", key: "n", modifiers: [.command, .shift]))
+        menu.addItem(NSMenuItem("Open Folder…", action: #selector(openFolderFromMenu), target: self,
+                                symbol: "plus", key: "n", modifiers: [.command, .option]))
 
         menu.popUp(positioning: nil, at: NSPoint(x: 0, y: 36), in: appMark)
     }
@@ -855,16 +832,10 @@ final class SidebarListController: NSViewController {
             items.append(contentsOf: newSessionActions(folderID: defaultFolder))
             items.append(.separator())
         }
-        let folders = NSMenuItem(title: "In Folder", action: nil, keyEquivalent: "")
-        folders.image = NSImage(systemSymbolName: "folder", accessibilityDescription: nil)
-        folders.submenu = folderSubmenu()
-        items.append(folders)
+        items.append(NSMenuItem("In Folder", symbol: "folder", submenu: folderSubmenuItems()))
         items.append(.separator())
-        let search = NSMenuItem(title: "Search Sessions…", action: #selector(showSearchFromMenu(_:)), keyEquivalent: "")
-        search.target = self
-        search.image = NSImage(systemSymbolName: "magnifyingglass", accessibilityDescription: nil)
-        search.representedObject = defaultFolder
-        items.append(search)
+        items.append(NSMenuItem("Search Sessions…", action: #selector(showSearchFromMenu(_:)), target: self,
+                                symbol: "magnifyingglass", object: defaultFolder))
         return items
     }
 
@@ -872,11 +843,7 @@ final class SidebarListController: NSViewController {
     /// agent's sandbox — all in `folderID`.
     private func newSessionActions(folderID: UUID) -> [NSMenuItem] {
         func action(_ title: String, _ icon: NSImage?, _ req: NewSessionRequest) -> NSMenuItem {
-            let item = NSMenuItem(title: title, action: #selector(addSessionFromMenu(_:)), keyEquivalent: "")
-            item.target = self
-            item.image = icon
-            item.representedObject = req
-            return item
+            NSMenuItem(title, action: #selector(addSessionFromMenu(_:)), target: self, image: icon, object: req)
         }
         var items: [NSMenuItem] = []
         let custom = controller.customAgents
@@ -891,26 +858,15 @@ final class SidebarListController: NSViewController {
                                 NewSessionRequest(folderID: folderID, agent: agent,
                                                   chat: SbxCommand.supportsACP(agent))))
         }
-        let terminal = NSMenuItem(title: "In Terminal", action: nil, keyEquivalent: "")
-        terminal.image = NSImage(systemSymbolName: "terminal", accessibilityDescription: nil)
-        let terminalMenu = NSMenu()
-        for agent in SbxCommand.acpAgents {
-            terminalMenu.addItem(action("New \(agent.displayName) in Terminal", agent.menuIcon,
-                                        NewSessionRequest(folderID: folderID, agent: agent)))
-        }
-        terminal.submenu = terminalMenu
-        items.append(terminal)
+        items.append(NSMenuItem("In Terminal", symbol: "terminal", submenu: SbxCommand.acpAgents.map { agent in
+            action("New \(agent.displayName) in Terminal", agent.menuIcon,
+                   NewSessionRequest(folderID: folderID, agent: agent))
+        }))
         let others = AgentKind.builtins.filter { !featured.contains($0) }
         if !others.isEmpty {
-            let more = NSMenuItem(title: "Other Agents", action: nil, keyEquivalent: "")
-            more.image = NSImage(systemSymbolName: "ellipsis.circle", accessibilityDescription: nil)
-            let sub = NSMenu()
-            for agent in others {
-                sub.addItem(action("New \(agent.displayName)", agent.menuIcon,
-                                   NewSessionRequest(folderID: folderID, agent: agent)))
-            }
-            more.submenu = sub
-            items.append(more)
+            items.append(NSMenuItem("Other Agents", symbol: "ellipsis.circle", submenu: others.map { agent in
+                action("New \(agent.displayName)", agent.menuIcon, NewSessionRequest(folderID: folderID, agent: agent))
+            }))
         }
         items.append(.separator())
         for host in [AgentKind.claude, .codex] + custom {
@@ -937,20 +893,15 @@ final class SidebarListController: NSViewController {
 
     /// "In Folder ▸": each known folder opens the same New … actions there,
     /// plus ways to add another folder.
-    private func folderSubmenu() -> NSMenu {
-        let menu = NSMenu()
-        for folder in controller.folders {
-            let item = NSMenuItem(title: controller.displayName(for: folder), action: nil, keyEquivalent: "")
-            item.image = NSImage(systemSymbolName: "folder", accessibilityDescription: nil)
-            let sub = NSMenu()
-            for action in newSessionActions(folderID: folder.id) { sub.addItem(action) }
-            item.submenu = sub
-            menu.addItem(item)
+    private func folderSubmenuItems() -> [NSMenuItem] {
+        var items = controller.folders.map { folder in
+            NSMenuItem(controller.displayName(for: folder), symbol: "folder",
+                       submenu: newSessionActions(folderID: folder.id))
         }
-        if !controller.folders.isEmpty { menu.addItem(.separator()) }
-        menu.addItem(menuItem("Add Folder…", #selector(newFolderClicked)))
-        menu.addItem(menuItem("Choose Existing Folder…", #selector(addExistingFolderClicked)))
-        return menu
+        if !items.isEmpty { items.append(.separator()) }
+        items.append(menuItem("Add Folder…", #selector(newFolderClicked)))
+        items.append(menuItem("Choose Existing Folder…", #selector(addExistingFolderClicked)))
+        return items
     }
 
     private func addSession(folderID: UUID, agent: AgentKind, containerAgent: AgentKind? = nil,
@@ -977,14 +928,10 @@ final class SidebarListController: NSViewController {
     // MARK: Context menu — Drops
 
     private func dropsSubmenuItem(for folderID: UUID) -> NSMenuItem {
-        let parent = NSMenuItem(title: "Drops", action: nil, keyEquivalent: "")
-        let sub = NSMenu()
-        sub.addItem(menuItem("Show Changed Files in Finder",
-                             #selector(contextShowChangedDrops), object: folderID))
-        sub.addItem(menuItem("Open Terminal to Changed Files",
-                             #selector(contextOpenTerminalToDrops), object: folderID))
-        parent.submenu = sub
-        return parent
+        NSMenuItem("Drops", submenu: [
+            menuItem("Show Changed Files in Finder", #selector(contextShowChangedDrops), object: folderID),
+            menuItem("Open Terminal to Changed Files", #selector(contextOpenTerminalToDrops), object: folderID),
+        ])
     }
 
     @objc private func contextShowChangedDrops(_ sender: NSMenuItem) {
@@ -1059,10 +1006,7 @@ final class SidebarListController: NSViewController {
     }
 
     private func menuItem(_ title: String, _ action: Selector, object: Any? = nil) -> NSMenuItem {
-        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
-        item.target = self
-        item.representedObject = object
-        return item
+        NSMenuItem(title, action: action, target: self, object: object)
     }
 
     @objc private func contextOpenFiles(_ sender: NSMenuItem) {

@@ -129,7 +129,7 @@ final class KitStartupBannerView: NSView {
     nonisolated static let rebuildHint = "Rebuilding reloads every kit’s contents (the way to pick up a kit update); adding a new kit doesn’t need a rebuild."
 
     private let icon = NSImageView()
-    private let spinner = NSProgressIndicator()
+    private let spinner = NSProgressIndicator.spinner()
     private let title = NSTextField(wrappingLabelWithString: "")
     private let detail = NSTextField(wrappingLabelWithString: "")
     private let hint = NSTextField(wrappingLabelWithString: "")
@@ -150,10 +150,6 @@ final class KitStartupBannerView: NSView {
 
         icon.translatesAutoresizingMaskIntoConstraints = false
         icon.symbolConfiguration = .init(pointSize: 15, weight: .semibold)
-        spinner.style = .spinning
-        spinner.controlSize = .small
-        spinner.isDisplayedWhenStopped = false
-        spinner.translatesAutoresizingMaskIntoConstraints = false
 
         title.font = .systemFont(ofSize: 12.5, weight: .semibold)
         title.maximumNumberOfLines = 2

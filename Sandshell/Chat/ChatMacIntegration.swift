@@ -146,13 +146,7 @@ final class TranscriptTextView: NSTextView {
         let base = super.menu(for: event) ?? NSMenu()
         guard let attachment = image(at: convert(event.locationInWindow, from: nil)) else { return base }
         let menu = NSMenu()
-        func add(_ title: String, _ handler: @escaping () -> Void) {
-            let item = NSMenuItem(title: title, action: #selector(ClosureMenuItem.run), keyEquivalent: "")
-            let box = ClosureMenuItem(handler)
-            item.target = box
-            item.representedObject = box   // keep the target alive
-            menu.addItem(item)
-        }
+        func add(_ title: String, _ handler: @escaping () -> Void) { menu.addItem(NSMenuItem(title, handler: handler)) }
         add("Quick Look") { if let url = attachment.fileURL { QuickLook.shared.show([url]) } }
         add("Open in Preview") {
             if let url = attachment.fileURL {
@@ -181,8 +175,4 @@ final class TranscriptTextView: NSTextView {
 }
 
 /// Target/action shim for closure-based menu items.
-final class ClosureMenuItem: NSObject {
-    private let handler: () -> Void
-    init(_ handler: @escaping () -> Void) { self.handler = handler }
-    @objc func run() { handler() }
-}
+

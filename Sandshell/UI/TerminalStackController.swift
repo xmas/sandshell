@@ -424,7 +424,7 @@ final class TerminalStackController: NSViewController {
     // Centered status (building / no selection)
     private let statusStack = NSStackView()
     private let statusLabel = NSTextField(labelWithString: "Select a session")
-    private let spinner = NSProgressIndicator()
+    private let spinner = NSProgressIndicator.spinner(.regular)
     private let restartButton = NSButton()
     /// Local event monitor that intercepts Cmd+V (image paste) and Cmd+F (search).
     private var pasteEventMonitor: Any?
@@ -740,9 +740,6 @@ final class TerminalStackController: NSViewController {
         frameView.addSubview(host)
 
         // Centered status.
-        spinner.style = .spinning
-        spinner.controlSize = .regular
-        spinner.isDisplayedWhenStopped = false
         statusLabel.alignment = .center
         statusLabel.textColor = .secondaryLabelColor
         statusLabel.font = .systemFont(ofSize: 15)

@@ -580,13 +580,7 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
         menu.removeAllItems()
         let urls = menuTargets
         guard !urls.isEmpty else { return }
-        func add(_ title: String, _ handler: @escaping () -> Void) {
-            let item = NSMenuItem(title: title, action: #selector(ClosureMenuItem.run), keyEquivalent: "")
-            let box = ClosureMenuItem(handler)
-            item.target = box
-            item.representedObject = box
-            menu.addItem(item)
-        }
+        func add(_ title: String, _ handler: @escaping () -> Void) { menu.addItem(NSMenuItem(title, handler: handler)) }
         if urls.count == 1, !urls[0].hasDirectoryPath { add("Open") { [weak self] in self?.onOpen?(urls[0]) } }
         add("Quick Look") { QuickLook.shared.show(urls) }
         add("Add to Chat") { [weak self] in self?.onAddToChat?(urls) }

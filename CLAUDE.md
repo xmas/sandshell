@@ -132,6 +132,8 @@ AppDelegate (@main)
 | Confirm / save-changes / notice alerts | `Alerts.confirm`, `Alerts.saveChanges`, `Alerts.inform` (`UI/Alerts.swift`) |
 | A model/mode/effort chooser | `ChoicePopUp` (`UI/ChoicePopUp.swift`), or its `style`/`fill`/`show` for a custom pull-down |
 | A borderless SF Symbol button | `NSButton.symbol(…)` / `configureSymbol(…)` (`UI/SymbolButton.swift`) |
+| A menu item (action, symbol, object, key, submenu; or a closure) | `NSMenuItem("Title", action:, target:, symbol:, object:, submenu:)` / `NSMenuItem("Title") { … }` (`UI/MenuItems.swift`); a recent folder: `RootProfile.menuItem(action:target:)` |
+| A spinner | `NSProgressIndicator.spinner(.small)` (`UI/SymbolButton.swift`) |
 | Agent / folder / profile badges | `BadgeMark` (SwiftUI) and `AgentBadgeView` (AppKit), both via `AgentKind.badgeContent` (`Theme/AgentStyle.swift`) |
 | "+12 −3" line counts | `NSAttributedString.diffCounts` |
 | A session's working color | `NSColor.sessionWorking` |

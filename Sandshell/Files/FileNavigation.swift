@@ -206,13 +206,15 @@ final class OpenQuicklyCell: NSTableCellView {
             .font: NSFont.systemFont(ofSize: 13),
             .foregroundColor: emphasized ? NSColor.alternateSelectedControlTextColor : .labelColor])
         let bold = NSFont.systemFont(ofSize: 13, weight: .bold)
-        let lower = Array(file.lowercased().utf16)
-        var i = 0
-        for ch in query.lowercased().utf16 {
-            while i < lower.count, lower[i] != ch { i += 1 }
-            guard i < lower.count else { break }
-            s.addAttribute(.font, value: bold, range: NSRange(location: i, length: 1))
-            i += 1
+        // Character by character in the name itself: lowercasing the whole
+        // name can change its length (İ → i̇) and shift every range after it.
+        var i = file.startIndex
+        for q in query {
+            while i < file.endIndex, file[i].lowercased() != q.lowercased() { i = file.index(after: i) }
+            guard i < file.endIndex else { break }
+            let next = file.index(after: i)
+            s.addAttribute(.font, value: bold, range: NSRange(i..<next, in: file))
+            i = next
         }
         name.attributedStringValue = s
     }

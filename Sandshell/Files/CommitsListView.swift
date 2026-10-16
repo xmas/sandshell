@@ -96,8 +96,12 @@ final class CommitsListView: NSView, NSTableViewDataSource, NSTableViewDelegate 
         new += commits.map(Row.commit)
         count.stringValue = commits.isEmpty ? "" : "\(commits.count)"
         if new != rows {
+            // A reload that drops the selected row reports a cleared selection:
+            // not the person's pick, so don't pass it on.
+            settingSelection = true
             rows = new
             table.reloadData()
+            settingSelection = false
         }
         select(picked)
         updateHeight()

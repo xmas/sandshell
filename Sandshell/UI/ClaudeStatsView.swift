@@ -115,18 +115,12 @@ final class ClaudeStatsView: NSView {
         let menu = ClaudeModelCatalog.shared.menu
         Self.fill(modelButton, with: ([ClaudeModelChoice.systemDefault] + menu.current).map { ($0.id, $0.title) })
         if !menu.older.isEmpty {
-            let sub = NSMenu()
-            for choice in menu.older {
-                // Submenu picks don't go through the pop-up's own action.
-                let item = NSMenuItem(title: choice.title, action: #selector(olderModelChosen(_:)), keyEquivalent: "")
-                item.target = self
-                item.representedObject = choice.id
+            // Submenu picks don't go through the pop-up's own action.
+            modelButton.menu?.addItem(NSMenuItem("Older", submenu: menu.older.map { choice in
+                let item = NSMenuItem(choice.title, action: #selector(olderModelChosen(_:)), target: self, object: choice.id)
                 item.toolTip = choice.id
-                sub.addItem(item)
-            }
-            let older = NSMenuItem(title: "Older", action: nil, keyEquivalent: "")
-            older.submenu = sub
-            modelButton.menu?.addItem(older)
+                return item
+            }))
         }
         modelButton.menu?.addItem(.separator())
         modelButton.addItem(withTitle: "Other model id…")

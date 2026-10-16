@@ -40,3 +40,15 @@ extension NSButton {
         }
     }
 }
+
+extension NSProgressIndicator {
+    /// A spinning indicator that hides itself when stopped.
+    static func spinner(_ size: NSControl.ControlSize = .small) -> NSProgressIndicator {
+        let spinner = NSProgressIndicator()
+        spinner.style = .spinning
+        spinner.controlSize = size
+        spinner.isDisplayedWhenStopped = false
+        spinner.translatesAutoresizingMaskIntoConstraints = false
+        return spinner
+    }
+}

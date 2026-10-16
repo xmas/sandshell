@@ -253,23 +253,16 @@ final class RecentRootsMenu: NSObject, NSMenuDelegate {
         menu.removeAllItems()
         let roots = RootFolderStore.byRecency()
         for profile in roots.prefix(Self.shortListCount) {
-            let item = NSMenuItem(title: profile.name, action: #selector(openRoot(_:)), keyEquivalent: "")
-            item.target = self
-            item.image = profile.menuImage()
-            item.toolTip = profile.path
-            item.representedObject = profile.url
-            menu.addItem(item)
+            menu.addItem(profile.menuItem(action: #selector(openRoot(_:)), target: self))
         }
         if roots.isEmpty {
-            let none = NSMenuItem(title: "No Recent Folders", action: nil, keyEquivalent: "")
+            let none = NSMenuItem("No Recent Folders")
             none.isEnabled = false
             menu.addItem(none)
         }
         menu.addItem(.separator())
-        let more = NSMenuItem(title: roots.count > Self.shortListCount ? "See More… (\(roots.count))" : "See More…",
-                              action: #selector(AppDelegate.openWorkspaceBrowser(_:)), keyEquivalent: "")
-        more.image = NSImage(systemSymbolName: "ellipsis.circle", accessibilityDescription: nil)
-        menu.addItem(more)
+        menu.addItem(NSMenuItem(roots.count > Self.shortListCount ? "See More… (\(roots.count))" : "See More…",
+                                action: #selector(AppDelegate.openWorkspaceBrowser(_:)), symbol: "ellipsis.circle"))
     }
 
     @objc private func openRoot(_ sender: NSMenuItem) {
@@ -281,10 +274,8 @@ final class RecentRootsMenu: NSObject, NSMenuDelegate {
 // MARK: - Menu helpers
 
 @MainActor private func submenu(_ title: String, _ items: [NSMenuItem]) -> NSMenuItem {
-    let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
-    let menu = NSMenu(title: title)
-    items.forEach(menu.addItem)
-    item.submenu = menu
+    let item = NSMenuItem(title, submenu: items)
+    item.submenu?.title = title
     return item
 }
 
