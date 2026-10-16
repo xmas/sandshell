@@ -110,6 +110,7 @@ final class WorkspaceController: ObservableObject {
 
     deinit {
         if let agentProfileObserver { NotificationCenter.default.removeObserver(agentProfileObserver) }
+        containerPollTask?.cancel()
     }
 
     // MARK: Claude model/effort + status feed
@@ -226,6 +227,16 @@ final class WorkspaceController: ObservableObject {
         var agents = Set(containers.keys)
         agents.insert(workspace.primaryAgent)
         for agent in agents { rebuildContainer(for: agent) }
+    }
+
+    /// Take mounts set from outside (`sandshell://open`) into this open
+    /// workspace without rebuilding: a sandbox whose mounts no longer match is
+    /// offered a rebuild the next time it's brought up, as for any config change.
+    func adoptPolicy(_ policy: MountPolicy) {
+        workspace.policy = policy
+        config.policy = policy
+        config.configured = true
+        try? config.save(root: workspace.rootURL)
     }
 
     /// Change the workspace's primary agent (default for the quick "+ New
@@ -797,7 +808,8 @@ final class WorkspaceController: ObservableObject {
         containerPollTask = Task { @MainActor [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 5_000_000_000)
-                self?.syncContainers()
+                guard let self else { return }   // the window closed
+                self.syncContainers()
             }
         }
     }
@@ -912,8 +924,9 @@ final class WorkspaceController: ObservableObject {
         Log.info(.workspace, "adding \(refs.count) kit(s) to '\(name)' with sbx kit add")
         // "Rebuilding…": the recreate swaps the container, so its sessions end
         // just as in a rebuild (the detail pane drops their terminals on this prefix).
-        activity = "Rebuilding \(name) — adding \(refs.count == 1 ? "a kit" : "\(refs.count) kits")…"
+        // (Phase first: the activity's observers read which sandbox it is.)
         containerPhases[agent] = .rebuilding
+        activity = "Rebuilding \(name) — adding \(refs.count == 1 ? "a kit" : "\(refs.count) kits")…"
         resetKitStartup(for: agent)
         kitDrift[agent] = nil
         for ref in refs {
@@ -1000,8 +1013,8 @@ final class WorkspaceController: ObservableObject {
                 }
             }
             Log.info(.workspace, "rebuilding container '\(name)' (\(mounts.count) mounts, \(kits.count) kits, force=\(force))")
+            containerPhases[agent] = .rebuilding   // (before the activity: see above)
             activity = "Rebuilding \(name)…"
-            containerPhases[agent] = .rebuilding
             resetKitStartup(for: agent)
             kitDrift[agent] = nil
             do {
@@ -1262,9 +1275,10 @@ extension WorkspaceController {
         rt.isLive = live
         runtimes[id] = rt
         // A live terminal means sbx exec succeeded → container is running.
-        if live, let session = session(id: id),
-           containerPhases[session.agent]?.isBuilding != true {
-            containerPhases[session.agent] = .running
+        // (The sandbox it runs in: a shell in Claude's sandbox is Claude's.)
+        if live, let kind = session(id: id)?.containerAgentKind,
+           containerPhases[kind]?.isBuilding != true {
+            containerPhases[kind] = .running
         }
     }
 

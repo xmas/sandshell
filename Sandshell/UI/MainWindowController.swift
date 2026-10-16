@@ -605,6 +605,14 @@ final class TrafficLightInsetWindow: NSWindow {
 }
 
 extension MainWindowController: NSWindowDelegate {
+    func windowShouldClose(_ sender: NSWindow) -> Bool { confirmUnsavedFiles() }
+
+    /// Unsaved edits in the Files inspector or a Files pane: Save / Discard /
+    /// Cancel for each (false = the person cancelled).
+    func confirmUnsavedFiles() -> Bool {
+        ([filesPane] + (detail?.panes.map(\.filesPane) ?? [])).compactMap { $0 }.allSatisfy { $0.confirmClose() }
+    }
+
     /// Tear down this window's terminals (kills their `sbx exec` + removes temp
     /// scripts), close its Settings window, and let `AppDelegate` forget it.
     func windowWillClose(_ notification: Notification) {

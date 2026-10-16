@@ -65,6 +65,6 @@ enum DropsScanner {
             }
         }
         guard ret == 0 else { return -1 }
-        return buf.withUnsafeBytes { $0.load(fromByteOffset: 4, as: Int64.self) }
+        return buf.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 4, as: Int64.self) }
     }
 }

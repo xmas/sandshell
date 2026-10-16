@@ -426,13 +426,13 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
         Task { [weak self] in
             let output: String = await Task.detached(priority: .userInitiated) {
                 if inRepo {
-                    return GitStatus.git(["-C", root.path, "grep", "-n", "-I", "-i", "-F", "--untracked",
+                    return GitStatus.git(["-C", root.path, "grep", "-n", "-z", "-I", "-i", "-F", "--untracked",
                                           "--no-color", "-e", query, "--", "."]) ?? ""
                 }
                 let p = Process()
                 p.executableURL = URL(fileURLWithPath: "/usr/bin/grep")
                 p.currentDirectoryURL = root
-                p.arguments = ["-rnIiF", "--exclude-dir=.git", "--exclude-dir=node_modules", "--exclude-dir=build",
+                p.arguments = ["-rnIiF", "--null", "--exclude-dir=.git", "--exclude-dir=node_modules", "--exclude-dir=build",
                                "--exclude-dir=.build", "--exclude-dir=DerivedData", "-e", query, "."]
                 let out = Pipe()
                 p.standardOutput = out
@@ -448,10 +448,14 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
             var order: [String] = []
             var total = 0
             for line in output.split(separator: "\n") where total < 500 {
-                // path:line:text (path may contain ':' — split from the left on the first two).
-                let parts = line.split(separator: ":", maxSplits: 2, omittingEmptySubsequences: false)
-                guard parts.count == 3, let n = Int(parts[1]) else { continue }
-                var rel = String(parts[0])
+                // path NUL line (NUL from git, ':' from grep) text — the path as
+                // is (no quoting of accented names, ':' allowed).
+                guard let nul = line.firstIndex(of: "\0") else { continue }
+                let rest = line[line.index(after: nul)...]
+                let digits = rest.prefix { $0.isASCII && $0.isNumber }
+                guard let n = Int(digits), digits.endIndex < rest.endIndex else { continue }
+                let text = rest[rest.index(after: digits.endIndex)...]
+                var rel = String(line[..<nul])
                 if rel.hasPrefix("./") { rel.removeFirst(2) }
                 let url = root.appendingPathComponent(rel)
                 let group = groups[rel] ?? {
@@ -460,7 +464,7 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
                     groups[rel] = g
                     return g
                 }()
-                group.matches.append(MatchNode(url: url, line: n, text: String(parts[2])))
+                group.matches.append(MatchNode(url: url, line: n, text: String(text)))
                 total += 1
             }
             self.searchGroups = order.compactMap { groups[$0] }
@@ -764,6 +768,17 @@ extension FileTreeController {
         }
     }
     var debugChangedTitle: String { changedButton.title }
+    /// Self-test: search file contents as if "?query" was typed.
+    func debugContentSearch(_ query: String) {
+        filter.stringValue = "?" + query
+        applyFilter()
+    }
+    var debugSearchFiles: [String] { searchGroups?.map(\.relative) ?? [] }
+    var debugSearchURLs: [URL] { searchGroups?.map(\.url) ?? [] }
+    func debugClearFilter() {
+        filter.stringValue = ""
+        applyFilter()
+    }
     /// Self-test: open the changed list's row like a click.
     func debugOpenRow(_ row: Int) {
         guard let node = outline.item(atRow: row) as? FileNode else { return }

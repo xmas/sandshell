@@ -676,6 +676,48 @@ enum SelfTest {
             snapshot(window, "files-inspector")
         }
         window.toggleFiles()
+
+        // Content search finds a file with an accented name, by its real path.
+        let accented = repo.appendingPathComponent("Café notes.md")
+        try? "zanzibar-needle\n".write(to: accented, atomically: true, encoding: .utf8)
+        files.tree.debugContentSearch("zanzibar-needle")
+        check(await until(10) { files.tree.debugSearchFiles == ["Café notes.md"] },
+              "content search: an accented name comes back as itself (\(files.tree.debugSearchFiles))")
+        check(files.tree.debugSearchURLs.first.map { FileManager.default.fileExists(atPath: $0.path) } == true,
+              "content search: the match opens the real file")
+        files.tree.debugClearFilter()
+        try? FileManager.default.removeItem(at: accented)
+
+        // Typing isn't reset by a changed-files refresh (another file changing).
+        let typed = repo.appendingPathComponent("src/typing.txt")
+        try? "line one\nline two\n".write(to: typed, atomically: true, encoding: .utf8)
+        files.open(typed)
+        await wait(0.5)
+        files.editor.debugType("XY", at: 4)
+        let caret = files.editor.debugCaret
+        files.editor.setScope(.uncommitted, files: ["/elsewhere/\(UUID().uuidString)"])
+        await wait(0.3)
+        check(files.editor.debugCaret == caret && files.editor.debugEditorText.hasPrefix("lineXY one"),
+              "a changed-list refresh leaves the text and caret where you're typing (caret \(files.editor.debugCaret), was \(caret))")
+
+        // Closing a dirty tab whose save fails keeps the tab (and the edits).
+        let locked = repo.appendingPathComponent("locked")
+        try? FileManager.default.createDirectory(at: locked, withIntermediateDirectories: true)
+        let lockedFile = locked.appendingPathComponent("ro.txt")
+        try? "keep me\n".write(to: lockedFile, atomically: true, encoding: .utf8)
+        files.open(lockedFile)
+        await wait(0.5)
+        files.editor.debugType("edit ", at: 0)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: locked.path)
+        files.editor.debugCloseCurrent()   // Save (answered by the automated run), which fails
+        check(files.editor.openURLs.contains(lockedFile) && files.editor.debugIsDirty,
+              "a tab whose save failed stays open with its edits")
+        try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: locked.path)
+        files.editor.debugCloseCurrent()   // now the save works
+        check(!files.editor.openURLs.contains(lockedFile)
+              && (try? String(contentsOf: lockedFile, encoding: .utf8)) == "edit keep me\n", "then it saves and closes")
+        try? FileManager.default.removeItem(at: locked)
+        try? FileManager.default.removeItem(at: typed)
     }
 
     /// Second launch after `files`: the Files pane comes back beside the session.

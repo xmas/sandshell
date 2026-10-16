@@ -11,7 +11,7 @@ final class OpenFile {
     var savedText: String
     var modified: Date?
     var mode: Mode
-    let isText: Bool
+    var isText: Bool
     var selection = NSRange(location: 0, length: 0)
     var isDirty: Bool { text != savedText }
 
@@ -315,6 +315,19 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
     var caretLineForTesting: Int { caretLine }
     var previewText: NSAttributedString? { preview.textStorage }
     var currentURL: URL? { current?.url }
+    var openURLs: [URL] { files.map(\.url) }
+    var debugIsDirty: Bool { current?.isDirty ?? false }
+    /// Type at the caret, as a person would.
+    func debugType(_ text: String, at location: Int) {
+        view.window?.makeFirstResponder(editor)
+        editor.setSelectedRange(NSRange(location: location, length: 0))
+        editor.insertText(text, replacementRange: editor.selectedRange())
+    }
+    var debugCaret: Int { editor.selectedRange().location }
+    var debugEditorText: String { editor.string }
+    func debugCloseCurrent() {
+        if let current, let i = files.firstIndex(where: { $0 === current }) { close(i) }
+    }
     func setMode(_ mode: OpenFile.Mode) {
         guard let file = current else { return }
         commitEditorText()
@@ -334,7 +347,15 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
         guard scope != self.scope || files != scopeFiles else { return }
         self.scope = scope
         scopeFiles = files
-        if let current { show(current) }
+        guard let current else { return }
+        // Refreshes arrive while you type (any file changing changes the list):
+        // a file being edited only gets its Changes button updated.
+        commitEditorText()
+        if current.mode == .source, current.isText, hasChanges(current.url) {
+            modeControl.setEnabled(true, forSegment: OpenFile.Mode.changes.rawValue)
+        } else {
+            show(current)
+        }
     }
 
     /// Open from the changed list: straight to its Changes when it has some.
@@ -375,6 +396,9 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
 
     private func reload(_ file: OpenFile) {
         let fresh = OpenFile(url: file.url)
+        // Now too big, or not UTF-8 text: Quick Look, never an empty editable copy.
+        file.isText = fresh.isText
+        if !fresh.isText { file.mode = .source }
         file.text = fresh.text
         file.savedText = fresh.text
         file.modified = fresh.modified
@@ -431,9 +455,20 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
 
         switch file.mode {
         case .source:
+            if file.isDirty, let onDisk = try? file.url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate,
+               onDisk != file.modified {
+                bannerLabel.stringValue = "\(file.url.lastPathComponent) changed on disk."
+                banner.isHidden = false
+            }
             editor.isEditable = true
-            editor.string = file.text
-            editor.setSelectedRange(file.selection)
+            // The same text already showing (a refresh): leave the caret,
+            // scroll and undo alone.
+            if editor.string != file.text || shownInEditor !== file {
+                editor.string = file.text
+                editor.setSelectedRange(file.selection)
+                editor.undoManager?.removeAllActions(withTarget: editor.textStorage as Any)
+            }
+            shownInEditor = file
             highlight()
             editorScroll.isHidden = false
             ruler.lineCountChanged()
@@ -844,7 +879,9 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
         let file = files[index]
         if file.isDirty {
             switch Alerts.saveChanges([file.url.lastPathComponent]) {
-            case .save: save(file)
+            case .save:
+                save(file)
+                if file.isDirty { return }   // the save failed (and said why): keep the tab
             case .cancel: return
             case .discard: break
             }
@@ -854,6 +891,9 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
     }
 
     // MARK: Editing
+
+    /// The file whose text is in `editor` now.
+    private weak var shownInEditor: OpenFile?
 
     private func commitEditorText() {
         guard let file = current, file.mode == .source, file.isText else { return }
@@ -899,6 +939,14 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
     }
 
     private func save(_ file: OpenFile) {
+        // Changed on disk since it was opened (an agent, while this tab sat in
+        // the background): don't overwrite that without asking.
+        let onDisk = try? file.url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
+        if let onDisk, onDisk != file.modified,
+           !Alerts.confirm("\(file.url.lastPathComponent) changed on disk since you opened it.",
+                           "Saving replaces that version with yours.", confirm: "Save Anyway", destructive: true) {
+            return
+        }
         do {
             try file.text.write(to: file.url, atomically: true, encoding: .utf8)
             file.savedText = file.text

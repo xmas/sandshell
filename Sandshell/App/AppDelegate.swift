@@ -302,7 +302,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             config.policy.selections = selections
         }
         config.configured = true   // skip the mount-config setup wizard
-        try? config.save(root: workspaceURL)
+        // An open window's controller holds this config in memory (its next
+        // save would put the old mounts back): it takes them itself.
+        let open = windows.compactMap(\.workspaceController)
+            .filter { $0.rootURL.standardizedFileURL.path == workspaceURL.standardizedFileURL.path }
+        if open.isEmpty {
+            try? config.save(root: workspaceURL)
+        } else {
+            for controller in open { controller.adoptPolicy(config.policy) }
+        }
 
         openWorkspace(workspaceURL)
     }
@@ -772,6 +780,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Snapshot the open windows for restore-on-launch, then freeze persistence so
     /// the windows closing during termination don't clear the saved set.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        // Unsaved file edits get their say first.
+        for controller in windows where !controller.confirmUnsavedFiles() { return .terminateCancel }
         OpenWindows.replace(with: windows.map { $0.root })
         isTerminating = true
         return .terminateNow

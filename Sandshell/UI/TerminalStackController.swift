@@ -263,6 +263,11 @@ final class SessionSurfaces {
     /// Sessions whose sandbox couldn't be brought up, with why: not retried
     /// until the user says so (a refresh used to relaunch — and fail — forever).
     var launchFailures: [UUID: String] = [:]
+    /// Sessions whose history is gone and the person chose not to start anew
+    /// (asked once; Try Again asks again).
+    var declinedRestores: Set<UUID> = []
+    /// The window closed: launches still waiting on a sandbox start nothing.
+    var isTornDown = false
     var searchWindows: [UUID: TerminalSearchWindowController] = [:]
     /// Whether some pane is showing the session (set by the pane tree).
     var isShown: (UUID) -> Bool = { _ in false }
@@ -295,6 +300,19 @@ final class SessionSurfaces {
     init(controller: WorkspaceController) {
         self.controller = controller
         backgroundTasks.start()
+        Self.all.add(self)
+    }
+
+    /// Every window's surfaces: a session runs in one window at a time.
+    private static let all = NSHashTable<SessionSurfaces>.weakObjects()
+
+    /// Another window (on the same folder) has this session running or
+    /// starting. Launching here too would reap that one's agent.
+    func isRunningElsewhere(_ id: UUID) -> Bool {
+        Self.all.allObjects.contains { other in
+            other !== self && !other.isTornDown
+                && (other.terminals[id] != nil || other.chats[id] != nil || other.pending.contains(id))
+        }
     }
 }
 
@@ -605,12 +623,14 @@ final class TerminalStackController: NSViewController {
         editSettingsPane = lower.contains("kit") ? .kits : lower.contains("mount") ? .mounts : .sandboxes
         editSettingsButton.title = editSettingsPane == .kits ? "Edit Kits…"
             : editSettingsPane == .mounts ? "Edit Mounts…" : "Sandbox Settings…"
+        editSettingsButton.isHidden = false
         failureActions.isHidden = false
     }
 
     @objc private func retryLaunch() {
         guard let id = shownSession else { return }
         surfaces.launchFailures[id] = nil
+        surfaces.declinedRestores.remove(id)
         refresh()
     }
 
@@ -915,9 +935,9 @@ final class TerminalStackController: NSViewController {
             self?.pruneClosed(); self?.refresh()
         }.store(in: &cancellables)
         controller.$activity.sink { [weak self] activity in
-            // A rebuild recreates containers, so the affected terminals' exec
-            // processes are dead — drop them so re-selecting relaunches.
-            if activity?.hasPrefix("Rebuilding") == true { self?.dropAllTerminals() }
+            // A rebuild recreates a container, so the exec processes of the
+            // sessions in it are dead — drop those so re-selecting relaunches.
+            if activity?.hasPrefix("Rebuilding") == true { self?.dropRebuildingSessions() }
             self?.refresh()
         }.store(in: &cancellables)
         controller.theme.$colors.dropFirst().sink { [weak self] c in self?.applyTheme(c) }
@@ -1382,30 +1402,41 @@ final class TerminalStackController: NSViewController {
         // every pane showing it once it's up (`surfaces.onLaunched`).
         if pending.contains(id) { return showStatus("Starting \(session.agent.displayName)…", busy: true) }
         guard terminals[id] == nil else { return }
+        if surfaces.isRunningElsewhere(id) { return showOpenElsewhere(session) }
 
         // Restore prior history: if this session ran before, resume that
         // conversation when its transcript still exists; if it's gone, ask
         // whether to start a new session instead.
         var resumeID: String? = nil
+        // Pending from here: the question below runs a modal loop, and a
+        // refresh during it (clearing the transcript id publishes) mustn't
+        // start a second launch.
+        pending.insert(id)
         if let tid = session.transcriptID {
             if TranscriptReader.transcriptExists(agent: session.agent, workdir: session.workdir,
                                                  home: controller.home, id: tid) {
                 resumeID = tid
-            } else if confirmStartFresh(session) {
+            } else if !surfaces.declinedRestores.contains(id), confirmStartFresh(session) {
                 controller.clearTranscriptID(id)
             } else {
-                return   // user declined; leave the session unopened
+                // Declined: say so here (not ask on every refresh); Try Again asks again.
+                pending.remove(id)
+                surfaces.declinedRestores.insert(id)
+                showStatus("“\(session.name)”’s \(session.agent.displayName) history is no longer available.", busy: false)
+                editSettingsButton.isHidden = true
+                failureActions.isHidden = false
+                return
             }
         }
 
-        pending.insert(id)
         showStatus(resumeID == nil ? "Starting \(session.agent.displayName)…"
                                    : "Restoring \(session.agent.displayName)…", busy: true)
 
         // Holds the pane until the terminal is up (its exit handler holds it weakly).
         Task { [self] in
             let containerName = await controller.ensureContainerReady(for: session.containerAgentKind)
-            pending.remove(id)
+            defer { pending.remove(id) }
+            guard !surfaces.isTornDown else { return }
             guard let containerName else {
                 let message = controller.lastError ?? "Failed to start the sandbox."
                 surfaces.launchFailures[id] = message
@@ -1433,6 +1464,8 @@ final class TerminalStackController: NSViewController {
                     sessionID: id.uuidString,
                     sbxProxyAuth: await SbxClient.shared.hasAnthropicSecret(sandbox: containerName))
             }
+            // Closed meanwhile (window, session), or started by another launch.
+            guard !surfaces.isTornDown, controller.session(id: id) != nil, terminals[id] == nil else { return }
             let terminal = TerminalSession(
                 sessionID: id, containerName: containerName, agent: session.agent,
                 workdir: session.workdir,
@@ -1448,6 +1481,10 @@ final class TerminalStackController: NSViewController {
 
             surfaces.onLaunched(id)
         }
+    }
+
+    private func showOpenElsewhere(_ session: Session) {
+        showStatus("“\(session.name)” is open in another window on this folder.", busy: false)
     }
 
     /// The session's prior history is gone — ask whether to start fresh.
@@ -1512,6 +1549,7 @@ final class TerminalStackController: NSViewController {
         let id = session.id
         if pending.contains(id) { return showStatus("Starting \(session.agent.displayName) chat…", busy: true) }
         guard chats[id] == nil else { return }
+        if surfaces.isRunningElsewhere(id) { return showOpenElsewhere(session) }
         pending.insert(id)
         showStatus("Starting \(session.agent.displayName) chat…", busy: true)
         Task { [weak self] in
@@ -1542,6 +1580,8 @@ final class TerminalStackController: NSViewController {
             let proxyAuth = await SbxClient.shared.hasAnthropicSecret(sandbox: containerName)
             let unavailable = await Self.missingCredential(for: current.agent, container: containerName,
                                                            home: controller.home)
+            // The window closed (or the session went) while the sandbox came up.
+            guard !surfaces.isTornDown, controller.session(id: id)?.isChat == true, chats[id] == nil else { return }
             let chat = ChatSession(title: current.agent.displayName, agent: current.agent,
                                    containerName: containerName,
                                    workdir: current.workdir, home: controller.home.path,
@@ -1743,21 +1783,23 @@ final class TerminalStackController: NSViewController {
     }
 
     func teardown() {
+        surfaces.isTornDown = true
         contextBar.stop()
         if let m = pasteEventMonitor { NSEvent.removeMonitor(m); pasteEventMonitor = nil }
         for wc in searchWindows.values { wc.close() }
         searchWindows.removeAll()
-        dropAllTerminals()
+        for id in Array(chats.keys) { closeChat(id) }
+        for id in Array(terminals.keys) { dropTerminal(id) }
     }
 
-    private func dropAllTerminals() {
-        for id in Array(chats.keys) { closeChat(id) }
-        for (id, terminal) in terminals {
-            terminal.view.removeFromSuperview()
-            terminal.cleanup()
-            runtime.terminalRemoved(id)
+    /// Sessions whose sandbox is being rebuilt (other sandboxes' keep running).
+    private func dropRebuildingSessions() {
+        func rebuilding(_ id: UUID) -> Bool {
+            guard let kind = controller.session(id: id)?.containerAgentKind else { return true }
+            return controller.containerPhases[kind] == .rebuilding
         }
-        terminals.removeAll()
+        for id in chats.keys.filter(rebuilding) { closeChat(id) }
+        for id in terminals.keys.filter(rebuilding) { dropTerminal(id) }
     }
 }
 
