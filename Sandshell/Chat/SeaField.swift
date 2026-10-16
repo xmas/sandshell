@@ -1,29 +1,33 @@
 import SwiftUI
 
 /// The empty chat's sea: a quiet band of sea creatures in black and white.
-/// Pass the pointer over them and the ones near it take on color and swim round
-/// it in a bubble for a moment, then drift home and fade back to gray. The
-/// field fills its whole frame (bubbles reach past the band to the pane's
-/// edges); the creatures rest in `band`. Nothing moves until then; under Reduce
-/// Motion they only color in.
+/// Move the pointer over them and the ones it passes color in and give a quick
+/// swish, while rings of water ripple out from under them and fade. Nothing
+/// stays: a moment later they're gray and still again. The field fills its
+/// whole frame so ripples never meet an edge; the creatures rest in `band`.
+/// Under Reduce Motion they only color in.
 struct SeaField: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
     /// Where the creatures rest, in this view's coordinates (up to `size`).
     var band: CGRect
-    /// Self-tests: start with a splash here, in band coordinates.
+    /// Self-tests: start as if the pointer passed here, in band coordinates.
     var initialSplash: CGPoint?
 
-    /// A bubble and the creatures it caught (each swims in one at a time).
-    private struct Splash { let point: CGPoint; let start: Date; let members: Set<Int> }
-    @State private var splashes: [Splash] = []
-    @State private var lastSpawn: CGPoint?
+    /// When each creature was last touched, and which way the pointer pushed it.
+    private struct Touch { let start: Date; let push: CGVector }
+    @State private var touches: [Int: Touch] = [:]
+    /// Rings of water spreading from under touched creatures.
+    private struct Ripple { let center: CGPoint; let start: Date; let size: Double }
+    @State private var ripples: [Ripple] = []
+    @State private var lastNow = Date()
 
     static let size = CGSize(width: 400, height: 168)
-    private static let swim: Double = 1.2      // seconds in the bubble
-    private static let settle: Double = 0.7    // back home and fading to gray
-    private static let reach: Double = 74      // how far the pointer reaches
-    private static let stride: Double = 36     // pointer travel between bubbles
+    private static let reach: Double = 46       // how near the pointer has to pass
+    private static let swish: Double = 0.55     // seconds of wiggle
+    private static let glow: Double = 1.4       // seconds of color, fading out at the end
+    private static let rippleLife: Double = 1.1
+    private static let cooldown: Double = 0.45  // before the same creature reacts again
 
     /// Where each creature rests, scattered over a loose grid (band coordinates).
     private struct Creature { let glyph: String; let home: CGPoint; let size: Double; let seed: Double }
@@ -46,21 +50,19 @@ struct SeaField: View {
         return out
     }()
 
-    private var animating: Bool { !splashes.isEmpty }
+    private var animating: Bool { !touches.isEmpty || !ripples.isEmpty }
 
     var body: some View {
         TimelineView(.animation(minimumInterval: 1 / 60, paused: !animating)) { timeline in
             Canvas { context, _ in draw(in: context, now: timeline.date) }
+                .onChange(of: timeline.date) { _, now in prune(now) }
         }
         .contentShape(Rectangle())
         .onContinuousHover(coordinateSpace: .local) { phase in
-            switch phase {
-            case .active(let point): hover(point)
-            case .ended: lastSpawn = nil
-            }
+            if case .active(let point) = phase { stir(at: point) }
         }
         .onAppear {
-            if let p = initialSplash { spawn(at: CGPoint(x: p.x + origin.x, y: p.y + origin.y), force: true) }
+            if let p = initialSplash { stir(at: CGPoint(x: p.x + origin.x, y: p.y + origin.y)) }
         }
         .accessibilityHidden(true)
     }
@@ -73,73 +75,69 @@ struct SeaField: View {
         CGPoint(x: origin.x + Self.creatures[i].home.x, y: origin.y + Self.creatures[i].home.y)
     }
 
-    /// A bubble wherever the pointer has travelled far enough since the last
-    /// one and finds creatures that aren't already swimming.
-    private func hover(_ point: CGPoint) {
-        if let last = lastSpawn, hypot(point.x - last.x, point.y - last.y) < Self.stride { return }
-        spawn(at: point, force: false)
+    /// The pointer passed `point`: creatures near it react (unless they just did).
+    private func stir(at point: CGPoint) {
+        let now = Date()
+        for i in Self.creatures.indices {
+            let h = home(i)
+            let dx = h.x - point.x, dy = h.y - point.y
+            let d = hypot(dx, dy)
+            guard d < Self.reach else { continue }
+            if let t = touches[i], now.timeIntervalSince(t.start) < Self.cooldown { continue }
+            let push = d > 0.5 ? CGVector(dx: dx / d, dy: dy / d) : CGVector(dx: 1, dy: 0)
+            touches[i] = Touch(start: now, push: push)
+            if !reduceMotion { ripples.append(Ripple(center: h, start: now, size: Self.creatures[i].size)) }
+        }
     }
 
-    private func spawn(at point: CGPoint, force: Bool) {
-        let busy = splashes.reduce(into: Set<Int>()) { $0.formUnion($1.members) }
-        let members = Set(Self.creatures.indices.filter {
-            !busy.contains($0) && hypot(home($0).x - point.x, home($0).y - point.y) < Self.reach
-        })
-        guard force || !members.isEmpty else { return }
-        lastSpawn = point
-        let s = Splash(point: point, start: Date(), members: members)
-        splashes.append(s)
-        DispatchQueue.main.asyncAfter(deadline: .now() + Self.swim + Self.settle + 0.05) {
-            splashes.removeAll { $0.start == s.start }
+    /// Drop what's finished, so the timeline pauses once the water is still.
+    private func prune(_ now: Date) {
+        if touches.contains(where: { now.timeIntervalSince($0.value.start) > Self.glow }) {
+            touches = touches.filter { now.timeIntervalSince($0.value.start) <= Self.glow }
+        }
+        if ripples.contains(where: { now.timeIntervalSince($0.start) > Self.rippleLife }) {
+            ripples.removeAll { now.timeIntervalSince($0.start) > Self.rippleLife }
         }
     }
 
     private func draw(in context: GraphicsContext, now: Date) {
         let dark = colorScheme == .dark
-        // Bubbles first, under the creatures swimming in them.
-        for s in splashes {
-            let age = now.timeIntervalSince(s.start)
-            guard age < Self.swim + 0.25 else { continue }
-            let grow = min(1, age / 0.25), pop = max(0, (age - Self.swim) / 0.25)
-            let r = Self.reach * (0.55 + 0.45 * Self.easeOut(grow)) * (1 + 0.15 * pop)
-            let bubble = Path(ellipseIn: CGRect(x: s.point.x - r, y: s.point.y - r, width: 2 * r, height: 2 * r))
-            let tint = Color(red: 0.35, green: 0.62, blue: 0.95)
-            context.fill(bubble, with: .radialGradient(
-                Gradient(colors: [tint.opacity(0.04 * (1 - pop)), tint.opacity(0.16 * (1 - pop))]),
-                center: s.point, startRadius: 0, endRadius: r))
-            context.stroke(bubble, with: .color(tint.opacity(0.45 * (1 - pop))), lineWidth: 1.2)
-            // A glint, as on a soap bubble.
-            let glint = Path(ellipseIn: CGRect(x: s.point.x - r * 0.55, y: s.point.y - r * 0.7, width: r * 0.3, height: r * 0.16))
-            context.fill(glint, with: .color(.white.opacity(0.5 * (1 - pop))))
+        let water = Color(red: 0.35, green: 0.62, blue: 0.95)
+        // Ripples under the creatures: two rings each, spreading and fading.
+        for r in ripples {
+            let t = now.timeIntervalSince(r.start) / Self.rippleLife
+            guard t >= 0, t < 1 else { continue }
+            for (k, lag) in [0.0, 0.22].enumerated() {
+                let u = t - lag
+                guard u > 0 else { continue }
+                let radius = r.size * 0.45 + Self.easeOut(u) * r.size * 1.6
+                let ring = Path(ellipseIn: CGRect(x: r.center.x - radius, y: r.center.y - radius * 0.45 + r.size * 0.35,
+                                                  width: 2 * radius, height: radius * 0.9))
+                let alpha = (1 - u) * (k == 0 ? 0.5 : 0.3)
+                context.stroke(ring, with: .color(water.opacity(alpha)), lineWidth: 1.4 * (1 - u) + 0.3)
+            }
         }
 
         for (i, c) in Self.creatures.enumerated() {
-            let rest = home(i)
-            var point = rest
-            var color = 0.0        // 0 = gray, 1 = full color
-            var heading = -1.0     // emoji face left; -1 = as drawn, 1 = mirrored
-            if let s = splashes.last(where: { $0.members.contains(i) }) {
-                let age = now.timeIntervalSince(s.start)
-                // Color in fast, hold, fade back out once home.
-                color = age < Self.swim ? min(1, age / 0.15) : max(0, 1 - (age - Self.swim) / Self.settle)
-                if !reduceMotion {
-                    // Into an orbit round the pointer, a lap or so, then home again.
-                    let orbit = Self.reach * (0.3 + 0.35 * c.seed)
-                    let start = atan2(rest.y - s.point.y, rest.x - s.point.x)
-                    let angle = start + age * (2.2 + c.seed) * (i % 2 == 0 ? 1 : -1)
-                    let target = CGPoint(x: s.point.x + cos(angle) * orbit, y: s.point.y + sin(angle) * orbit * 0.8)
-                    let into = Self.easeInOut(min(1, age / 0.35))
-                    let out = Self.easeInOut(max(0, min(1, (age - Self.swim) / Self.settle)))
-                    let mix = into * (1 - out)
-                    point = CGPoint(x: rest.x + (target.x - rest.x) * mix, y: rest.y + (target.y - rest.y) * mix)
-                    // Face the way it's swimming round.
-                    let vx = -sin(angle) * (i % 2 == 0 ? 1 : -1)
-                    if mix > 0.2 { heading = vx > 0 ? 1 : -1 }
+            var point = home(i)
+            var color = 0.0       // 0 = gray, 1 = full color
+            var tilt = 0.0
+            if let touch = touches[i] {
+                let age = now.timeIntervalSince(touch.start)
+                // Color in at once, hold, then fade back to gray.
+                color = age < Self.glow - 0.5 ? 1 : max(0, (Self.glow - age) / 0.5)
+                if !reduceMotion, age < Self.swish {
+                    // A quick swish away from the pointer and back: a damped wiggle.
+                    let k = age / Self.swish
+                    let wave = sin(k * .pi * 3) * (1 - k) * (1 - k)
+                    point.x += touch.push.dx * 5 * wave
+                    point.y += touch.push.dy * 3 * wave
+                    tilt = wave * (c.seed > 0.5 ? 0.22 : -0.22)
                 }
             }
             var g = context
             g.translateBy(x: point.x, y: point.y)
-            if heading > 0 { g.scaleBy(x: -1, y: 1) }
+            if tilt != 0 { g.rotate(by: .radians(tilt)) }
             if color < 1 {
                 // Gray at rest; color mixed back in by drawing over it.
                 var gray = g
@@ -149,13 +147,12 @@ struct SeaField: View {
             }
             if color > 0 {
                 g.opacity = color
-                g.draw(g.resolve(Text(c.glyph).font(.system(size: c.size * (1 + 0.15 * color)))), at: .zero)
+                g.draw(g.resolve(Text(c.glyph).font(.system(size: c.size))), at: .zero)
             }
         }
     }
 
     private static func easeOut(_ t: Double) -> Double { 1 - pow(1 - t, 3) }
-    private static func easeInOut(_ t: Double) -> Double { t < 0.5 ? 4 * t * t * t : 1 - pow(-2 * t + 2, 3) / 2 }
 }
 
 /// The empty chat: the sea's band above the prompt, the sea itself spread over

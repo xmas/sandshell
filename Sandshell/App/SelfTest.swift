@@ -1536,9 +1536,10 @@ enum SelfTest {
                 await wait(0.3)
                 check(abs(w.frame.height - 560) < 2, "the window shrinks to 560 pt (got \(Int(w.frame.height)))")
             }
+            ws.closeSession(s.id)   // leave the fixture as it was
         }
         for (name, look) in [("light", NSAppearance.Name.aqua), ("dark", .darkAqua)] {
-            for splash in [nil, CGPoint(x: 40, y: 20)] as [CGPoint?] {
+            for splash in [nil, CGPoint(x: 200, y: 84)] as [CGPoint?] {
                 let host = NSHostingView(rootView: SeaBackdrop(initialSplash: splash) {
                         Text("What should Claude work on?").font(.title3.weight(.medium)).foregroundStyle(.secondary)
                     }
@@ -1550,7 +1551,7 @@ enum SelfTest {
                 w.alphaValue = 0
                 w.contentView = host
                 w.orderBack(nil)
-                for (i, delay) in (splash == nil ? [0.3] : [0.25, 0.45, 0.45]).enumerated() {
+                for (i, delay) in (splash == nil ? [0.3] : [0.12, 0.2, 0.4, 1.4]).enumerated() {
                     await wait(delay)
                     snapshot(host, "sea-\(name)-\(splash == nil ? "rest" : "splash\(i)")")
                 }
