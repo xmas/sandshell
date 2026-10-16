@@ -128,14 +128,7 @@ final class KitConfigModel: ObservableObject {
 
     /// Pick a kit directory or .zip via a file panel.
     func browse() {
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = true
-        panel.allowsMultipleSelection = false
-        panel.allowedContentTypes = []   // any (directory or .zip)
-        panel.prompt = "Add Kit"
-        panel.message = "Choose a kit folder or .zip."
-        if panel.runModal() == .OK, let url = panel.url { add(url.path) }
+        if let url = NSOpenPanel.chooseKit(prompt: "Add Kit", message: "Choose a kit folder or .zip.") { add(url.path) }
     }
 
     /// Remove a kit from the app registry (and deselect it here).
@@ -208,14 +201,8 @@ struct KitConfigView: View {
             }
 
             Section {
-                HStack(spacing: 8) {
-                    Button("Choose Folder…") { model.browse() }
-                    TextField("Folder path, .zip, or OCI reference (docker.io/sbx/…)", text: $model.newRef)
-                        .textFieldStyle(.roundedBorder)
-                        .onSubmit { model.add(model.newRef) }
-                    Button("Add") { model.add(model.newRef) }
-                        .disabled(model.newRef.trimmingCharacters(in: .whitespaces).isEmpty)
-                }
+                KitRefAddRow(ref: $model.newRef, prompt: "Folder path, .zip, or OCI reference (docker.io/sbx/…)",
+                             onBrowse: model.browse, onAdd: { model.add($0) })
                 if let notice = model.notice {
                     Text(notice).font(.caption).foregroundStyle(.secondary)
                         .accessibilityIdentifier("kits-notice")

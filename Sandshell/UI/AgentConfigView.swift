@@ -71,13 +71,10 @@ final class AgentConfigModel: ObservableObject {
     }
 
     func browse() {
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = true
-        panel.allowsMultipleSelection = false
-        panel.prompt = "Add Agent"
-        panel.message = "Choose an agent kit folder or .zip (spec.yaml with kind: sandbox)."
-        if panel.runModal() == .OK, let url = panel.url { add(url.path) }
+        if let url = NSOpenPanel.chooseKit(prompt: "Add Agent",
+                                           message: "Choose an agent kit folder or .zip (spec.yaml with kind: sandbox).") {
+            add(url.path)
+        }
     }
 }
 
@@ -106,18 +103,8 @@ struct AgentConfigView: View {
             }
 
             Section {
-                HStack(spacing: 8) {
-                    Button("Choose Folder…") { model.browse() }.disabled(model.adding)
-                    TextField("Kit reference", text: $model.newRef,
-                              prompt: Text("Kit folder, .zip, git+https://… or OCI reference"))
-                        .labelsHidden()
-                        .textFieldStyle(.roundedBorder)
-                        .onSubmit { model.add(model.newRef) }
-                    if model.adding { ProgressView().controlSize(.small) }
-                    Button("Add") { model.add(model.newRef) }
-                        .disabled(model.adding || model.newRef.trimmingCharacters(in: .whitespaces).isEmpty)
-                        .accessibilityIdentifier("agents-add")
-                }
+                KitRefAddRow(ref: $model.newRef, prompt: "Kit folder, .zip, git+https://… or OCI reference",
+                             busy: model.adding, addID: "agents-add", onBrowse: model.browse, onAdd: { model.add($0) })
                 if let error = model.error {
                     Text(error).font(.caption).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
                 }
