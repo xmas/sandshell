@@ -758,6 +758,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Sessions' processes in the sandboxes outlive the app unless reaped.
     func applicationWillTerminate(_ notification: Notification) {
         for window in windows { window.prepareForQuit() }
+        ACPSparePool.shared.drain()
         SbxClient.waitForReaps(timeout: 2)
     }
 

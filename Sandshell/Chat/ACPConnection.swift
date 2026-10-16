@@ -94,6 +94,12 @@ final class ACPConnection: @unchecked Sendable {
         write(["jsonrpc": "2.0", "id": id, "error": ["code": .number(Double(code)), "message": .string(message)]])
     }
 
+    /// The agent process is up and its pipes open.
+    var isRunning: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return !isClosed && process.isRunning
+    }
+
     func terminate() {
         try? stdinPipe.fileHandleForWriting.close()
         if process.isRunning { process.terminate() }

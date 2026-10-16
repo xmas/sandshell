@@ -15,6 +15,9 @@ enum ChatItem: Identifiable, Equatable {
     /// Display only (the transcript view makes these): a run of consecutive
     /// tool calls, shown as one "Ran 3 commands ›" line.
     case toolGroup([ToolCall])
+    /// The files a turn changed (Claude's checkpoints), with Undo; `restored`
+    /// once they've been put back.
+    case fileChanges(turn: String, paths: [String], restored: Bool)
 
     var id: String {
         switch self {
@@ -26,6 +29,7 @@ enum ChatItem: Identifiable, Equatable {
         case .notice(let id, _, _): return "notice-\(id)"
         case .image(let id, _): return "image-\(id)"
         case .toolGroup(let calls): return "group-\(calls.first?.id ?? "")"
+        case .fileChanges(let turn, _, _): return "changes-\(turn)"
         }
     }
 
@@ -145,7 +149,11 @@ final class ChatSession: ObservableObject {
     private let unavailable: String?
     private var resumeID: String?
     private let sbxProxyAuth: Bool
-    private let tag: SbxCommand.ProcessTag
+    /// Seconds from launch to ready, and whether it started from a warm spare.
+    private(set) var readyAfter: TimeInterval?
+    private(set) var startedWarm = false
+    /// Tags the agent's processes for reaping (a claimed spare brings its own).
+    private var tag: SbxCommand.ProcessTag
     private let containerName: String
     /// Host path of the session's working directory (mounted at the same path).
     let workdir: String
@@ -226,12 +234,22 @@ final class ChatSession: ObservableObject {
             phase = .closed("\(title) can’t run as a chat (no ACP support).")
             return
         }
-        let conn = ACPConnection(executable: PathFixer.sbxPath(), arguments: args)
-        connection = conn
-        do { try conn.start() } catch {
-            phase = .closed("Couldn’t launch sbx: \(error.localizedDescription)")
-            return
+        // A warm spare for the same sandbox, folder and settings, if one's ready
+        // — for new conversations only: a spare started before another app
+        // wrote to a conversation can load a stale copy of it.
+        let spare = resumeID == nil ? ACPSparePool.shared.claim(args) : nil
+        let conn: ACPConnection
+        if let spare {
+            conn = spare.connection
+            tag = spare.tag
+        } else {
+            conn = ACPConnection(executable: PathFixer.sbxPath(), arguments: args)
+            do { try conn.start() } catch {
+                phase = .closed("Couldn’t launch sbx: \(error.localizedDescription)")
+                return
+            }
         }
+        connection = conn
         let auth = agent == .claude ? (sbxProxyAuth ? "sbx proxy" : "~/.claude credentials") : "sbx proxy"
         Log.info(.sbx, "chat: launched \(agent.rawValue) ACP agent in “\(containerName)” at \(workdir) (auth: \(auth))")
         let launchedAt = Date()
@@ -240,10 +258,7 @@ final class ChatSession: ObservableObject {
         }
         Task {
             do {
-                _ = try await conn.request("initialize", [
-                    "protocolVersion": 1,
-                    "clientCapabilities": ["fs": ["readTextFile": false, "writeTextFile": false], "terminal": false],
-                ])
+                if spare == nil { _ = try await conn.request("initialize", Self.initializeParams) }
                 let result = try await openSession(conn)
                 applyModes(result["modes"])
                 // New conversations start in Auto where the agent offers it;
@@ -270,8 +285,12 @@ final class ChatSession: ObservableObject {
                     }
                 }
                 if let sid = sessionID { onSessionID?(sid) }
-                Log.info(.sbx, String(format: "chat: %@ ready %.1fs after launch", agent.rawValue, Date().timeIntervalSince(launchedAt)))
+                readyAfter = Date().timeIntervalSince(launchedAt)
+                startedWarm = spare != nil
+                Log.info(.sbx, String(format: "chat: %@ ready %.1fs after launch%@", agent.rawValue,
+                                      Date().timeIntervalSince(launchedAt), spare != nil ? " (warm)" : ""))
                 phase = .ready
+                warmSpare()
                 startFollowing()
                 if let (text, attachments) = queued {
                     queued = nil
@@ -353,6 +372,27 @@ final class ChatSession: ObservableObject {
         return result
     }
 
+    /// We declare two of the JetBrains AIR extensions the Claude adapter
+    /// implements: background-task updates (to list and stop them) and per-turn
+    /// file-change reports (which also turn on Claude Code's file checkpoints,
+    /// what Undo rewinds to). Other agents ignore the `_meta`.
+    static let initializeParams: JSONValue = [
+        "protocolVersion": 1,
+        "clientCapabilities": [
+            "fs": ["readTextFile": false, "writeTextFile": false], "terminal": false,
+            "_meta": ["jetbrains": ["air": ["version": 1, "capabilities": ["asyncTasks", "agentFileChangeReport"]]]],
+        ],
+    ]
+
+    /// Have the next chat like this one start warm.
+    private func warmSpare() {
+        let spareTag = SbxCommand.ProcessTag(session: UUID())
+        guard !isClosed, let args = SbxCommand.acpArguments(
+            agent: agent, containerName: containerName, workdir: workdir, home: home, mcpURL: mcpURL,
+            sbxProxyAuth: sbxProxyAuth, tag: spareTag, claudeModel: agent == .claude ? launchModel : nil) else { return }
+        ACPSparePool.shared.warm(args, tag: spareTag, container: containerName)
+    }
+
     func close() {
         isClosed = true
         stopFollowing()
@@ -396,9 +436,18 @@ final class ChatSession: ObservableObject {
             }
         }
         phase = .running
+        var params: JSONValue = ["sessionId": .string(sid), "prompt": .array(blocks)]
+        if agent == .claude {
+            // Ask for the turn's file-change report, keyed by our own id.
+            let turn = "t" + UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
+            turns[turn] = Turn(id: turn, prompt: trimmed)
+            params = ["sessionId": .string(sid), "prompt": .array(blocks),
+                      "_meta": ["jetbrains": ["air": ["version": 1,
+                                "agentFileChangeReportRequest": ["version": 1, "requestId": .string(turn)]]]]]
+        }
         Task {
             do {
-                let result = try await conn.request("session/prompt", ["sessionId": .string(sid), "prompt": .array(blocks)])
+                let result = try await conn.request("session/prompt", params)
                 if let reason = result["stopReason"]?.string, reason != "end_turn" {
                     notice("Stopped: \(reason)", isError: false)
                 }
@@ -493,6 +542,150 @@ final class ChatSession: ObservableObject {
         guard let conn = connection, let sid = sessionID else { return }
         currentMode = id
         Task { _ = try? await conn.request("session/set_mode", ["sessionId": .string(sid), "modeId": .string(id)]) }
+    }
+
+    // MARK: Turns: Undo (rewind), background tasks, MCP — Claude, via the adapter wrapper
+
+    /// One prompt we sent: our file-report id, its text (to find its uuid in
+    /// the transcript, which is what Claude Code rewinds to).
+    struct Turn { let id: String; let prompt: String; var uuid: String? }
+    private var turns: [String: Turn] = [:]
+
+    /// A background task the agent reported (shell, subagent, monitor).
+    struct BackgroundTaskState: Equatable {
+        let id: String
+        var name = ""
+        var description = ""
+        var state = "running"
+        var summary = ""
+        var canStop = false
+        var isRunning: Bool { !["completed", "failed", "stopped", "killed", "cancelled"].contains(state) }
+    }
+    @Published private(set) var backgroundTasks: [String: BackgroundTaskState] = [:]
+
+    /// An MCP server as Claude Code sees it in this session.
+    struct MCPServer: Equatable, Identifiable {
+        var name: String
+        var status: String          // connected | failed | needs-auth | pending | disabled
+        var error: String?
+        var scope: String?
+        var source: String?
+        var detail: String?         // command or URL
+        var version: String?
+        var tools: [String]
+        var id: String { name }
+    }
+    @Published private(set) var mcpServers: [MCPServer]?
+
+    struct RewindResult { var canRewind: Bool; var error: String?; var files: [String]; var insertions: Int; var deletions: Int }
+
+    /// Whether this chat has the wrapper's extras (Undo, MCP).
+    var hasExtras: Bool { agent == .claude }
+
+    /// One request to the adapter wrapper (see `SbxCommand.claudeACPWrapper`).
+    private func extra(_ request: [String: JSONValue]) async throws -> JSONValue {
+        guard let conn = connection, let sid = sessionID else { throw ExtraError("The chat isn’t connected.") }
+        let json = try JSONEncoder().encode(JSONValue.object(request))
+        let b64 = json.base64EncodedString().replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
+        let result = try await conn.request("_session/async_task/stop",
+                                            ["sessionId": .string(sid), "asyncTaskId": .string("sandshell:" + b64)])
+        return result["_meta"]?["sandshell"] ?? .null
+    }
+    struct ExtraError: LocalizedError {
+        let message: String
+        init(_ m: String) { message = m }
+        var errorDescription: String? { message }
+    }
+
+    /// Stop a background task (the adapter's own request).
+    func stopBackgroundTask(_ id: String) async -> Bool {
+        guard let conn = connection, let sid = sessionID else { return false }
+        let result = try? await conn.request("_session/async_task/stop",
+                                             ["sessionId": .string(sid), "asyncTaskId": .string(id)])
+        let stopped = result?["stopped"]?.bool ?? false
+        if stopped, var task = backgroundTasks[id] { task.state = "stopped"; backgroundTasks[id] = task }
+        return stopped
+    }
+
+    /// What undoing `turn` would put back (nothing changes yet).
+    func previewRewind(_ turn: String) async throws -> RewindResult {
+        try await rewind(turn, dryRun: true)
+    }
+
+    /// Put the files `turn` changed back as they were before it.
+    func rewind(_ turn: String) async throws -> RewindResult {
+        let result = try await rewind(turn, dryRun: false)
+        if result.canRewind, case .fileChanges(turn, let paths, _)? = items.first(where: { $0.id == "changes-\(turn)" }) {
+            upsert(.fileChanges(turn: turn, paths: paths, restored: true))
+        }
+        return result
+    }
+
+    private func rewind(_ turn: String, dryRun: Bool) async throws -> RewindResult {
+        guard let uuid = await promptUUID(turn) else {
+            throw ExtraError("Couldn’t find that message in the conversation’s transcript.")
+        }
+        let r = try await extra(["op": "rewind", "uuid": .string(uuid), "dryRun": .bool(dryRun)])
+        return RewindResult(canRewind: r["canRewind"]?.bool ?? false, error: r["error"]?.string,
+                            files: r["filesChanged"]?.array?.compactMap(\.string) ?? [],
+                            insertions: r["insertions"]?.int ?? 0, deletions: r["deletions"]?.int ?? 0)
+    }
+
+    /// The transcript's uuid for the prompt of `turn` (the adapter stamps each
+    /// prompt with one; Claude Code checkpoints files per prompt uuid).
+    private func promptUUID(_ turn: String) async -> String? {
+        guard var t = turns[turn], let sid = sessionID else { return nil }
+        if let uuid = t.uuid { return uuid }
+        let url = URL(fileURLWithPath: home)
+            .appendingPathComponent(".claude/projects/\(TranscriptReader.claudeEncodedDir(for: workdir))/\(sid).jsonl")
+        let taken = Set(turns.values.compactMap(\.uuid))
+        let prompt = t.prompt
+        let uuid = await Task.detached(priority: .utility) { () -> String? in
+            guard let text = try? String(contentsOf: url, encoding: .utf8) else { return nil }
+            var found: String?
+            for line in text.split(separator: "\n") where line.contains("\"type\":\"user\"") {
+                guard let o = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
+                      o["isMeta"] as? Bool != true, let id = o["uuid"] as? String, !taken.contains(id),
+                      let message = o["message"] as? [String: Any] else { continue }
+                let content: String
+                if let s = message["content"] as? String { content = s }
+                else if let blocks = message["content"] as? [[String: Any]] {
+                    content = blocks.compactMap { $0["type"] as? String == "text" ? $0["text"] as? String : nil }.joined(separator: "\n")
+                } else { continue }
+                if content.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix(String(prompt.prefix(200))) { found = id }
+            }
+            return found
+        }.value
+        t.uuid = uuid
+        turns[turn] = t
+        return uuid
+    }
+
+    /// Ask Claude Code which MCP servers this session has, and how they're doing.
+    func refreshMCP() async throws {
+        mcpServers = Self.mcpServers(try await extra(["op": "mcpStatus"]))
+    }
+
+    func reconnectMCP(_ name: String) async throws {
+        mcpServers = Self.mcpServers(try await extra(["op": "mcpReconnect", "name": .string(name)]))
+    }
+
+    func setMCP(_ name: String, enabled: Bool) async throws {
+        mcpServers = Self.mcpServers(try await extra(["op": "mcpToggle", "name": .string(name), "enabled": .bool(enabled)]))
+    }
+
+    static func mcpServers(_ value: JSONValue) -> [MCPServer] {
+        (value.array ?? []).compactMap { s in
+            guard let name = s["name"]?.string else { return nil }
+            let config = s["config"]
+            let detail = config?["url"]?.string
+                ?? config?["command"]?.string.map { ([$0] + (config?["args"]?.array?.compactMap(\.string) ?? [])).joined(separator: " ") }
+            return MCPServer(name: name, status: s["status"]?.string ?? "pending", error: s["error"]?.string,
+                             scope: s["scope"]?.string, source: s["source"]?.string, detail: detail,
+                             version: s["serverInfo"]?["version"]?.string,
+                             tools: s["tools"]?.array?.compactMap { $0["name"]?.string } ?? [])
+        }
     }
 
     // MARK: Following other writers
@@ -745,6 +938,22 @@ final class ChatSession: ObservableObject {
             } else {
                 items.append(.user(id: UUID(), text: text, attachments: []))
             }
+        case "session_info_update":
+            // A turn's file-change report (AIR): which files it changed.
+            if let report = u["_meta"]?["jetbrains"]?["air"]?["agentFileChangeReport"],
+               report["status"]?.string == "reported", let turn = report["requestId"]?.string,
+               let paths = report["paths"]?.array?.compactMap(\.string), !paths.isEmpty {
+                upsert(.fileChanges(turn: turn, paths: paths, restored: false))
+            }
+        case "async_task_spawned", "async_task_progress", "async_task_state_update":
+            guard let id = u["asyncTaskId"]?.string else { return }
+            var task = backgroundTasks[id] ?? BackgroundTaskState(id: id)
+            if let v = u["name"]?.string { task.name = v }
+            if let v = u["description"]?.string { task.description = v }
+            if let v = u["canStop"]?.bool { task.canStop = v }
+            if let v = u["state"]?.string { task.state = v }
+            if let v = u["summary"]?.string { task.summary = v }
+            backgroundTasks[id] = task
         case "usage_update":
             if let model = u["_meta"]?["_claude/model"]?.string { liveModel = model }
             if let used = u["used"]?.int, let size = u["size"]?.int {
