@@ -130,11 +130,25 @@ struct ClaudeTranscriptTail {
         guard let fh = try? FileHandle(forReadingFrom: url) else { return nil }
         defer { try? fh.close() }
         guard let size = try? fh.seekToEnd(), size > offset else { return nil }
-        try? fh.seek(toOffset: offset)
-        guard let data = try? fh.readToEnd(), let lastNewline = data.lastIndex(of: 0x0A) else { return nil }
+        // Start on a line boundary: after an in-place rewrite (Claude's
+        // cost-state line) the offset can land mid-line, even mid-character.
+        let start = offset > 0 ? offset - 1 : 0
+        try? fh.seek(toOffset: start)
+        guard var data = try? fh.readToEnd() else { return nil }
+        if offset > 0 {
+            guard let first = data.first else { return nil }
+            if first == 0x0A {
+                data = data.dropFirst()
+            } else {
+                // Mid-line: drop the rest of that line.
+                guard let nl = data.firstIndex(of: 0x0A) else { return nil }
+                data = data[data.index(after: nl)...]
+            }
+        }
+        guard let lastNewline = data.lastIndex(of: 0x0A) else { return nil }
         let complete = data[data.startIndex...lastNewline]
-        guard let text = String(data: complete, encoding: .utf8) else { return nil }
-        return (text, offset + UInt64(complete.count))
+        // (Indices count from `start`: slices keep the read's own.)
+        return (String(decoding: complete, as: UTF8.self), start + UInt64(lastNewline + 1))
     }
 
     /// The file's inode, to notice it being replaced rather than appended to.

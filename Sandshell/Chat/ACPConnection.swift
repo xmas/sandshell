@@ -49,6 +49,9 @@ final class ACPConnection: @unchecked Sendable {
     }
 
     func start() throws {
+        // A write after the agent exited (an Allow click as it dies) must fail,
+        // not SIGPIPE the app.
+        _ = fcntl(stdinPipe.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1)
         try process.run()
         let out = stdoutPipe.fileHandleForReading.fileDescriptor
         let err = stderrPipe.fileHandleForReading.fileDescriptor

@@ -555,24 +555,36 @@ actor SbxClient {
     /// Kill a session's processes inside its sandbox (by `SbxCommand.ProcessTag`
     /// env), since they outlive the host-side `sbx exec`. Fire-and-forget from
     /// sync teardown paths; `waitForReaps` lets app quit give them a moment.
-    nonisolated static func reapSessionProcesses(container: String, match: String, immediate: Bool = false) {
+    @discardableResult
+    nonisolated static func reapSessionProcesses(container: String, match: String, immediate: Bool = false) -> Process? {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: PathFixer.sbxPath())
         p.arguments = ["exec", container, "sh", "-c", SbxCommand.reapScript(match: match, immediate: immediate)]
         p.standardInput = FileHandle.nullDevice
         p.standardOutput = FileHandle.nullDevice
         p.standardError = FileHandle.nullDevice
-        do { try p.run() } catch { return }
+        do { try p.run() } catch { return nil }
         reaps.withLock { $0.append(p) }
+        return p
     }
 
     /// Same, awaited — used before (re)launching a session so leftovers from a
-    /// crash/kill can't share its conversation with the new process.
-    nonisolated static func reapSessionProcessesAndWait(container: String, match: String, immediate: Bool = false) async {
+    /// crash/kill can't share its conversation with the new process. Waits for
+    /// this reap itself (a slow `sbx exec` included): one still scanning after
+    /// the relaunch would kill the new process too, if it matches it. Past
+    /// `timeout` the reap is stopped rather than left to land late.
+    nonisolated static func reapSessionProcessesAndWait(container: String, match: String, immediate: Bool = false,
+                                                        timeout: TimeInterval = 45) async {
         await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
             DispatchQueue.global().async {
-                reapSessionProcesses(container: container, match: match, immediate: immediate)
-                waitForReaps(timeout: 5)
+                if let p = reapSessionProcesses(container: container, match: match, immediate: immediate) {
+                    let deadline = Date().addingTimeInterval(timeout)
+                    while p.isRunning, Date() < deadline { Thread.sleep(forTimeInterval: 0.05) }
+                    if p.isRunning {
+                        Log.error(.sbx, "reap in \(container) still running after \(Int(timeout))s; stopping it")
+                        p.terminate()
+                    }
+                }
                 done.resume()
             }
         }

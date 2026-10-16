@@ -1458,6 +1458,17 @@ enum SelfTest {
         check(batch.events.count == 4, "parse: prompt, tool use, tool result, reply (got \(batch.events.count))")
         check(batch.events.first == .user("hello there"), "parse: the prompt, not the wrappers")
         check(batch.working == false && batch.entrypoint == "claude-desktop", "parse: turn finished, written by the Claude app")
+        // Reading from mid-line (even mid-character, after an in-place rewrite)
+        // skips to the next whole line instead of getting stuck.
+        let tailFile = FileManager.default.temporaryDirectory.appendingPathComponent("sandshell-tail-\(UUID().uuidString).jsonl")
+        try? Data("{\"a\":\"x—y\"}\n{\"b\":1}\n".utf8).write(to: tailFile)
+        let mid = ClaudeTranscriptTail.readLines(tailFile, from: 9)   // inside "—"
+        check(mid?.0 == "{\"b\":1}\n" && mid?.1 == ClaudeTranscriptTail.fileSize(tailFile),
+              "tail: a read from mid-character skips to the next line (\(String(describing: mid)))")
+        let whole = ClaudeTranscriptTail.readLines(tailFile, from: 0)
+        let edge = ClaudeTranscriptTail.readLines(tailFile, from: UInt64("{\"a\":\"x—y\"}\n".utf8.count))
+        check(whole?.0.split(separator: "\n").count == 2 && edge?.0 == "{\"b\":1}\n", "tail: line-boundary reads are whole")
+        try? FileManager.default.removeItem(at: tailFile)
         let own = ClaudeTranscriptTail.parse(
             #"{"type":"user","entrypoint":"sdk-ts","message":{"role":"user","content":"<task-notification>done</task-notification>"}}"#,
             skippingEntrypoint: "sdk-ts")

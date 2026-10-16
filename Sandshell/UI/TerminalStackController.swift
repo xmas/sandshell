@@ -237,6 +237,16 @@ private final class TerminalRuntimeController {
 /// shows the terminal; other sessions persist hidden in the background. While a
 /// container builds/rebuilds, a centered spinner + status is shown instead.
 
+/// Something to put into a session's chat once it's open: text and files for
+/// the composer, or (send) a message to send — with any attachments, pasted
+/// images included, that a message queued in an earlier chat carried.
+struct ChatDraft {
+    var text: String
+    var urls: [URL]
+    var attachments: [ChatAttachment] = []
+    var send: Bool
+}
+
 /// A window's live session surfaces (terminals, chats, launches, drafts and
 /// the activity watcher), shared by its panes — so a session keeps running
 /// when it moves between panes, and each session runs once per window.
@@ -245,7 +255,7 @@ final class SessionSurfaces {
     let controller: WorkspaceController
     var terminals: [UUID: TerminalSession] = [:]
     var chats: [UUID: ChatSessionView] = [:]
-    var drafts: [UUID: (text: String, urls: [URL], send: Bool)] = [:]
+    var drafts: [UUID: ChatDraft] = [:]
     var pending: Set<UUID> = []
     /// A closed chat's process tag, when it isn't the session's own (a warm
     /// spare's): reaped before the session launches again.
@@ -310,7 +320,7 @@ final class TerminalStackController: NSViewController {
         set { surfaces.chats = newValue }
     }
     /// Drafts for chats still starting (Services, Shortcuts).
-    private var drafts: [UUID: (text: String, urls: [URL], send: Bool)] {
+    private var drafts: [UUID: ChatDraft] {
         get { surfaces.drafts }
         set { surfaces.drafts = newValue }
     }
@@ -1576,7 +1586,7 @@ final class TerminalStackController: NSViewController {
             chat.start()
             surfaces.onLaunched(id)
             if let draft = drafts.removeValue(forKey: id) {
-                view.applyDraft(text: draft.text, urls: draft.urls, send: draft.send)
+                view.applyDraft(text: draft.text, urls: draft.urls, attachments: draft.attachments, send: draft.send)
             }
         }
     }
@@ -1606,7 +1616,7 @@ final class TerminalStackController: NSViewController {
     /// Put a draft into the session's chat — now if it's open, else when it starts.
     func queueDraft(_ text: String, urls: [URL], send: Bool, for id: UUID) {
         if let chat = chats[id] { chat.applyDraft(text: text, urls: urls, send: send) }
-        else { drafts[id] = (text, urls, send) }
+        else { drafts[id] = ChatDraft(text: text, urls: urls, send: send) }
     }
 
     private func showChat(_ id: UUID, _ chat: ChatSessionView) {
@@ -1676,8 +1686,12 @@ final class TerminalStackController: NSViewController {
         guard let chat = chats.removeValue(forKey: id) else { return }
         // A message queued behind its turn is kept for the session's next chat
         // (a reconnect sends it) instead of vanishing.
-        if let waiting = chat.session.takeQueued(), surfaces.drafts[id] == nil {
-            surfaces.drafts[id] = (waiting.text, waiting.files, true)
+        if let waiting = chat.session.takeQueued() {
+            var draft = surfaces.drafts[id] ?? ChatDraft(text: "", urls: [], send: true)
+            draft.text = [waiting.text, draft.text].filter { !$0.isEmpty }.joined(separator: "\n\n")
+            draft.attachments = waiting.attachments + draft.attachments
+            draft.send = true
+            surfaces.drafts[id] = draft
         }
         let wasWorking = chat.session.phase == .running
         chat.session.close()

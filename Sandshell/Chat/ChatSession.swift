@@ -167,6 +167,10 @@ final class ChatSession: ObservableObject {
     var processMatch: String { tag.pairs[1] }
     /// Tags the agent's processes for reaping (a claimed spare brings its own).
     private var tag: SbxCommand.ProcessTag
+    /// The session's own id (`tag` is a warm spare's once one is claimed).
+    private let ownSessionID: UUID
+    /// A fresh launch tag for a relaunch, so a reap of the last launch can't reach it.
+    private func newLaunchTag() { tag = SbxCommand.ProcessTag(session: ownSessionID) }
     private let containerName: String
     /// Host path of the session's working directory (mounted at the same path).
     let workdir: String
@@ -222,6 +226,7 @@ final class ChatSession: ObservableObject {
         self.agent = agent
         self.unavailable = unavailable
         self.tag = SbxCommand.ProcessTag(session: sessionID)
+        self.ownSessionID = sessionID
         self.sbxProxyAuth = sbxProxyAuth
         self.resumeID = resumeID
         self.containerName = containerName
@@ -288,6 +293,8 @@ final class ChatSession: ObservableObject {
                     self.connection = nil
                     conn.terminate()
                     let container = self.containerName, match = self.tag.pairs[1]
+                    // The relaunch gets its own launch tag, so this reap can't reach it.
+                    self.newLaunchTag()
                     await SbxClient.reapSessionProcessesAndWait(container: container, match: match)
                     self.start()
                     return
@@ -333,6 +340,10 @@ final class ChatSession: ObservableObject {
                 }
                 // Closed (or relaunched) while it was starting: it isn't ours any more.
                 guard !isClosed, connection === conn else { conn.terminate(); return }
+                // Died during the optional requests above (they only log): the
+                // exit path says so; a waiting message stays queued for a reconnect.
+                if case .closed = phase { return }
+                guard conn.isRunning else { return }
                 if catchUpMissedTurn() { return }
                 if let sid = sessionID { onSessionID?(sid) }
                 readyAfter = Date().timeIntervalSince(launchedAt)
@@ -510,16 +521,17 @@ final class ChatSession: ObservableObject {
                    let next = codexFallbackModel(after: said), !isClosed, connection === conn {
                     codexRetries += 1
                     let refused = currentModel.map(Self.modelBase) ?? "That model"
-                    items.removeAll { $0.id == ChatItem.agentText(id: id, text: "").id }
-                    if case .user? = items.last { items.removeLast() }
-                    var run = codexNotice ?? (UUID(), [])
-                    run.refused.append(refused)
-                    codexNotice = run
-                    let names = run.refused.count == 1 ? run.refused[0]
-                        : run.refused.dropLast().joined(separator: ", ") + " and " + run.refused.last!
-                    upsert(.notice(id: run.id, text: "\(names) \(run.refused.count == 1 ? "isn’t" : "aren’t") available "
-                                   + "with a ChatGPT sign-in — using \(Self.modelBase(next)).", isError: false))
-                    if await switchModel(next) {
+                    // Switch first: if that fails, the refusal and the prompt stay as they are.
+                    if await switchModel(next), !isClosed, connection === conn {
+                        items.removeAll { $0.id == ChatItem.agentText(id: id, text: "").id }
+                        if case .user? = items.last { items.removeLast() }
+                        var run = codexNotice ?? (UUID(), [])
+                        run.refused.append(refused)
+                        codexNotice = run
+                        let names = run.refused.count == 1 ? run.refused[0]
+                            : run.refused.dropLast().joined(separator: ", ") + " and " + run.refused.last!
+                        upsert(.notice(id: run.id, text: "\(names) \(run.refused.count == 1 ? "isn’t" : "aren’t") available "
+                                       + "with a ChatGPT sign-in — using \(Self.modelBase(next)).", isError: false))
                         UserDefaults.standard.set(next, forKey: Self.codexModelKey)
                         retryingTurn = true
                         phase = .ready
@@ -567,10 +579,10 @@ final class ChatSession: ObservableObject {
     }
     private var queued: (String, [ChatAttachment])? { didSet { hasQueued = queued != nil } }
     /// Hand over the message waiting to be sent (a reconnect carries it over).
-    func takeQueued() -> (text: String, files: [URL])? {
+    func takeQueued() -> (text: String, attachments: [ChatAttachment])? {
         guard let (text, attachments) = queued else { return nil }
         queued = nil
-        return (text, attachments.compactMap { if case .file(let url) = $0.kind { url } else { nil } })
+        return (text, attachments)
     }
 
     /// A message is waiting for the turn (or the start) to finish.
@@ -580,7 +592,16 @@ final class ChatSession: ObservableObject {
     /// start); false when the chat can't take it (closed), so the draft stays.
     func submit(text: String, attachments: [ChatAttachment]) -> Bool {
         switch phase {
-        case .ready: send(text: text, attachments: attachments); return true
+        case .ready:
+            // A message still waiting to go (its drain is a tick behind) goes
+            // first, with this one after it in the same prompt.
+            if let (earlier, files) = queued {
+                queued = nil
+                send(text: [earlier, text].filter { !$0.isEmpty }.joined(separator: "\n\n"), attachments: files + attachments)
+            } else {
+                send(text: text, attachments: attachments)
+            }
+            return true
         case .running, .starting: sendWhenReady(text: text, attachments: attachments); return true
         case .closed: return false
         }
@@ -619,6 +640,7 @@ final class ChatSession: ObservableObject {
     @discardableResult
     private func switchModel(_ id: String) async -> Bool {
         guard let conn = connection, let sid = sessionID, id != currentModel else { return true }
+        let previous = currentModel
         currentModel = id
         do {
             if modelViaSetModel {
@@ -630,6 +652,7 @@ final class ChatSession: ObservableObject {
             applyConfig(result["configOptions"])
             return true
         } catch {
+            if currentModel == id { currentModel = previous }   // still on the old one
             notice("Couldn’t switch model: \(error.localizedDescription)", isError: true)
             return false
         }
@@ -807,25 +830,35 @@ final class ChatSession: ObservableObject {
             // The prompt's line comes after where the transcript ended when it
             // was sent: the first user line there that's a prompt (not a tool
             // result or meta), matching its text when it has some.
-            // (From the start if the offset finds nothing: Claude rewrites its
-            // last line in place, so the file can shift a little.)
-            for start in offset > 0 ? [offset, 0] : [0] {
-            guard let (text, _) = ClaudeTranscriptTail.readLines(url, from: start) else { continue }
-            for line in text.split(separator: "\n") where line.contains("\"type\":\"user\"") {
-                guard let o = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
-                      o["isMeta"] as? Bool != true, let id = o["uuid"] as? String, !taken.contains(id),
-                      let message = o["message"] as? [String: Any] else { continue }
-                let content: String
-                if let s = message["content"] as? String { content = s }
-                else if let blocks = message["content"] as? [[String: Any]] {
-                    if blocks.contains(where: { $0["type"] as? String == "tool_result" }) { continue }
-                    content = blocks.compactMap { $0["type"] as? String == "text" ? $0["text"] as? String : nil }.joined(separator: "\n")
-                } else { continue }
-                let said = content.trimmingCharacters(in: .whitespacesAndNewlines)
-                if prompt.isEmpty || said.hasPrefix(String(prompt.prefix(200))) { return id }
+            // (Else, from the start — Claude rewrites its last line in place,
+            // so the file can shift a little — the matching prompt nearest that
+            // offset: a repeated "continue" mustn't pick an earlier turn's.)
+            func promptLines(from start: UInt64) -> [(id: String, said: String, at: UInt64)] {
+                guard let (text, _) = ClaudeTranscriptTail.readLines(url, from: start) else { return [] }
+                var found: [(String, String, UInt64)] = []
+                var at = start
+                for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
+                    defer { at += UInt64(line.utf8.count + 1) }
+                    guard line.contains("\"type\":\"user\""),
+                          let o = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
+                          o["isMeta"] as? Bool != true, let id = o["uuid"] as? String, !taken.contains(id),
+                          let message = o["message"] as? [String: Any] else { continue }
+                    let content: String
+                    if let s = message["content"] as? String { content = s }
+                    else if let blocks = message["content"] as? [[String: Any]] {
+                        if blocks.contains(where: { $0["type"] as? String == "tool_result" }) { continue }
+                        content = blocks.compactMap { $0["type"] as? String == "text" ? $0["text"] as? String : nil }.joined(separator: "\n")
+                    } else { continue }
+                    found.append((id, content.trimmingCharacters(in: .whitespacesAndNewlines), at))
+                }
+                return found
             }
-            }
-            return nil
+            func matches(_ said: String) -> Bool { prompt.isEmpty || said.hasPrefix(String(prompt.prefix(200))) }
+            if offset > 0, let hit = promptLines(from: offset).first(where: { matches($0.said) }) { return hit.id }
+            // An attachment-only prompt has no text to find it by away from its offset.
+            guard !prompt.isEmpty || offset == 0 else { return nil }
+            return promptLines(from: 0).filter { matches($0.said) }
+                .min { $0.at.distance(to: offset).magnitude < $1.at.distance(to: offset).magnitude }?.id
         }.value
         t.uuid = uuid
         turns[turn] = t
@@ -1066,7 +1099,8 @@ final class ChatSession: ObservableObject {
     /// The reload didn't replay the other app's turn (Claude Code resumed
     /// from an earlier leaf): load once more before sending.
     private func catchUpMissedTurn() -> Bool {
-        guard isCatchingUp, let expect = catchUpExpect, let sid = sessionID else { return false }
+        // (A conversation that wouldn't load at all started fresh: nothing to retry.)
+        guard isCatchingUp, let expect = catchUpExpect, let sid = sessionID, sid == resumeID else { return false }
         let replayed = items.contains { if case .user(_, let t, _) = $0 { t.contains(expect) } else { false } }
         guard !replayed, catchUpRetries < 2 else { catchUpExpect = nil; return false }
         catchUpRetries += 1
@@ -1083,6 +1117,7 @@ final class ChatSession: ObservableObject {
         items = []
         phase = .starting
         let container = containerName, match = tag.pairs[1]
+        newLaunchTag()   // the reap below can't reach the relaunch
         Task { [weak self] in
             // KILL first, before it sees its stdin close: a Claude Code process
             // that's allowed to exit rewrites its transcript's cost-state line

@@ -82,10 +82,10 @@ final class ChatSessionView: NSView {
 
     /// Start from a draft: text in the composer and files as attachments, or
     /// sent straight away.
-    func applyDraft(text: String, urls: [URL], send: Bool) {
+    func applyDraft(text: String, urls: [URL], attachments: [ChatAttachment] = [], send: Bool) {
         if send {
             let files = urls.map { ComposerTextView.attachment(for: resolveFileURLs?([$0]).first ?? $0) }
-            session.sendWhenReady(text: text, attachments: files)
+            session.sendWhenReady(text: text, attachments: attachments + files)
         } else {
             if !text.isEmpty { composer.setDraft(text) }
             if !urls.isEmpty { composer.addAttachments(urls: urls) }
