@@ -1483,6 +1483,16 @@ enum SelfTest {
             _ = await until(180) { tree.surfaces.chats[s.id] != nil }
             await wait(2)
             snapshot(window, "sea-empty-chat")
+            // The empty state mustn't hold the window open: it resizes freely.
+            if let w = window.window, let chat = tree.surfaces.chats[s.id] {
+                log("chat fitting \(chat.fittingSize)")
+                check(chat.fittingSize.height < 600, "an empty chat asks for no great height")
+                var frame = w.frame
+                frame.size.height = 560
+                w.setFrame(frame, display: true)
+                await wait(0.3)
+                check(abs(w.frame.height - 560) < 2, "the window shrinks to 560 pt (got \(Int(w.frame.height)))")
+            }
         }
         for (name, look) in [("light", NSAppearance.Name.aqua), ("dark", .darkAqua)] {
             for splash in [nil, CGPoint(x: 40, y: 20)] as [CGPoint?] {

@@ -157,12 +157,17 @@ final class ChatSessionView: NSView {
         bottom.spacing = 8
         bottom.detachesHiddenViews = true
 
+        // No SwiftUI min/ideal size: measured at zero width the wrapped hint is
+        // thousands of points tall, which pinned the window's height (even
+        // with the empty state hidden).
+        emptyState.sizingOptions = []
         for v in [transcript, emptyState, bottom, footer] as [NSView] {
             v.translatesAutoresizingMaskIntoConstraints = false
             addSubview(v)
         }
         NSLayoutConstraint.activate([
-            // Edge to edge over the transcript: the sea is full bleed.
+            // Edge to edge over the transcript: the sea is full bleed. It takes
+            // the transcript's size and imposes none (see `sizingOptions`).
             emptyState.topAnchor.constraint(equalTo: transcript.topAnchor),
             emptyState.bottomAnchor.constraint(equalTo: transcript.bottomAnchor),
             emptyState.leadingAnchor.constraint(equalTo: transcript.leadingAnchor),
