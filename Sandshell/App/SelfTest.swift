@@ -1281,6 +1281,14 @@ enum SelfTest {
         check(KitStore.kits([codeServer, "/some/kit"], for: .codex) == ["/some/kit"]
               && KitStore.kits([codeServer, "/some/kit"], for: .claude) == [codeServer, "/some/kit"],
               "code-server is for Claude's sandbox only")
+        // An agent kit (kind: sandbox) is its own agent's, never another's --kit.
+        let droid = "git+https://example.invalid/kits.git#dir=selftest-droid"
+        AgentProfileStore.upsert(AgentProfile(agent: "selftest-droid", displayName: "Droid", icon: "cpu",
+                                              colorHex: "8b5cf6", kitRef: droid))
+        check(KitStore.kits([droid, "/some/kit"], for: .codex) == ["/some/kit"]
+              && KitStore.kits([droid], for: AgentKind(rawValue: "selftest-droid")) == [droid],
+              "an agent's own kit stays with that agent")
+        AgentProfileStore.remove("selftest-droid")
         check(ws.kits.contains(codeServer), "the workspace has code-server")
         let name = await ws.ensureContainerReady(for: .codex)
         check(name != nil, "the Codex sandbox builds (\(ws.lastError ?? "ok"))")

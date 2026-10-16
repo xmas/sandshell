@@ -712,6 +712,9 @@ final class WorkspaceController: ObservableObject {
                 return
             }
             var drift = KitDrift.compute(containerName: name, actual: actual, configured: configured, root: root)
+            // The kit that defines this sandbox's agent isn't drift: it's how
+            // the sandbox was made, and adopting it would hand it to every agent.
+            drift.extra.removeAll { KitStore.requiredAgent($0) == .some(agent.rawValue) }
             let ignored = Set((self.state.ignoredKitDrift[name] ?? []).map { KitDrift.normalize($0, root: root) })
             drift.extra.removeAll { ignored.contains(KitDrift.normalize($0, root: root)) }
             let value: KitDrift? = drift.isEmpty ? nil : drift

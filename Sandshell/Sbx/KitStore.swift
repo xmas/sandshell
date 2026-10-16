@@ -67,10 +67,13 @@ enum KitStore {
     /// Known up front, so the official default works offline.
     private static let knownRequirements = ["docker.io/sbx/code-server-kit:latest": "claude"]
 
-    /// The agent a kit is made for (`requires.agent` in its spec): `.some(nil)`
-    /// for any agent, `nil` while not yet known.
+    /// The agent a kit is made for (`requires.agent` in its spec, or the agent
+    /// a `kind: sandbox` kit defines): `.some(nil)` for any agent, `nil` while
+    /// not yet known.
     static func requiredAgent(_ ref: String) -> String?? {
         if let known = knownRequirements[ref] { return .some(known) }
+        // An agent kit is its own agent's: sbx refuses it as another's --kit.
+        if let profile = AgentProfileStore.all.first(where: { $0.kitRef == ref }) { return .some(profile.agent) }
         let cache = UserDefaults.standard.dictionary(forKey: requirementsKey) as? [String: String] ?? [:]
         guard let agent = cache[ref] else { return nil }
         return .some(agent.isEmpty ? nil : agent)
@@ -79,7 +82,7 @@ enum KitStore {
     /// Remember what `sbx kit inspect` said a kit requires.
     static func learn(_ ref: String, from info: KitInspection) {
         var cache = UserDefaults.standard.dictionary(forKey: requirementsKey) as? [String: String] ?? [:]
-        cache[ref] = info.requires?.agent ?? ""
+        cache[ref] = info.kind == "sandbox" ? (info.name ?? "") : (info.requires?.agent ?? "")
         UserDefaults.standard.set(cache, forKey: requirementsKey)
     }
 
