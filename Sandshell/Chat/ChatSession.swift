@@ -232,6 +232,17 @@ final class ChatSession: ObservableObject {
                 ])
                 let result = try await openSession(conn)
                 applyModes(result["modes"])
+                // New conversations start in Auto where the agent offers it;
+                // a resumed one keeps the mode it was in.
+                if sessionID != resumeID, modes.contains(where: { $0.id == "auto" }),
+                   currentMode != "auto", let sid = sessionID {
+                    do {
+                        _ = try await conn.request("session/set_mode", ["sessionId": .string(sid), "modeId": "auto"])
+                        currentMode = "auto"
+                    } catch {
+                        Log.info(.sbx, "chat: couldn't start in Auto mode: \(error.localizedDescription)")
+                    }
+                }
                 applyModels(result["models"])
                 applyConfig(result["configOptions"])
                 // The workspace's effort, like a terminal's `--effort` (Claude).

@@ -97,6 +97,7 @@ enum SelfTest {
         case "links": links()
         case "tool-groups": await toolGroups()
         case "tables": await tables()
+        case "codex-chat": await codexChat(window)
         case "sea": await sea(window)
         case "title-strip": await titleStrip(window)
         case "follow": await follow(window)
@@ -234,6 +235,8 @@ enum SelfTest {
         check(await until(600) { session()?.phase == .ready }, "chat reaches ready (sandbox + adapter up)")
         guard let chat = session(), chat.phase == .ready else { return log("chat phase: \(String(describing: session()?.phase))") }
         check(tree.surfaces.chats[s.id]?.debugComposerEnabled == true, "the composer opens once it's ready")
+        log("modes: \(chat.modes.map(\.id))")
+        check(!chat.modes.contains { $0.id == "auto" } || chat.currentMode == "auto", "a new chat starts in Auto mode")
         log("model \(chat.currentModel ?? "-"), mode \(chat.currentMode ?? "-"), \(chat.commands.count) commands")
         check(!chat.commands.isEmpty, "agent advertises slash commands")
 
@@ -1614,6 +1617,23 @@ enum SelfTest {
         host.close()
     }
 
+    // MARK: Codex chat
+
+    /// A Codex chat signs in through sbx's proxy like `sbx run codex` does,
+    /// even in a sandbox `sbx run` never started. Uses the workspace's root folder.
+    private static func codexChat(_ window: MainWindowController) async {
+        guard let ws = window.workspaceController, let tree = window.paneTree,
+              let folder = ws.rootFolder?.id ?? ws.folders.first?.id else { return log("no window") }
+        guard let s = ws.addSession(folderID: folder, agent: .codex, chat: true) else { return log("no session") }
+        ws.selection = .session(s.id)
+        func chat() -> ChatSession? { tree.surfaces.chats[s.id]?.session }
+        let ready = await until(600) { chat()?.phase == .ready || { if case .closed = chat()?.phase { true } else { false } }() }
+        log("codex chat phase: \(String(describing: chat()?.phase)) models: \(chat()?.models.count ?? 0)")
+        check(ready && chat()?.phase == .ready, "a Codex chat reaches ready (signed in through sbx)")
+        snapshot(window, "codex-chat")
+        ws.closeSession(s.id)
+    }
+
     // MARK: Tables
 
     /// Markdown tables: a small one is a grid in the prose face; a wide one
@@ -1695,9 +1715,23 @@ enum SelfTest {
         }
         // A long session name truncates inside the identity item instead of
         // drawing over the status and buttons beside it.
-        let long = window.debugToolbarName("https://unsloth.ai/docs/new/studio/sandboxing-in-unsloth compare what they're doing to what we're doing.")
-        log("long name: label ends at \(Int(long.label)) of \(Int(long.identity))")
-        check(long.label <= long.identity + 1 && long.identity <= 361, "a long session name stays inside the identity item")
+        for width in [1000.0, 1300] {
+            var frame = w.frame
+            frame.size.width = width
+            w.setFrame(frame, display: true)
+            _ = window.debugToolbarName("New Claude Session with a long name, longer than the toolbar has room for")
+            await wait(0.8)
+            let long = window.debugToolbarName("New Claude Session with a long name, longer than the toolbar has room for")
+            log("long name at \(Int(width)): label ends at \(Int(long.label)) of \(Int(long.identity))")
+            check(long.label <= long.identity + 1 && long.identity <= 361, "at \(Int(width)) a long session name stays inside the identity item")
+            check(long.label >= long.identity - 4 && long.identity >= 199,
+                  "at \(Int(width)) the name uses the identity's whole width (\(Int(long.label)) of \(Int(long.identity)))")
+            // A name that fits isn't cut short to the subtitle's width.
+            _ = window.debugToolbarName("New Claude Session", subtitle: "msdgc · ~/Code/msdgc")
+            await wait(0.8)
+            _ = window.debugToolbarName("New Claude Session", subtitle: "msdgc · ~/Code/msdgc")
+            check(window.debugToolbarNameFits, "at \(Int(width)) “New Claude Session” shows whole")
+        }
         // A narrow split pane: the readout is down to its model chooser.
         tree.split(pane, edge: .trailing, showing: nil)
         await measure("split", folderAtLeast: 80)
