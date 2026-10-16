@@ -306,6 +306,7 @@ final class ChatSession: ObservableObject {
                 }
                 applyModels(result["models"])
                 applyConfig(result["configOptions"])
+                await applyRememberedCodexModel()
                 // The workspace's effort, like a terminal's `--effort` (Claude).
                 if agent == .claude, let effort = launchEffort, let sid = sessionID {
                     do {
@@ -489,6 +490,29 @@ final class ChatSession: ObservableObject {
         Task {
             do {
                 let result = try await conn.request("session/prompt", params)
+                // Codex on a model this sign-in can't use: try the next one.
+                if case .agentText(let id, let said)? = items.last, codexRetries < 4,
+                   let next = codexFallbackModel(after: said), !isClosed, connection === conn {
+                    codexRetries += 1
+                    let refused = currentModel.map(Self.modelBase) ?? "That model"
+                    items.removeAll { $0.id == ChatItem.agentText(id: id, text: "").id }
+                    if case .user? = items.last { items.removeLast() }
+                    var run = codexNotice ?? (UUID(), [])
+                    run.refused.append(refused)
+                    codexNotice = run
+                    let names = run.refused.count == 1 ? run.refused[0]
+                        : run.refused.dropLast().joined(separator: ", ") + " and " + run.refused.last!
+                    upsert(.notice(id: run.id, text: "\(names) \(run.refused.count == 1 ? "isn’t" : "aren’t") available "
+                                   + "with a ChatGPT sign-in — using \(Self.modelBase(next)).", isError: false))
+                    if await switchModel(next) {
+                        UserDefaults.standard.set(next, forKey: Self.codexModelKey)
+                        phase = .ready
+                        send(text: text, attachments: attachments)
+                        return
+                    }
+                }
+                codexRetries = 0
+                codexNotice = nil
                 if let reason = result["stopReason"]?.string, reason != "end_turn" {
                     notice("Stopped: \(reason)", isError: false)
                 }
@@ -568,21 +592,70 @@ final class ChatSession: ObservableObject {
     }
 
     func setModel(_ id: String) {
-        guard let conn = connection, let sid = sessionID, id != currentModel else { return }
+        Task { _ = await switchModel(id) }
+    }
+
+    /// Switch the session's model; false (with a notice) if the agent refused.
+    @discardableResult
+    private func switchModel(_ id: String) async -> Bool {
+        guard let conn = connection, let sid = sessionID, id != currentModel else { return true }
         currentModel = id
-        Task {
-            do {
-                if modelViaSetModel {
-                    _ = try await conn.request("session/set_model", ["sessionId": .string(sid), "modelId": .string(id)])
-                    return
-                }
-                let result = try await conn.request("session/set_config_option", [
-                    "sessionId": .string(sid), "configId": "model", "value": .string(id)])
-                applyConfig(result["configOptions"])
-            } catch {
-                notice("Couldn’t switch model: \(error.localizedDescription)", isError: true)
+        do {
+            if modelViaSetModel {
+                _ = try await conn.request("session/set_model", ["sessionId": .string(sid), "modelId": .string(id)])
+                return true
             }
+            let result = try await conn.request("session/set_config_option", [
+                "sessionId": .string(sid), "configId": "model", "value": .string(id)])
+            applyConfig(result["configOptions"])
+            return true
+        } catch {
+            notice("Couldn’t switch model: \(error.localizedDescription)", isError: true)
+            return false
         }
+    }
+
+    // MARK: Codex models a ChatGPT sign-in can use
+
+    /// Codex chats run the adapter's own (newer) codex, whose default model can
+    /// be one a ChatGPT sign-in can't use. The model that worked is remembered,
+    /// and models that refused are skipped.
+    private static let codexModelKey = "codexChatModel"
+    private static let codexRefusedKey = "codexChatRefusedModels"
+    private var codexRetries = 0
+    /// One notice for a run of refusals, updated as it goes.
+    private var codexNotice: (id: UUID, refused: [String])?
+
+    /// "gpt-6.1-sol[medium]" → "gpt-6.1-sol".
+    private static func modelBase(_ id: String) -> String { id.split(separator: "[").first.map(String.init) ?? id }
+
+    /// Start a Codex chat on the model that worked before (if it's offered),
+    /// or off one known to refuse this sign-in.
+    private func applyRememberedCodexModel() async {
+        guard agent == .codex else { return }
+        let refused = Set(UserDefaults.standard.stringArray(forKey: Self.codexRefusedKey) ?? [])
+        if let saved = UserDefaults.standard.string(forKey: Self.codexModelKey), models.contains(where: { $0.id == saved }) {
+            await switchModel(saved)
+        } else if let current = currentModel, refused.contains(Self.modelBase(current)), let next = codexCandidate(refused: refused) {
+            await switchModel(next)
+        }
+    }
+
+    private func codexCandidate(refused: Set<String>) -> String? {
+        let level = currentModel.flatMap { m in m.firstIndex(of: "[").map { String(m[$0...]) } } ?? ""
+        let candidates = models.map(\.id).filter { !refused.contains(Self.modelBase($0)) }
+        return candidates.first { !level.isEmpty && $0.hasSuffix(level) } ?? candidates.first
+    }
+
+    /// The reply was Codex saying the model isn't available with a ChatGPT
+    /// account: the next model it offers (same reasoning level where it can),
+    /// or nil when it's another reply or nothing's left to try.
+    private func codexFallbackModel(after reply: String) -> String? {
+        guard agent == .codex, reply.contains("not supported when using Codex with a ChatGPT account") else { return nil }
+        var refused = Set(UserDefaults.standard.stringArray(forKey: Self.codexRefusedKey) ?? [])
+        if let current = currentModel { refused.insert(Self.modelBase(current)) }
+        UserDefaults.standard.set(Array(refused), forKey: Self.codexRefusedKey)
+        return codexCandidate(refused: refused)
     }
 
     /// Claude's effort level, live (`nil` = Claude's default).

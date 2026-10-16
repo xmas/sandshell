@@ -1908,6 +1908,17 @@ enum SelfTest {
         let ready = await until(600) { chat()?.phase == .ready || { if case .closed = chat()?.phase { true } else { false } }() }
         log("codex chat phase: \(String(describing: chat()?.phase)) models: \(chat()?.models.count ?? 0)")
         check(ready && chat()?.phase == .ready, "a Codex chat reaches ready (signed in through sbx)")
+        if let c = chat(), c.phase == .ready {
+            // Codex's own default model can be one a ChatGPT sign-in can't use:
+            // the chat moves to one it can and the prompt still gets its answer.
+            c.send(text: "Reply with exactly the word PONG and nothing else.", attachments: [])
+            let answered = await until(300) {
+                c.phase == .ready && c.items.contains { if case .agentText(_, let t) = $0 { t.contains("PONG") } else { false } }
+            }
+            let notes = c.items.compactMap { if case .notice(_, let t, _) = $0 { t } else { nil } }
+            log("codex model \(c.currentModel ?? "-"), notices \(notes)")
+            check(answered, "a Codex prompt gets its answer")
+        }
         snapshot(window, "codex-chat")
         ws.closeSession(s.id)
     }
