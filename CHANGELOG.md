@@ -2,6 +2,18 @@
 
 A running log of what changed, newest first. Yes, we actually write these.
 
+## Unreleased
+- **Undo a turn's edits.** When Claude changes files in a chat, the turn ends with "Changed 3 files · Undo": Undo shows what it would put back, then restores those files to how they were before that message (Claude Code's checkpoints; shell-command changes aren't tracked).
+- **MCP servers at a glance.** A Claude chat's footer shows "MCP 3/4" (red when one's failing); click for each server's status, what it runs, its error and its tools, with Reconnect and Enable/Disable.
+- **Stop a background task** from the Background Tasks list (a chat's subagents, background commands and monitors).
+- **Sandshell's own kits.** Undo and MCP status come from the new `sandshell-claude` kit, which also preinstalls the chat adapter so chats start sooner; `sandshell-codex` does the same for Codex. They're on for every workspace and can be turned off in Settings ▸ Kits (those features then hide); a workspace's existing sandboxes pick them up at their next rebuild. Published for any sbx client at github.com/xmas/sandshell-kits.
+- **Chats start faster.** A spare agent waits behind the last chat, so the next new chat is ready in well under a second.
+- **Sandshell sees what other apps are doing** in a conversation (through Claude Code's own session list): it knows when the Claude app is mid-answer, and "Send When It Finishes" holds your message until it's done.
+- **Messages sent while Claude is working queue up** and send when the turn ends — Return no longer loses them.
+- **Codex chats answer.** They sign in through sbx like `sbx run codex`, and when Codex's default model isn't available with a ChatGPT sign-in, the chat moves to one that is (and remembers it).
+- **Files has a Commits list** — All changes, Uncommitted changes, and each commit since your branch left main; pick one for just its files (+/− counts) and their diffs. Diffs show line numbers: click one to tell the agent what to change there.
+- **Fixes:** Files works in folders under /tmp (the changed list, badges and Changes were empty there); the editor no longer takes the keyboard when files change on disk; commit lists handle accented and spaced names and merge commits; a new sandbox with kits isn't used until its kit setup finishes (a chat started in it could die silently); an unreadable workspace config is kept, not overwritten; toolbar Stop/Restart can't reach a session a pane no longer shows; a session dragged into a pane while starting shows up when it's ready; the toolbar title uses its whole width and pane dividers start below it; Search shows custom agents' icons; and one look for choosers, badges, popovers, alerts and +/− counts throughout.
+
 ## v0.2.27 — "Ripples"
 - **The empty chat's sea is calmer.** No more bubble: move over the sea creatures and the ones you pass color in with a quick swish while rings of water ripple out from under them and fade. A moment later everything is gray and still again.
 
