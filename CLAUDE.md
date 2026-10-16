@@ -123,6 +123,20 @@ AppDelegate (@main)
 | `UI/SearchWindowController.swift` | Search window (⇧⌘F; ⌘F is Find): live results select/focus the session, past ones `restoreSession` |
 | `Theme/ThemeController.swift` | Per-window `ThemePreferences` + resolved `ThemeColors` |
 
+### Shared building blocks (use these, don't re-create them)
+
+| Need | Use |
+|------|-----|
+| Token counts, "3m ago", work times, `~/…` paths | `Format` (`Util/Format.swift`): `Format.tokens`, `.ago`, `.relative`, `.workTime`; `String.tildeAbbreviated`; `URL.realPath` (resolves /tmp → /private/tmp like git does — use it to compare with git's paths) |
+| A popover under a control (second click closes) | `NSPopover.toggle(&slot, below: anchor) { .hosting(view) }` (`UI/Popovers.swift`) |
+| Confirm / save-changes / notice alerts | `Alerts.confirm`, `Alerts.saveChanges`, `Alerts.inform` (`UI/Alerts.swift`) |
+| A model/mode/effort chooser | `ChoicePopUp` (`UI/ChoicePopUp.swift`), or its `style`/`fill`/`show` for a custom pull-down |
+| A borderless SF Symbol button | `NSButton.symbol(…)` / `configureSymbol(…)` (`UI/SymbolButton.swift`) |
+| Agent / folder / profile badges | `BadgeMark` (SwiftUI) and `AgentBadgeView` (AppKit), both via `AgentKind.badgeContent` (`Theme/AgentStyle.swift`) |
+| "+12 −3" line counts | `NSAttributedString.diffCounts` |
+| A session's working color | `NSColor.sessionWorking` |
+| Kit reference entry / kit folder picker | `KitRefAddRow`, `NSOpenPanel.chooseKit` (`UI/KitRefField.swift`) |
+
 ### Key quirks
 
 - **One window per workspace root.** `AppDelegate` manages an array of `MainWindowController` instances. Multiple windows on the same root are allowed (cascaded).
