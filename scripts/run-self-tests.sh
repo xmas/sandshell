@@ -69,6 +69,7 @@ run() {   # run <scenario> <fixture> <kind: quick|account|fresh> [extra args…]
   local scenario="$1" fx="$2" kind="$3"; shift 3
   [[ -n "$ONLY" && "$ONLY" != *",$scenario,"* ]] && return
   [[ $QUICK == 1 && "$kind" != quick ]] && return
+  flush_pending
   local out="$RESULTS/$scenario"
   case "$kind" in quick) LIMIT=600 ;; account) LIMIT=1500 ;; *) LIMIT=2400 ;; esac
   printf '%-16s %-10s ' "$scenario" "$fx"
@@ -87,11 +88,25 @@ run() {   # run <scenario> <fixture> <kind: quick|account|fresh> [extra args…]
   fi
 }
 
-prepare() { fixture prepare "$1" >/dev/null; }
-configure() {   # write the app's config.json once, then apply the fixture's edits
-  local fx="$1"
-  [[ -f "$FIX/$fx/.sandshell/config.json" ]] || { LIMIT=300; launch bootstrap "$fx" "$RESULTS/.bootstrap-$fx"; }
-  fixture config "$fx"
+# Fixture steps wait until a scenario that's actually run needs them (so
+# --only / --quick don't bootstrap or delete sandboxes for nothing).
+PENDING=()
+prepare()   { PENDING+=("prepare:$1"); }
+configure() { PENDING+=("configure:$1"); }
+rmboxes()   { PENDING+=("rm-sandboxes:$1"); }
+flush_pending() {
+  local step fx
+  for step in "${PENDING[@]+"${PENDING[@]}"}"; do
+    fx="${step#*:}"
+    case "$step" in
+      prepare:*) fixture prepare "$fx" >/dev/null ;;
+      configure:*)
+        [[ -f "$FIX/$fx/.sandshell/config.json" ]] || { LIMIT=300; launch bootstrap "$fx" "$RESULTS/.bootstrap-$fx"; }
+        fixture config "$fx" ;;
+      rm-sandboxes:*) fixture rm-sandboxes "$fx" >/dev/null ;;
+    esac
+  done
+  PENDING=()
 }
 
 echo "==> Fixtures in $FIX, results in $RESULTS"
@@ -127,7 +142,7 @@ prepare kits;      configure kits
 run kits           kits   quick "-SandshellSelfTestKits" "(\"${KITDIRS[0]}\",\"${KITDIRS[1]}\",\"${KITDIRS[2]}\",\"${KITDIRS[3]}\",\"${KITDIRS[4]}\")"
 prepare kitagents; configure kitagents
 run kit-agents     kitagents quick
-prepare broken;    configure broken; fixture rm-sandboxes broken >/dev/null
+prepare broken;    configure broken; rmboxes broken
 run launch-failure broken quick
 prepare agents
 run agents         agents quick "-SandshellSelfTestKit" "$FIX/kitdirs/agent"
@@ -135,17 +150,17 @@ prepare search
 run search         search quick
 
 # Real agent turns (the signed-in account, a few tiny turns each).
-for s in chat fork follow reconnect chat-model background warm extras queue; do
+for s in chat fork follow reconnect chat-model background warm queue; do
   prepare chat
   run "$s" chat account
 done
 run codex-chat     kits   account
 
 # Sandboxes made from scratch.
-prepare fresh; fixture rm-sandboxes fresh >/dev/null
+prepare fresh; rmboxes fresh
 run building       fresh  fresh
-prepare fresh; fixture rm-sandboxes fresh >/dev/null
-run kit-extras     fresh  fresh
+prepare fresh; rmboxes fresh
+run kit-extras     fresh  fresh   # also Undo / Stop / MCP (extras) with the kit
 
 echo ""
 echo "${#PASSED[@]} passed, ${#FAILED[@]} failed${FAILED[*]:+: ${FAILED[*]}}"

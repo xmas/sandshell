@@ -271,6 +271,7 @@ final class ChatSession: ObservableObject {
         // would leave the chat "Starting…" forever: give up on it, so the
         // pane offers Reconnect. The first start may install the adapter.
         installingAdapter = false
+        launchSeen = false
         Task { [weak self, weak conn] in
             // 4 minutes, or 12 while it installs the adapter first (slow networks).
             var waited = 0
@@ -278,6 +279,19 @@ final class ChatSession: ObservableObject {
                 try? await Task.sleep(for: .seconds(10))
                 waited += 10
                 guard let self, let conn, self.connection === conn, self.phase == .starting else { return }
+                // Not even the launch script's first line: `sbx exec` never got
+                // in (seen right after a sandbox's kit setup). Try once more.
+                if waited == 50, !self.launchSeen, self.stuckLaunchRetries == 0 {
+                    self.stuckLaunchRetries += 1
+                    Log.error(.sbx, "chat: sbx exec into “\(self.containerName)” hasn't started; launching again")
+                    self.pumpTask?.cancel()
+                    self.connection = nil
+                    conn.terminate()
+                    let container = self.containerName, match = self.tag.pairs[1]
+                    await SbxClient.reapSessionProcessesAndWait(container: container, match: match)
+                    self.start()
+                    return
+                }
                 if waited >= 4 * 60, !self.installingAdapter { break }
             }
             guard let self, let conn, self.connection === conn, self.phase == .starting else { return }
@@ -727,6 +741,9 @@ final class ChatSession: ObservableObject {
     @Published private(set) var hasExtras = false
     /// The launch is installing the adapter first (the start deadline waits longer).
     private var installingAdapter = false
+    /// The launch script has said its first line (the exec got into the sandbox).
+    private var launchSeen = false
+    private var stuckLaunchRetries = 0
 
     /// One request to the adapter wrapper (in the sandshell-claude kit).
     private func extra(_ request: [String: JSONValue]) async throws -> JSONValue {
@@ -1071,6 +1088,7 @@ final class ChatSession: ObservableObject {
             Log.info(.sbx, "chat[acp]: \(line)")
             if line == SbxCommand.extrasMarker { hasExtras = true; return }
             if line == SbxCommand.installingMarker { installingAdapter = true; return }
+            if line == SbxCommand.launchMarker { launchSeen = true; return }
             if line.hasPrefix("sandshell: ") { launchError = String(line.dropFirst("sandshell: ".count)) }
         case .closed(let status):
             permission = nil; waitingPermissions = []

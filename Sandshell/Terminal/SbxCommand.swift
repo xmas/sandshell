@@ -226,6 +226,7 @@ enum SbxCommand {
     /// when it's installing the adapter first.
     static let extrasMarker = "sandshell-extras: on"
     static let installingMarker = "sandshell-installing: adapter"
+    static let launchMarker = "sandshell-launch: up"
 
     /// The bundled copy of Sandshell's kits (`kits/` in the repo).
     static var bundledKits: URL? { Bundle.main.url(forResource: "kits", withExtension: nil) }
@@ -284,7 +285,8 @@ enum SbxCommand {
         if agent == .claude, let model = claudeModel, !model.isEmpty {
             args += ["ANTHROPIC_MODEL=\(model)", "ANTHROPIC_CUSTOM_MODEL_OPTION=\(model)"]
         }
-        args += ["bash", "-c", pathSetup + " " + program]
+        // First thing it says: the exec got into the sandbox (see ChatSession).
+        args += ["bash", "-c", #"echo "\#(launchMarker)" >&2; "# + pathSetup + " " + program]
         return args
     }
 

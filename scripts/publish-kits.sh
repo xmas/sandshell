@@ -43,7 +43,9 @@ done
 [[ -f "$KITS_DIR/README.md" ]] && run sed -i '' -E "s/ref=v[0-9][0-9.]*/ref=$TAG/g" "$KITS_DIR/README.md"
 
 if [[ $DRY_RUN == 0 && -z "$(git -C "$KITS_DIR" status --porcelain)" ]] && git -C "$KITS_DIR" rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
-  echo "kits unchanged and $TAG exists; nothing to publish"
+  # Tagged here before but never pushed (the remote lacks it, checked above): push now.
+  git -C "$KITS_DIR" push -q origin main && git -C "$KITS_DIR" push -q origin "$TAG"
+  echo "published kits at github.com/xmas/sandshell-kits ($TAG)"
   exit 0
 fi
 run git -C "$KITS_DIR" add -A

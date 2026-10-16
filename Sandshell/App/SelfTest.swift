@@ -518,7 +518,8 @@ enum SelfTest {
         await wait(0.5)
         check(window.sidebarList?.emptyStateText == nil,
               "with a row in the list, the build placeholder stays off it (\(window.sidebarList?.emptyStateText ?? "hidden"))")
-        let ok = await until(240) { tree.surfaces.terminals[s.id] != nil }
+        // A new session is a chat (the default) or a terminal: either one up.
+        let ok = await until(300) { tree.surfaces.terminals[s.id] != nil || tree.surfaces.chats[s.id]?.session.phase == .ready }
         log("building=\(ws.isBuilding) activity=\(ws.activity ?? "nil") pending=\(tree.surfaces.pending.contains(s.id)) "
             + "shown=\(tree.panes.map { $0.shownSession == s.id }) error=\(ws.lastError ?? "nil")")
         check(ok, "the session launches once the sandbox is up")
