@@ -333,6 +333,7 @@ final class ChatSession: ObservableObject {
                 }
                 // Closed (or relaunched) while it was starting: it isn't ours any more.
                 guard !isClosed, connection === conn else { conn.terminate(); return }
+                if catchUpMissedTurn() { return }
                 if let sid = sessionID { onSessionID?(sid) }
                 readyAfter = Date().timeIntervalSince(launchedAt)
                 startedWarm = spare != nil
@@ -1019,6 +1020,7 @@ final class ChatSession: ObservableObject {
             switch event {
             case .user(let text):
                 items.append(.user(id: UUID(), text: text, attachments: []))
+                lastExternalPrompt = text
             case .text(let mid, let text):
                 let id = "ext-" + mid
                 if case .agentText(id, let t)? = items.last {
@@ -1050,15 +1052,43 @@ final class ChatSession: ObservableObject {
         stopFollowing()
         queued = message
         isCatchingUp = true
+        // What the reload must replay: the other app's last prompt.
+        catchUpExpect = lastExternalPrompt.map { String($0.prefix(40)) }
+        lastExternalPrompt = nil
+        catchUpRetries = 0
+        reload(sid)
+    }
+
+    private var catchUpExpect: String?
+    private var lastExternalPrompt: String?
+    private var catchUpRetries = 0
+
+    /// The reload didn't replay the other app's turn (Claude Code resumed
+    /// from an earlier leaf): load once more before sending.
+    private func catchUpMissedTurn() -> Bool {
+        guard isCatchingUp, let expect = catchUpExpect, let sid = sessionID else { return false }
+        let replayed = items.contains { if case .user(_, let t, _) = $0 { t.contains(expect) } else { false } }
+        guard !replayed, catchUpRetries < 2 else { catchUpExpect = nil; return false }
+        catchUpRetries += 1
+        Log.info(.sbx, "chat: \(sid) reload didn't replay the other app's last turn; loading again")
+        reload(sid)
+        return true
+    }
+
+    private func reload(_ sid: String) {
         pumpTask?.cancel()
-        connection?.terminate()
+        let old = connection
         connection = nil
         resumeID = sid
         items = []
         phase = .starting
         let container = containerName, match = tag.pairs[1]
         Task { [weak self] in
-            await SbxClient.reapSessionProcessesAndWait(container: container, match: match)
+            // KILL first, before it sees its stdin close: a Claude Code process
+            // that's allowed to exit rewrites its transcript's cost-state line
+            // in place — over turns another app appended after it.
+            await SbxClient.reapSessionProcessesAndWait(container: container, match: match, immediate: true)
+            old?.terminate()
             // Closed meanwhile (Restart, Terminal, deleted): start nothing.
             self?.start()
         }

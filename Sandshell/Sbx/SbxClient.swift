@@ -555,10 +555,10 @@ actor SbxClient {
     /// Kill a session's processes inside its sandbox (by `SbxCommand.ProcessTag`
     /// env), since they outlive the host-side `sbx exec`. Fire-and-forget from
     /// sync teardown paths; `waitForReaps` lets app quit give them a moment.
-    nonisolated static func reapSessionProcesses(container: String, match: String) {
+    nonisolated static func reapSessionProcesses(container: String, match: String, immediate: Bool = false) {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: PathFixer.sbxPath())
-        p.arguments = ["exec", container, "sh", "-c", SbxCommand.reapScript(match: match)]
+        p.arguments = ["exec", container, "sh", "-c", SbxCommand.reapScript(match: match, immediate: immediate)]
         p.standardInput = FileHandle.nullDevice
         p.standardOutput = FileHandle.nullDevice
         p.standardError = FileHandle.nullDevice
@@ -568,10 +568,10 @@ actor SbxClient {
 
     /// Same, awaited — used before (re)launching a session so leftovers from a
     /// crash/kill can't share its conversation with the new process.
-    nonisolated static func reapSessionProcessesAndWait(container: String, match: String) async {
+    nonisolated static func reapSessionProcessesAndWait(container: String, match: String, immediate: Bool = false) async {
         await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
             DispatchQueue.global().async {
-                reapSessionProcesses(container: container, match: match)
+                reapSessionProcesses(container: container, match: match, immediate: immediate)
                 waitForReaps(timeout: 5)
                 done.resume()
             }

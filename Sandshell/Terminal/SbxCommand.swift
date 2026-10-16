@@ -77,8 +77,11 @@ enum SbxCommand {
 
     /// `sh -c` body run via `sbx exec <container>` that TERMs, then KILLs, every
     /// process whose environment carries `match` (e.g. `SANDSHELL_LAUNCH=<uuid>`).
-    static func reapScript(match: String) -> String {
+    /// `immediate`: KILL at once, with no chance to write anything on the way
+    /// out (a chat reloading a conversation another app is writing to).
+    static func reapScript(match: String, immediate: Bool = false) -> String {
         let scan = #"for d in /proc/[0-9]*; do { tr '\0' '\n' < "$d/environ"; } 2>/dev/null | grep -qxF "$M" && kill -SIG "${d#/proc/}" 2>/dev/null; done"#
+        if immediate { return "M=\(shellQuote(match)); " + scan.replacingOccurrences(of: "SIG", with: "KILL") + "; true" }
         return "M=\(shellQuote(match)); " + scan.replacingOccurrences(of: "SIG", with: "TERM")
             + "; sleep 1; " + scan.replacingOccurrences(of: "SIG", with: "KILL") + "; true"
     }

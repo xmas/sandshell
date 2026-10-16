@@ -1521,31 +1521,43 @@ enum SelfTest {
             return Date().timeIntervalSince(stillSince) >= 6
         }
         let lines = (try? String(contentsOf: url, encoding: .utf8))?.split(separator: "\n") ?? []
-        // Chain onto the last real message (Claude Code also writes other lines
-        // with uuids — titles, progress — that aren't part of the conversation).
+        // Chain onto the conversation's last node, as another Claude app would:
+        // messages and their attachments (not sidechains, not bookkeeping lines).
         let last = lines.reversed().lazy.compactMap { line -> String? in
             guard let o = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
-                  ["user", "assistant"].contains(o["type"] as? String ?? ""),
-                  o["isSidechain"] as? Bool != true, o["isMeta"] as? Bool != true else { return nil }
+                  ["user", "assistant", "attachment", "system"].contains(o["type"] as? String ?? ""),
+                  o.keys.contains("parentUuid"), o["isSidechain"] as? Bool != true else { return nil }
             return o["uuid"] as? String
         }.first
         check(last != nil, "transcript at \(url.path) has turns")
-        let now = ISO8601DateFormatter().string(from: Date())
+        // Real lines from this transcript as templates (every field Claude Code
+        // writes), re-addressed: what another Claude app's turn looks like.
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         let userID = UUID().uuidString.lowercased(), replyID = UUID().uuidString.lowercased()
         func line(_ o: [String: Any]) -> String {
             String(data: try! JSONSerialization.data(withJSONObject: o), encoding: .utf8)! + "\n"
         }
-        let common: [String: Any] = ["isSidechain": false, "userType": "external", "entrypoint": "claude-desktop",
-                                     "cwd": c.workdir, "sessionId": sid, "version": "2.1.295", "timestamp": now]
-        var user = common
-        user.merge(["parentUuid": last ?? NSNull(), "uuid": userID, "type": "user",
+        func template(_ type: String) -> [String: Any] {
+            lines.reversed().lazy.compactMap { l -> [String: Any]? in
+                guard let o = try? JSONSerialization.jsonObject(with: Data(l.utf8)) as? [String: Any],
+                      o["type"] as? String == type, o["isMeta"] as? Bool != true,
+                      (o["message"] as? [String: Any])?["content"] != nil else { return nil }
+                return o
+            }.first ?? [:]
+        }
+        var user = template("user")
+        user.merge(["parentUuid": last ?? NSNull(), "uuid": userID, "type": "user", "entrypoint": "claude-desktop",
+                    "isSidechain": false, "timestamp": iso.string(from: Date()),
                     "message": ["role": "user", "content": "Remember this codeword: ZEBRA-42. Reply OK."]]) { $1 }
-        var reply = common
-        reply.merge(["parentUuid": userID, "uuid": replyID, "type": "assistant",
-                     "message": ["id": "msg_selftest_\(replyID.prefix(8))", "type": "message", "role": "assistant",
-                                 "model": "claude-opus-5-5", "content": [["type": "text", "text": "OK, noted."]],
-                                 "stop_reason": "end_turn", "stop_sequence": NSNull(),
-                                 "usage": ["input_tokens": 1, "output_tokens": 3]]]) { $1 }
+        user.removeValue(forKey: "promptId")
+        var reply = template("assistant")
+        var message = reply["message"] as? [String: Any] ?? [:]
+        message.merge(["id": "msg_selftest_\(replyID.prefix(8))", "content": [["type": "text", "text": "OK, noted."]],
+                       "stop_reason": "end_turn"]) { $1 }
+        reply.merge(["parentUuid": userID, "uuid": replyID, "type": "assistant", "entrypoint": "claude-desktop",
+                     "isSidechain": false, "timestamp": iso.string(from: Date().addingTimeInterval(1)),
+                     "message": message, "requestId": "req_selftest_\(replyID.prefix(8))"]) { $1 }
         func inject() {
             guard let fh = try? FileHandle(forWritingTo: url) else { return }
             // Claude Code may leave its last line (cost-state) without a newline.
@@ -1580,12 +1592,14 @@ enum SelfTest {
         check(!c.otherAppIsWorking, "the other app's turn is finished")
         snapshot(window, "follow-external")
 
+        log("before sending: injected turn intact = \(injectedIntact())")
         // Sending now reloads the agent first, so it knows the codeword.
         c.send(text: "What codeword did I ask you to remember? Reply with just the codeword.", attachments: [])
         check(c.isCatchingUp, "sending reloads the agent first")
         check(await until(300) { c.phase == .ready && said(c).contains("ZEBRA-42") && !c.isCatchingUp },
               "the reply knows the other app's turn (\(said(c).suffix(80)))")
         check(said(c).contains("PONG"), "the reloaded transcript still has the first reply")
+        check(injectedIntact(), "the reload left the other app's turn intact (the old agent didn't write over it)")
         snapshot(window, "follow-final")
 
         // Another app mid-turn (per the registry): the message waits, then goes.
