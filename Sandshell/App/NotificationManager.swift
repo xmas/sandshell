@@ -119,7 +119,7 @@ extension NotificationManager: @preconcurrency UNUserNotificationCenterDelegate 
                                  withCompletionHandler handler: @escaping () -> Void) {
         let info = response.notification.request.content.userInfo
         if let raw = info["sessionID"] as? String, let id = UUID(uuidString: raw) {
-            NSApp.activate(ignoringOtherApps: true)
+            NSApp.activate()
             onSessionTap?(id)
             if info["backgroundTask"] != nil {
                 NotificationCenter.default.post(name: Self.showBackgroundTasks, object: id)

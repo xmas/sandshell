@@ -223,7 +223,7 @@ final class MainWindowController: NSWindowController {
         split.addSplitViewItem(filesItem)
         // Follow the active session's folder (the workspace root otherwise).
         selectionObserver = controller.$selection.sink { [weak self] _ in
-            DispatchQueue.main.async { self?.syncFilesRoot() }
+            Task { @MainActor [weak self] in self?.syncFilesRoot() }
         }
 
         window.contentViewController = split
@@ -481,7 +481,10 @@ final class MainWindowController: NSWindowController {
         if let files = detail?.anyFiles { return files.openQuickly(nil) }
         toggleFiles()
         // After the inspector's expand animation, so the popover anchors in place.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in self?.filesPane?.openQuickly(nil) }
+        Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(300))
+            self?.filesPane?.openQuickly(nil)
+        }
     }
 
     private func syncFilesRoot() {
@@ -553,8 +556,7 @@ final class MainWindowController: NSWindowController {
     var isFilesShown: Bool { !(filesItem?.isCollapsed ?? true) }
     /// What ⌘W would close here: a session, or the window.
     var closesSession: Bool {
-        if let workspace, case .session = workspace.selection { return true }
-        return false
+        if case .session? = workspace?.selection { true } else { false }
     }
 
     /// ⌘W closes the selected session, falling back to closing the window.
@@ -572,14 +574,9 @@ final class MainWindowController: NSWindowController {
     }
 
     func scriptingStatus() -> WindowScriptStatus {
-        let selection: String?
-        if let workspace {
-            switch workspace.selection {
-            case .session(let id): selection = "session:\(id.uuidString)"
-            case nil: selection = nil
-            }
-        } else {
-            selection = nil
+        let selection: String? = switch workspace?.selection {
+        case .session(let id)?: "session:\(id.uuidString)"
+        case nil: nil
         }
         let sessions = workspace?.orderedSessions.map { session -> SessionScriptStatus in
             let rt = workspace?.runtime(session.id)
@@ -667,7 +664,8 @@ extension MainWindowController: NSWindowDelegate {
     }
 
     /// Tear down this window's terminals (kills their `sbx exec` + removes temp
-    /// scripts), close its Settings window, and let `AppDelegate` forget it.
+    /// scripts), close its Settings, Search and status windows, and let
+    /// `AppDelegate` forget it.
     /// (Not called at quit: the windows and their layouts come back at launch.)
     func windowWillClose(_ notification: Notification) {
         workspace?.windowClosed()
@@ -677,6 +675,7 @@ extension MainWindowController: NSWindowDelegate {
         // the next time the folder opens.
         if instanceIndex > 0 { detail?.forgetLayout() }
         searchWindow?.close()
+        sidebar?.closeAuxiliaryWindows()
         if let window { SettingsWindowController.close(for: window) }
         backgroundTasksPanel?.close()   // it shows (and stops) this window's sessions
         backgroundTasksPanel = nil

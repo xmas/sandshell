@@ -179,6 +179,11 @@ enum SelfTest {
         func shown() -> [UUID?] { tree.panes.map(\.shownSession) }
         func focusedIndex() -> Int? { tree.panes.firstIndex { $0 === tree.focused } }
         func live(_ id: UUID) -> Bool { tree.surfaces.terminals[id] != nil }
+        /// Whether the keys are in `id`'s terminal (they go with the focus ring).
+        func keysIn(_ id: UUID) -> Bool {
+            guard let held = window.window?.firstResponder as? NSView, let v = tree.surfaces.terminals[id]?.view else { return false }
+            return held.isDescendant(of: v)
+        }
 
         ws.selection = .session(a)
         check(await until(90) { live(a) }, "session A launches in the only pane")
@@ -210,13 +215,16 @@ enum SelfTest {
         if let pane = tree.panes.first(where: { $0.shownSession == b }), let v = bView {
             check(v.isDescendant(of: pane.view), "B's terminal view lives in its new pane")
         }
+        check(keysIn(b), "the keys go with B to its new pane")
 
         tree.closeFocused()
         await wait()
         check(tree.panes.count == 3 && live(b), "Close Pane keeps the session running")
+        check(tree.focused.shownSession == a && keysIn(a), "Close Pane hands the keys to the pane now focused (A)")
 
         window.equalizePanes()
         await wait()
+        check(keysIn(a), "Equalize Panes leaves the keys in A's terminal")
         let frames = tree.panes.map { $0.view.frame }
         log("pane sizes after equalize: \(frames.map { "\(Int($0.width))×\(Int($0.height))" })")
         // Layout now: [A over empty] | old-B pane — two equal columns, A/empty equal rows.
@@ -229,7 +237,10 @@ enum SelfTest {
 
         window.focusNextPane()
         await wait()
-        check(focusedIndex() != nil, "Next Pane moves focus")
+        check(focusedIndex() == 1 && !keysIn(a), "Next Pane moves focus, and the keys leave A")
+        window.focusPreviousPane()
+        await wait()
+        check(focusedIndex() == 0 && keysIn(a), "Previous Pane brings focus and the keys back to A")
 
         // Layout persists (saved asynchronously).
         await wait(1.0)
@@ -944,7 +955,7 @@ enum SelfTest {
         let shortcuts = ShortcutsWindowController.collect()
         func has(_ title: String, _ keys: String) -> Bool { shortcuts.contains { $0.title == title && $0.keys == keys } }
         check(has("Stop", "⌘.") && has("Restart", "⌘R") && has("Reopen Closed Session", "⇧⌘T")
-              && has("Filter Sessions", "⌥⌘F") && has("Print…", "⌘P") && has("Keyboard Shortcuts", "⇧⌘/"),
+              && has("Filter Sessions", "⌥⌘F") && has("Print…", "⌘P") && has("Keyboard Shortcuts", "⌥⌘/"),
               "the menu bar has Session, File and Help commands with their shortcuts")
         check(!shortcuts.contains { $0.title == "Show Tab Bar" || $0.title == "Move Tab to New Window" },
               "no tab commands in a window that doesn't tab")

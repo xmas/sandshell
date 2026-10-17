@@ -44,7 +44,8 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
     private var cancellables: Set<AnyCancellable> = []
     private var clickMonitor: Any?
     private let container = PaneDropContainer()
-    private var saveScheduled = false
+    /// The layout save waiting out its debounce (`scheduleSave`).
+    private var saveTask: Task<Void, Never>?
     /// Where this window's layout is saved (see `layoutKey(root:instanceIndex:)`).
     let layoutKey: String
     /// Whether the window opens on its saved layout (a Duplicate Window starts
@@ -197,6 +198,96 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
         pane.reemitChrome()
     }
 
+    /// Focus `pane` from the keyboard (Next/Previous Pane): the keys go with
+    /// the ring.
+    private func focusWithKeyboard(_ pane: TerminalStackController) {
+        focus(pane)
+        giveKeyboard(to: pane)
+    }
+
+    /// Where the keys are before the panes change (`keyHolder`). Taking a
+    /// view out of the window takes the keys from it (the window becomes
+    /// first responder), so `rebuild` and `close` note them first and hand
+    /// them back after (`restoreKeys`, `giveKeyboard`).
+    private func keysInPanes() -> NSResponder? {
+        guard let window = view.window else { return nil }
+        return Self.keyHolder(window.firstResponder, in: window, panes: view)
+    }
+
+    /// After the panes changed: keys that were in them (`keysInPanes`) go
+    /// back to the view that had them while it's still showing, else to what
+    /// the focused pane shows.
+    private func restoreKeys(_ keys: NSResponder?) {
+        guard keys != nil, let window = view.window else { return }
+        if let held = Self.returningKeyView(keys, in: window, panes: view) {
+            if window.firstResponder !== held { window.makeFirstResponder(held) }
+        } else if let focused {
+            giveKeyboard(to: focused)
+        }
+    }
+
+    /// Where the keys are, for a change to the panes in `container` to hand
+    /// on: `responder` (the window's first responder) when it's in them, or
+    /// the window itself (keys going nowhere); nil while they're elsewhere
+    /// (the sidebar, a field in the toolbar), which a change to the panes
+    /// leaves alone. A text field being edited holds the window's field
+    /// editor, which leaves it once the field is out of the window: the
+    /// field is what comes back.
+    static func keyHolder(_ responder: NSResponder?, in window: NSWindow, panes container: NSView) -> NSResponder? {
+        guard let responder else { return nil }
+        if responder === window { return window }
+        guard let held = responder as? NSView, held.isDescendant(of: container) else { return nil }
+        if let editor = held as? NSTextView, editor.isFieldEditor,
+           let field = editor.delegate as? NSView, field.isDescendant(of: container) {
+            return field
+        }
+        return held
+    }
+
+    /// The view the keys go back to after a change to the panes in
+    /// `container`: `keys` (from `keyHolder`) while it's still showing in
+    /// them; nil once it's gone, or when they went nowhere — the focused pane
+    /// takes them then.
+    static func returningKeyView(_ keys: NSResponder?, in window: NSWindow, panes container: NSView) -> NSView? {
+        guard let held = keys as? NSView, held.window === window, held.isDescendant(of: container),
+              !held.isHiddenOrHasHiddenAncestor else { return nil }
+        return held
+    }
+
+    /// The keys to what `pane` shows: its chat (the composer, or the agent's
+    /// question), its terminal, or its Files (the file shown, else the list).
+    /// A pane with nothing to type into yet — empty, or its session still
+    /// starting, which takes them once it's up — takes them from the pane left.
+    private func giveKeyboard(to pane: TerminalStackController) {
+        guard let window = view.window else { return }
+        func isShown(_ v: NSView) -> Bool { v.isDescendant(of: pane.view) && !v.isHiddenOrHasHiddenAncestor }
+        if let id = pane.shownSession, let chat = surfaces.chats[id], isShown(chat) {
+            chat.focusComposer()
+        } else if let id = pane.shownSession, let terminal = surfaces.terminals[id]?.view, isShown(terminal) {
+            window.makeFirstResponder(terminal)
+        } else if let files = pane.filesPane, let target = Self.keyView(inFiles: files.view) {
+            window.makeFirstResponder(target)
+        } else if let responder = window.firstResponder as? NSView,
+                  panes.contains(where: { $0 !== pane && responder.isDescendant(of: $0.view) }) {
+            window.makeFirstResponder(nil)
+        }
+    }
+
+    /// A Files surface's place for the keys: the file it shows (editor,
+    /// preview or changes), else its list.
+    static func keyView(inFiles view: NSView) -> NSView? {
+        var text: NSTextView?
+        var list: NSOutlineView?
+        func walk(_ v: NSView) {
+            guard !v.isHidden else { return }
+            if text == nil, let t = v as? NSTextView, t.isSelectable { text = t }
+            if list == nil, let o = v as? NSOutlineView { list = o }
+            v.subviews.forEach(walk)
+        }
+        walk(view)
+        return text ?? list
+    }
+
     /// Sidebar selection → the focused pane, unless another pane already shows it.
     private func selectionChanged(_ selection: SidebarSelection?) {
         guard focused != nil else { return }
@@ -305,7 +396,7 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
             for c in leaf.children { c.parent = leaf }
             leaf.fractions = []
         }
-        rebuild()
+        let keys = rebuild(restoringKeys: false)
         if let files {
             newPane.showFiles(files)
         } else if let session {
@@ -315,6 +406,9 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
             newPane.show(nil)
         }
         focus(newPane)
+        // Keys that were in the panes go with the ring: to the session or
+        // Files it shows (an empty pane has nothing to take them yet).
+        if keys != nil { giveKeyboard(to: newPane) }
         scheduleSave()
     }
 
@@ -322,6 +416,7 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
     func close(_ pane: TerminalStackController) {
         guard panes.count > 1, let leaf = node(for: pane), let parent = leaf.parent,
               case .split(let axis, var kids) = parent.kind, pane.confirmLeavingFiles() else { return }
+        let keys = keysInPanes()   // (before the pane's view, which may hold them, goes)
         pane.paneClosed()
         kids.removeAll { $0 === leaf }
         if kids.count == 1 {
@@ -335,18 +430,24 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
         }
         pane.view.removeFromSuperview()
         pane.removeFromParent()
-        rebuild()
-        if focused === pane, let next = panes.first { focus(next) }
+        rebuild(restoringKeys: false)
+        if focused === pane, let next = panes.first {
+            // The ring moves on, and keys that were in the panes go with it.
+            focus(next)
+            if keys != nil { giveKeyboard(to: next) }
+        } else {
+            restoreKeys(keys)
+        }
         scheduleSave()
     }
 
     func closeFocused() { if let focused { close(focused) } }
 
-    /// Move focus to the next/previous pane in reading order.
+    /// Move focus (and the keys) to the next/previous pane in reading order.
     func focusAdjacent(_ delta: Int) {
         let all = panes
         guard all.count > 1, let i = all.firstIndex(where: { $0 === focused }) else { return }
-        focus(all[(i + delta + all.count) % all.count])
+        focusWithKeyboard(all[(i + delta + all.count) % all.count])
     }
 
     /// Give every split's children equal sizes.
@@ -360,7 +461,13 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
     // MARK: View hierarchy
 
     /// Rebuild the split views from the tree (pane views are reparented).
-    private func rebuild() {
+    /// The tree leaves the window and comes back, which would drop the keys:
+    /// keys that were in the panes go back to the view that had them (else to
+    /// the focused pane's content) unless `restoringKeys` is false, when the
+    /// caller hands them on itself. Returns where they were (`keysInPanes`).
+    @discardableResult
+    private func rebuild(restoringKeys: Bool = true) -> NSResponder? {
+        let keys = keysInPanes()
         // Building splits fires divider-tagged resizes from AppKit's own layout;
         // ignore them until our positions are applied.
         applyingFractions = true
@@ -382,16 +489,18 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
             p.showsFocusRing = many
             p.isFocused = p === focused
         }
+        if restoringKeys { restoreKeys(keys) }
         // Divider positions need the splits' real sizes: apply them after
         // this layout pass (positions computed from zero would clamp to the minimum).
         view.layoutSubtreeIfNeeded()
-        DispatchQueue.main.async { [weak self] in
+        Task { [weak self] in
             guard let self else { return }
             self.view.layoutSubtreeIfNeeded()
             self.applyFractions(self.root)
             self.applyingFractions = false
             self.panes.forEach { $0.redrawSurface() }
         }
+        return keys
     }
 
     /// Set while we position dividers ourselves (don't record those as user moves).
@@ -535,15 +644,15 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
     }
 
     private func scheduleSave() {
-        guard !saveScheduled else { return }
-        saveScheduled = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+        guard saveTask == nil else { return }
+        saveTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(500))
             guard let self, !self.layoutForgotten else { return }
-            self.saveScheduled = false
+            self.saveTask = nil
             @MainActor func encode(_ n: Node) -> Saved {
                 switch n.kind {
-                case .leaf(let p): return Saved(session: p.shownSession, files: p.shownFiles)
-                case .split(let a, let kids): return Saved(axis: a, children: kids.map(encode), fractions: n.fractions)
+                case .leaf(let p): Saved(session: p.shownSession, files: p.shownFiles)
+                case .split(let a, let kids): Saved(axis: a, children: kids.map(encode), fractions: n.fractions)
                 }
             }
             if let data = try? JSONEncoder().encode(encode(self.root)) {
@@ -569,7 +678,7 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
                 if kids.count == 1 { return kids[0] }
                 let n = Node(.split(axis, kids))
                 kids.forEach { $0.parent = n }
-                n.fractions = s.fractions?.count == kids.count ? s.fractions! : []
+                if let fractions = s.fractions, fractions.count == kids.count { n.fractions = fractions }
                 return n
             }
             let pane = makePane()
