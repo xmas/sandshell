@@ -73,13 +73,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// doesn't overwrite the persisted open-window set with an empty list.
     private var isTerminating = false
 
-    /// Persist the currently-open roots (with multiplicity) so launch can restore
-    /// every window. Call on any change to `windows` (skipped during quit, where
-    /// the set captured in `applicationShouldTerminate` is the one to keep).
+    /// Persist the currently-open roots (with multiplicity) and each window's
+    /// instance index so launch can restore every window as itself. Call on any
+    /// change to `windows` (skipped during quit, where the set captured in
+    /// `applicationShouldTerminate` is the one to keep).
     @MainActor private func persistOpenWindows() {
         guard !isTerminating else { return }
-        OpenWindows.replace(with: windows.map { $0.root })
+        saveOpenWindows()
     }
+
+    @MainActor private func saveOpenWindows() {
+        OpenWindows.replace(with: windows.map { .init(root: $0.root, instanceIndex: $0.instanceIndex) })
+    }
+
+    /// Set once launch has restored its windows. Files and folders opened with
+    /// the app before then (AppKit hands them over before
+    /// `applicationDidFinishLaunching`) wait in `openedAtLaunch`.
+    private var finishedLaunching = false
+    private var openedAtLaunch: [URL] = []
 
     // This app is fully programmatic — no MainMenu.xib / storyboard. The default
     // NSApplicationDelegate.main() just calls NSApplicationMain, which relies on a
@@ -165,20 +176,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         #endif
         // Restore every window that was open at last quit; otherwise open the
         // chosen default root folder (falling back to ~/Sandshell).
-        let restore = OpenWindows.all
+        let restore = OpenWindows.windows
         Log.info(.app, "launch: \(restore.count) window(s) to restore, \(RootFolderStore.all.count) known root(s)")
         let fallback = RootFolderStore.launchFolder()
-        primaryRoot = restore.first ?? fallback
+        primaryRoot = restore.first?.root ?? fallback
         if !restore.isEmpty {
-            for root in restore { createWindow(root: root) }
+            // Each with the index it had, so it gets its own frame and layout back.
+            for window in restore { createWindow(root: window.root, instanceIndex: window.instanceIndex) }
         } else if RootFolderStore.all.isEmpty {
             showWelcome()   // first launch: no folder has had a sandbox yet
         } else if let fallback {
             openWorkspace(fallback)
         }
+        // What the app was opened with (a file dropped on the Dock icon) goes
+        // to the windows now back, rather than opening ahead of them.
+        finishedLaunching = true
+        if !openedAtLaunch.isEmpty {
+            let urls = openedAtLaunch
+            openedAtLaunch = []
+            application(NSApp, open: urls)
+        }
         // Nothing opened (the launch folder is gone, or its workspace couldn't
         // be set up): choose one, rather than an app with only a menu bar.
-        if windows.isEmpty, setupWindow == nil { openWorkspaceBrowser(nil) }
+        // (Scripted runs never put up a window, or take focus, on their own.)
+        if windows.isEmpty, setupWindow == nil, !AutomatedRun.isActive { openWorkspaceBrowser(nil) }
 
         #if DEBUG
         if SelfTest.requested != nil {
@@ -462,9 +483,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// Always create a new window for `root` (used by restore + Duplicate Window),
-    /// allowing more than one window per folder.
+    /// allowing more than one window per folder. `instanceIndex` is the index
+    /// the window had when the app quit (restore); `restoresLayout: false`
+    /// opens one fresh pane rather than a saved layout (Duplicate Window).
     @MainActor @discardableResult
-    func createWindow(root: URL) -> MainWindowController? {
+    func createWindow(root: URL, instanceIndex requested: Int? = nil,
+                      restoresLayout: Bool = true) -> MainWindowController? {
         do {
             try WorkspaceBootstrap.openOrCreate(root: root)
         } catch {
@@ -474,11 +498,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         RecentRoots.record(root)
         RootFolderStore.touch(root.path)
         let key = root.standardizedFileURL.path
-        // Distinct autosave names per window on the same root: an index no open
-        // window on it holds (one freed by a closed window is reused).
-        let instanceIndex = MainWindowController.freeInstanceIndex(
+        // Distinct autosave names per window on the same root: the index it had
+        // at quit, else one no open window on it holds (one freed by a closed
+        // window is reused).
+        let instanceIndex = MainWindowController.instanceIndex(
+            requested: requested,
             used: windows.filter { $0.root.standardizedFileURL.path == key }.map(\.instanceIndex))
-        let controller = MainWindowController(root: root, instanceIndex: instanceIndex)
+        let controller = MainWindowController(root: root, instanceIndex: instanceIndex,
+                                              restoresLayout: restoresLayout)
         controller.onOpenWorkspace = { [weak self] r in self?.openWorkspace(r) }
         controller.onBecomeKey = { [weak self, weak controller] in self?.lastActiveController = controller }
         // Drop the window from the registry once it closes.
@@ -503,7 +530,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// root (same folders + per-root settings, but its own fresh terminals).
     @MainActor @objc func duplicateWindow(_ sender: Any?) {
         guard let root = activeController?.root else { return }
-        createWindow(root: root)
+        // One fresh pane: a saved layout's sessions run in the other window.
+        createWindow(root: root, restoresLayout: false)
     }
 
     /// ⌘O / File ▸ Open… — open the recent workspaces browser.
@@ -799,6 +827,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Directories open/focus workspaces; regular files are inserted into the
     /// active terminal as sandbox-readable paths.
     func application(_ application: NSApplication, open urls: [URL]) {
+        // Opened with the app at launch: wait for PATH and the restored windows.
+        guard finishedLaunching else { openedAtLaunch += urls; return }
         var files: [URL] = []
         for url in urls {
             var isDir: ObjCBool = false
@@ -836,7 +866,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         // Unsaved file edits get their say first.
         for controller in windows where !controller.confirmUnsavedFiles() { return .terminateCancel }
-        OpenWindows.replace(with: windows.map { $0.root })
+        saveOpenWindows()
         isTerminating = true
         return .terminateNow
     }

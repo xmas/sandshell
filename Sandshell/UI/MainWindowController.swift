@@ -90,7 +90,17 @@ final class MainWindowController: NSWindowController {
         return (0...taken.count).first { !taken.contains($0) } ?? taken.count
     }
 
-    init(root: URL, instanceIndex: Int = 0) {
+    /// The index for a new window on a root whose open windows hold `used`:
+    /// `requested` (the one it had when the app quit) while no open window
+    /// holds it, else the lowest free one.
+    nonisolated static func instanceIndex(requested: Int?, used: [Int]) -> Int {
+        if let requested, requested >= 0, !used.contains(requested) { return requested }
+        return freeInstanceIndex(used: used)
+    }
+
+    /// `restoresLayout: false` opens one fresh pane instead of the window's
+    /// saved layout (Duplicate Window).
+    init(root: URL, instanceIndex: Int = 0, restoresLayout: Bool = true) {
         self.root = root
         self.instanceIndex = instanceIndex
         let window = TrafficLightInsetWindow(
@@ -156,7 +166,8 @@ final class MainWindowController: NSWindowController {
         self.sidebarItem = sidebarItem
         split.addSplitViewItem(sidebarItem)
 
-        let detail = PaneTreeController(controller: controller, instanceIndex: instanceIndex)
+        let detail = PaneTreeController(controller: controller, instanceIndex: instanceIndex,
+                                        restoresLayout: restoresLayout)
         self.detail = detail
         detail.onToggleSidebar = { [weak self] in self?.toggleSidebar() }
         detail.newSessionMenu = { [weak self] in self?.sidebar?.newSessionMenu() }
@@ -662,8 +673,13 @@ extension MainWindowController: NSWindowDelegate {
 
     /// Tear down this window's terminals (kills their `sbx exec` + removes temp
     /// scripts), close its Settings window, and let `AppDelegate` forget it.
+    /// (Not called at quit: the windows and their layouts come back at launch.)
     func windowWillClose(_ notification: Notification) {
         detail?.teardown()
+        // An extra window's layout goes with it, so a later window taking its
+        // index starts fresh; the folder's first window keeps its layout for
+        // the next time the folder opens.
+        if instanceIndex > 0 { detail?.forgetLayout() }
         searchWindow?.close()
         if let window { SettingsWindowController.close(for: window) }
         backgroundTasksPanel?.close()   // it shows (and stops) this window's sessions

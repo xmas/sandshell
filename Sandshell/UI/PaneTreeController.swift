@@ -49,6 +49,12 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
     private var saveScheduled = false
     /// Where this window's layout is saved (see `layoutKey(root:instanceIndex:)`).
     let layoutKey: String
+    /// Whether the window opens on its saved layout (a Duplicate Window starts
+    /// with one fresh pane instead).
+    private let restoresLayout: Bool
+    /// The window closed and its layout was dropped (`forgetLayout`): a save
+    /// still pending mustn't write it back.
+    private var layoutForgotten = false
 
     /// The layout's defaults key for window `instanceIndex` on `root`: each
     /// window on a folder keeps its own (index 0 the legacy per-folder key).
@@ -57,10 +63,11 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
         return "paneLayout:" + (instanceIndex == 0 ? path : "\(path)#\(instanceIndex)")
     }
 
-    init(controller: WorkspaceController, instanceIndex: Int = 0) {
+    init(controller: WorkspaceController, instanceIndex: Int = 0, restoresLayout: Bool = true) {
         self.controller = controller
         self.surfaces = SessionSurfaces(controller: controller)
         self.layoutKey = Self.layoutKey(root: controller.rootURL, instanceIndex: instanceIndex)
+        self.restoresLayout = restoresLayout
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -89,7 +96,7 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
         surfaces.onChatAgentExit = { [weak self] id in
             self?.panes.first { $0.shownSession == id }?.chatAgentExited(id)
         }
-        root = restoreLayout() ?? Node(.leaf(makePane()))
+        root = (restoresLayout ? restoreLayout() : nil) ?? Node(.leaf(makePane()))
         // Focus the pane holding the selected session, if the layout has it.
         if case .session(let id)? = controller.selection, let holder = panes.first(where: { $0.shownSession == id }) {
             focused = holder
@@ -535,7 +542,7 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
         guard !saveScheduled else { return }
         saveScheduled = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-            guard let self else { return }
+            guard let self, !self.layoutForgotten else { return }
             self.saveScheduled = false
             @MainActor func encode(_ n: Node) -> Saved {
                 switch n.kind {
@@ -547,6 +554,14 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
                 UserDefaults.standard.set(data, forKey: self.layoutKey)
             }
         }
+    }
+
+    /// The window closed while the app runs (not at quit, whose layout is
+    /// restored at launch): drop its saved layout, so the next window to take
+    /// its index doesn't open on the sessions this one showed.
+    func forgetLayout() {
+        layoutForgotten = true
+        UserDefaults.standard.removeObject(forKey: layoutKey)
     }
 
     private func restoreLayout() -> Node? {

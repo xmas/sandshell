@@ -341,22 +341,52 @@ enum RecentRoots {
 }
 
 /// App-global list of currently-open workspace roots, stored in `UserDefaults`,
-/// with multiplicity (a root open in N windows appears N times). Restored on
-/// launch so every open window re-opens.
+/// with multiplicity (a root open in N windows appears N times), and each
+/// window's instance index. Restored on launch so every open window re-opens
+/// as itself: its frame, split, Files visibility and pane layout are saved
+/// under its index.
 enum OpenWindows {
     private static let key = "openWindowRoots"
+    /// The windows' instance indexes, beside the roots they were saved with
+    /// (`["roots": […], "indexes": […]]`). They're used only while those roots
+    /// are `key`'s, so roots set another way (the self-tests'
+    /// `-openWindowRoots` argument) never take another list's indexes.
+    private static let indexesKey = "openWindowIndexes"
+    /// A defaults suite to keep the list in instead of the app's own (a test
+    /// binds its own).
+    @TaskLocal static var suiteName: String? = nil
+    private static var defaults: UserDefaults { suiteName.flatMap(UserDefaults.init(suiteName:)) ?? .standard }
 
-    /// The roots to restore on launch, in order, including duplicates. Filtered
-    /// to those that still exist on disk.
-    static var all: [URL] {
-        let paths = UserDefaults.standard.stringArray(forKey: key) ?? []
-        return paths.filter { FileManager.default.fileExists(atPath: $0) }
-            .map { URL(fileURLWithPath: $0) }
+    /// A window to reopen: its folder and the instance index it had (nil when
+    /// none was saved for it).
+    struct Window: Equatable {
+        var root: URL
+        var instanceIndex: Int?
     }
 
-    /// Replace the persisted set with the given roots (call whenever windows change).
-    static func replace(with roots: [URL]) {
-        let paths = roots.map { $0.standardizedFileURL.path }
-        UserDefaults.standard.set(paths, forKey: key)
+    /// The windows to restore on launch, in order, including several on one
+    /// root. Filtered to roots that still exist on disk.
+    static var windows: [Window] {
+        let paths = defaults.stringArray(forKey: key) ?? []
+        let saved = defaults.dictionary(forKey: indexesKey)
+        var indexes: [Int?] = Array(repeating: nil, count: paths.count)
+        if saved?["roots"] as? [String] == paths, let stored = saved?["indexes"] as? [Int],
+           stored.count == paths.count {
+            indexes = stored
+        }
+        return zip(paths, indexes)
+            .filter { FileManager.default.fileExists(atPath: $0.0) }
+            .map { Window(root: URL(fileURLWithPath: $0.0), instanceIndex: $0.1) }
+    }
+
+    /// Replace the persisted set with the given windows (call whenever windows change).
+    static func replace(with windows: [Window]) {
+        let paths = windows.map { $0.root.standardizedFileURL.path }
+        defaults.set(paths, forKey: key)
+        if windows.allSatisfy({ $0.instanceIndex != nil }) {
+            defaults.set(["roots": paths, "indexes": windows.compactMap(\.instanceIndex)], forKey: indexesKey)
+        } else {
+            defaults.removeObject(forKey: indexesKey)
+        }
     }
 }

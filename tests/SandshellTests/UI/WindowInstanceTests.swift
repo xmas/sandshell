@@ -3,7 +3,8 @@ import Testing
 @testable import Sandshell
 
 // Tests for what keeps several windows on one folder apart: the instance index
-// a new window takes (`MainWindowController.freeInstanceIndex`, which picks its
+// a new window takes (`MainWindowController.freeInstanceIndex`, and
+// `instanceIndex(requested:used:)` for one restored at launch, which picks its
 // frame, split and Files autosave names) and the key its pane layout is saved
 // under (`PaneTreeController.layoutKey`). Paths are under `/srv`, which doesn't
 // exist, so nothing on disk is consulted.
@@ -20,6 +21,18 @@ struct WindowInstanceIndexTests {
     ] as [([Int], Int)])
     func freeIndex(used: [Int], expected: Int) {
         #expect(MainWindowController.freeInstanceIndex(used: used) == expected)
+    }
+
+    @Test("A restored window keeps the index it had unless an open window holds it", arguments: [
+        (nil, [], 0),
+        (nil, [0, 2], 1),
+        (2, [0], 2),
+        (0, [], 0),
+        (1, [0, 1], 2),
+        (-1, [], 0),
+    ] as [(Int?, [Int], Int)])
+    func requestedIndex(requested: Int?, used: [Int], expected: Int) {
+        #expect(MainWindowController.instanceIndex(requested: requested, used: used) == expected)
     }
 
     @Test func duplicatingAfterTheFirstWindowClosedKeepsOpenWindowsApart() {
