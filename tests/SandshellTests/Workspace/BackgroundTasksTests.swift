@@ -810,9 +810,81 @@ extension BackgroundTasksTests {
                 BGLine.queued(event, at: 70), BGLine.delivered(event, at: 71),
             ])
             let task = try #require(parser.tasks.first)
-            withKnownIssue("Notifications are de-duplicated by the hash of their body, so a Monitor event whose text repeats an earlier one is dropped as if it were the delivered copy of the first; events stays at 1") {
-                #expect(task.events == 2)
-            }
+            #expect(task.events == 2, "Each delivered copy is the queued one's; the second queued line is a new event")
+        }
+
+        @Test(.tags(.backgroundTasksEdgeCase))
+        func repeatedIdenticalEventsCountAcrossReads() throws {
+            let event = BGNotice.body(taskID: "mon_1", event: "ERROR: connection refused")
+            var parser = try BGScenario.parse(launch + [BGLine.queued(event, at: 10)])
+            try parser.consume(BGLine.file([BGLine.delivered(event, at: 11), BGLine.queued(event, at: 70)]))
+            try parser.consume(BGLine.file([BGLine.delivered(event, at: 71)]))
+            #expect(parser.tasks.first?.events == 2)
+        }
+
+        @Test(.tags(.backgroundTasksEdgeCase))
+        func eventsDeliveredWithoutBeingQueuedEachCount() throws {
+            let event = BGNotice.body(taskID: "mon_1", event: "ERROR: connection refused")
+            let parser = try BGScenario.parse(launch + [BGLine.delivered(event, at: 10), BGLine.delivered(event, at: 70)])
+            #expect(parser.tasks.first?.events == 2)
+        }
+
+        @Test(.tags(.backgroundTasksEdgeCase))
+        func removedQueueEntryIsNotANewEvent() throws {
+            let event = BGNotice.body(taskID: "mon_1", event: "ERROR: connection refused")
+            // Claude Code's usual order: enqueue, (an attachment delivers it), remove.
+            var parser = try BGScenario.parse(launch + [BGLine.queued(event, at: 10), BGLine.removed(event, at: 11)])
+            #expect(parser.tasks.first?.events == 1, "The remove is the queued entry leaving")
+            // The same line again, delivered without being queued: nothing queued is left to swallow it.
+            try parser.consume(BGLine.file([BGLine.delivered(event, at: 70)]))
+            #expect(parser.tasks.first?.events == 2)
+        }
+
+        @Test(.tags(.backgroundTasksEdgeCase))
+        func repeatedEventsLeavingByRemoveEachCount() throws {
+            let event = BGNotice.body(taskID: "mon_1", event: "ERROR: connection refused")
+            let parser = try BGScenario.parse(launch + [
+                BGLine.queued(event, at: 10), BGLine.removed(event, at: 11),
+                BGLine.queued(event, at: 70), BGLine.removed(event, at: 71),
+            ])
+            #expect(parser.tasks.first?.events == 2)
+        }
+
+        @Test(.tags(.backgroundTasksEdgeCase))
+        func removeWithNothingQueuedIsIgnored() throws {
+            let event = BGNotice.body(taskID: "mon_1", event: "ERROR: connection refused")
+            let parser = try BGScenario.parse(launch + [BGLine.removed(event, at: 11), BGLine.queued(event, at: 70),
+                                                        BGLine.delivered(event, at: 71)])
+            #expect(parser.tasks.first?.events == 1, "Only the enqueue is new; its delivery uses it up")
+        }
+
+        @Test(.tags(.backgroundTasksEdgeCase))
+        func dequeueWithoutContentLeavesTheDeliveryPaired() throws {
+            let event = BGNotice.body(taskID: "mon_1", event: "ERROR: connection refused")
+            let parser = try BGScenario.parse(launch + [BGLine.queued(event, at: 10), BGLine.dequeued(at: 11),
+                                                        BGLine.delivered(event, at: 11)])
+            #expect(parser.tasks.first?.events == 1)
+        }
+
+        @Test(.tags(.backgroundTasksEdgeCase))
+        func lineWrittenAgainIsHandledOnce() throws {
+            let event = BGNotice.body(taskID: "mon_1", event: "ERROR: connection refused")
+            let parser = try BGScenario.parse(launch + [
+                BGLine.queued(event, at: 10),
+                BGLine.delivered(event, at: 11, uuid: "u1"),
+                BGLine.delivered(event, at: 11, uuid: "u1"),
+            ])
+            #expect(parser.tasks.first?.events == 1, "Claude Code wrote the delivery twice (same uuid)")
+        }
+
+        @Test(.tags(.backgroundTasksEdgeCase))
+        func distinctLinesWithTheSameEventEachCount() throws {
+            let event = BGNotice.body(taskID: "mon_1", event: "ERROR: connection refused")
+            let parser = try BGScenario.parse(launch + [
+                BGLine.delivered(event, at: 10, uuid: "u1"),
+                BGLine.delivered(event, at: 70, uuid: "u2"),
+            ])
+            #expect(parser.tasks.first?.events == 2)
         }
     }
 }
@@ -1140,19 +1212,24 @@ extension BackgroundTasksTests {
             let window = data.count - 1           // starts at A9, the second byte of the character
             try withBGScratchFile(data) { url in
                 try #require(SubagentProgress.latestStep(in: url) == "Read: /late", "Sanity check: the whole file reads")
-                withKnownIssue("latestStep decodes the whole window with String(data:encoding: .utf8), which returns nil when the window starts mid-character, so any non-ASCII text at the 64 KB boundary hides the latest step") {
-                    #expect(SubagentProgress.latestStep(in: url, maxBytes: window) == "Read: /late")
-                }
+                #expect(SubagentProgress.latestStep(in: url, maxBytes: window) == "Read: /late")
+            }
+        }
+
+        @Test(.tags(.backgroundTasksEdgeCase), arguments: ["", "  ", "\n"])
+        func blankDescriptionFallsThroughToTheNextInput(description: String) throws {
+            let line = try BGLine.assistant([BGBlock.toolUse(id: "toolu_1", name: "Bash",
+                                                             input: ["description": description, "command": "swift test"])])
+            try withBGScratchFile(lines: [line]) { url in
+                #expect(SubagentProgress.latestStep(in: url) == "Bash: swift test")
             }
         }
 
         @Test(.tags(.backgroundTasksEdgeCase))
-        func emptyDescriptionFallsThroughToTheNextInput() throws {
-            let line = #"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"description":"","command":"swift test"}}]}}"#
+        func onlyBlankInputsNameTheToolAlone() throws {
+            let line = try BGLine.assistant([BGBlock.toolUse(id: "toolu_1", name: "Bash", input: ["description": "", "command": " "])])
             try withBGScratchFile(lines: [line]) { url in
-                withKnownIssue("latestStep takes the first input that is a String, even an empty one, so an empty description reads \"Bash: \" instead of falling through to the command (BackgroundTaskParser treats an empty description as missing)") {
-                    #expect(SubagentProgress.latestStep(in: url) == "Bash: swift test")
-                }
+                #expect(SubagentProgress.latestStep(in: url) == "Bash")
             }
         }
     }
@@ -1247,9 +1324,22 @@ fileprivate enum BGLine {
         return try json(object)
     }
 
-    /// A user message whose content is a string.
-    static func delivered(_ content: String, at seconds: Int = 0) throws -> String {
-        try json(["type": "user", "timestamp": BGStamp.iso(seconds), "message": ["role": "user", "content": content]])
+    /// Claude Code taking `content` off the queue (delivered as an attachment, or dropped).
+    static func removed(_ content: String, at seconds: Int = 0) throws -> String {
+        try json(["type": "queue-operation", "operation": "remove", "timestamp": BGStamp.iso(seconds), "content": content])
+    }
+
+    /// Claude Code taking the next entry off the queue to deliver it (no content).
+    static func dequeued(at seconds: Int = 0) throws -> String {
+        try json(["type": "queue-operation", "operation": "dequeue", "timestamp": BGStamp.iso(seconds)])
+    }
+
+    /// A user message whose content is a string (with the line's `uuid` when given).
+    static func delivered(_ content: String, at seconds: Int = 0, uuid: String? = nil) throws -> String {
+        var object: [String: Any] = ["type": "user", "timestamp": BGStamp.iso(seconds),
+                                     "message": ["role": "user", "content": content]]
+        if let uuid { object["uuid"] = uuid }
+        return try json(object)
     }
 
     /// A user message whose content is text blocks.

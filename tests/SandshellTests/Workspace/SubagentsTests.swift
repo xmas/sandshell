@@ -247,7 +247,7 @@ extension SubagentsTests {
             #expect(SubagentScanner.finished(url) == false)
         }
 
-        @Test(arguments: ["end_turn", "stop_sequence", "max_tokens"])
+        @Test(arguments: ["end_turn", "stop_sequence", "max_tokens", "refusal", "model_context_window_exceeded"])
         func terminalStopReasonMeansFinished(stopReason: String) throws {
             let url = try transcript([SubagentsFixture.userLine, SubagentsFixture.assistantLine(stopReason: stopReason)])
             #expect(SubagentScanner.finished(url))

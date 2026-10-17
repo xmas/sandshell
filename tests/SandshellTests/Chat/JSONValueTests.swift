@@ -365,16 +365,7 @@ struct JSONValueAccessorTests {
         #expect(JSONValue.number(number).int == expected)
     }
 
-    // Can't be wrapped in withKnownIssue: Int(_: Double) traps, which would take down
-    // the whole test host rather than record an issue. An exit test isn't safe either:
-    // its child process relaunches the host app with the XCTest variables removed, so
-    // AppDelegate.isHostingTests would be false and the app would start for real.
-    // Enable once `int` uses Int(exactly:) or otherwise checks the range.
-    @Test(
-        .tags(.jsonValueEdgeCase),
-        .disabled("BUG (JSONValue.swift:44): JSONValue.int calls Int(_: Double), which traps for NaN, infinity and out-of-range numbers instead of returning nil"),
-        arguments: [Double.nan, .infinity, -.infinity, 1e300, -1e300, Double(Int.max)]
-    )
+    @Test(.tags(.jsonValueEdgeCase), arguments: [Double.nan, .infinity, -.infinity, 1e300, -1e300, Double(Int.max)])
     func intIsNilWhenNumberDoesNotFitInInt(number: Double) {
         #expect(JSONValue.number(number).int == nil, "\(number) does not fit in Int")
     }

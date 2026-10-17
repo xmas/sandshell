@@ -48,8 +48,26 @@ struct BackgroundTaskParser: Sendable {
 
     /// Background-capable tool calls awaiting their result, by tool_use id.
     private var launches: [String: Launch] = [:]
-    /// Notifications show up twice (queued, then delivered); handle each once.
-    private var seenNotifications: Set<Int> = []
+    /// Notifications show up more than once (queued, then delivered or taken
+    /// off the queue); handle each once. The queued copies still in the queue,
+    /// by body: a copy leaving it uses one up, so the same text queued again
+    /// later (a Monitor's repeated line) counts.
+    private var inQueue: [String: Int] = [:]
+    /// Lines that delivered notifications, by `uuid`: Claude Code can write a
+    /// line again (same uuid), and its notifications were handled the first time.
+    private var deliveredLines: Set<String> = []
+
+    /// Where a notification's text turned up.
+    private enum Copy {
+        /// An enqueue: a new queue entry.
+        case queued
+        /// Off the queue (a remove, carrying the text): delivered as an
+        /// attachment, or dropped. Never new.
+        case leftQueue
+        /// In a user line: a queued entry's delivery, else new (Claude Code
+        /// also delivers some notifications without queueing them).
+        case delivered
+    }
 
     private struct Launch: Sendable {
         let tool: String
@@ -82,9 +100,16 @@ struct BackgroundTaskParser: Sendable {
                 for block in Self.blocks(obj["message"]) where block["type"] as? String == "tool_result" {
                     noteResult(block, toolUseResult: obj["toolUseResult"] as? [String: Any], at: at)
                 }
-                if let text = Self.text(of: obj["message"]) { noteNotifications(in: text, at: at) }
+                if let text = Self.text(of: obj["message"]), text.contains("<task-notification>"),
+                   firstWrite(of: obj) {
+                    noteNotifications(in: text, at: at, copy: .delivered)
+                }
             case "queue-operation":
-                if let content = obj["content"] as? String { noteNotifications(in: content, at: at) }
+                // An enqueue is a new entry; any other operation that carries
+                // the text (a remove) is that entry leaving. A dequeue carries none.
+                guard let content = obj["content"] as? String else { continue }
+                let enqueue = obj["operation"] as? String ?? "enqueue" == "enqueue"
+                noteNotifications(in: content, at: at, copy: enqueue ? .queued : .leftQueue)
             default:
                 continue
             }
@@ -178,12 +203,20 @@ struct BackgroundTaskParser: Sendable {
         tasks.append(task)
     }
 
-    private mutating func noteNotifications(in text: String, at: Date) {
+    private mutating func noteNotifications(in text: String, at: Date, copy: Copy) {
         guard text.contains("<task-notification>") else { return }
         for chunk in text.components(separatedBy: "<task-notification>").dropFirst() {
             let body = chunk.components(separatedBy: "</task-notification>").first ?? chunk
-            guard seenNotifications.insert(body.hashValue).inserted,
-                  let id = Self.tag("task-id", in: body),
+            switch copy {
+            case .queued:
+                inQueue[body, default: 0] += 1
+            case .leftQueue:
+                takeOffQueue(body)
+                continue
+            case .delivered:
+                if takeOffQueue(body) { continue }   // the delivered copy of one already handled
+            }
+            guard let id = Self.tag("task-id", in: body),
                   let i = tasks.firstIndex(where: { $0.id == id }) else { continue }
             var summary = Self.tag("summary", in: body)
             let status = Self.tag("status", in: body)?.lowercased()
@@ -212,6 +245,21 @@ struct BackgroundTaskParser: Sendable {
             tasks[i].summary = summary.map(Self.oneLine) ?? tasks[i].summary
             justFinished.append(tasks[i])
         }
+    }
+
+    /// False for a line Claude Code wrote again (same `uuid`) after the one
+    /// whose notifications were already handled.
+    private mutating func firstWrite(of line: [String: Any]) -> Bool {
+        guard let uuid = line["uuid"] as? String else { return true }
+        return deliveredLines.insert(uuid).inserted
+    }
+
+    /// Uses up one queued copy of `body`; false when none is in the queue.
+    @discardableResult
+    private mutating func takeOffQueue(_ body: String) -> Bool {
+        guard let copies = inQueue[body] else { return false }
+        inQueue[body] = copies > 1 ? copies - 1 : nil
+        return true
     }
 
     // MARK: Parsing helpers
@@ -268,8 +316,9 @@ enum SubagentProgress {
         defer { try? fh.close() }
         let size = (try? fh.seekToEnd()) ?? 0
         try? fh.seek(toOffset: size > UInt64(maxBytes) ? size - UInt64(maxBytes) : 0)
-        guard let data = try? fh.readToEnd(), let text = String(data: data, encoding: .utf8) else { return nil }
-        for line in text.split(separator: "\n").reversed() {
+        // Lossy: the window can start mid-character (that first line is cut anyway).
+        guard let data = try? fh.readToEnd() else { return nil }
+        for line in String(decoding: data, as: UTF8.self).split(separator: "\n").reversed() {
             guard line.contains("\"assistant\""),
                   let obj = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
                   obj["type"] as? String == "assistant",
@@ -277,9 +326,10 @@ enum SubagentProgress {
             for block in blocks.reversed() {
                 if block["type"] as? String == "tool_use", let name = block["name"] as? String {
                     let input = block["input"] as? [String: Any] ?? [:]
+                    // The first one that says something: a blank description falls through to the command.
                     let what = ["description", "file_path", "command", "pattern", "url", "query"]
-                        .lazy.compactMap { input[$0] as? String }.first
-                    return what.map { "\(name): \(BackgroundTaskParser.oneLine($0))" } ?? name
+                        .lazy.compactMap { (input[$0] as? String).map(BackgroundTaskParser.oneLine) }.first { !$0.isEmpty }
+                    return what.map { "\(name): \($0)" } ?? name
                 }
                 if block["type"] as? String == "text", let t = block["text"] as? String,
                    !t.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {

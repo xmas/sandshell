@@ -163,6 +163,8 @@ fileprivate enum AQFixture {
         (3, "3"),
         (.number(2.5), "2.5"),
         (-4, "-4"),
+        (.number(1e20), "1e+20"),
+        (.number(-1e300), "-1e+300"),
         (true, "Yes"),
         (false, "No"),
         (["a", 1, "b"], "a, b"),
@@ -566,6 +568,13 @@ struct AgentQuestionFormTests {
         #expect(form.texts == ["name": "Ada", "count": "3", "ratio": "2.5"], "Whole numbers show without a decimal point")
         #expect(form.toggles == ["agree": true])
         #expect(form.previewed.isEmpty)
+    }
+
+    @Test(.tags(.agentQuestionEdgeCase), arguments: [(1e20, "1e+20"), (-1e300, "-1e+300"), (4.0, "4")])
+    func numberDefaultsPastIntsRangeKeepTheirSpelling(value: Double, shown: String) {
+        let question = AQFixture.form([AQFixture.field("n", kind: .number(integer: false), defaultValue: .number(value))])
+        let (form, _) = AQFixture.makeForm(question)
+        #expect(form.texts["n"] == shown, "A whole number Int can't hold is shown, not trapped on")
     }
 
     @Test(.tags(.agentQuestionEdgeCase))

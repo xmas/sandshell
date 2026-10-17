@@ -47,9 +47,8 @@ struct ChatRendererTests {
         @Test(.tags(.edgeCase), arguments: ["turn/2", "turn?2", "turn#2"])
         func undoURLRoundTripsTurnsWithURLDelimiters(turn: String) {
             let url = ChatRenderer.undoURL(turn)
-            withKnownIssue("undoURL interpolates the turn id without percent-encoding it (toggleURL does encode), so a '/', '?' or '#' in the id changes the path and the transcript's url.lastPathComponent asks to undo the wrong turn") {
-                #expect(url.lastPathComponent == turn)
-            }
+            #expect(url.host() == "undo")
+            #expect(url.lastPathComponent == turn, "A '/', '?' or '#' in the turn is escaped, not read as URL structure")
         }
 
         /// The link's scheme and host route it, and one percent-decoding of its
@@ -602,9 +601,7 @@ struct ChatRendererTests {
         @Test(.tags(.edgeCase), arguments: ["ls\n", "\nls"])
         func newlinesAroundACommandAreNotACut(input: String) {
             let summary = ChatRenderer.groupSummary([CRFixture.call(kind: "execute", input: input)], running: false)
-            withKnownIssue("groupSummary trims only spaces and tabs before comparing the shown first line with the whole command, so a leading or trailing newline reads as a cut and adds \"…\" (\"Ran ls…\")") {
-                #expect(summary == "Ran ls")
-            }
+            #expect(summary == "Ran ls")
         }
     }
 
@@ -1161,19 +1158,21 @@ struct ChatRendererTests {
         @Test(.tags(.edgeCase))
         func windowsLineEndingsSplitListItems() {
             let rendered = ChatRenderer.markdown("- one\r\n- two", prose: .document)
-            let bullets = rendered.string.filter { $0 == "•" }.count
-            withKnownIssue("markdown splits on the Character \"\\n\", but \"\\r\\n\" is a single Character in Swift, so text with CRLF line endings (a Markdown file saved on Windows, shown in the Files preview) is never split into lines") {
-                #expect(bullets == 2)
-            }
+            #expect(rendered.string == "•\tone\n•\ttwo\n", "\"\\r\\n\" is a single Character in Swift, but still ends a line")
         }
 
         @Test(.tags(.edgeCase))
         func windowsLineEndingsKeepFencedCodeAndWhatFollows() {
             let rendered = ChatRenderer.markdown("```\r\nlet x = 1\r\n```\r\nAfter", prose: .document)
-            withKnownIssue("With CRLF line endings the whole text is one line starting with ```, so it becomes an empty code block and everything after the fence is dropped") {
-                #expect(rendered.string.contains("let x = 1"))
-                #expect(rendered.string.contains("After"))
-            }
+            #expect(rendered.string.contains("let x = 1"))
+            #expect(rendered.string.contains("After"))
+            #expect(rendered.string.contains("\r") == false)
+        }
+
+        @Test(.tags(.edgeCase))
+        func mixedLineEndingsSplitAlike() {
+            let rendered = ChatRenderer.markdown("# Title\r\n- one\n- two\r\n", prose: .document)
+            #expect(rendered.string == ChatRenderer.markdown("# Title\n- one\n- two\n", prose: .document).string)
         }
     }
 

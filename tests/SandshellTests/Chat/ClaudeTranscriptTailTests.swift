@@ -185,13 +185,10 @@ extension ClaudeTranscriptTailTests {
             #expect(ClaudeTranscriptTail.parse(text).working == working)
         }
 
-        @Test(.tags(.tailEdgeCase))
-        func refusalEndsTheTurn() {
-            let line = TailLine.assistant([TailBlock.text("I can't help with that.")], stop: "refusal")
-            let batch = ClaudeTranscriptTail.parse(line)
-            withKnownIssue("\"refusal\" is a terminal stop reason but isn't in parse's terminal set, so a refused turn still reads as working") {
-                #expect(batch.working == false)
-            }
+        @Test(.tags(.tailEdgeCase), arguments: ["refusal", "model_context_window_exceeded"])
+        func refusalOrAFullContextEndsTheTurn(stopReason: String) {
+            let line = TailLine.assistant([TailBlock.text("I can't help with that.")], stop: stopReason)
+            #expect(ClaudeTranscriptTail.parse(line).working == false)
         }
     }
 }
@@ -503,9 +500,16 @@ extension ClaudeTranscriptTailTests {
         ])
         func harnessBlocksAreFilteredOneByOne(texts: [String]) {
             let batch = ClaudeTranscriptTail.parse(TailLine.user(blocks: texts.map(TailBlock.text)))
-            withKnownIssue("prompt(_:) filters the joined text by its first character: a typed prompt after a <…> block is dropped, and a <…> block after it is shown") {
-                #expect(batch.events == [.user("Fix the build")])
-            }
+            #expect(batch.events == [.user("Fix the build")])
+            #expect(batch.working == true)
+        }
+
+        @Test(.tags(.tailEdgeCase))
+        func lineOfOnlyHarnessBlocksHasNoPrompt() {
+            let texts = ["<ide_opened_file>Foo.swift</ide_opened_file>", "  ", "<system-reminder>Be brief.</system-reminder>"]
+            let batch = ClaudeTranscriptTail.parse(TailLine.user(blocks: texts.map(TailBlock.text)))
+            #expect(batch.events.isEmpty)
+            #expect(batch.working == true, "It's still a user line: the turn goes on")
         }
     }
 }

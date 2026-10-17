@@ -159,7 +159,12 @@ enum ChatRenderer {
 
     // MARK: Pieces
 
-    static func undoURL(_ turn: String) -> URL { URL(string: "sandshell-chat://undo/\(turn)")! }
+    /// The turn is one path component, its "/", "?" and "#" escaped
+    /// (the transcript hands Undo the URL's `lastPathComponent`).
+    static func undoURL(_ turn: String) -> URL {
+        let component = CharacterSet.urlPathAllowed.subtracting(CharacterSet(charactersIn: "/"))
+        return URL(string: "sandshell-chat://undo/\(turn.addingPercentEncoding(withAllowedCharacters: component) ?? turn)")!
+    }
 
     /// "Changed 3 files: a.swift, b.swift, c.swift · Undo", or once undone,
     /// "Restored 3 files to before this message".
@@ -306,7 +311,7 @@ enum ChatRenderer {
     }
 
     static func groupSummary(_ calls: [ChatItem.ToolCall], running: Bool) -> String {
-        func clean(_ s: String) -> String { s.replacingOccurrences(of: "`", with: "").trimmingCharacters(in: .whitespaces) }
+        func clean(_ s: String) -> String { s.replacingOccurrences(of: "`", with: "").trimmingCharacters(in: .whitespacesAndNewlines) }
         if calls.count == 1, let call = calls.first {
             let verb = ToolVerb(call.kind)
             let words = verb.words
@@ -452,7 +457,8 @@ enum ChatRenderer {
     /// rules; inline bold/italic/code/links via Foundation.
     static func markdown(_ text: String, prose: Prose = .chat) -> NSAttributedString {
         let out = NSMutableAttributedString()
-        let lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        // "\r\n" is one Character, not a "\n" (a file saved on Windows).
+        let lines = text.split(omittingEmptySubsequences: false) { $0 == "\n" || $0 == "\r\n" }.map(String.init)
         var i = 0
         while i < lines.count {
             let trimmed = lines[i].trimmingCharacters(in: .whitespaces)
