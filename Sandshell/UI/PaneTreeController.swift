@@ -67,7 +67,7 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
         dropOverlay.isHidden = true
         view = container
 
-        surfaces.isShown = { [weak self] id in self?.panes.contains { $0.shownSession == id } ?? false }
+        surfaces.paneShowing = { [weak self] id in self?.panes.first { $0.shownSession == id } }
         surfaces.onTerminalExit = { [weak self] id in
             self?.panes.filter { $0.shownSession == id }.forEach { $0.terminalRuntimeDidExit(id) }
         }

@@ -38,6 +38,7 @@ final class BackgroundTaskMonitor {
         task = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(1))
+                guard !Task.isCancelled else { return }
                 await self?.tick()
             }
         }
@@ -48,6 +49,8 @@ final class BackgroundTaskMonitor {
         task = nil
     }
 
+    /// Stops at the first await that ends after `stop()`: the window (and what
+    /// `isAlive`/`isVisible` ask) may be gone by then.
     private func tick() async {
         let home = controller.home
         for session in controller.orderedSessions where session.agent == .claude {
@@ -69,6 +72,7 @@ final class BackgroundTaskMonitor {
 
             let offset = watch.offset
             let read = await Task.detached(priority: .utility) { Self.readLines(url, from: offset) }.value
+            guard !Task.isCancelled else { return }
             if let (text, newOffset) = read {
                 watch.offset = newOffset
                 watch.parser.consume(text)
@@ -95,6 +99,7 @@ final class BackgroundTaskMonitor {
                                 sessionTranscript: url, agentID: aid)).map { (aid, $0) }
                         }
                     }.value
+                    guard !Task.isCancelled else { return }
                     for (aid, step) in steps { watch.parser.setActivity(step, for: aid) }
                 }
             }

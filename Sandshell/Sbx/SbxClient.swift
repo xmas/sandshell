@@ -123,6 +123,8 @@ actor SbxClient {
         var running: Bool
         var pid: Int
         var exitCode: Int?
+        /// What the exec runs (entrypoint, then arguments), when sbx says.
+        var command: [String]?
 
         enum CodingKeys: String, CodingKey {
             case id
@@ -133,6 +135,12 @@ actor SbxClient {
             case mobyRunning = "Running"
             case mobyPid = "Pid"
             case mobyExitCode = "ExitCode"
+            case mobyProcessConfig = "ProcessConfig"
+        }
+
+        private struct ProcessConfig: Decodable {
+            var entrypoint: String?
+            var arguments: [String]?
         }
 
         init(from decoder: Decoder) throws {
@@ -147,7 +155,21 @@ actor SbxClient {
                 ?? 0
             exitCode = try c.decodeIfPresent(Int.self, forKey: .exitCode)
                 ?? c.decodeIfPresent(Int.self, forKey: .mobyExitCode)
+            let config = try? c.decodeIfPresent(ProcessConfig.self, forKey: .mobyProcessConfig)
+            let command = [config?.entrypoint].compactMap { $0 } + (config?.arguments ?? [])
+            self.command = command.isEmpty ? nil : command
         }
+    }
+
+    /// Which exec, of those that started since a launch, is the launch's own:
+    /// the one whose command carries its tag (`SANDSHELL_LAUNCH=…`). When sbx
+    /// doesn't say what execs run, only a lone new one is taken — never a guess
+    /// among several, which may be another session's agent, a reap or a log read.
+    static func launchExec(among candidates: [(id: String, state: ExecLifecycleState?)], tag: String) -> String? {
+        if let own = candidates.first(where: { $0.state?.command?.contains(tag) == true }) { return own.id }
+        guard candidates.count == 1, let only = candidates.first, let state = only.state,
+              state.command == nil else { return nil }
+        return only.id
     }
 
     /// Inspect an sbx exec id over the lifecycle socket.

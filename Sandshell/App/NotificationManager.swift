@@ -57,8 +57,17 @@ final class NotificationManager: NSObject {
         content.threadIdentifier = sessionID.uuidString
         content.userInfo = ["sessionID": sessionID.uuidString]
         UNUserNotificationCenter.current().add(UNNotificationRequest(
-            identifier: "needs-input-\(sessionID.uuidString)", content: content, trigger: nil))
+            identifier: Self.needsInputID(sessionID), content: content, trigger: nil))
     }
+
+    /// The agent stopped waiting (answered, cancelled, or its chat closed):
+    /// take its "needs you" out of Notification Center.
+    func withdrawNeedsInput(sessionID: UUID) {
+        guard !AutomatedRun.isActive else { return }
+        UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [Self.needsInputID(sessionID)])
+    }
+
+    private static func needsInputID(_ sessionID: UUID) -> String { "needs-input-\(sessionID.uuidString)" }
 
     /// Posted (object: session UUID) when a background-task notification is
     /// tapped: the pane showing that session opens its task list.

@@ -162,7 +162,8 @@ final class TerminalSession {
     private let controller: TerminalController
     private let scriptURL: URL
     private let containerName: String
-    private let tag: SbxCommand.ProcessTag
+    /// The env tags this launch's processes in the sandbox carry.
+    let tag: SbxCommand.ProcessTag
     private let theme: ThemeController
     private var themeObserver: AnyCancellable?
     private var cursorObserver: AnyCancellable?
