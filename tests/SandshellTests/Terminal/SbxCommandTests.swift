@@ -629,7 +629,7 @@ extension SbxCommandTests {
 
         static var codexACP: String {
             let v = SbxCommand.codexACPVersion
-            return #"export NO_BROWSER=1; H="$HOME/.codex"; if [ "${CODEX_HOME:-$H}" = "$H" ] && [ ! -f "$H/auth.json" ] && [ -n "$SBX_CRED_OPENAI_MODE" ]; then mkdir -p "$H" && printf '%s' '{"OPENAI_API_KEY":"proxy-managed"}' > "$H/auth.json"; fi; D="$HOME/.sandshell/acp/codex-acp-\#(v)"; B="$D/node_modules/.bin/codex-acp"; if [ ! -x "$B" ]; then echo "\#(SbxCommand.installingMarker)" >&2; mkdir -p "$HOME/.sandshell/acp"; T=$(mktemp -d "$D.tmp.XXXXXX"); if npm install --silent --no-audit --no-fund --prefix "$T" @agentclientprotocol/codex-acp@\#(v) >&2; then [ -x "$B" ] || rm -rf "$D"; mv -T "$T" "$D" 2>/dev/null || rm -rf "$T"; else rm -rf "$T"; echo "sandshell: couldn't install @agentclientprotocol/codex-acp@\#(v)" >&2; exit 1; fi; fi; exec "$B""#
+            return #"export NO_BROWSER=1; H="$HOME/.codex"; if [ "${CODEX_HOME:-$H}" = "$H" ] && [ ! -s "$H/auth.json" ] && [ -n "$SBX_CRED_OPENAI_MODE" ]; then mkdir -p "$H" && printf '%s' '{"OPENAI_API_KEY":"proxy-managed"}' > "$H/auth.json"; fi; D="$HOME/.sandshell/acp/codex-acp-\#(v)"; B="$D/node_modules/.bin/codex-acp"; if [ ! -x "$B" ]; then echo "\#(SbxCommand.installingMarker)" >&2; mkdir -p "$HOME/.sandshell/acp"; T=$(mktemp -d "$D.tmp.XXXXXX"); if npm install --silent --no-audit --no-fund --prefix "$T" @agentclientprotocol/codex-acp@\#(v) >&2; then [ -x "$B" ] || rm -rf "$D"; mv -T "$T" "$D" 2>/dev/null || rm -rf "$T"; else rm -rf "$T"; echo "sandshell: couldn't install @agentclientprotocol/codex-acp@\#(v)" >&2; exit 1; fi; fi; exec "$B""#
         }
 
         static var claudeACP: String {

@@ -259,7 +259,7 @@ enum SbxCommand {
             // it the adapter reports "Authentication required". Write the same one —
             // only into the sandbox's own ~/.codex, never a mounted host one.
             return "export NO_BROWSER=1; " + #"H="$HOME/.codex"; "#
-                + #"if [ "${CODEX_HOME:-$H}" = "$H" ] && [ ! -f "$H/auth.json" ] && [ -n "$SBX_CRED_OPENAI_MODE" ]; then "#
+                + #"if [ "${CODEX_HOME:-$H}" = "$H" ] && [ ! -s "$H/auth.json" ] && [ -n "$SBX_CRED_OPENAI_MODE" ]; then "#
                 + #"mkdir -p "$H" && printf '%s' '{"OPENAI_API_KEY":"proxy-managed"}' > "$H/auth.json"; fi; "#
                 + npmAdapterLaunch(dir: "codex-acp-\(codexACPVersion)", package: codexACPPackage,
                                    bin: "codex-acp", omitOptional: false)
