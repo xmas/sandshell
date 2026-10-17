@@ -10,9 +10,9 @@ struct FilesTarget: Codable, Equatable {
     @MainActor
     func resolve(in controller: WorkspaceController) -> (url: URL, title: String) {
         if let id = session, let s = controller.session(id: id) {
-            return (URL(fileURLWithPath: s.workdir), s.name)
+            return (URL(filePath: s.workdir, directoryHint: .checkFileSystem), s.name)
         }
-        let url = URL(fileURLWithPath: folder)
+        let url = URL(filePath: folder, directoryHint: .checkFileSystem)
         return (url, url.lastPathComponent)
     }
 }
@@ -27,12 +27,12 @@ final class FilesPaneController: NSViewController, NSSplitViewDelegate {
     /// Narrower minimums for a split pane (the inspector has room to spare).
     private let compact: Bool
     private var openQuicklyPopover: NSPopover?
-    /// "Add to Chat" from the tree's context menu.
     /// "Change this" text from a diff line, for the session's agent.
     var onAskAgent: ((String) -> Void)? {
         get { editor.onAskAgent }
         set { editor.onAskAgent = newValue }
     }
+    /// "Add to Chat" from the tree's context menu.
     var onAddToChat: (([URL]) -> Void)? {
         get { tree.onAddToChat }
         set { tree.onAddToChat = newValue }
@@ -135,7 +135,7 @@ final class FilesPaneController: NSViewController, NSSplitViewDelegate {
     }
 
     /// A split Files pane's tabs: under the first folder it shows.
-    static func folderTabsKey(_ folder: URL) -> String { "filesTabs:" + folder.standardizedFileURL.path }
+    static func folderTabsKey(_ folder: URL) -> String { "filesTabs:" + folder.standardizedFileURL.plainPath }
 
     /// The inspector's tabs used to be kept under the first folder it showed:
     /// the first time it has its own key, it starts from that list. Copied, not
