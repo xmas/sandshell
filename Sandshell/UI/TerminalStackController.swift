@@ -103,7 +103,8 @@ private final class TerminalRuntimeController {
                 await self.pollExecLifecycle(id)
                 if self.exited.contains(id) { continue }
                 if self.activityWatches[id]?.transcriptURL == nil {
-                    let agent = s.agent, workdir = s.workdir
+                    // (Its folder may have moved since it started: the agent files under the old cwd.)
+                    let agent = s.agent, workdir = s.conversationWorkdir
                     let claimed = self.claimedTranscripts
                     let startedAt = self.activityWatches[id]?.startedAt ?? start
                     let url = await Task.detached(priority: .utility) {
@@ -1416,6 +1417,8 @@ final class TerminalStackController: NSViewController {
         // refresh during it (clearing the transcript id publishes) mustn't
         // start a second launch.
         pending.insert(id)
+        // Its folder moved while it last ran: its conversation comes along now.
+        controller.settleConversation(id)
         if let tid = session.transcriptID {
             if TranscriptReader.transcriptExists(agent: session.agent, workdir: session.workdir,
                                                  home: controller.home, id: tid) {
@@ -1593,6 +1596,9 @@ final class TerminalStackController: NSViewController {
                 return
             }
             guard let current = controller.session(id: id), current.isChat, chats[id] == nil else { return }
+            // Its folder moved while it last ran: its conversation comes along
+            // now (the agent from then is gone: it closed before this launch).
+            controller.settleConversation(id)
             var resumeID: String?
             if let tid = current.transcriptID,
                !Self.transcriptsOnHost(current.agent, home: controller.home)

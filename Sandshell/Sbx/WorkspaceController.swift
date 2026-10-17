@@ -41,7 +41,6 @@ final class WorkspaceController: ObservableObject {
     /// Each Claude session's workflows (the Workflow tool's runs), newest last.
     @Committed private(set) var workflows: [UUID: [WorkflowRun]] = [:]
     private var subagentPollTask: Task<Void, Never>?
-    private var transcriptURLs: [UUID: URL] = [:]
     /// What each sandbox is (kernel, distribution, mount types), asked once.
     @Committed private(set) var sandboxSystems: [String: SandboxSystem] = [:]
     private var probingSandboxes: Set<String> = []
@@ -308,7 +307,12 @@ final class WorkspaceController: ObservableObject {
         config.policy = policy
         config.configured = true
         try? config.save(root: workspace.rootURL)
-        for agent in containers.keys { ensureContainer(for: agent) }
+        // Each sandbox it has, or is bringing up. One in flight read the old
+        // mounts: compare the new ones once it's done, rather than take its result.
+        let inflight = (availableAgents + containerPhases.keys).filter { Self.bringUps[containerName(for: $0)] != nil }
+        for agent in Set(containers.keys).union(inflight) {
+            runAction { @MainActor in try await self.bringUpContainer(for: agent, onMismatch: .prompt, recheck: true) }
+        }
     }
 
     /// Change the workspace's primary agent (default for the quick "+ New
@@ -316,8 +320,9 @@ final class WorkspaceController: ObservableObject {
     /// the bare slug stays the old primary's (`WorkspaceState.slugAgent`).
     func setPrimaryAgent(_ agent: AgentKind) {
         guard agent != workspace.primaryAgent else { return }
-        if state.slugAgent == nil, state.appliedMountSignatures[workspace.containerName] != nil {
-            state.slugAgent = workspace.primaryAgent
+        // Whether or not its sandbox exists yet: one being made right now
+        // records nothing until it's up, and gets the bare slug all the same.
+        if state.pinSlugAgent(workspace.primaryAgent) {
             try? state.save(root: workspace.rootURL)
         }
         workspace.primaryAgent = agent
@@ -623,7 +628,10 @@ final class WorkspaceController: ObservableObject {
     /// may have changed one of them.
     private func syncContainers() {
         Task {
-            for agent in Array(containers.keys) {
+            // Also a sandbox shown building: with no bring-up of it left in
+            // any window, nothing else would say it's done.
+            let building = containerPhases.filter { $0.value.isBuilding }.map(\.key)
+            for agent in Set(containers.keys).union(building) {
                 let name = containerName(for: agent)
                 // A bring-up sets the container itself: an answer from before
                 // it (or from while it rebuilt) would put back what it replaced.
@@ -635,9 +643,9 @@ final class WorkspaceController: ObservableObject {
                 } catch {
                     continue   // sbx didn't answer this time: that isn't "gone"
                 }
+                // No bring-up ran meanwhile, so a building phase is left over.
                 guard Self.bringUps[name] == nil, Self.bringUpsStarted[name] == started else { continue }
                 containers[agent] = sb
-                guard containerPhases[agent]?.isBuilding != true else { continue }
                 containerPhases[agent] = sb.map { $0.isRunning ? .running : .stopped } ?? .absent
                 // A container that (re)started outside our create path (e.g.
                 // Settings ▸ Run) re-runs its startup dispatcher — follow it.
@@ -670,9 +678,13 @@ final class WorkspaceController: ObservableObject {
     /// agent (or the one that was primary when its sandbox was made, see
     /// `WorkspaceState.slugAgent`), `<slug>-<agent>` for the rest.
     func containerName(for agent: AgentKind) -> String {
-        agent == (state.slugAgent ?? workspace.primaryAgent)
-            ? workspace.containerName
-            : "\(workspace.containerName)-\(agent.rawValue)"
+        Self.containerName(for: agent, slug: workspace.containerName,
+                           slugAgent: state.slugAgent ?? workspace.primaryAgent)
+    }
+
+    /// The sandbox name of `agent` when `slugAgent`'s has the bare `slug`.
+    static func containerName(for agent: AgentKind, slug: String, slugAgent: AgentKind) -> String {
+        agent == slugAgent ? slug : "\(slug)-\(agent.rawValue)"
     }
 
     /// The full ordered mount set for the workspace under the current policy,
@@ -934,12 +946,10 @@ final class WorkspaceController: ObservableObject {
     func refreshSubagents() async {
         var targets: [(UUID, URL, [String: BackgroundTask.State])] = []
         for session in state.sessions where session.agent == .claude {
-            guard let tid = session.transcriptID else { continue }
-            if transcriptURLs[session.id]?.deletingPathExtension().lastPathComponent != tid {
-                transcriptURLs[session.id] = TranscriptReader.transcriptURL(agent: .claude, workdir: session.workdir,
-                                                                           home: home, id: tid)
-            }
-            guard let url = transcriptURLs[session.id] else { continue }
+            // Looked up each time (a stat): a folder rename moves conversations.
+            guard let tid = session.transcriptID,
+                  let url = TranscriptReader.transcriptURL(agent: .claude, workdir: session.conversationWorkdir,
+                                                           home: home, id: tid) else { continue }
             let known = Dictionary((backgroundTasks[session.id] ?? []).filter { $0.kind == .agent }.map { ($0.id, $0.state) },
                                    uniquingKeysWith: { a, _ in a })
             targets.append((session.id, url, known))
@@ -1047,12 +1057,12 @@ final class WorkspaceController: ObservableObject {
     private static var bringUpsStarted: [String: Int] = [:]
 
     /// Bring a container up, joining one already in flight for it when that
-    /// one's result will do. A forced rebuild, or a rebuild to match the
-    /// config (which may have changed since the in-flight one read it), waits
-    /// for it, then runs its own.
+    /// one's result will do. A forced rebuild, or a check against a config
+    /// that just changed (`recheck`, and every rebuild to match the config —
+    /// the in-flight one may have read the old one), waits for it, then runs its own.
     private func bringUpContainer(for agent: AgentKind, onMismatch: MismatchAction,
-                                  force: Bool = false) async throws {
-        try await serializedBringUp(for: agent, joinInflight: !force && onMismatch != .rebuild) {
+                                  force: Bool = false, recheck: Bool = false) async throws {
+        try await serializedBringUp(for: agent, joinInflight: !force && !recheck && onMismatch != .rebuild) {
             try await self.performBringUp(for: agent, onMismatch: onMismatch, force: force)
         }
     }
@@ -1075,7 +1085,10 @@ final class WorkspaceController: ObservableObject {
     }
 
     /// Wait for an in-flight bring-up. One another window started set that
-    /// window's view of the container, so take this one's from sbx after it.
+    /// window's view of the container, so take this one's from sbx once no
+    /// other window is bringing it up: that window's session launch often
+    /// attaches right after its rebuild, and an attach says nothing here (this
+    /// window would keep showing "Rebuilding…" for good).
     private func join(_ inflight: BringUp, for agent: AgentKind) async throws {
         guard inflight.owner != ObjectIdentifier(self) else { return try await inflight.task.value }
         do {
@@ -1085,13 +1098,33 @@ final class WorkspaceController: ObservableObject {
             throw error
         }
         let name = containerName(for: agent)
-        let sandbox = try await SbxClient.shared.status(name: name)
-        guard Self.bringUps[name] == nil else { return }   // the next one sets it
-        containers[agent] = sandbox
-        containerPhases[agent] = sandbox.map { $0.isRunning ? .running : .stopped } ?? .absent
-        guard sandbox != nil else { return }
-        refreshKitStartupIfNeeded(for: agent)
-        refreshKitDrift(for: agent)
+        while true {
+            while let next = Self.bringUps[name] {
+                // This window's own sets the container here itself.
+                if next.owner == ObjectIdentifier(self) { return try await next.task.value }
+                _ = try? await next.task.value
+            }
+            let started = Self.bringUpsStarted[name]
+            let sandbox: Sandbox?
+            do {
+                sandbox = try await SbxClient.shared.status(name: name)
+            } catch {
+                // sbx didn't answer: the bring-up is over all the same, so
+                // don't leave this window building (its panes wait on that).
+                if containerPhases[agent]?.isBuilding == true {
+                    containerPhases[agent] = .failed(error.localizedDescription)
+                }
+                throw error
+            }
+            // One started while sbx answered: take the container after it.
+            guard Self.bringUps[name] == nil, Self.bringUpsStarted[name] == started else { continue }
+            containers[agent] = sandbox
+            containerPhases[agent] = sandbox.map { $0.isRunning ? .running : .stopped } ?? .absent
+            guard sandbox != nil else { return }
+            refreshKitStartupIfNeeded(for: agent)
+            refreshKitDrift(for: agent)
+            return
+        }
     }
 
     /// A bring-up is (re)making `agent`'s sandbox: say so here and in the other
@@ -1714,18 +1747,42 @@ extension WorkspaceController {
             return
         }
         // Claude files conversations by their cwd: take those of the sessions
-        // working in the folder (open, or closed here and reopenable) along.
+        // working in the folder (open, or closed here and reopenable) along —
+        // except a running session's, which its agent keeps writing under the
+        // cwd it started in: its next launch takes that one (`settleConversation`).
         let workdirs = Set((state.sessions + recentlyClosed).map(\.workdir) + [src.path])
+        let running = runningSessionIDs()
         TranscriptReader.moveClaudeProjects(workdirs.compactMap { from in
             Session.workdir(from, movedFrom: src.path, to: dst.path).map { (from, $0) }
-        }, home: home)
+        }, home: home, keeping: Set(state.sessions.filter { running.contains($0.id) }.compactMap(\.transcriptID)))
         // Rows nested in it, and sessions working in it or below, follow it.
-        state.moveFolder(id, to: newRelative, root: workspace.rootURL)
+        state.moveFolder(id, to: newRelative, root: workspace.rootURL, running: running)
         for i in recentlyClosed.indices {
             if let moved = Session.workdir(recentlyClosed[i].workdir, movedFrom: src.path, to: dst.path) {
                 recentlyClosed[i].workdir = moved
             }
         }
+        saveState()
+    }
+
+    /// Sessions running in any window on the folder.
+    private func runningSessionIDs() -> Set<UUID> {
+        Set(([self] + store.others(than: self)).flatMap { window in
+            window.runtimes.filter { $0.value.isLive }.map(\.key)
+        })
+    }
+
+    /// A session about to launch whose folder moved while it last ran: its
+    /// agent filed the conversation under the old cwd. It starts in the new
+    /// one now, so take the conversation there first (or resuming finds nothing).
+    func settleConversation(_ id: UUID) {
+        guard let idx = state.sessions.firstIndex(where: { $0.id == id }),
+              let from = state.sessions[idx].transcriptWorkdir else { return }
+        let session = state.sessions[idx]
+        if let tid = session.transcriptID {
+            TranscriptReader.moveClaudeConversation(tid, from: from, to: session.workdir, home: home)
+        }
+        state.sessions[idx].transcriptWorkdir = nil
         saveState()
     }
 
@@ -1853,7 +1910,8 @@ extension WorkspaceController {
     @discardableResult
     func forkChat(_ id: UUID, upTo replyText: String) -> Session? {
         guard let source = session(id: id), source.agent == .claude, let tid = source.transcriptID,
-              let url = TranscriptReader.transcriptURL(agent: .claude, workdir: source.workdir, home: home, id: tid),
+              let url = TranscriptReader.transcriptURL(agent: .claude, workdir: source.conversationWorkdir,
+                                                       home: home, id: tid),
               let text = try? String(contentsOf: url, encoding: .utf8) else { return nil }
         let lines = text.split(separator: "\n", omittingEmptySubsequences: true)
         // The reply's last words identify its transcript line (streamed text == stored text).
@@ -1875,8 +1933,14 @@ extension WorkspaceController {
             if let data = try? JSONSerialization.data(withJSONObject: obj, options: [.withoutEscapingSlashes]),
                let json = String(data: data, encoding: .utf8) { out += json + "\n" }
         }
-        let forkURL = url.deletingLastPathComponent().appendingPathComponent("\(newID).jsonl")
-        guard (try? out.write(to: forkURL, atomically: true, encoding: .utf8)) != nil,
+        // Filed under the cwd the fork runs in (its folder's), which needn't be
+        // where the source's conversation is (a session in a subdirectory, or
+        // one that ran on while its folder moved).
+        guard let folder = folder(id: source.folderID) else { return nil }
+        let forkFolder = TranscriptReader.claudeProjectFolder(for: workdir(for: folder), home: home)
+        let forkURL = forkFolder.appendingPathComponent("\(newID).jsonl")
+        guard (try? FileManager.default.createDirectory(at: forkFolder, withIntermediateDirectories: true)) != nil,
+              (try? out.write(to: forkURL, atomically: true, encoding: .utf8)) != nil,
               let fork = addSession(folderID: source.folderID, agent: source.agent,
                                     name: "Fork of \(source.name)", chat: true) else { return nil }
         setTranscriptID(fork.id, newID)

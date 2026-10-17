@@ -365,8 +365,26 @@ struct WorkspaceStateSessionTests {
                               isChat: withOptionalFields)
         session.isNamedByUser = withOptionalFields
         session.lastActiveAt = withOptionalFields ? WorkspaceStateFixture.referenceDate.addingTimeInterval(60) : nil
+        session.transcriptWorkdir = withOptionalFields ? "/workspace/old" : nil
         let decoded = try WorkspaceStateJSON.roundTrip(session)
         #expect(decoded == session)
+    }
+
+    /// A session whose folder moved while it ran finds its conversation under the
+    /// old cwd until its next launch takes it along (xmas-sandshell-e7q.84).
+    @Test func transcriptWorkdirPersistsAndIsWhereItsConversationIs() throws {
+        var session = Session(folderID: UUID(), agent: .claude, name: "A", order: 0, workdir: "/ws/server",
+                              createdAt: WorkspaceStateFixture.referenceDate)
+        #expect(session.conversationWorkdir == "/ws/server")
+        #expect(try WorkspaceStateJSON.object(WorkspaceStateJSON.encode(session))["transcriptWorkdir"] == nil,
+                "Absent unless set")
+
+        session.transcriptWorkdir = "/ws/api"
+        #expect(session.conversationWorkdir == "/ws/api")
+        let object = try WorkspaceStateJSON.object(WorkspaceStateJSON.encode(session))
+        #expect(object["transcriptWorkdir"] as? String == "/ws/api")
+        #expect(try WorkspaceStateJSON.decode(Session.self, from: #"{"agent":"claude"}"#).transcriptWorkdir == nil,
+                "Files predating it decode without one")
     }
 }
 
@@ -437,6 +455,18 @@ struct WorkspaceStateCodingTests {
         let object = try WorkspaceStateJSON.object(WorkspaceStateJSON.encode(state))
         #expect(object["slugAgent"] as? String == agent)
         #expect(try WorkspaceStateJSON.roundTrip(state).slugAgent == AgentKind(rawValue: agent))
+    }
+
+    /// The bare slug stays with the agent it was for when the primary agent changes,
+    /// whether or not its sandbox exists yet (xmas-sandshell-e7q.44).
+    @Test func theFirstPrimaryChangePinsTheSlugToTheOldPrimary() {
+        var state = WorkspaceState()
+        let first = state.pinSlugAgent(.claude)
+        #expect(first)
+        #expect(state.slugAgent == .claude)
+        let second = state.pinSlugAgent(.codex)
+        #expect(second == false, "A later change keeps the first pin")
+        #expect(state.slugAgent == .claude)
     }
 
     @Test func encodingWritesIgnoredKitDriftWhenPresent() throws {
@@ -555,6 +585,45 @@ struct WorkspaceStateFolderMoveTests {
         #expect(workdirs["restored"] == "/ws/app/web/src", "A session in a subdirectory keeps it")
         #expect(workdirs["sibling"] == "/ws/proj-old")
         #expect(workdirs["elsewhere"] == "/Users/test/other", "A cwd outside the folder didn't move")
+    }
+
+    /// A running agent keeps filing its conversation under the cwd it started in
+    /// (xmas-sandshell-e7q.84): the session remembers it until its next launch.
+    @Test func aRunningSessionRemembersTheCwdItsAgentFilesUnder() {
+        let running = session("running", in: proj, workdir: "/ws/proj/src")
+        let stopped = session("stopped", in: proj, workdir: "/ws/proj")
+        var moved = state(sessions: [running, stopped])
+
+        moved.moveFolder(proj.id, to: "app", root: root, running: [running.id])
+
+        let byName = Dictionary(uniqueKeysWithValues: moved.sessions.map { ($0.name, $0) })
+        #expect(byName["running"]?.workdir == "/ws/app/src")
+        #expect(byName["running"]?.transcriptWorkdir == "/ws/proj/src")
+        #expect(byName["running"]?.conversationWorkdir == "/ws/proj/src")
+        #expect(byName["stopped"]?.transcriptWorkdir == nil, "Its conversation moved with the folder")
+    }
+
+    @Test func movingAgainWhileItRunsKeepsTheCwdItStartedIn() {
+        let running = session("running", in: proj, workdir: "/ws/proj")
+        var moved = state(sessions: [running])
+
+        moved.moveFolder(proj.id, to: "app", root: root, running: [running.id])
+        moved.moveFolder(proj.id, to: "server", root: root, running: [running.id])
+
+        #expect(moved.sessions.first?.workdir == "/ws/server")
+        #expect(moved.sessions.first?.transcriptWorkdir == "/ws/proj")
+    }
+
+    @Test(.tags(.workspaceStateEdgeCase))
+    func movingBackToTheCwdItStartedInForgetsIt() {
+        let running = session("running", in: proj, workdir: "/ws/proj")
+        var moved = state(sessions: [running])
+
+        moved.moveFolder(proj.id, to: "app", root: root, running: [running.id])
+        moved.moveFolder(proj.id, to: "proj", root: root)
+
+        #expect(moved.sessions.first?.workdir == "/ws/proj")
+        #expect(moved.sessions.first?.transcriptWorkdir == nil)
     }
 
     @Test(.tags(.workspaceStateEdgeCase), arguments: [true, false])

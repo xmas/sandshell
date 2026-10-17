@@ -526,27 +526,59 @@ enum TranscriptReader {
     /// cwd>/`): after folders move, take the conversations of each moved cwd
     /// (old → new) along, so resuming in the new one finds them. Merges into a
     /// folder the new cwd already has, never replacing a file there.
-    static func moveClaudeProjects(_ moves: [(from: String, to: String)], home: URL) {
+    /// `keeping`: conversation ids to leave where they are (a running Claude
+    /// keeps writing them under its old cwd; `moveClaudeConversation` takes
+    /// each along once it has stopped).
+    static func moveClaudeProjects(_ moves: [(from: String, to: String)], home: URL,
+                                   keeping: Set<String> = []) {
         let fm = FileManager.default
-        let projects = home.appendingPathComponent(".claude/projects", isDirectory: true)
+        let kept = Set(keeping.flatMap { [$0, "\($0).jsonl"] })
         for (from, to) in moves {
-            let src = projects.appendingPathComponent(claudeEncodedDir(for: from), isDirectory: true)
-            let dst = projects.appendingPathComponent(claudeEncodedDir(for: to), isDirectory: true)
+            let src = claudeProjectFolder(for: from, home: home)
+            let dst = claudeProjectFolder(for: to, home: home)
             guard src.path != dst.path, fm.fileExists(atPath: src.path) else { continue }
             do {
-                guard fm.fileExists(atPath: dst.path) else {
+                if !fm.fileExists(atPath: dst.path),
+                   kept.isDisjoint(with: try fm.contentsOfDirectory(atPath: src.path)) {
                     try fm.moveItem(at: src, to: dst)
                     continue
                 }
-                for name in try fm.contentsOfDirectory(atPath: src.path)
-                where !fm.fileExists(atPath: dst.appendingPathComponent(name).path) {
-                    try fm.moveItem(at: src.appendingPathComponent(name), to: dst.appendingPathComponent(name))
-                }
-                if try fm.contentsOfDirectory(atPath: src.path).isEmpty { try fm.removeItem(at: src) }
+                try moveEntries(from: src, to: dst) { !kept.contains($0) }
             } catch {
                 Log.error(.workspace, "moving Claude conversations from \(from) to \(to) failed: \(error.localizedDescription)")
             }
         }
+    }
+
+    /// Take one Claude conversation (its transcript and its folder of
+    /// subagents) from where it was filed under `from` to the folder of the
+    /// cwd `to`, never replacing a file there.
+    static func moveClaudeConversation(_ id: String, from: String, to: String, home: URL) {
+        let src = claudeProjectFolder(for: from, home: home)
+        let dst = claudeProjectFolder(for: to, home: home)
+        guard src.path != dst.path, FileManager.default.fileExists(atPath: src.path) else { return }
+        do {
+            try moveEntries(from: src, to: dst) { $0 == id || $0 == "\(id).jsonl" }
+        } catch {
+            Log.error(.workspace, "moving Claude conversation \(id) from \(from) to \(to) failed: \(error.localizedDescription)")
+        }
+    }
+
+    /// The folder Claude files a cwd's conversations in.
+    static func claudeProjectFolder(for cwd: String, home: URL) -> URL {
+        home.appendingPathComponent(".claude/projects/\(claudeEncodedDir(for: cwd))", isDirectory: true)
+    }
+
+    /// Move `src`'s entries that `include` names into `dst` (made if need be),
+    /// skipping any `dst` already has, and remove `src` once it's empty.
+    private static func moveEntries(from src: URL, to dst: URL, where include: (String) -> Bool) throws {
+        let fm = FileManager.default
+        let names = try fm.contentsOfDirectory(atPath: src.path).filter(include)
+        if !names.isEmpty { try fm.createDirectory(at: dst, withIntermediateDirectories: true) }
+        for name in names where !fm.fileExists(atPath: dst.appendingPathComponent(name).path) {
+            try fm.moveItem(at: src.appendingPathComponent(name), to: dst.appendingPathComponent(name))
+        }
+        if try fm.contentsOfDirectory(atPath: src.path).isEmpty { try fm.removeItem(at: src) }
     }
 
     private static func extractText(_ content: Any?) -> String? {

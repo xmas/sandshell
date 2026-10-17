@@ -76,10 +76,18 @@ struct Session: Identifiable, Codable, Hashable {
     var isChat: Bool
     /// Named by the person (Rename): automatic naming leaves it alone.
     var isNamedByUser = false
+    /// The cwd its agent files the conversation under, when that isn't
+    /// `workdir`: its folder moved while it ran, and a running agent keeps the
+    /// cwd it started in (Claude: `~/.claude/projects/<encoded cwd>`). Its next
+    /// launch takes the conversation to `workdir` and clears this.
+    var transcriptWorkdir: String?
 
     /// The agent whose container this session runs in: the override when present,
     /// otherwise the session's own agent.
     var containerAgentKind: AgentKind { containerAgent ?? agent }
+
+    /// Where to look for its conversation (see `transcriptWorkdir`).
+    var conversationWorkdir: String { transcriptWorkdir ?? workdir }
 
     init(id: UUID = UUID(),
          folderID: UUID,
@@ -105,6 +113,7 @@ struct Session: Identifiable, Codable, Hashable {
 
     enum CodingKeys: String, CodingKey {
         case id, folderID, agent, name, order, workdir, transcriptID, createdAt, lastActiveAt, containerAgent
+        case transcriptWorkdir
         case isChat = "chat"
         case isNamedByUser = "namedByUser"
         case projectID   // legacy key (pre-folders model)
@@ -126,6 +135,7 @@ struct Session: Identifiable, Codable, Hashable {
         containerAgent = try c.decodeIfPresent(AgentKind.self, forKey: .containerAgent)
         isChat = try c.decodeIfPresent(Bool.self, forKey: .isChat) ?? false
         isNamedByUser = try c.decodeIfPresent(Bool.self, forKey: .isNamedByUser) ?? false
+        transcriptWorkdir = try c.decodeIfPresent(String.self, forKey: .transcriptWorkdir)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -142,6 +152,7 @@ struct Session: Identifiable, Codable, Hashable {
         try c.encodeIfPresent(containerAgent, forKey: .containerAgent)
         if isChat { try c.encode(true, forKey: .isChat) }
         if isNamedByUser { try c.encode(true, forKey: .isNamedByUser) }
+        try c.encodeIfPresent(transcriptWorkdir, forKey: .transcriptWorkdir)
     }
 
     /// A workdir once the directory at `from` has moved to `to`: nil unless
@@ -172,9 +183,18 @@ struct WorkspaceState: Codable {
     /// Cleared when that container is (re)created.
     var ignoredKitDrift: [String: [String]]
     /// The agent whose sandbox has the bare workspace slug as its name, once
-    /// the primary agent changed after that sandbox was made (sandboxes keep
-    /// their names). Nil: the primary agent's.
+    /// the primary agent changed (sandboxes keep their names). Nil: the
+    /// primary agent's.
     var slugAgent: AgentKind?
+
+    /// The primary agent is changing from `primary`: the bare slug stays its —
+    /// its sandbox may exist, or be being made. Only the first change pins it.
+    /// Whether anything changed.
+    mutating func pinSlugAgent(_ primary: AgentKind) -> Bool {
+        guard slugAgent == nil else { return false }
+        slugAgent = primary
+        return true
+    }
 
     init(schemaVersion: Int = 2,
          folders: [Folder] = [],
@@ -238,8 +258,9 @@ struct WorkspaceState: Codable {
 
     /// Point a folder row at `newRelative` after its directory moved there:
     /// the rows nested in it follow, and every session working in it (or below)
-    /// gets the moved path.
-    mutating func moveFolder(_ id: UUID, to newRelative: String, root: URL) {
+    /// gets the moved path. The `running` ones' agents keep filing their
+    /// conversations under the old cwd (`Session.transcriptWorkdir`).
+    mutating func moveFolder(_ id: UUID, to newRelative: String, root: URL, running: Set<UUID> = []) {
         guard let folder = folders.first(where: { $0.id == id }), !folder.isRoot else { return }
         let old = folder.relativePath
         let moving = Set(folders(nestedIn: id).map(\.id) + [id])
@@ -249,7 +270,12 @@ struct WorkspaceState: Codable {
         let from = root.appendingPathComponent(old, isDirectory: true).path
         let to = root.appendingPathComponent(newRelative, isDirectory: true).path
         for i in sessions.indices {
-            if let moved = Session.workdir(sessions[i].workdir, movedFrom: from, to: to) { sessions[i].workdir = moved }
+            guard let moved = Session.workdir(sessions[i].workdir, movedFrom: from, to: to) else { continue }
+            if running.contains(sessions[i].id), sessions[i].transcriptWorkdir == nil {
+                sessions[i].transcriptWorkdir = sessions[i].workdir
+            }
+            sessions[i].workdir = moved
+            if sessions[i].transcriptWorkdir == moved { sessions[i].transcriptWorkdir = nil }   // moved back
         }
     }
 

@@ -39,3 +39,27 @@ struct WorkspaceControllerAdjacentSessionTests {
         #expect(WorkspaceController.adjacentSession(to: ids[0], in: [ids[0]], delta) == ids[0])
     }
 }
+
+/// `WorkspaceController.containerName(for:slug:slugAgent:)`: the agent the bare slug
+/// was pinned to keeps it when the primary agent changes, so another agent never
+/// attaches to its sandbox (xmas-sandshell-e7q.44).
+@MainActor
+struct WorkspaceControllerContainerNameTests {
+    @Test func theSlugAgentHasTheBareSlug() {
+        #expect(WorkspaceController.containerName(for: .claude, slug: "proj", slugAgent: .claude) == "proj")
+    }
+
+    @Test(arguments: [AgentKind.codex, .shell, AgentKind(rawValue: "my-kit-agent")])
+    func everyOtherAgentHasItsOwnName(agent: AgentKind) {
+        #expect(WorkspaceController.containerName(for: agent, slug: "proj", slugAgent: .claude)
+                == "proj-\(agent.rawValue)")
+    }
+
+    @Test func changingThePrimaryAgentKeepsTheNames() {
+        var state = WorkspaceState()
+        _ = state.pinSlugAgent(.claude)   // the primary was Claude; now it's Codex
+        let owner = state.slugAgent ?? .codex
+        #expect(WorkspaceController.containerName(for: .claude, slug: "proj", slugAgent: owner) == "proj")
+        #expect(WorkspaceController.containerName(for: .codex, slug: "proj", slugAgent: owner) == "proj-codex")
+    }
+}
