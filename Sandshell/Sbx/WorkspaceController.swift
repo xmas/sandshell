@@ -876,7 +876,7 @@ final class WorkspaceController: ObservableObject {
     }
 
     func refreshSubagents() async {
-        var targets: [(UUID, URL, [String: BackgroundTask.State])] = []
+        var targets: [(UUID, URL, [String: BackgroundTask.State], Date?)] = []
         for session in state.sessions where session.agent == .claude {
             guard let tid = session.transcriptID else { continue }
             if transcriptURLs[session.id]?.deletingPathExtension().lastPathComponent != tid {
@@ -886,12 +886,13 @@ final class WorkspaceController: ObservableObject {
             guard let url = transcriptURLs[session.id] else { continue }
             let known = Dictionary((backgroundTasks[session.id] ?? []).filter { $0.kind == .agent }.map { ($0.id, $0.state) },
                                    uniquingKeysWith: { a, _ in a })
-            targets.append((session.id, url, known))
+            // A foreground subagent runs while the turn that started it does (set only while working).
+            targets.append((session.id, url, known, runtimes[session.id]?.workingSince))
         }
         let (found, runs) = await Task.detached(priority: .utility) { () -> ([UUID: [SubagentInfo]], [UUID: [WorkflowRun]]) in
             var out: [UUID: [SubagentInfo]] = [:], runs: [UUID: [WorkflowRun]] = [:]
-            for (id, url, known) in targets {
-                let list = SubagentScanner.scan(sessionID: id, transcript: url, known: known)
+            for (id, url, known, since) in targets {
+                let list = SubagentScanner.scan(sessionID: id, transcript: url, known: known, parentWorkingSince: since)
                 if !list.isEmpty { out[id] = Array(list.suffix(12)) }
                 let wf = WorkflowScanner.scan(transcript: url)
                 if !wf.isEmpty { runs[id] = Array(wf.suffix(12)) }

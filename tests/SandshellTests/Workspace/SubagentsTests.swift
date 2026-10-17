@@ -26,6 +26,15 @@ extension SubagentsTests {
                                     startedAt: SubagentsFixture.epoch, lastWrite: SubagentsFixture.epoch, state: state)
             #expect(info.isRunning == expected)
         }
+
+        @Test(arguments: [
+            (WorkflowRun.Agent.State.running, SubagentInfo.State.running),
+            (WorkflowRun.Agent.State.done, SubagentInfo.State.done),
+            (WorkflowRun.Agent.State.failed, SubagentInfo.State.failed),
+        ])
+        func workflowAgentStateCarriesOver(agent: WorkflowRun.Agent.State, expected: SubagentInfo.State) {
+            #expect(SubagentInfo.State(agent) == expected)
+        }
     }
 }
 
@@ -48,9 +57,10 @@ extension SubagentsTests {
             workspace = try SubagentsWorkspace()
         }
 
-        private func scan(known: [String: BackgroundTask.State] = [:],
+        private func scan(known: [String: BackgroundTask.State] = [:], parentWorkingSince: Date? = nil,
                           now: Date = SubagentsFixture.epoch) -> [SubagentInfo] {
-            SubagentScanner.scan(sessionID: sessionID, transcript: workspace.transcript, known: known, now: now)
+            SubagentScanner.scan(sessionID: sessionID, transcript: workspace.transcript, known: known,
+                                 parentWorkingSince: parentWorkingSince, now: now)
         }
 
         @Test func missingSubagentsFolderGivesNoSubagents() {
@@ -130,12 +140,8 @@ extension SubagentsTests {
         func blankAgentTypeWithoutDescriptionFallsBackToSubagent(agentType: String) throws {
             try workspace.addSubagent("a1", meta: SubagentsFixture.meta(["agentType": agentType]))
             let info = try #require(scan().first)
-            withKnownIssue("""
-                Subagents.swift:47 drops a blank description but uses agentType as the title without the same \
-                check, so a blank agentType gives the sidebar row a blank title instead of "Subagent"
-                """) {
-                #expect(info.title == "Subagent")
-            }
+            #expect(info.title == "Subagent")
+            #expect(info.agentType == nil, "A blank type isn't a type (the window's subtitle reads \"Subagent\")")
         }
 
         @Test func eachSubagentReadsItsOwnMetaFile() throws {
@@ -202,16 +208,64 @@ extension SubagentsTests {
             (0.0, SubagentInfo.State.running),
             (45.0, SubagentInfo.State.running),
             (90.0, SubagentInfo.State.running),
-            (91.0, SubagentInfo.State.done),
-            (3_600.0, SubagentInfo.State.done),
+            (91.0, SubagentInfo.State.stopped),
+            (3_600.0, SubagentInfo.State.stopped),
             (-120.0, SubagentInfo.State.running),
         ])
-        func unfinishedTranscriptRunsUntilNinetySecondsAfterItsLastWrite(age: TimeInterval,
-                                                                       expected: SubagentInfo.State) throws {
+        func unfinishedTranscriptRunsUntilNinetySecondsAfterItsLastWriteThenStopped(age: TimeInterval,
+                                                                                  expected: SubagentInfo.State) throws {
             let modified = SubagentsFixture.epoch
             try workspace.addSubagent("a1", lines: [SubagentsFixture.unfinishedLine], created: modified, modified: modified)
             let info = try #require(scan(now: modified.addingTimeInterval(age)).first)
-            #expect(info.state == expected, "\(age)s after its last write")
+            #expect(info.state == expected, "\(age)s after its last write, its session not working: it was cut off")
+        }
+
+        @Test(arguments: [0.0, 91.0, 3_600.0])
+        func unfinishedTranscriptRunsWhileTheTurnThatStartedItDoes(age: TimeInterval) throws {
+            let modified = SubagentsFixture.epoch
+            try workspace.addSubagent("a1", lines: [SubagentsFixture.unfinishedLine], created: modified, modified: modified)
+            let turnBegan = modified.addingTimeInterval(-30)
+            let info = try #require(scan(parentWorkingSince: turnBegan, now: modified.addingTimeInterval(age)).first)
+            #expect(info.state == .running, "Quiet for \(age)s, but its session's turn is still waiting on it")
+        }
+
+        @Test(.tags(.subagentsEdgeCase))
+        func turnStartingAtItsLastWriteStillCounts() throws {
+            let modified = SubagentsFixture.epoch
+            try workspace.addSubagent("a1", lines: [SubagentsFixture.unfinishedLine], created: modified, modified: modified)
+            let info = try #require(scan(parentWorkingSince: modified, now: modified.addingTimeInterval(600)).first)
+            #expect(info.state == .running)
+        }
+
+        @Test(arguments: [(30.0, SubagentInfo.State.running), (91.0, SubagentInfo.State.stopped)])
+        func unfinishedTranscriptFromAnEarlierTurnIsNotKeptRunningByALaterOne(age: TimeInterval,
+                                                                           expected: SubagentInfo.State) throws {
+            let modified = SubagentsFixture.epoch
+            try workspace.addSubagent("a1", lines: [SubagentsFixture.unfinishedLine], created: modified, modified: modified)
+            let laterTurn = modified.addingTimeInterval(10)
+            let info = try #require(scan(parentWorkingSince: laterTurn, now: modified.addingTimeInterval(age)).first)
+            #expect(info.state == expected, "Last written before this turn began: it was cut off in an earlier one")
+        }
+
+        @Test func finishedTranscriptIsDoneWhileItsSessionIsStillWorking() throws {
+            let modified = SubagentsFixture.epoch
+            try workspace.addSubagent("a1", lines: [SubagentsFixture.userLine, SubagentsFixture.finishedLine],
+                                      created: modified, modified: modified)
+            let info = try #require(scan(parentWorkingSince: modified.addingTimeInterval(-30), now: modified).first)
+            #expect(info.state == .done, "Its session's turn goes on after it reported back")
+        }
+
+        @Test(arguments: [
+            (BackgroundTask.State.completed, SubagentInfo.State.done),
+            (BackgroundTask.State.failed, SubagentInfo.State.failed),
+            (BackgroundTask.State.stopped, SubagentInfo.State.stopped),
+        ])
+        func knownFinalStateWinsOverAWorkingSession(known: BackgroundTask.State, expected: SubagentInfo.State) throws {
+            let modified = SubagentsFixture.epoch
+            try workspace.addSubagent("a1", lines: [SubagentsFixture.unfinishedLine], created: modified, modified: modified)
+            let info = try #require(scan(known: ["a1": known], parentWorkingSince: modified.addingTimeInterval(-30),
+                                         now: modified.addingTimeInterval(5)).first)
+            #expect(info.state == expected, "A background subagent's state comes from its task, not its session's turn")
         }
 
         @Test func justStartedSubagentWithAnEmptyTranscriptIsRunning() throws {
@@ -307,18 +361,29 @@ extension SubagentsTests {
             #expect(SubagentScanner.finished(url))
         }
 
-        @Test(.tags(.subagentsEdgeCase))
-        func finalAssistantMessageLongerThanTheTailWindowCountsAsFinished() throws {
-            let report = String(repeating: "a", count: 20_000)
+        @Test(.tags(.subagentsEdgeCase), arguments: [("a", 20_000), ("a", 300_000), ("a", 1_500_000), ("é", 12_000)])
+        func finalAssistantMessageLongerThanTheTailWindowCountsAsFinished(character: String, count: Int) throws {
+            let report = String(repeating: character, count: count)
             let url = try transcript([SubagentsFixture.userLine,
                                       SubagentsFixture.assistantLine(stopReason: "end_turn", text: report)])
-            withKnownIssue("""
-                finished(_:) reads only the last 16 KiB (Subagents.swift:58), so a final assistant line longer \
-                than that is cut mid-JSON and skipped: a subagent that ended its turn with a long report reads \
-                as unfinished (and scan() shows it running until 90s after its last write)
-                """) {
-                #expect(SubagentScanner.finished(url))
-            }
+            #expect(SubagentScanner.finished(url), "A long final report (\(report.utf8.count) bytes) still ends the turn")
+        }
+
+        @Test(.tags(.subagentsEdgeCase))
+        func longLastAssistantMessageStillOutranksAnEarlierEndedTurn() throws {
+            let url = try transcript([
+                SubagentsFixture.finishedLine,
+                SubagentsFixture.userLine,
+                SubagentsFixture.assistantLine(stopReason: "tool_use", text: String(repeating: "a", count: 100_000)),
+            ])
+            #expect(SubagentScanner.finished(url) == false, "The long last message is still working, whatever came before")
+        }
+
+        @Test(.tags(.subagentsEdgeCase))
+        func longLinesAfterTheLastAssistantMessageAreReadPast() throws {
+            let result = #"{"type":"user","message":{"role":"user","content":"\#(String(repeating: "r", count: 50_000))"}}"#
+            let url = try transcript([SubagentsFixture.userLine, SubagentsFixture.finishedLine, result])
+            #expect(SubagentScanner.finished(url))
         }
     }
 }
@@ -366,6 +431,45 @@ extension SubagentsTests {
                 .agentText(id: "msg_2", text: "One TODO, in a.swift."),
             ])
         }
+
+        @Test func rereadingAGrowingTranscriptKeepsTheItemsItHad() throws {
+            let url = try workspace.writeFile(named: "agent-a1.jsonl",
+                                              contents: SubagentsFixture.jsonl([TranscriptLines.prompt, TranscriptLines.reply]))
+            let before = SubagentScanner.items(url)
+            try #require(before.count == 2)
+            #expect(SubagentScanner.items(url) == before, "The same file reads the same, prompt ids included")
+
+            let handle = try FileHandle(forWritingTo: url)
+            try handle.seekToEnd()
+            try handle.write(contentsOf: Data(SubagentsFixture.jsonl([TranscriptLines.toolUse]).utf8))
+            try handle.close()
+            let after = SubagentScanner.items(url)
+            #expect(after.count == 3)
+            #expect(Array(after.prefix(before.count)) == before,
+                    "What it had stays as it was, so the viewer adds to it instead of starting over")
+        }
+
+        @Test(.tags(.subagentsEdgeCase))
+        func readCutInsideACharacterKeepsTheItemsBeforeIt() throws {
+            let complete = SubagentsFixture.jsonl([TranscriptLines.prompt, TranscriptLines.reply])
+            let expected = SubagentScanner.items(try workspace.writeFile(named: "complete.jsonl", contents: complete))
+            try #require(expected.count == 2)
+            // A line still being written, cut between the bytes of its "—".
+            let unfinished = #"{"type":"assistant","isSidechain":true,"agentId":"a1","message":{"id":"msg_2","role":"assistant","content":[{"type":"text","text":"Read it —"#
+            let url = workspace.root.appendingPathComponent("agent-a1.jsonl")
+            try (Data(complete.utf8) + Data(unfinished.utf8).dropLast()).write(to: url)
+            #expect(SubagentScanner.items(url) == expected, "The half-written line is skipped; the rest still reads")
+        }
+    }
+
+    /// Lines of a subagent's own transcript (each one a sidechain).
+    fileprivate enum TranscriptLines {
+        static let prompt =
+            #"{"type":"user","isSidechain":true,"agentId":"a1","message":{"role":"user","content":"Find the TODOs"}}"#
+        static let reply =
+            #"{"type":"assistant","isSidechain":true,"agentId":"a1","message":{"id":"msg_1","role":"assistant","content":[{"type":"text","text":"Searching."}],"stop_reason":null}}"#
+        static let toolUse =
+            #"{"type":"assistant","isSidechain":true,"agentId":"a1","message":{"id":"msg_2","role":"assistant","content":[{"type":"tool_use","id":"toolu_1","name":"Grep","input":{"pattern":"TODO"}}],"stop_reason":"tool_use"}}"#
     }
 }
 
@@ -397,6 +501,18 @@ extension SubagentsTests {
             #expect(first.text == "one")
             #expect(second.text == "two")
             #expect(first.id != second.id)
+        }
+
+        @Test func promptIDsAreTheSameOnEveryFold() {
+            let events: [ClaudeTranscriptTail.Event] = [.user("one"), .text(messageID: "m1", "Hi."), .user("two")]
+            #expect(fold(events) == fold(events), "Rereading a transcript mustn't give its prompts new ids")
+        }
+
+        @Test func laterEventsLeaveEarlierPromptIDsAlone() {
+            let earlier: [ClaudeTranscriptTail.Event] = [.user("one"), .text(messageID: "m1", "Hi.")]
+            let before = fold(earlier)
+            let after = fold(earlier + [.toolUse(SubagentsFixture.toolCall(id: "t1")), .user("two")])
+            #expect(Array(after.prefix(before.count)) == before)
         }
 
         @Test func textOfOneMessageIsJoinedIntoOneReply() {
