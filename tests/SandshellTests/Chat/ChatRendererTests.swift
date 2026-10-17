@@ -1240,6 +1240,16 @@ struct ChatRendererTests {
             HighlightCase(language: "swift", source: "var s: String", token: "String", role: "type"),
             HighlightCase(language: "swift", source: "let s = \"hello\"", token: "\"hello\"", role: "string"),
             HighlightCase(language: "js", source: "const c = 'x'", token: "'x'", role: "string"),
+            HighlightCase(language: "", source: "it's 'quoted'", token: "'quoted'", role: "string"),
+            HighlightCase(language: "python", source: "s = f'{n}'", token: "f'{n}'", role: "string"),
+            HighlightCase(language: "python", source: "p = rb'\\d'", token: "rb'\\d'", role: "string"),
+            HighlightCase(language: "shell", source: "echo 'a\\' b", token: "'a\\'", role: "string"),
+            // ' opens only a character literal in Rust (and Swift, Go, the C family…).
+            HighlightCase(language: "rust", source: "let c = 'x';", token: "'x'", role: "string"),
+            HighlightCase(language: "rust", source: "let c = '\\'';", token: "'\\''", role: "string"),
+            HighlightCase(language: "rust", source: "let c = '\\u{1F600}';", token: "'\\u{1F600}'", role: "string"),
+            HighlightCase(language: "rust", source: "fn f<'a>(x: &'a str) -> &'a str", token: "'a>(x: &'", role: "plain"),
+            HighlightCase(language: "go", source: "r := '\\n'", token: "'\\n'", role: "string"),
             HighlightCase(language: "js", source: "const t = `tpl ${x}`", token: "`tpl ${x}`", role: "string"),
             HighlightCase(language: "swift", source: "x // note", token: "// note", role: "comment"),
             HighlightCase(language: "swift", source: "a /* one\ntwo */ b", token: "/* one\ntwo */", role: "comment"),
@@ -1331,6 +1341,29 @@ struct ChatRendererTests {
         func quotesInsideCommentsStayComment(language: String, source: String, inside: String) throws {
             let highlighted = SyntaxHighlighter.highlight(source, language: language, font: font)
             let range = try #require(CRFixture.range(of: inside, in: highlighted))
+            #expect(CRFixture.color(in: highlighted, at: range.location) == NSColor.secondaryLabelColor)
+        }
+
+        /// A ' that opens no string — a Rust lifetime or label, an escaped
+        /// shell quote, an apostrophe in a word — doesn't run on into the comment
+        /// after it, ending at an apostrophe there.
+        @Test(.tags(.edgeCase), arguments: [
+            ("rust", "fn f() -> &'static str { // it's", "it"),
+            ("rust", "pub fn name(&self) -> &'static str { // it's fixed", "fixed"),
+            ("rust", "fn f<'a>(x: &'a str) {} // it's", "it"),
+            ("rust", "'outer: loop { // don't", "don"),
+            ("shell", "echo it\\'s # it's here", "here"),
+            ("", "Don't panic // it's fine", "fine"),
+            ("js", "x = y // it's", "it"),
+            ("yaml", "note: it's here # it's fine", "fine"),
+        ])
+        func apostrophesThatOpenNoStringLeaveTheCommentAlone(language: String, source: String, inside: String) throws {
+            let highlighted = SyntaxHighlighter.highlight(source, language: language, font: font)
+            let comment = try #require(source.range(of: language == "shell" || language == "yaml" ? "# " : "// "))
+            let start = source.distance(from: source.startIndex, to: comment.lowerBound)
+            try CRFixture.verifyTokenColor(String(source[comment.lowerBound...]), in: highlighted, is: .secondaryLabelColor)
+            let range = try #require(CRFixture.range(of: inside, in: highlighted))
+            #expect(range.location > start, "\(inside.debugDescription) is in the comment")
             #expect(CRFixture.color(in: highlighted, at: range.location) == NSColor.secondaryLabelColor)
         }
 

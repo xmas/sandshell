@@ -776,7 +776,9 @@ enum SyntaxHighlighter {
         paint(#"\b("# + words.map(NSRegularExpression.escapedPattern(for:)).joined(separator: "|") + #")\b"#, .systemPink)
         // Strings and comments in one pass, leftmost first: a comment marker in
         // a string ("https://…", "#tag") stays string, a quote in a comment stays comment.
-        let string = #""(\\.|[^"\\\n])*"|'(\\.|[^'\\\n])*'|`(\\.|[^`\\])*`"#
+        // So ' opens a string only where the language would: a Rust lifetime or an
+        // apostrophe in a word would otherwise run on into a comment after it.
+        let string = #""(\\.|[^"\\\n])*"|"# + singleQuoted(lang) + #"|`(\\.|[^`\\])*`"#
         let comment = (hashComments ? #"#.*$"# : #"//.*$"#) + #"|/\*[\s\S]*?\*/"#
         if let re = try? NSRegularExpression(pattern: "(?<string>\(string))|\(comment)", options: .anchorsMatchLines) {
             for m in re.matches(in: source, range: full) {
@@ -785,5 +787,32 @@ enum SyntaxHighlighter {
             }
         }
         return out
+    }
+
+    /// Languages where ' only ever opens a character literal (Swift has no
+    /// single-quoted literal at all): Rust's lifetimes and labels ('static,
+    /// 'outer:) are left alone.
+    private static let charLiteralQuotes: Set<String> = [
+        "swift", "rust", "go", "c", "h", "cc", "cpp", "cxx", "hpp", "c++", "objc", "m", "mm",
+        "java", "kotlin", "kt", "scala", "cs", "csharp",
+    ]
+
+    /// The pattern for a single-quoted literal in `lang`.
+    private static func singleQuoted(_ lang: String) -> String {
+        if charLiteralQuotes.contains(lang) {
+            // One character, or one escape ('\n', '\'', '\u{1F600}', '\x7f').
+            return #"'([^'\\\n]|\\[^\n][^'\\\n]{0,9})'"#
+        }
+        switch lang {
+        case "shell":
+            // No escapes inside, and an escaped \' outside opens nothing.
+            return #"(?<!\\)'[^'\n]*'"#
+        case "python":
+            // Not an apostrophe in a word (don't); string prefixes are fine (f'…', rb'…').
+            return #"(?<![\p{L}\p{N}_])[rRbBuUfF]{0,2}'(\\.|[^'\\\n])*'"#
+        default:
+            // Not an apostrophe in a word (don't, it's).
+            return #"(?<![\p{L}\p{N}_])'(\\.|[^'\\\n])*'"#
+        }
     }
 }

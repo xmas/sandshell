@@ -658,6 +658,12 @@ final class ChatSession: ObservableObject {
     func debugAsk(_ q: AgentQuestion?) { question = q }
     /// Tests: the agent sends this `session/update`.
     func debugApply(_ update: JSONValue) { apply(update) }
+    /// Tests: talk to `connection` as session `sessionID` (nil and nil: as a
+    /// reload or close leaves it, with the old agent going away).
+    func debugAttach(_ connection: ACPConnection?, sessionID: String?) {
+        self.connection = connection
+        self.sessionID = sessionID
+    }
     #endif
 
     /// Answer the pending permission prompt; nil = cancelled.
@@ -673,7 +679,8 @@ final class ChatSession: ObservableObject {
         Task { _ = await switchModel(id) }
     }
 
-    /// Switch the session's model; false (with a notice) if the agent refused.
+    /// Switch the session's model; false if the agent refused (with a notice),
+    /// or if the chat was closed or reloaded meanwhile (silently).
     @discardableResult
     private func switchModel(_ id: String) async -> Bool {
         guard let conn = connection, let sid = sessionID, id != currentModel else { return true }
@@ -682,13 +689,18 @@ final class ChatSession: ObservableObject {
         do {
             if modelViaSetModel {
                 _ = try await conn.request("session/set_model", ["sessionId": .string(sid), "modelId": .string(id)])
-                return true
+                return !isClosed && connection === conn
             }
             let result = try await conn.request("session/set_config_option", [
                 "sessionId": .string(sid), "configId": "model", "value": .string(id)])
+            // Closed or reloaded meanwhile: that session's options aren't this one's.
+            guard !isClosed, connection === conn else { return false }
             applyConfig(result["configOptions"])
             return true
         } catch {
+            // Closed or reloaded meanwhile (the request failed because its agent
+            // went away): the new session has its own model, and nothing to say.
+            guard !isClosed, connection === conn else { return false }
             if currentModel == id { currentModel = previous }   // still on the old one
             notice("Couldn’t switch model: \(error.localizedDescription)", isError: true)
             return false
@@ -749,8 +761,10 @@ final class ChatSession: ObservableObject {
             do {
                 let r = try await conn.request("session/set_config_option", [
                     "sessionId": .string(sid), "configId": "effort", "value": .string(level ?? "default")])
+                guard !isClosed, connection === conn else { return }
                 applyConfig(r["configOptions"])
             } catch {
+                guard !isClosed, connection === conn else { return }
                 notice("Couldn’t change the effort level: \(error.localizedDescription)", isError: true)
             }
         }
@@ -764,6 +778,8 @@ final class ChatSession: ObservableObject {
             do {
                 _ = try await conn.request("session/set_mode", ["sessionId": .string(sid), "modeId": .string(id)])
             } catch {
+                // Closed or reloaded meanwhile: the new session has its own mode.
+                guard !isClosed, connection === conn else { return }
                 if currentMode == id { currentMode = previous }   // still on the old one
                 notice("Couldn’t switch mode: \(error.localizedDescription)", isError: true)
             }
