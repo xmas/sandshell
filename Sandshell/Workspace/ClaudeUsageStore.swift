@@ -32,10 +32,10 @@ enum ClaudeUsagePeriod: String, CaseIterable, Identifiable, Sendable {
     var id: String { rawValue }
     var title: String {
         switch self {
-        case .week: return "This week"
-        case .month: return "This month"
-        case .year: return "This year"
-        case .all: return "All time"
+        case .week: "This week"
+        case .month: "This month"
+        case .year: "This year"
+        case .all: "All time"
         }
     }
 }
@@ -155,7 +155,7 @@ struct ClaudePriceBook: Sendable {
         if let r = table[m] { return r }
         var best: (String, ClaudeRate)?
         for (k, r) in table where m.hasPrefix(k) {
-            if best == nil || k.count > best!.0.count { best = (k, r) }
+            if k.count > best?.0.count ?? -1 { best = (k, r) }
         }
         return best?.1
     }
@@ -202,7 +202,7 @@ enum ClaudePriceSources {
         if let data = try? Data(contentsOf: cacheURL) {
             cached = try? JSONDecoder().decode(FeedCache.self, from: data)
         }
-        if let cached, cached.models != nil, Date().timeIntervalSince(cached.fetchedAt) < feedMaxAge { return cached }
+        if let cached, cached.models != nil, Date.now.timeIntervalSince(cached.fetchedAt) < feedMaxAge { return cached }
         do {
             var req = URLRequest(url: feedURL)
             req.timeoutInterval = 20
@@ -211,8 +211,6 @@ enum ClaudePriceSources {
                   let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { return cached }
             var rates: [String: ClaudeRate] = [:]
             var models: [String] = []
-            let day = ISO8601DateFormatter()
-            day.formatOptions = [.withFullDate]
             for (key, v) in obj {
                 // Raw key test: "anthropic.claude-…" (Bedrock) and "vertex_ai/claude-…"
                 // are priced below but aren't ids `claude --model` takes.
@@ -220,8 +218,9 @@ enum ClaudePriceSources {
                    let row = v as? [String: Any],
                    row["litellm_provider"] as? String == "anthropic",
                    (row["mode"] as? String ?? "chat") == "chat" {
-                    let retired = (row["deprecation_date"] as? String).flatMap { day.date(from: $0) }
-                        .map { $0 <= Date() } ?? false
+                    let retired = (row["deprecation_date"] as? String)
+                        .flatMap { try? Date($0, strategy: .iso8601.year().month().day()) }
+                        .map { $0 <= .now } ?? false
                     if !retired { models.append(key) }
                 }
                 let k = ClaudePriceBook.normalize(key)
@@ -236,7 +235,7 @@ enum ClaudePriceSources {
                                       cacheWrite1h: w1h * 1e6, cacheRead: cr * 1e6)
             }
             guard rates.count >= 5 else { return cached }   // sanity: don't trust a near-empty feed
-            let fresh = FeedCache(fetchedAt: Date(), rates: rates, models: models.sorted())
+            let fresh = FeedCache(fetchedAt: .now, rates: rates, models: models.sorted())
             if let out = try? JSONEncoder().encode(fresh) {
                 try? FileManager.default.createDirectory(at: cacheURL.deletingLastPathComponent(),
                                                          withIntermediateDirectories: true)
@@ -253,8 +252,8 @@ enum ClaudePriceSources {
     /// Rates are USD per MTok; `cacheWrite` covers both TTLs.
     static func loadOverrides(home: URL) -> (rows: [String: ClaudeRate], multiplier: Double, found: Bool) {
         let candidates = [
-            home.appendingPathComponent(".claude/settings.json"),
-            URL(fileURLWithPath: "/Library/Application Support/ClaudeCode/managed-settings.json"),
+            home.appending(path: ".claude/settings.json"),
+            URL(filePath: "/Library/Application Support/ClaudeCode/managed-settings.json"),
         ]
         var rows: [String: ClaudeRate] = [:]
         var multiplier = 1.0
@@ -325,9 +324,9 @@ final class ClaudeUsageStore: ObservableObject {
     private var sessionFiles: [String: FileState] = [:]
     private var sessionScans: Set<String> = []
     private var sessionRescan: Set<String> = []
-    private let home = FileManager.default.homeDirectoryForCurrentUser
-    private var cacheURL: URL { home.appendingPathComponent(".sandshell/claude-usage-cache.json") }
-    private var feedCacheURL: URL { home.appendingPathComponent(".sandshell/model-prices.json") }
+    private let home = URL.homeDirectory
+    private var cacheURL: URL { home.appending(path: ".sandshell/claude-usage-cache.json") }
+    private var feedCacheURL: URL { home.appending(path: ".sandshell/model-prices.json") }
 
     private init() {
         if let data = try? Data(contentsOf: cacheURL),
@@ -344,7 +343,7 @@ final class ClaudeUsageStore: ObservableObject {
     /// last one is under 60s old.
     func refresh(force: Bool = false) {
         guard scanTask == nil else { return }
-        if !force, let last = lastUpdated, Date().timeIntervalSince(last) < 60 { return }
+        if !force, let last = lastUpdated, Date.now.timeIntervalSince(last) < 60 { return }
         isScanning = true
         let home = self.home
         let cached = self.files
@@ -362,7 +361,7 @@ final class ClaudeUsageStore: ObservableObject {
             self.recomputeTotals()
             self.recomputeSessionTotals()
             ClaudeModelCatalog.shared.setUsedModels(Array(self.byModel[.month, default: [:]].keys))
-            self.lastUpdated = Date()
+            self.lastUpdated = .now
             self.isScanning = false
             self.scanTask = nil
             self.persist()
@@ -378,7 +377,7 @@ final class ClaudeUsageStore: ObservableObject {
             }
             // Feed rows win over built-in rows for the same key; built-in fills gaps.
             book.rates = ClaudePriceBook.builtIn.merging(feed.rates) { _, feed in feed }
-            let age = Date().timeIntervalSince(feed.fetchedAt)
+            let age = Date.now.timeIntervalSince(feed.fetchedAt)
             parts.append("LiteLLM feed (\(ClaudeStatsFormat.duration(age * 1000)) old)")
         } else {
             parts.append("built-in list prices")
@@ -389,7 +388,7 @@ final class ClaudeUsageStore: ObservableObject {
             book.multiplier = ov.multiplier
             var s = "modelPricing"
             if !ov.rows.isEmpty { s += " \(ov.rows.count) row\(ov.rows.count == 1 ? "" : "s")" }
-            if ov.multiplier != 1 { s += String(format: " ×%.2f", ov.multiplier) }
+            if ov.multiplier != 1 { s += " ×\(ov.multiplier.formatted(.number.precision(.fractionLength(2))))" }
             parts.insert(s, at: 0)
         }
         parts.insert(ClaudePriceBook.companyCalibrationLabel, at: ov.found ? 1 : 0)
@@ -436,18 +435,15 @@ final class ClaudeUsageStore: ObservableObject {
     /// `~/.claude/projects/<project>/<id>.jsonl`, parsed unless unchanged from `old`.
     private nonisolated static func readSession(_ id: String, home: URL, old: FileState?) -> FileState? {
         let fm = FileManager.default
-        let projects = home.appendingPathComponent(".claude/projects")
+        let projects = home.appending(path: ".claude/projects", directoryHint: .isDirectory)
         guard let dirs = try? fm.contentsOfDirectory(at: projects, includingPropertiesForKeys: nil) else { return nil }
         for dir in dirs {
-            let url = dir.appendingPathComponent("\(id).jsonl")
+            let url = dir.appending(path: "\(id).jsonl")
             guard let attrs = try? url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey]),
                   let mtime = attrs.contentModificationDate?.timeIntervalSince1970,
                   let size = attrs.fileSize else { continue }
             if let old, old.mtime == mtime, old.size == size { return old }
-            let iso = ISO8601DateFormatter()
-            iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-            return FileState(mtime: mtime, size: size,
-                             days: parse(url: url, iso: iso, isoPlain: ISO8601DateFormatter(), day: dayFormatter()))
+            return FileState(mtime: mtime, size: size, days: parse(url: url, day: dayFormatter()))
         }
         return nil
     }
@@ -462,7 +458,7 @@ final class ClaudeUsageStore: ObservableObject {
 
     private func recomputeTotals() {
         let cal = Calendar.current
-        let now = Date()
+        let now = Date.now
         let fmt = Self.dayFormatter()
         let weekStart = cal.dateInterval(of: .weekOfYear, for: now).map { fmt.string(from: $0.start) } ?? ""
         let monthStart = cal.dateInterval(of: .month, for: now).map { fmt.string(from: $0.start) } ?? ""
@@ -471,8 +467,8 @@ final class ClaudeUsageStore: ObservableObject {
         var models: [ClaudeUsagePeriod: [String: ClaudeUsageTotals]] = [:]
         for p in ClaudeUsagePeriod.allCases { out[p] = ClaudeUsageTotals(); models[p] = [:] }
         func add(_ p: ClaudeUsagePeriod, _ model: String, _ t: ClaudeUsageTotals) {
-            out[p]! += t
-            models[p]![model, default: ClaudeUsageTotals()] += t
+            out[p, default: ClaudeUsageTotals()] += t
+            models[p, default: [:]][model, default: ClaudeUsageTotals()] += t
         }
         var rateCache: [String: ClaudeRate?] = [:]
         for state in files.values {
@@ -509,25 +505,21 @@ final class ClaudeUsageStore: ObservableObject {
 
     private nonisolated static func scan(home: URL, cached: [String: FileState]) -> [String: FileState] {
         let fm = FileManager.default
-        let projects = home.appendingPathComponent(".claude/projects")
+        let projects = home.appending(path: ".claude/projects", directoryHint: .isDirectory)
         guard let e = fm.enumerator(at: projects, includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey],
                                     options: [.skipsHiddenFiles]) else { return cached }
         var result: [String: FileState] = [:]
-        let iso = ISO8601DateFormatter()
-        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        let isoPlain = ISO8601DateFormatter()
         let day = dayFormatter()
         for case let url as URL in e where url.pathExtension == "jsonl" {
             guard let attrs = try? url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey]),
                   let mtime = attrs.contentModificationDate?.timeIntervalSince1970,
                   let size = attrs.fileSize else { continue }
-            let key = url.path
+            let key = url.path(percentEncoded: false)
             if let old = cached[key], old.mtime == mtime, old.size == size {
                 result[key] = old
                 continue
             }
-            result[key] = FileState(mtime: mtime, size: size,
-                                    days: parse(url: url, iso: iso, isoPlain: isoPlain, day: day))
+            result[key] = FileState(mtime: mtime, size: size, days: parse(url: url, day: day))
         }
         return result
     }
@@ -535,10 +527,9 @@ final class ClaudeUsageStore: ObservableObject {
     /// One transcript → day → model → token totals. Only `"type":"assistant"`
     /// lines carry usage; a streamed message can appear on several lines with
     /// the same message id + request id, so count each pair once.
-    private nonisolated static func parse(url: URL, iso: ISO8601DateFormatter,
-                                          isoPlain: ISO8601DateFormatter,
-                                          day: DateFormatter) -> [String: [String: ClaudeUsageTotals]] {
+    private nonisolated static func parse(url: URL, day: DateFormatter) -> [String: [String: ClaudeUsageTotals]] {
         guard let data = try? Data(contentsOf: url) else { return [:] }
+        let iso = Date.ISO8601FormatStyle(includingFractionalSeconds: true), isoPlain = Date.ISO8601FormatStyle()
         var days: [String: [String: ClaudeUsageTotals]] = [:]
         var seen = Set<String>()
         let text = String(decoding: data, as: UTF8.self)
@@ -570,7 +561,7 @@ final class ClaudeUsageStore: ObservableObject {
             }
 
             let stamp = obj["timestamp"] as? String ?? ""
-            let date = iso.date(from: stamp) ?? isoPlain.date(from: stamp) ?? Date(timeIntervalSince1970: 0)
+            let date = (try? iso.parse(stamp)) ?? (try? isoPlain.parse(stamp)) ?? Date(timeIntervalSince1970: 0)
             days[day.string(from: date), default: [:]][ClaudePriceBook.normalize(model), default: ClaudeUsageTotals()] += t
         }
         return days

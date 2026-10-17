@@ -63,7 +63,7 @@ final class BackgroundTaskMonitor {
                 }
                 continue
             }
-            var watch = watches[id] ?? Watch(since: Date().addingTimeInterval(-5))
+            var watch = watches[id] ?? Watch(since: .now.addingTimeInterval(-5))
             if watch.url == nil, let tid = session.transcriptID {
                 watch.url = TranscriptReader.transcriptURL(agent: .claude, workdir: session.conversationWorkdir,
                                                            home: home, id: tid)
@@ -89,8 +89,8 @@ final class BackgroundTaskMonitor {
             watch.caughtUp = true
 
             // A running subagent's latest step, from its own transcript.
-            if Date().timeIntervalSince(watch.lastProgressRead) >= 2 {
-                watch.lastProgressRead = Date()
+            if Date.now.timeIntervalSince(watch.lastProgressRead) >= 2 {
+                watch.lastProgressRead = .now
                 let agents = watch.parser.tasks.filter { $0.isRunning && $0.kind == .agent }.map(\.id)
                 if !agents.isEmpty {
                     let steps = await Task.detached(priority: .utility) {

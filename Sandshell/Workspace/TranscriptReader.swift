@@ -14,11 +14,11 @@ enum TranscriptReader {
     static func transcriptURL(agent: AgentKind, workdir: String, home: URL,
                               since: Date, excluding claimed: Set<URL>) -> URL? {
         switch agent {
-        case .claude: return claudeTranscriptURL(workdir: workdir, home: home,
-                                                  since: since, excluding: claimed)
-        case .codex:  return codexTranscriptURL(workdir: workdir, home: home,
-                                                 since: since, excluding: claimed)
-        default:      return nil
+        case .claude: claudeTranscriptURL(workdir: workdir, home: home,
+                                           since: since, excluding: claimed)
+        case .codex:  codexTranscriptURL(workdir: workdir, home: home,
+                                          since: since, excluding: claimed)
+        default:      nil
         }
     }
 
@@ -28,8 +28,8 @@ enum TranscriptReader {
         switch agent {
         case .claude:
             let url = home
-                .appendingPathComponent(".claude/projects/\(claudeEncodedDir(for: workdir))/\(id).jsonl")
-            return FileManager.default.fileExists(atPath: url.path) ? url : nil
+                .appending(path: ".claude/projects/\(claudeEncodedDir(for: workdir))/\(id).jsonl")
+            return FileManager.default.fileExists(atPath: url.path(percentEncoded: false)) ? url : nil
         case .codex:
             return codexTranscriptURL(home: home, id: id)
         default:
@@ -41,9 +41,9 @@ enum TranscriptReader {
     static func transcriptID(at url: URL, agent: AgentKind) -> String? {
         switch agent {
         case .codex:
-            return codexMetadata(at: url).sessionID
+            codexMetadata(at: url).sessionID
         default:
-            return url.deletingPathExtension().lastPathComponent
+            url.deletingPathExtension().lastPathComponent
         }
     }
 
@@ -79,8 +79,8 @@ enum TranscriptReader {
     /// can change from active to idle even if the file has not been written again.
     static func liveStateMayChangeWithoutFileWrite(agent: AgentKind) -> Bool {
         switch agent {
-        case .codex: return true
-        default: return false
+        case .codex: true
+        default: false
         }
     }
 
@@ -110,8 +110,8 @@ enum TranscriptReader {
         switch agent {
         case .claude:
             let url = home
-                .appendingPathComponent(".claude/projects/\(claudeEncodedDir(for: workdir))/\(id).jsonl")
-            return FileManager.default.fileExists(atPath: url.path)
+                .appending(path: ".claude/projects/\(claudeEncodedDir(for: workdir))/\(id).jsonl")
+            return FileManager.default.fileExists(atPath: url.path(percentEncoded: false))
         case .codex:
             return codexTranscriptURL(home: home, id: id) != nil
         default:
@@ -123,7 +123,7 @@ enum TranscriptReader {
 
     private static func claudeTranscriptURL(workdir: String, home: URL,
                                              since: Date, excluding claimed: Set<URL>) -> URL? {
-        let dir = home.appendingPathComponent(".claude/projects/\(claudeEncodedDir(for: workdir))")
+        let dir = home.appending(path: ".claude/projects/\(claudeEncodedDir(for: workdir))", directoryHint: .isDirectory)
         guard let entries = try? FileManager.default.contentsOfDirectory(
             at: dir, includingPropertiesForKeys: [.contentModificationDateKey], options: []) else { return nil }
         let slack = since.addingTimeInterval(-5)
@@ -216,7 +216,7 @@ enum TranscriptReader {
         guard let lastRole else { return nil }
         let mtime = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?
             .contentModificationDate
-        let recentlyWritten = mtime.map { Date().timeIntervalSince($0) < 10 } ?? false
+        let recentlyWritten = mtime.map { Date.now.timeIntervalSince($0) < 10 } ?? false
         let working = lastRole == "user" || (lastRole != "assistant" && recentlyWritten)
         return IncrementalLiveStateResult(
             liveState: LiveState(working: working, latestPrompt: latestPrompt),
@@ -292,7 +292,7 @@ enum TranscriptReader {
         guard meta.sawConversation else { return nil }
         let mtime = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?
             .contentModificationDate
-        let recentlyWritten = mtime.map { Date().timeIntervalSince($0) < 10 } ?? false
+        let recentlyWritten = mtime.map { Date.now.timeIntervalSince($0) < 10 } ?? false
         let working = meta.lastRole == "user" || (meta.lastRole != "assistant" && recentlyWritten)
         return LiveState(working: working, latestPrompt: meta.latestPrompt)
     }
@@ -315,18 +315,18 @@ enum TranscriptReader {
     /// rollout files (a different line schema — see `codexSummary`).
     static func summary(at url: URL, agent: AgentKind) -> ConversationSummary? {
         switch agent {
-        case .claude: return claudeSummary(at: url)
-        case .codex:  return codexSummary(at: url)
-        default:      return nil   // unknown format — don't guess it's Claude-shaped
+        case .claude: claudeSummary(at: url)
+        case .codex:  codexSummary(at: url)
+        default:      nil   // unknown format — don't guess it's Claude-shaped
         }
     }
 
     /// Ordered (role, text) messages for the History preview pane.
     static func messages(at url: URL, agent: AgentKind) -> [(role: String, text: String)] {
         switch agent {
-        case .claude: return claudeMessages(at: url)
-        case .codex:  return codexMessages(at: url)
-        default:      return []
+        case .claude: claudeMessages(at: url)
+        case .codex:  codexMessages(at: url)
+        default:      []
         }
     }
 
@@ -383,7 +383,7 @@ enum TranscriptReader {
     /// History, live tracking, and resume validation all use the same source.
     static func codexFiles(home: URL, limit: Int = 2_000) -> [(url: URL, date: Date)] {
         let fm = FileManager.default
-        let sessions = home.appendingPathComponent(".codex/sessions")
+        let sessions = home.appending(path: ".codex/sessions", directoryHint: .isDirectory)
         guard let enumerator = fm.enumerator(
             at: sessions,
             includingPropertiesForKeys: [.contentModificationDateKey],
@@ -513,8 +513,8 @@ enum TranscriptReader {
     static func claudeEncodedDir(for workdir: String) -> String {
         String(decoding: workdir.utf16.map { unit -> UInt16 in
             switch unit {
-            case 0x30...0x39, 0x41...0x5A, 0x61...0x7A: return unit
-            default: return 0x2D
+            case 0x30...0x39, 0x41...0x5A, 0x61...0x7A: unit
+            default: 0x2D
             }
         }, as: UTF16.self)
     }

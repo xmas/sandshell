@@ -55,17 +55,17 @@ enum SubagentScanner {
     /// `known`: what the background-task monitor already knows (state wins).
     /// `parentWorkingSince`: when the session's current turn began (nil: it isn't working).
     nonisolated static func scan(sessionID: UUID, transcript: URL, known: [String: BackgroundTask.State] = [:],
-                                 parentWorkingSince: Date? = nil, now: Date = Date()) -> [SubagentInfo] {
-        let dir = transcript.deletingPathExtension().appendingPathComponent("subagents", isDirectory: true)
+                                 parentWorkingSince: Date? = nil, now: Date = .now) -> [SubagentInfo] {
+        let dir = transcript.deletingPathExtension().appending(path: "subagents", directoryHint: .isDirectory)
         let fm = FileManager.default
-        guard let names = try? fm.contentsOfDirectory(atPath: dir.path) else { return [] }
+        guard let names = try? fm.contentsOfDirectory(atPath: dir.path(percentEncoded: false)) else { return [] }
         return names.filter { $0.hasPrefix("agent-") && $0.hasSuffix(".jsonl") }.compactMap { name -> SubagentInfo? in
             let id = String(name.dropFirst("agent-".count).dropLast(".jsonl".count))
-            let url = dir.appendingPathComponent(name)
-            guard let attrs = try? fm.attributesOfItem(atPath: url.path) else { return nil }
+            let url = dir.appending(path: name)
+            guard let attrs = try? fm.attributesOfItem(atPath: url.path(percentEncoded: false)) else { return nil }
             let modified = attrs[.modificationDate] as? Date ?? now
             let created = attrs[.creationDate] as? Date ?? modified
-            let meta = (try? Data(contentsOf: dir.appendingPathComponent("agent-\(id).meta.json")))
+            let meta = (try? Data(contentsOf: dir.appending(path: "agent-\(id).meta.json")))
                 .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]
             func text(_ key: String) -> String? {
                 (meta[key] as? String).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.flatMap { $0.isEmpty ? nil : $0 }
@@ -85,7 +85,7 @@ enum SubagentScanner {
     /// since the turn began: an earlier turn's was cut off), however long it's
     /// quiet; otherwise for 90 s after its last write, then it was stopped.
     nonisolated static func state(_ url: URL, lastWrite: Date, parentWorkingSince: Date?,
-                                  now: Date = Date()) -> SubagentInfo.State {
+                                  now: Date = .now) -> SubagentInfo.State {
         if finished(url) { return .done }
         if let since = parentWorkingSince, lastWrite >= since { return .running }
         return now.timeIntervalSince(lastWrite) > 90 ? .stopped : .running
