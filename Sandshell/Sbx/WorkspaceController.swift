@@ -88,6 +88,9 @@ final class WorkspaceController: ObservableObject {
     /// Sessions closed in this window, most recent last (Reopen Closed Session).
     var recentlyClosed: [Session] = []
     private var containerPollTask: Task<Void, Never>?
+    /// The container sync running now, and whether another was asked for meanwhile.
+    private var containerSyncTask: Task<Void, Never>?
+    private var containerSyncQueued = false
     private var clockCancellable: AnyCancellable?
     private var statusFeedCancellable: AnyCancellable?
     private var statusFeedMTime: Date?
@@ -630,33 +633,44 @@ final class WorkspaceController: ObservableObject {
     }
 
     /// Re-sync the workspace's own container map after a global sandbox action
-    /// may have changed one of them.
+    /// may have changed one of them. One pass at a time: asked again while one
+    /// runs, it runs once more after it, so an older `sbx ls` never lands last
+    /// (and slow ones don't pile up behind the poll).
     private func syncContainers() {
-        Task {
-            // Also a sandbox shown building: with no bring-up of it left in
-            // any window, nothing else would say it's done.
-            let building = containerPhases.filter { $0.value.isBuilding }.map(\.key)
-            for agent in Set(containers.keys).union(building) {
-                let name = containerName(for: agent)
-                // A bring-up sets the container itself: an answer from before
-                // it (or from while it rebuilt) would put back what it replaced.
-                guard Self.bringUps[name] == nil else { continue }
-                let started = Self.bringUpsStarted[name]
-                let sb: Sandbox?
-                do {
-                    sb = try await SbxClient.shared.status(name: name)
-                } catch {
-                    continue   // sbx didn't answer this time: that isn't "gone"
-                }
-                // No bring-up ran meanwhile, so a building phase is left over.
-                guard Self.bringUps[name] == nil, Self.bringUpsStarted[name] == started else { continue }
-                containers[agent] = sb
-                containerPhases[agent] = sb.map { $0.isRunning ? .running : .stopped } ?? .absent
-                // A container that (re)started outside our create path (e.g.
-                // Settings ▸ Run) re-runs its startup dispatcher — follow it.
-                if sb?.isRunning == true { refreshKitStartupIfNeeded(for: agent) }
-                else if sb == nil { resetKitStartup(for: agent); kitDrift[agent] = nil }
-            }
+        guard containerSyncTask == nil else { containerSyncQueued = true; return }
+        containerSyncTask = Task {
+            repeat {
+                containerSyncQueued = false
+                await syncContainersPass()
+            } while containerSyncQueued
+            containerSyncTask = nil
+        }
+    }
+
+    /// One `sbx ls` for every agent's container.
+    private func syncContainersPass() async {
+        // Also a sandbox shown building: with no bring-up of it left in
+        // any window, nothing else would say it's done.
+        let building = containerPhases.filter { $0.value.isBuilding }.map(\.key)
+        // A bring-up sets the container itself: an answer from before it (or
+        // from while it rebuilt) would put back what it replaced.
+        let targets = Set(containers.keys).union(building).compactMap { agent -> (AgentKind, String, Int?)? in
+            let name = containerName(for: agent)
+            return Self.bringUps[name] == nil ? (agent, name, Self.bringUpsStarted[name]) : nil
+        }
+        guard !targets.isEmpty else { return }
+        // sbx didn't answer this time: that isn't "gone".
+        guard let list = try? await SbxClient.shared.list() else { return }
+        for (agent, name, started) in targets {
+            // No bring-up ran meanwhile, so a building phase is left over.
+            guard Self.bringUps[name] == nil, Self.bringUpsStarted[name] == started else { continue }
+            let sb = list.first { $0.name == name }
+            containers[agent] = sb
+            containerPhases[agent] = sb.map { $0.isRunning ? .running : .stopped } ?? .absent
+            // A container that (re)started outside our create path (e.g.
+            // Settings ▸ Run) re-runs its startup dispatcher — follow it.
+            if sb?.isRunning == true { refreshKitStartupIfNeeded(for: agent) }
+            else if sb == nil { resetKitStartup(for: agent); kitDrift[agent] = nil }
         }
     }
 
