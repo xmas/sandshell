@@ -1,5 +1,6 @@
 import Combine
 import Foundation
+import Observation
 
 /// One row in the Search window: an open session in this workspace (`.live`)
 /// or a past agent conversation that can be restored (`.past`).
@@ -37,27 +38,36 @@ struct SearchResult: Identifiable, Hashable {
 /// running (same transcript id) is folded into that session instead of being
 /// listed twice.
 @MainActor
-final class SearchStore: ObservableObject {
-    @Published var query = "" {
+@Observable
+final class SearchStore {
+    var query = "" {
         didSet { if query != oldValue { scheduleSearch(debounce: 0.12) } }
     }
-    @Published private(set) var results: [SearchResult] = []
-    @Published var selectedID: SearchResult.ID?
+    private(set) var results: [SearchResult] = [] {
+        didSet {
+            liveResults = results.filter(\.isLive)
+            pastResults = results.filter { !$0.isLive }
+        }
+    }
+    /// `results` split by source, kept in step with it (the window's sections).
+    private(set) var liveResults: [SearchResult] = []
+    private(set) var pastResults: [SearchResult] = []
+    var selectedID: SearchResult.ID?
     /// Scanning transcripts or running a query.
-    @Published private(set) var busy = false
+    private(set) var busy = false
     /// Bumped to (re)focus the search field when the window is shown again.
-    @Published var focusRequest = 0
+    var focusRequest = 0
 
-    private(set) var history: HistoryStore
+    @ObservationIgnored private(set) var history: HistoryStore
     private let workspace: WorkspaceController
     let home: URL
     private let cacheDirectory: URL?
     /// Cache hits for `matchedQuery` (the query `results` reflect).
-    private var pastMatches: [String: HistoryCache.Match] = [:]
+    @ObservationIgnored private var pastMatches: [String: HistoryCache.Match] = [:]
     private(set) var matchedQuery = ""
-    private var searchTask: Task<Void, Never>?
-    private var historyObservers: Set<AnyCancellable> = []
-    private var revisionObserver: AnyCancellable?
+    @ObservationIgnored private var searchTask: Task<Void, Never>?
+    @ObservationIgnored private var historyObservers: Set<AnyCancellable> = []
+    @ObservationIgnored private var revisionObserver: AnyCancellable?
 
     /// `home` / `cacheDirectory` override where transcripts and the search
     /// cache live (self-tests); the defaults are the user's.
@@ -152,8 +162,8 @@ final class SearchStore: ObservableObject {
         selectedID = results[min(max(current + delta, 0), results.count - 1)].id
     }
 
-    var liveCount: Int { results.lazy.filter(\.isLive).count }
-    var pastCount: Int { results.count - liveCount }
+    var liveCount: Int { liveResults.count }
+    var pastCount: Int { pastResults.count }
 
     // MARK: Ranking
 
