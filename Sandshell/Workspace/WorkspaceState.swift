@@ -264,11 +264,14 @@ enum WorkspaceBootstrap {
         // 2. `.sandshell/.gitignore` — keep volatile state out of git.
         let gitignore = control.appendingPathComponent(".gitignore")
         let existing = (try? String(contentsOf: gitignore, encoding: .utf8)) ?? ""
-        let present = Set(existing.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) })
+        // Lines end in "\n" or "\r\n", as git reads them ("\r\n" is one
+        // Character, never equal to "\n").
+        let isLineEnd: (Character) -> Bool = { $0 == "\n" || $0 == "\r\n" }
+        let present = Set(existing.split(whereSeparator: isLineEnd).map { $0.trimmingCharacters(in: .whitespaces) })
         let missing = gitignoredControlFiles.filter { !present.contains($0) }
         if !missing.isEmpty {
             var body = existing
-            if !body.isEmpty, !body.hasSuffix("\n") { body += "\n" }
+            if let last = body.last, !isLineEnd(last) { body += "\n" }
             body += missing.joined(separator: "\n") + "\n"
             try body.write(to: gitignore, atomically: true, encoding: .utf8)
         }

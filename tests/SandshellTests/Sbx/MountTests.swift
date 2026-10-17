@@ -308,12 +308,17 @@ final class MountPolicyFileSystemTests {
         let paths = MountPolicy.agentMountSpecs(home: home).map(\.path.path)
         let seededOnly = [homePath(".agents"), homePath(".claude")]
 
-        withKnownIssue("""
-            agentMountSpecs only checks fileExists(atPath:) for .ifPresent mounts, so a \
-            regular file at ~/.codex is passed to `sbx create`, which accepts only folders
-            """) {
-            #expect(paths == seededOnly)
-        }
+        #expect(paths == seededOnly, "`sbx create` accepts only folders")
+    }
+
+    @Test("A link at ~/.codex to a folder is mounted", .tags(.mountEdgeCase))
+    func agentMountSpecsFollowsACodexLink() throws {
+        let target = try makeFolder("codex-home")
+        try FileManager.default.createSymbolicLink(at: home.appendingPathComponent(".codex"), withDestinationURL: target)
+
+        let paths = MountPolicy.agentMountSpecs(home: home).map(\.path.path)
+
+        #expect(paths == [homePath(".agents"), homePath(".claude"), homePath(".codex")])
     }
 
     // MARK: seedAgentMounts(home:)
@@ -374,6 +379,16 @@ final class MountPolicyFileSystemTests {
 
         #expect(specs == expectedSpecs,
                 "order follows defaultReadOnlyFolders, not creation order; other folders are ignored")
+    }
+
+    @Test("makeDefault skips a common folder name that is a file", .tags(.mountEdgeCase))
+    func makeDefaultSkipsFiles() throws {
+        try Data("not a folder".utf8).write(to: home.appendingPathComponent("Downloads"))
+        try makeDirectory(home.appendingPathComponent("Desktop"))
+
+        let specs = MountPolicy.makeDefault(home: home).selections.map(\.spec)
+
+        #expect(specs == [homePath("Desktop") + ":ro"])
     }
 
     // MARK: resolved(home:root:)
@@ -505,13 +520,6 @@ final class MountPolicyFileSystemTests {
         let mountsTheFile = mounts.contains(where: { $0.path.path == file.path })
 
         #expect(mounts.last?.path.path == folder.path, "the folder after the file is still mounted")
-        withKnownIssue("""
-            MountPolicy.resolved only checks fileExists(atPath:), so a regular file reaches \
-            `sbx create`, which rejects non-folder mounts and fails the whole create. The \
-            sandshell CLI checks for folders, but the sandshell://open?ro=/rw= handler in \
-            AppDelegate.openFromURL adds the paths unchecked.
-            """) {
-            #expect(mountsTheFile == false)
-        }
+        #expect(mountsTheFile == false, "`sbx create` rejects a file mount and fails the whole create")
     }
 }

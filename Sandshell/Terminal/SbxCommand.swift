@@ -149,7 +149,7 @@ enum SbxCommand {
             if !agent.isBuiltin, let entry = AgentProfileStore.profile(for: agent)?.entrypoint, !entry.isEmpty {
                 return entry.map(shellQuote).joined(separator: " ")
             }
-            return agent.rawValue
+            return shellQuote(agent.rawValue)
         }
     }
 

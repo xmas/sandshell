@@ -62,12 +62,18 @@ struct MountPolicy: Codable, Hashable {
     /// side effects), suitable for UI count/display. A mount is included when it
     /// is seeded (always created) or already present on the host.
     static func agentMountSpecs(home: URL) -> [MountSpec] {
-        let fm = FileManager.default
-        return agentMounts.compactMap { m in
+        agentMounts.compactMap { m in
             let url = home.appendingPathComponent(m.subpath)
-            let willExist = m.seed != .ifPresent || fm.fileExists(atPath: url.path)
+            let willExist = m.seed != .ifPresent || isFolder(url.path)
             return willExist ? MountSpec(path: url, readonly: m.readonly) : nil
         }
+    }
+
+    /// Whether `path` is a folder (or a link to one): `sbx create` mounts only
+    /// folders and fails the whole create on a file.
+    private static func isFolder(_ path: String) -> Bool {
+        var isDirectory: ObjCBool = false
+        return FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory) && isDirectory.boolValue
     }
 
     /// Create the host paths for seeded agent mounts. Call before `sbx create`.
@@ -89,26 +95,25 @@ struct MountPolicy: Codable, Hashable {
 
     /// The default policy for a new workspace: the existing common folders ro.
     static func makeDefault(home: URL) -> MountPolicy {
-        let fm = FileManager.default
         let selections = defaultReadOnlyFolders
             .map { MountSpec(path: home.appendingPathComponent($0), readonly: true) }
-            .filter { fm.fileExists(atPath: $0.path.path) }
+            .filter { isFolder($0.path.path) }
         return MountPolicy(selections: selections)
     }
 
     /// Resolve the final mount set for `sbx create`, in priority order:
     /// 1. workspace `root` (rw); 2. managed agent mounts (`agentMounts`,
-    /// `.claude` surgical); 3. user `selections`. De-duped by path, capped at
+    /// `.claude` surgical); 3. user `selections`. Only folders that exist are
+    /// kept (a file or missing path is skipped); de-duped by path, capped at
     /// `mountLimit`. Essentials (root + dot-folders) come first so the cap only
     /// ever drops user selections — `dropped` lists what was cut (never silent).
     func resolved(home: URL, root: URL) -> (mounts: [MountSpec], dropped: [MountSpec]) {
-        let fm = FileManager.default
         var ordered: [MountSpec] = []
         var seen: Set<String> = []
 
         func add(_ spec: MountSpec) {
             let path = spec.path.standardizedFileURL.path
-            guard !seen.contains(path), fm.fileExists(atPath: path) else { return }
+            guard !seen.contains(path), Self.isFolder(path) else { return }
             seen.insert(path)
             ordered.append(spec)
         }

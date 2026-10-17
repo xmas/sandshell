@@ -203,12 +203,13 @@ enum KitStore {
 
     /// Lightweight `spec.yaml` read (top-level `displayName:` / `description:`),
     /// mirroring the old sbx-ui parser — avoids a YAML dependency.
-    private static func parseSpec(at dir: String) -> (displayName: String?, summary: String?) {
+    static func parseSpec(at dir: String) -> (displayName: String?, summary: String?) {
         let url = URL(fileURLWithPath: dir).appendingPathComponent("spec.yaml")
         guard let text = try? String(contentsOf: url, encoding: .utf8) else { return (nil, nil) }
         var displayName: String?
         var summary: String?
-        for raw in text.split(separator: "\n", omittingEmptySubsequences: false) {
+        // Any line ending: "\r\n" is one Character, never equal to "\n".
+        for raw in text.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline) {
             let line = String(raw)
             if displayName == nil { displayName = value(line, key: "displayName") }
             if summary == nil { summary = value(line, key: "description") }

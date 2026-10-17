@@ -353,3 +353,44 @@ struct KitStoreAgentRequirementTests {
         #expect(KitStore.kits(refs, for: .codex) == ["sandshell-codex"])
     }
 }
+
+// MARK: - spec.yaml metadata
+
+/// Each test gets its own kit folder under the temporary directory; `deinit` removes it.
+final class KitStoreSpecTests {
+    let kit: URL
+
+    init() throws {
+        kit = FileManager.default.temporaryDirectory
+            .appendingPathComponent("SandshellKitStoreTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: kit, withIntermediateDirectories: true)
+    }
+
+    deinit {
+        try? FileManager.default.removeItem(at: kit)
+    }
+
+    func writeSpec(_ lines: [String], lineEnding: String) throws {
+        let text = lines.joined(separator: lineEnding) + lineEnding
+        try Data(text.utf8).write(to: kit.appendingPathComponent("spec.yaml"))
+    }
+
+    @Test("displayName and description are read whatever the line endings", arguments: ["\n", "\r\n", "\r"])
+    func readsTopLevelNameAndDescription(lineEnding: String) throws {
+        try writeSpec(["schemaVersion: \"1\"", "kind: mixin", "displayName: GitHub SSH",
+                       "description: 'Forwards the SSH agent'", "commands:", "  - echo hi"],
+                      lineEnding: lineEnding)
+
+        let spec = KitStore.parseSpec(at: kit.path)
+
+        #expect(spec.displayName == "GitHub SSH")
+        #expect(spec.summary == "Forwards the SSH agent", "Quotes are stripped, and no later line leaks in")
+    }
+
+    @Test("A folder without spec.yaml has no metadata", .tags(.kitStoreEdgeCase))
+    func missingSpecHasNoMetadata() {
+        let spec = KitStore.parseSpec(at: kit.path)
+        #expect(spec.displayName == nil)
+        #expect(spec.summary == nil)
+    }
+}

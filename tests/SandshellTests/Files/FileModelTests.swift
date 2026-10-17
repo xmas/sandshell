@@ -149,9 +149,7 @@ struct FileModelTests {
             try #require(url.path != gitPath)
 
             let status = GitStatus(changes: [gitPath: .deleted])
-            withKnownIssue("change(for:) falls back to URL.realPath, whose realpath(3) fails for a file that no longer exists; the standardizedFileURL fallback leaves the symlinked folder (/tmp, /var, a linked workspace) unresolved, so a deleted file's open tab never finds git's \"D\"") {
-                #expect(status.change(for: url) == .deleted)
-            }
+            #expect(status.change(for: url) == .deleted, "A deleted file's open tab finds the \"D\" through its resolved folder")
         }
     }
 
