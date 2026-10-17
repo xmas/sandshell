@@ -632,7 +632,7 @@ final class SidebarListController: NSViewController {
 
     private func refreshRelativeTimes() {
         guard !reloading else { return }
-        for id in displayedSessionIDs where controller.runtime(id)?.lastActivityAt != nil {
+        for id in displayedSessionIDs where controller.lastActivity(id) != nil {
             updateSessionRow(id)
         }
     }
@@ -1627,6 +1627,8 @@ final class SessionCellView: NSTableCellView {
     private var tracking: NSTrackingArea?
     private var agentLabel = ""
     private var workdirName: String?
+    /// The session's last turn before this run (`Session.lastActiveAt`).
+    private var lastActive: Date?
     private var accent: NSColor = .controlAccentColor
 
     init(owner: SidebarListController) {
@@ -1726,6 +1728,7 @@ final class SessionCellView: NSTableCellView {
                    theme: ThemeColors, workdirName: String?, backgroundCount: Int = 0) {
         agentLabel = session.agent.displayName
         self.workdirName = workdirName
+        lastActive = session.lastActiveAt
         accent = theme.accent
         fg = theme.sidebarFg
         badge.configure(session.agent)
@@ -1775,13 +1778,15 @@ final class SessionCellView: NSTableCellView {
             statusDot.layer?.backgroundColor = accent.cgColor
             statusDot.isHidden = !unread       // accent dot only when ready + unseen
             timeLabel.isHidden = true
-            parts.append(runtime?.lastActivityAt.map { relativeActivity($0) } ?? "Ready")
+            parts.append((runtime?.lastActivityAt ?? lastActive).map { relativeActivity($0) } ?? "Ready")
             if unread { parts.append("New") }   // not just the dot's colour
         default:
             workingView.stopAnimating()
             workingView.isHidden = true
             statusDot.isHidden = true
             timeLabel.isHidden = true
+            // Not run since the app opened: when it last was.
+            if runtime == nil, let lastActive { parts.append(relativeActivity(lastActive)) }
         }
         if runtime?.stoppedReason != nil { parts.append("Stopped") }
         if backgroundRunning > 0 { parts.append("\(backgroundRunning) in background") }

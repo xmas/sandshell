@@ -10,6 +10,10 @@ final class WorkspaceStore {
     let root: URL
     private(set) var state: WorkspaceState
     private(set) var config: WorkspaceConfig
+    /// Sessions some window on this folder has started since it opened (each
+    /// window knows only its own runtimes; "+ New …" mustn't hand out another
+    /// window's session as an unused one).
+    private(set) var launched: Set<UUID> = []
 
     private init(root: URL, state: WorkspaceState, config: WorkspaceConfig) {
         self.root = root
@@ -58,6 +62,13 @@ final class WorkspaceStore {
         observers.removeAll { $0.owner == nil }
         observers.append(Observer(owner, notify))
     }
+
+    /// The other observers of type `T`: the other windows open on this folder.
+    func others<T: AnyObject>(than owner: T) -> [T] {
+        observers.compactMap { $0.owner as? T }.filter { $0 !== owner }
+    }
+
+    func markLaunched(_ id: UUID) { launched.insert(id) }
 
     func setState(_ new: WorkspaceState, by writer: AnyObject) {
         state = new

@@ -309,14 +309,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             config.policy.selections = selections
         }
         config.configured = true   // skip the mount-config setup wizard
-        // An open window's controller holds this config in memory (its next
-        // save would put the old mounts back): it takes them itself.
+        // An open window holds this config in memory (its next save would put
+        // the old mounts back): it takes them itself, for every window on the
+        // folder (they share it), and offers the rebuild they need — once.
         let open = windows.compactMap(\.workspaceController)
             .filter { $0.rootURL.standardizedFileURL.path == workspaceURL.standardizedFileURL.path }
-        if open.isEmpty {
-            try? config.save(root: workspaceURL)
+        if let controller = open.first {
+            controller.adoptPolicy(config.policy)
         } else {
-            for controller in open { controller.adoptPolicy(config.policy) }
+            try? config.save(root: workspaceURL)
         }
 
         openWorkspace(workspaceURL)

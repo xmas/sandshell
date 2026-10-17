@@ -368,11 +368,7 @@ struct GeneralPaneView: View {
     private func bind(_ keyPath: WritableKeyPath<RootProfile, String>) -> Binding<String> {
         Binding(
             get: { editing[keyPath: keyPath] },
-            set: { newValue in
-                var p = controller.rootProfile
-                p[keyPath: keyPath] = newValue
-                controller.updateRootProfile(p)
-            })
+            set: { newValue in controller.updateRootProfile { $0[keyPath: keyPath] = newValue } })
     }
 }
 

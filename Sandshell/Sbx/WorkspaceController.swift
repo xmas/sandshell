@@ -41,7 +41,6 @@ final class WorkspaceController: ObservableObject {
     /// Each Claude session's workflows (the Workflow tool's runs), newest last.
     @Committed private(set) var workflows: [UUID: [WorkflowRun]] = [:]
     private var subagentPollTask: Task<Void, Never>?
-    private var transcriptURLs: [UUID: URL] = [:]
     /// What each sandbox is (kernel, distribution, mount types), asked once.
     @Committed private(set) var sandboxSystems: [String: SandboxSystem] = [:]
     private var probingSandboxes: Set<String> = []
@@ -99,6 +98,9 @@ final class WorkspaceController: ObservableObject {
     /// Custom (kit-defined) agents this workspace offers (see `availableAgents`).
     @Committed private(set) var customAgents: [AgentKind] = []
     nonisolated(unsafe) private var agentProfileObserver: NSObjectProtocol?
+    nonisolated(unsafe) private var rootProfileObserver: NSObjectProtocol?
+    /// The window closed. Work it started may still finish, but asks nothing.
+    private(set) var isClosed = false
 
     /// Whether the mount-config UI should be shown before creating a container
     /// (true until the user confirms mounts for this workspace).
@@ -124,6 +126,15 @@ final class WorkspaceController: ObservableObject {
             forName: AgentProfileStore.didChange, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.revision += 1 }
         }
+        // The folder's look changed (in any window on it): show it here too.
+        rootProfileObserver = NotificationCenter.default.addObserver(
+            forName: RootFolderStore.didChange, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                let profile = RootFolderStore.profile(for: self.workspace.rootURL.path)
+                if profile != self.rootProfile { self.rootProfile = profile }
+            }
+        }
         startStatusFeedPolling()
         // Another window on this folder changed it: show that here.
         store.observe(self) { [weak self] parts in self?.sharedStoreChanged(parts) }
@@ -131,6 +142,15 @@ final class WorkspaceController: ObservableObject {
 
     deinit {
         if let agentProfileObserver { NotificationCenter.default.removeObserver(agentProfileObserver) }
+        if let rootProfileObserver { NotificationCenter.default.removeObserver(rootProfileObserver) }
+        containerPollTask?.cancel()
+        subagentPollTask?.cancel()
+    }
+
+    /// Its window closed: stop polling, and ask nothing from here on (a
+    /// bring-up still running declines a rebuild rather than prompt).
+    func windowClosed() {
+        isClosed = true
         containerPollTask?.cancel()
         subagentPollTask?.cancel()
     }
@@ -243,6 +263,11 @@ final class WorkspaceController: ObservableObject {
             if customAgents != config.customAgents { customAgents = config.customAgents }
             if let prefs = config.theme, prefs != theme.prefs { theme.prefs = prefs }
         }
+        // It closed the session selected here: nothing is selected now (⌘N, ⌘W
+        // and the Session menu would act on a session that's gone).
+        if parts.contains(.state) { clearSelectionIfGone() }
+        // It may have adopted or ignored the kit drift shown here.
+        for agent in kitDrift.keys { refreshKitDrift(for: agent) }
         // The session list (and anything drawn from config) redraws.
         revision += 1
     }
@@ -274,19 +299,32 @@ final class WorkspaceController: ObservableObject {
     }
 
     /// Take mounts set from outside (`sandshell://open`) into this open
-    /// workspace without rebuilding: a sandbox whose mounts no longer match is
-    /// offered a rebuild the next time it's brought up, as for any config change.
+    /// workspace (and so every window on it), and offer to rebuild each of its
+    /// sandboxes whose mounts no longer match: a session launch attaches as-is,
+    /// so nothing else would.
     func adoptPolicy(_ policy: MountPolicy) {
         workspace.policy = policy
         config.policy = policy
         config.configured = true
         try? config.save(root: workspace.rootURL)
+        // Each sandbox it has, or is bringing up. One in flight read the old
+        // mounts: compare the new ones once it's done, rather than take its result.
+        let inflight = (availableAgents + containerPhases.keys).filter { Self.bringUps[containerName(for: $0)] != nil }
+        for agent in Set(containers.keys).union(inflight) {
+            runAction { @MainActor in try await self.bringUpContainer(for: agent, onMismatch: .prompt, recheck: true) }
+        }
     }
 
     /// Change the workspace's primary agent (default for the quick "+ New
-    /// Session" action and the bare-slug container name). Persisted.
+    /// Session" action). Persisted. Sandboxes keep their names: the one with
+    /// the bare slug stays the old primary's (`WorkspaceState.slugAgent`).
     func setPrimaryAgent(_ agent: AgentKind) {
         guard agent != workspace.primaryAgent else { return }
+        // Whether or not its sandbox exists yet: one being made right now
+        // records nothing until it's up, and gets the bare slug all the same.
+        if state.pinSlugAgent(workspace.primaryAgent) {
+            try? state.save(root: workspace.rootURL)
+        }
         workspace.primaryAgent = agent
         config.primaryAgent = agent
         try? config.save(root: workspace.rootURL)
@@ -541,7 +579,9 @@ final class WorkspaceController: ObservableObject {
     /// MCP info available for foreign sandboxes).
     func rebuildSandbox(_ sandbox: Sandbox) {
         if let agent = agentForContainer(named: sandbox.name) {
+            sandboxBusy.insert(sandbox.name)   // its row's buttons wait for it
             runAction { @MainActor in
+                defer { self.sandboxBusy.remove(sandbox.name) }
                 try await self.bringUpContainer(for: agent, onMismatch: .rebuild, force: true)
                 self.refreshSandboxes()
                 self.syncContainers()
@@ -588,10 +628,24 @@ final class WorkspaceController: ObservableObject {
     /// may have changed one of them.
     private func syncContainers() {
         Task {
-            for agent in Array(containers.keys) {
-                let sb = try? await SbxClient.shared.status(name: containerName(for: agent))
+            // Also a sandbox shown building: with no bring-up of it left in
+            // any window, nothing else would say it's done.
+            let building = containerPhases.filter { $0.value.isBuilding }.map(\.key)
+            for agent in Set(containers.keys).union(building) {
+                let name = containerName(for: agent)
+                // A bring-up sets the container itself: an answer from before
+                // it (or from while it rebuilt) would put back what it replaced.
+                guard Self.bringUps[name] == nil else { continue }
+                let started = Self.bringUpsStarted[name]
+                let sb: Sandbox?
+                do {
+                    sb = try await SbxClient.shared.status(name: name)
+                } catch {
+                    continue   // sbx didn't answer this time: that isn't "gone"
+                }
+                // No bring-up ran meanwhile, so a building phase is left over.
+                guard Self.bringUps[name] == nil, Self.bringUpsStarted[name] == started else { continue }
                 containers[agent] = sb
-                guard containerPhases[agent]?.isBuilding != true else { continue }
                 containerPhases[agent] = sb.map { $0.isRunning ? .running : .stopped } ?? .absent
                 // A container that (re)started outside our create path (e.g.
                 // Settings ▸ Run) re-runs its startup dispatcher — follow it.
@@ -621,11 +675,16 @@ final class WorkspaceController: ObservableObject {
     }
 
     /// Container name for an agent: the bare workspace slug for the primary
-    /// agent, `<slug>-<agent>` for the rest (keeps names unique per window).
+    /// agent (or the one that was primary when its sandbox was made, see
+    /// `WorkspaceState.slugAgent`), `<slug>-<agent>` for the rest.
     func containerName(for agent: AgentKind) -> String {
-        agent == workspace.primaryAgent
-            ? workspace.containerName
-            : "\(workspace.containerName)-\(agent.rawValue)"
+        Self.containerName(for: agent, slug: workspace.containerName,
+                           slugAgent: state.slugAgent ?? workspace.primaryAgent)
+    }
+
+    /// The sandbox name of `agent` when `slugAgent`'s has the bare `slug`.
+    static func containerName(for agent: AgentKind, slug: String, slugAgent: AgentKind) -> String {
+        agent == slugAgent ? slug : "\(slug)-\(agent.rawValue)"
     }
 
     /// The full ordered mount set for the workspace under the current policy,
@@ -818,20 +877,26 @@ final class WorkspaceController: ObservableObject {
     func adoptKitDrift(for agent: AgentKind) {
         guard let drift = kitDrift[agent], !drift.extra.isEmpty else { return }
         let name = drift.containerName
+        // Not those another window on the folder adopted already.
+        let extra = drift.extra(notIn: resolvedKits(), root: workspace.rootURL)
+        guard !extra.isEmpty else {
+            kitDrift[agent] = nil
+            return refreshKitDrift(for: agent)
+        }
         let mounts = resolvedMounts()
         let wasInSync = state.appliedMountSignatures[name] == configSignature(mounts: mounts, kits: resolvedKits(), agent: agent)
         let registered = Set(KitStore.all.map(\.ref))
-        for ref in drift.extra where !registered.contains(ref) {
+        for ref in extra where !registered.contains(ref) {
             KitStore.add(ref)
             Task {
                 guard let info = await SbxClient.shared.kitInspect(ref) else { return }
                 KitStore.update(ref, displayName: info.title, summary: info.description)
             }
         }
-        let kits = resolvedKits() + drift.extra
+        let kits = resolvedKits() + extra
         storeKits(kits)
         if wasInSync { recordSignature(configSignature(mounts: mounts, kits: kits, agent: agent), for: name) }
-        Log.info(.workspace, "adopted kit(s) from '\(name)' into the workspace: \(drift.extra.joined(separator: ", "))")
+        Log.info(.workspace, "adopted kit(s) from '\(name)' into the workspace: \(extra.joined(separator: ", "))")
         kitDrift[agent] = nil
         refreshKitDrift(for: agent)
     }
@@ -845,9 +910,12 @@ final class WorkspaceController: ObservableObject {
         kitDrift[agent] = nil
     }
 
-    /// Update this folder's identity (icon/color/sidebar bg) — persists to the
-    /// global registry and republishes so the sidebar re-renders live.
-    func updateRootProfile(_ profile: RootProfile) {
+    /// Edit this folder's identity (icon/color/sidebar bg) — applied to the
+    /// registry's copy (another window may have changed another part of it),
+    /// persisted, and republished so the sidebar re-renders live.
+    func updateRootProfile(_ edit: (inout RootProfile) -> Void) {
+        var profile = RootFolderStore.profile(for: workspace.rootURL.path)
+        edit(&profile)
         RootFolderStore.upsert(profile)
         rootProfile = profile
     }
@@ -878,12 +946,10 @@ final class WorkspaceController: ObservableObject {
     func refreshSubagents() async {
         var targets: [(UUID, URL, [String: BackgroundTask.State])] = []
         for session in state.sessions where session.agent == .claude {
-            guard let tid = session.transcriptID else { continue }
-            if transcriptURLs[session.id]?.deletingPathExtension().lastPathComponent != tid {
-                transcriptURLs[session.id] = TranscriptReader.transcriptURL(agent: .claude, workdir: session.workdir,
-                                                                           home: home, id: tid)
-            }
-            guard let url = transcriptURLs[session.id] else { continue }
+            // Looked up each time (a stat): a folder rename moves conversations.
+            guard let tid = session.transcriptID,
+                  let url = TranscriptReader.transcriptURL(agent: .claude, workdir: session.conversationWorkdir,
+                                                           home: home, id: tid) else { continue }
             let known = Dictionary((backgroundTasks[session.id] ?? []).filter { $0.kind == .agent }.map { ($0.id, $0.state) },
                                    uniquingKeysWith: { a, _ in a })
             targets.append((session.id, url, known))
@@ -973,19 +1039,30 @@ final class WorkspaceController: ObservableObject {
         return valid
     }
 
-    /// Shared create/attach/rebuild core for an agent's container. `force`
-    /// rebuilds even when the mounts are unchanged.
-    /// In-flight bring-ups by container name. Opening a workspace (startup
-    /// `ensureContainer`) and launching its selected session
-    /// (`ensureContainerReady`) both bring the same container up at once; without
-    /// this each saw "no sandbox" and ran its own `sbx create`.
-    private var bringUps: [String: Task<Void, Error>] = [:]
+    /// An in-flight bring-up, and the window (controller) that started it.
+    private struct BringUp {
+        let task: Task<Void, Error>
+        let owner: ObjectIdentifier
+    }
 
-    /// Bring a container up, joining one already in flight for it. A forced
-    /// rebuild waits for the in-flight one, then runs its own.
+    /// In-flight bring-ups by container name, across every window: sbx names are
+    /// global, and the windows on one folder share its sandboxes. Opening a
+    /// workspace (startup `ensureContainer`) and launching its selected session
+    /// (`ensureContainerReady`) — or two windows on one folder — bring the same
+    /// container up at once; without this each saw "no sandbox" and ran its own
+    /// `sbx create`, or each rebuilt it (one removing what the other was making).
+    private static var bringUps: [String: BringUp] = [:]
+    /// How many bring-ups each container name has had (a status poll that
+    /// spans one drops its answer).
+    private static var bringUpsStarted: [String: Int] = [:]
+
+    /// Bring a container up, joining one already in flight for it when that
+    /// one's result will do. A forced rebuild, or a check against a config
+    /// that just changed (`recheck`, and every rebuild to match the config —
+    /// the in-flight one may have read the old one), waits for it, then runs its own.
     private func bringUpContainer(for agent: AgentKind, onMismatch: MismatchAction,
-                                  force: Bool = false) async throws {
-        try await serializedBringUp(for: agent, joinInflight: !force) {
+                                  force: Bool = false, recheck: Bool = false) async throws {
+        try await serializedBringUp(for: agent, joinInflight: !force && !recheck && onMismatch != .rebuild) {
             try await self.performBringUp(for: agent, onMismatch: onMismatch, force: force)
         }
     }
@@ -995,14 +1072,78 @@ final class WorkspaceController: ObservableObject {
     private func serializedBringUp(for agent: AgentKind, joinInflight: Bool,
                                    _ work: @escaping @MainActor () async throws -> Void) async throws {
         let name = containerName(for: agent)
-        if let inflight = bringUps[name] {
-            if joinInflight { return try await inflight.value }
-            _ = try? await inflight.value
+        // Again after each wait: another waiter may have started its own meanwhile.
+        while let inflight = Self.bringUps[name] {
+            if joinInflight { return try await join(inflight, for: agent) }
+            _ = try? await inflight.task.value
         }
         let task = Task { @MainActor in try await work() }
-        bringUps[name] = task
-        defer { if bringUps[name] == task { bringUps[name] = nil } }
+        Self.bringUps[name] = BringUp(task: task, owner: ObjectIdentifier(self))
+        Self.bringUpsStarted[name, default: 0] += 1
+        defer { if Self.bringUps[name]?.task == task { Self.bringUps[name] = nil } }
         try await task.value
+    }
+
+    /// Wait for an in-flight bring-up. One another window started set that
+    /// window's view of the container, so take this one's from sbx once no
+    /// other window is bringing it up: that window's session launch often
+    /// attaches right after its rebuild, and an attach says nothing here (this
+    /// window would keep showing "Rebuilding…" for good).
+    private func join(_ inflight: BringUp, for agent: AgentKind) async throws {
+        guard inflight.owner != ObjectIdentifier(self) else { return try await inflight.task.value }
+        do {
+            try await inflight.task.value
+        } catch {
+            containerPhases[agent] = .failed(error.localizedDescription)
+            throw error
+        }
+        let name = containerName(for: agent)
+        while true {
+            while let next = Self.bringUps[name] {
+                // This window's own sets the container here itself.
+                if next.owner == ObjectIdentifier(self) { return try await next.task.value }
+                _ = try? await next.task.value
+            }
+            let started = Self.bringUpsStarted[name]
+            let sandbox: Sandbox?
+            do {
+                sandbox = try await SbxClient.shared.status(name: name)
+            } catch {
+                // sbx didn't answer: the bring-up is over all the same, so
+                // don't leave this window building (its panes wait on that).
+                if containerPhases[agent]?.isBuilding == true {
+                    containerPhases[agent] = .failed(error.localizedDescription)
+                }
+                throw error
+            }
+            // One started while sbx answered: take the container after it.
+            guard Self.bringUps[name] == nil, Self.bringUpsStarted[name] == started else { continue }
+            containers[agent] = sandbox
+            containerPhases[agent] = sandbox.map { $0.isRunning ? .running : .stopped } ?? .absent
+            guard sandbox != nil else { return }
+            refreshKitStartupIfNeeded(for: agent)
+            refreshKitDrift(for: agent)
+            return
+        }
+    }
+
+    /// A bring-up is (re)making `agent`'s sandbox: say so here and in the other
+    /// windows on the folder, which drop their sessions in a sandbox being
+    /// rebuilt (as this one's panes do) and take the new one when it's up.
+    private func beginBuilding(_ agent: AgentKind, _ phase: ContainerPhase, _ activity: String) {
+        func show(in window: WorkspaceController) {
+            // Phase first: the activity's observers read which sandbox it is.
+            window.containerPhases[agent] = phase
+            window.activity = activity
+            window.resetKitStartup(for: agent)
+            window.kitDrift[agent] = nil
+        }
+        show(in: self)
+        let name = containerName(for: agent)
+        for window in store.others(than: self) where !window.isClosed && window.containerName(for: agent) == name {
+            show(in: window)
+            window.runAction { @MainActor in try await window.bringUpContainer(for: agent, onMismatch: .attach) }
+        }
     }
 
     /// Add kits to an existing container with `sbx kit add`, one ref at a time.
@@ -1025,11 +1166,7 @@ final class WorkspaceController: ObservableObject {
         Log.info(.workspace, "adding \(refs.count) kit(s) to '\(name)' with sbx kit add")
         // "Rebuilding…": the recreate swaps the container, so its sessions end
         // just as in a rebuild (the detail pane drops their terminals on this prefix).
-        // (Phase first: the activity's observers read which sandbox it is.)
-        containerPhases[agent] = .rebuilding
-        activity = "Rebuilding \(name) — adding \(refs.count == 1 ? "a kit" : "\(refs.count) kits")…"
-        resetKitStartup(for: agent)
-        kitDrift[agent] = nil
+        beginBuilding(agent, .rebuilding, "Rebuilding \(name) — adding \(refs.count == 1 ? "a kit" : "\(refs.count) kits")…")
         for ref in refs {
             let reason: String
             do {
@@ -1114,10 +1251,7 @@ final class WorkspaceController: ObservableObject {
                 }
             }
             Log.info(.workspace, "rebuilding container '\(name)' (\(mounts.count) mounts, \(kits.count) kits, force=\(force))")
-            containerPhases[agent] = .rebuilding   // (before the activity: see above)
-            activity = "Rebuilding \(name)…"
-            resetKitStartup(for: agent)
-            kitDrift[agent] = nil
+            beginBuilding(agent, .rebuilding, "Rebuilding \(name)…")
             do {
                 built = try await SbxClient.shared.rebuild(workspace: workspace, agent: agent, name: name, mounts: mounts, kits: kits)
             } catch {
@@ -1126,9 +1260,7 @@ final class WorkspaceController: ObservableObject {
             }
         } else {
             Log.info(.workspace, "creating container '\(name)' for \(agent.rawValue) (\(mounts.count) mounts, \(kits.count) kits)")
-            activity = "Building \(name)…"
-            containerPhases[agent] = .creating
-            resetKitStartup(for: agent)
+            beginBuilding(agent, .creating, "Building \(name)…")
             do {
                 built = try await SbxClient.shared.create(workspace: workspace, agent: agent, name: name, mounts: mounts, kits: kits) { [weak self] in
                     // Recorded once it exists: quitting during kit setup mustn't
@@ -1170,6 +1302,12 @@ final class WorkspaceController: ObservableObject {
 
     /// Modal confirmation before a rebuild that would kill running sessions.
     private func confirmRebuild(name: String, killsRunning: Bool) async -> Bool {
+        // The window it was for closed meanwhile: no question with nothing to
+        // show it for (and no rebuild under another window's sessions).
+        if isClosed {
+            Log.info(.workspace, "not rebuilding “\(name)”: its window closed")
+            return false
+        }
         if AutomatedRun.isActive {
             let ok = AutomatedRun.isScratch(workspace.rootURL)
             Log.info(.workspace, "automated run: \(ok ? "rebuilding" : "not rebuilding") “\(name)” (mounts changed)")
@@ -1379,7 +1517,11 @@ extension WorkspaceController {
         runtimes[id] = rt
     }
 
+    /// A pane started launching a session: it's used now (see `addSession`).
+    func markLaunched(_ id: UUID) { store.markLaunched(id) }
+
     func setLive(_ id: UUID, _ live: Bool) {
+        if live { markLaunched(id) }
         var rt = runtimes[id] ?? SessionRuntime()
         guard rt.isLive != live else { return }
         rt.isLive = live
@@ -1417,6 +1559,12 @@ extension WorkspaceController {
             rt.workingSince = nil
             // Flag unread only if the session finished in the background.
             if selection != .session(id) { rt.isUnread = true }
+            // Remember when, for the list's order and "Xm ago" after a relaunch
+            // (once per finished turn, not on every poll).
+            if wasWorking, let idx = state.sessions.firstIndex(where: { $0.id == id }) {
+                state.sessions[idx].lastActiveAt = rt.lastActivityAt ?? now
+                try? state.save(root: workspace.rootURL)
+            }
         }
         if runtimes[id] != rt { runtimes[id] = rt }   // publish only on change
         return SessionActivityTransition(finishedWork: wasWorking && !working,
@@ -1424,7 +1572,8 @@ extension WorkspaceController {
     }
 
     /// All sessions, most-recently-active first — the sidebar's flat peer list.
-    /// Falls back to `createdAt` until a session has any real activity. Not
+    /// Falls back to `createdAt` until a session has any real activity (the
+    /// last turn's time persists in `Session.lastActiveAt`). Not
     /// re-derived on every runtime tick from the caller's side (see
     /// `SidebarListController.runtimesChanged`) — only when a session is
     /// created/closed or transitions working↔ready — so rows don't jump around
@@ -1434,20 +1583,31 @@ extension WorkspaceController {
     }
 
     private func sortKey(_ session: Session) -> Date {
-        max(runtimes[session.id]?.lastActivityAt ?? .distantPast, session.createdAt)
+        max(runtimes[session.id]?.lastActivityAt ?? .distantPast, session.lastActiveAt ?? .distantPast,
+            session.createdAt)
     }
 
-    /// Cycle the selection to the next (`+1`) / previous (`-1`) session.
-    func selectAdjacentSession(_ delta: Int) {
-        let all = orderedSessions
-        guard !all.isEmpty else { return }
-        let next: Int
-        if case let .session(id) = selection, let cur = all.firstIndex(where: { $0.id == id }) {
-            next = (cur + delta + all.count) % all.count
-        } else {
-            next = delta >= 0 ? 0 : all.count - 1
-        }
-        selection = .session(all[next].id)
+    /// When the session's agent last wrote: this run's activity, else the last
+    /// turn before (`Session.lastActiveAt`). Nil if it never has.
+    func lastActivity(_ id: UUID) -> Date? {
+        runtimes[id]?.lastActivityAt ?? session(id: id)?.lastActiveAt
+    }
+
+    /// Cycle the selection to the next (`+1`) / previous (`-1`) of `ids` (the
+    /// sessions the sidebar lists, in its order).
+    func selectAdjacentSession(_ delta: Int, in ids: [UUID]) {
+        let current: UUID? = if case let .session(id) = selection { id } else { nil }
+        guard let next = Self.adjacentSession(to: current, in: ids, delta) else { return }
+        selection = .session(next)
+    }
+
+    /// The session `delta` places after `current` in `ids`, wrapping around;
+    /// from none (or one not in `ids`), the first (forward) or last (back).
+    static func adjacentSession(to current: UUID?, in ids: [UUID], _ delta: Int) -> UUID? {
+        guard !ids.isEmpty else { return nil }
+        guard let current, let index = ids.firstIndex(of: current) else { return delta >= 0 ? ids.first : ids.last }
+        let count = ids.count
+        return ids[((index + delta) % count + count) % count]
     }
 
     var expandedFolderIDs: Set<UUID> { Set(state.expandedFolderIDs) }
@@ -1556,8 +1716,9 @@ extension WorkspaceController {
         return folder
     }
 
-    /// Rename a folder on disk and update its sessions' workdirs. The root folder
-    /// is not renameable (its name is the workspace root).
+    /// Rename a folder on disk and update the rows nested in it and the
+    /// workdirs (and Claude conversations) of the sessions working in it. The
+    /// root folder is not renameable (its name is the workspace root).
     func renameFolder(_ id: UUID, to newName: String) {
         guard let idx = state.folders.firstIndex(where: { $0.id == id }) else { return }
         let old = state.folders[idx]
@@ -1585,11 +1746,43 @@ extension WorkspaceController {
             Log.error(.workspace, "renameFolder failed: \(error.localizedDescription)")
             return
         }
-        state.folders[idx].relativePath = newRelative
-        // Re-point sessions' workdirs at the renamed folder.
-        for sidx in state.sessions.indices where state.sessions[sidx].folderID == id {
-            state.sessions[sidx].workdir = dst.path
+        // Claude files conversations by their cwd: take those of the sessions
+        // working in the folder (open, or closed here and reopenable) along —
+        // except a running session's, which its agent keeps writing under the
+        // cwd it started in: its next launch takes that one (`settleConversation`).
+        let workdirs = Set((state.sessions + recentlyClosed).map(\.workdir) + [src.path])
+        let running = runningSessionIDs()
+        TranscriptReader.moveClaudeProjects(workdirs.compactMap { from in
+            Session.workdir(from, movedFrom: src.path, to: dst.path).map { (from, $0) }
+        }, home: home, keeping: Set(state.sessions.filter { running.contains($0.id) }.compactMap(\.transcriptID)))
+        // Rows nested in it, and sessions working in it or below, follow it.
+        state.moveFolder(id, to: newRelative, root: workspace.rootURL, running: running)
+        for i in recentlyClosed.indices {
+            if let moved = Session.workdir(recentlyClosed[i].workdir, movedFrom: src.path, to: dst.path) {
+                recentlyClosed[i].workdir = moved
+            }
         }
+        saveState()
+    }
+
+    /// Sessions running in any window on the folder.
+    private func runningSessionIDs() -> Set<UUID> {
+        Set(([self] + store.others(than: self)).flatMap { window in
+            window.runtimes.filter { $0.value.isLive }.map(\.key)
+        })
+    }
+
+    /// A session about to launch whose folder moved while it last ran: its
+    /// agent filed the conversation under the old cwd. It starts in the new
+    /// one now, so take the conversation there first (or resuming finds nothing).
+    func settleConversation(_ id: UUID) {
+        guard let idx = state.sessions.firstIndex(where: { $0.id == id }),
+              let from = state.sessions[idx].transcriptWorkdir else { return }
+        let session = state.sessions[idx]
+        if let tid = session.transcriptID {
+            TranscriptReader.moveClaudeConversation(tid, from: from, to: session.workdir, home: home)
+        }
+        state.sessions[idx].transcriptWorkdir = nil
         saveState()
     }
 
@@ -1597,19 +1790,30 @@ extension WorkspaceController {
     /// folder cannot be removed.
     func hideFolder(_ id: UUID) {
         guard folder(id: id)?.isRoot != true else { return }
-        state.sessions.removeAll { $0.folderID == id }
-        state.folders.removeAll { $0.id == id }
-        clearSelectionIfGone()
-        saveState()
+        removeFolders([id])
     }
 
-    /// Move a folder's directory to the Trash, then remove it from the sidebar.
-    /// The root folder cannot be trashed.
+    /// Move a folder's directory to the Trash, then remove it from the sidebar
+    /// (with the rows nested in it: their directories went too, and the next
+    /// open would recreate them empty). The root folder cannot be trashed.
     func trashFolder(_ id: UUID) {
         guard let folder = folder(id: id), !folder.isRoot else { return }
         let dir = folderURL(for: folder)
-        try? FileManager.default.trashItem(at: dir, resultingItemURL: nil)
-        hideFolder(id)
+        let nested = state.folders(nestedIn: id).map(\.id)
+        if (try? FileManager.default.trashItem(at: dir, resultingItemURL: nil)) != nil {
+            removeFolders([id] + nested)
+        } else {
+            removeFolders([id])
+        }
+    }
+
+    /// Drop folder rows and their sessions from the sidebar.
+    private func removeFolders(_ ids: [UUID]) {
+        let ids = Set(ids)
+        state.sessions.removeAll { ids.contains($0.folderID) }
+        state.folders.removeAll { ids.contains($0.id) }
+        clearSelectionIfGone()
+        saveState()
     }
 
     // MARK: Session ops
@@ -1654,7 +1858,9 @@ extension WorkspaceController {
            let index = state.sessions.firstIndex(where: {
                $0.folderID == folderID && $0.agent == agent
                    && $0.containerAgent == override && defaultNames.contains($0.name) && $0.isChat == chat
-                   && runtimes[$0.id] == nil   // never launched (shells keep their default name)
+                   // Never launched, here or in another window on the folder
+                   // (shells keep their default name).
+                   && runtimes[$0.id] == nil && !store.launched.contains($0.id)
            }) {
             // Reuse the pristine "New … Session" (no prompts yet), under today's spelling.
             if state.sessions[index].name != defaultName {
@@ -1683,11 +1889,9 @@ extension WorkspaceController {
         let folderID: UUID
         let agent: AgentKind
         var containerAgent: AgentKind? = nil
-        switch selection {
-        case .session(let id):
-            guard let s = session(id: id) else { return nil }
+        if case .session(let id) = selection, let s = session(id: id) {
             folderID = s.folderID; agent = s.agent; containerAgent = s.containerAgent
-        case .none:
+        } else {
             guard let first = folders.first else { return nil }
             folderID = first.id; agent = primaryAgent
         }
@@ -1706,7 +1910,8 @@ extension WorkspaceController {
     @discardableResult
     func forkChat(_ id: UUID, upTo replyText: String) -> Session? {
         guard let source = session(id: id), source.agent == .claude, let tid = source.transcriptID,
-              let url = TranscriptReader.transcriptURL(agent: .claude, workdir: source.workdir, home: home, id: tid),
+              let url = TranscriptReader.transcriptURL(agent: .claude, workdir: source.conversationWorkdir,
+                                                       home: home, id: tid),
               let text = try? String(contentsOf: url, encoding: .utf8) else { return nil }
         let lines = text.split(separator: "\n", omittingEmptySubsequences: true)
         // The reply's last words identify its transcript line (streamed text == stored text).
@@ -1728,8 +1933,14 @@ extension WorkspaceController {
             if let data = try? JSONSerialization.data(withJSONObject: obj, options: [.withoutEscapingSlashes]),
                let json = String(data: data, encoding: .utf8) { out += json + "\n" }
         }
-        let forkURL = url.deletingLastPathComponent().appendingPathComponent("\(newID).jsonl")
-        guard (try? out.write(to: forkURL, atomically: true, encoding: .utf8)) != nil,
+        // Filed under the cwd the fork runs in (its folder's), which needn't be
+        // where the source's conversation is (a session in a subdirectory, or
+        // one that ran on while its folder moved).
+        guard let folder = folder(id: source.folderID) else { return nil }
+        let forkFolder = TranscriptReader.claudeProjectFolder(for: workdir(for: folder), home: home)
+        let forkURL = forkFolder.appendingPathComponent("\(newID).jsonl")
+        guard (try? FileManager.default.createDirectory(at: forkFolder, withIntermediateDirectories: true)) != nil,
+              (try? out.write(to: forkURL, atomically: true, encoding: .utf8)) != nil,
               let fork = addSession(folderID: source.folderID, agent: source.agent,
                                     name: "Fork of \(source.name)", chat: true) else { return nil }
         setTranscriptID(fork.id, newID)
@@ -1842,7 +2053,8 @@ extension WorkspaceController {
         undoManager?.registerUndo(withTarget: self) { controller in
             MainActor.assumeIsolated { _ = controller.reopenSession(closed, at: index) }
         }
-        undoManager?.setActionName("Close Session")
+        // Undoing a reopen closes it: then this is what Redo reopens.
+        undoManager?.setActionName(undoManager?.isUndoing == true ? "Reopen Closed Session" : "Close Session")
     }
 
     /// Close several at once: one undo puts them all back.
@@ -1881,7 +2093,7 @@ extension WorkspaceController {
     @discardableResult
     func reopenLastClosed() -> Session? {
         while let last = recentlyClosed.popLast() {
-            if session(id: last.id) == nil, folder(id: last.folderID) != nil { return reopenSession(last, at: 0) }
+            if session(id: last.id) == nil { return reopenSession(last, at: 0) }
         }
         return nil
     }
@@ -1889,17 +2101,23 @@ extension WorkspaceController {
     @discardableResult
     private func reopenSession(_ session: Session, at index: Int) -> Session? {
         guard self.session(id: session.id) == nil else { return nil }
+        // The copy kept for Reopen Closed follows folder renames (an undo's doesn't).
+        var restored = recentlyClosed.last { $0.id == session.id } ?? session
         recentlyClosed.removeAll { $0.id == session.id }
         // Its folder went meanwhile: the root folder holds it.
-        var restored = session
-        if folder(id: session.folderID) == nil, let root = folders.first { restored.folderID = root.id }
+        if folder(id: restored.folderID) == nil, let root = folders.first { restored.folderID = root.id }
+        // Its directory went too (renamed, trashed): it works in its folder's.
+        if !FileManager.default.fileExists(atPath: restored.workdir), let folder = folder(id: restored.folderID) {
+            restored.workdir = workdir(for: folder)
+        }
         state.sessions.insert(restored, at: min(index, state.sessions.count))
         saveState()
         selection = .session(restored.id)
         undoManager?.registerUndo(withTarget: self) { controller in
             MainActor.assumeIsolated { controller.closeSession(restored.id) }
         }
-        undoManager?.setActionName("Close Session")
+        // Undoing a close reopens it: then this is what Redo closes.
+        undoManager?.setActionName(undoManager?.isUndoing == true ? "Close Session" : "Reopen Closed Session")
         return restored
     }
 

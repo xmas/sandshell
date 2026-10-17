@@ -62,7 +62,7 @@ final class BackgroundTaskMonitor {
             }
             var watch = watches[id] ?? Watch(since: Date().addingTimeInterval(-5))
             if watch.url == nil, let tid = session.transcriptID {
-                watch.url = TranscriptReader.transcriptURL(agent: .claude, workdir: session.workdir,
+                watch.url = TranscriptReader.transcriptURL(agent: .claude, workdir: session.conversationWorkdir,
                                                            home: home, id: tid)
             }
             guard let url = watch.url else { watches[id] = watch; continue }

@@ -82,6 +82,9 @@ struct RootProfile: Codable, Hashable, Identifiable {
 enum RootFolderStore {
     private static let listKey = "rootProfiles"
     private static let defaultKey = "defaultRootPath"
+    /// Posted when a profile is added, changed or removed, so every window on
+    /// that folder shows its current look.
+    static let didChange = Notification.Name("RootFolderStore.didChange")
 
     static func standardize(_ path: String) -> String {
         URL(fileURLWithPath: path).standardizedFileURL.path
@@ -96,6 +99,7 @@ enum RootFolderStore {
     private static func save(_ list: [RootProfile]) {
         if let data = try? JSONEncoder().encode(list) {
             UserDefaults.standard.set(data, forKey: listKey)
+            NotificationCenter.default.post(name: didChange, object: nil)
         }
     }
 

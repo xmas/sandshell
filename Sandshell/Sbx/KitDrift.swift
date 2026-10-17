@@ -25,6 +25,13 @@ struct KitDrift: Equatable {
                         missing: configured.filter { !have.contains(normalize($0, root: root)) })
     }
 
+    /// The extra kits `configured` doesn't include yet (another window on the
+    /// folder may have adopted some since this drift was read).
+    func extra(notIn configured: [String], root: URL) -> [String] {
+        let want = Set(configured.map { Self.normalize($0, root: root) })
+        return extra.filter { !want.contains(Self.normalize($0, root: root)) }
+    }
+
     /// Canonical form of a kit reference for comparison. Local paths resolve
     /// against the workspace root (where `sbx create` runs) with symlinks and a
     /// trailing slash removed; Docker Hub refs get the implicit registry and tag.
