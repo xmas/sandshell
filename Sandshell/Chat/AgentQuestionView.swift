@@ -43,7 +43,7 @@ final class AgentQuestionForm: ObservableObject {
             case (.choice, .string(let s)?): picks[field.id] = s
             case (.multiChoice, .array(let a)?): multiPicks[field.id] = Set(a.compactMap(\.string))
             case (.text, .string(let s)?): texts[field.id] = s
-            case (.number, .number(let n)?): texts[field.id] = n == n.rounded() ? String(Int(n)) : String(n)
+            case (.number, .number(let n)?): texts[field.id] = AgentQuestion.text(of: n)
             case (.toggle, .bool(let b)?): toggles[field.id] = b
             default: break
             }
@@ -54,15 +54,18 @@ final class AgentQuestionForm: ObservableObject {
         switch field.kind {
         case .choice: return picks[field.id].map(JSONValue.string)
         case .multiChoice(let options):
+            // Only picks among the options (a default may name others).
             let set = multiPicks[field.id] ?? []
-            guard !set.isEmpty else { return nil }
-            return .array(options.filter { set.contains($0.value) }.map { .string($0.value) })
+            let picked = options.filter { set.contains($0.value) }
+            return picked.isEmpty ? nil : .array(picked.map { .string($0.value) })
         case .text:
             let s = (texts[field.id] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             return s.isEmpty ? nil : .string(s)
         case .number(let integer):
+            // JSON can't carry inf or nan, and past 2^53 a Double isn't the
+            // whole number that was typed.
             let s = (texts[field.id] ?? "").trimmingCharacters(in: .whitespaces)
-            guard let n = Double(s), !integer || n == n.rounded() else { return nil }
+            guard let n = Double(s), n.isFinite, !integer || (n == n.rounded() && abs(n) < 0x1p53) else { return nil }
             return .number(n)
         case .toggle: return .bool(toggles[field.id] ?? false)
         }

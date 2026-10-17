@@ -154,24 +154,29 @@ struct AgentQuestion: Equatable, Identifiable {
         case .cancel: return "Dismissed: \(message)"
         case .accept(let content):
             if case .url(let url, _) = mode { return "Opened \(url.host ?? url.absoluteString) — \(message)" }
-            let lines = questions.compactMap { q -> String? in
+            let answers = questions.compactMap { q -> (label: String, parts: String)? in
                 var parts: [String] = []
                 switch content[q.id] {
                 case .string(let s)?: parts.append(s)
                 case .array(let a)?: parts.append(contentsOf: a.compactMap(\.string))
-                case .number(let n)?: parts.append(n == n.rounded() ? String(Int(n)) : String(n))
+                case .number(let n)?: parts.append(Self.text(of: n))
                 case .bool(let b)?: parts.append(b ? "Yes" : "No")
                 default: break
                 }
                 if case .text(secret: true) = q.kind, !parts.isEmpty { parts = ["••••"] }
                 if let other = companion(of: q), case .string(let s)? = content[other.id], !s.isEmpty { parts.append(s) }
                 guard !parts.isEmpty else { return nil }
-                let label = q.title ?? q.detail ?? (questions.count == 1 ? message : q.id)
-                return "\(label): \(parts.joined(separator: ", "))"
+                return (q.title ?? q.detail ?? q.id, parts.joined(separator: ", "))
             }
-            return lines.isEmpty ? "Answered: \(message)" : (questions.count == 1 && questions[0].title == nil
-                ? "\(message) — \(lines[0].split(separator: ":", maxSplits: 1).last.map { $0.trimmingCharacters(in: .whitespaces) } ?? "")"
-                : "\(message)\n" + lines.map { "• " + $0 }.joined(separator: "\n"))
+            if answers.isEmpty { return "Answered: \(message)" }
+            // One untitled question: the message says what was asked.
+            if questions.count == 1, questions[0].title == nil { return "\(message) — \(answers[0].parts)" }
+            return "\(message)\n" + answers.map { "• \($0.label): \($0.parts)" }.joined(separator: "\n")
         }
+    }
+
+    /// A number as it's typed: whole ones without ".0" (any size, without trapping).
+    static func text(of number: Double) -> String {
+        Int(exactly: number).map(String.init) ?? String(number)
     }
 }
