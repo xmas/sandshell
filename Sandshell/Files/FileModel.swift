@@ -28,6 +28,19 @@ struct GitStatus: Sendable, Equatable {
             case .renamed: .systemBlue
             }
         }
+
+        /// What VoiceOver says for the badge (the letter and color alone don't
+        /// say it).
+        var name: String {
+            switch self {
+            case .modified: "modified"
+            case .added: "added"
+            case .deleted: "deleted"
+            case .renamed: "renamed"
+            case .untracked: "untracked"
+            case .conflicted: "conflicted"
+            }
+        }
     }
 
     var repoRoot: String?
@@ -40,59 +53,66 @@ struct GitStatus: Sendable, Equatable {
 
     /// The change for a file, by its path as given or as git reports it
     /// (resolved: /tmp/x is /private/tmp/x).
-    func change(for url: URL) -> Change? { changes[url.path] ?? changes[url.realPath] }
+    func change(for url: URL) -> Change? { changes[url.plainPath] ?? changes[url.realPath] }
 
     /// `git status --porcelain -z -b` for the repo containing `folder`.
     static func load(for folder: URL) async -> GitStatus {
         await Task.detached(priority: .utility) {
-            guard let top = git(["-C", folder.path, "rev-parse", "--show-toplevel"])?
+            guard let top = git(["-C", folder.plainPath, "rev-parse", "--show-toplevel"])?
                 .trimmingCharacters(in: .whitespacesAndNewlines), !top.isEmpty,
                   let raw = git(["-C", top, "status", "--porcelain=v1", "-z", "-b", "--untracked-files=all"])
             else { return .empty }
-            var status = GitStatus(repoRoot: top)
-            var fields = raw.split(separator: "\0", omittingEmptySubsequences: true).map(String.init)[...]
-            while let entry = fields.popFirst() {
-                if entry.hasPrefix("## ") {
-                    // "main...origin/main [ahead 1]", "release-1.2", "No commits yet on main", "HEAD (no branch)".
-                    var head = String(entry.dropFirst(3))
-                    if let r = head.range(of: "...") { head = String(head[..<r.lowerBound]) }
-                    if head.hasPrefix("No commits yet on ") { head = String(head.dropFirst("No commits yet on ".count)) }
-                    status.branch = head.hasPrefix("HEAD (no branch)") ? nil : head.split(separator: " ").first.map(String.init)
-                    continue
-                }
-                guard entry.count > 3 else { continue }
-                let x = entry[entry.startIndex], y = entry[entry.index(after: entry.startIndex)]
-                let path = top + "/" + entry.dropFirst(3)
-                let change: Change
-                switch (x, y) {
-                case ("?", "?"): change = .untracked
-                case ("U", _), (_, "U"), ("A", "A"), ("D", "D"): change = .conflicted
-                case ("R", _), ("C", _): change = .renamed; _ = fields.popFirst()   // -z: original path follows
-                case ("A", _): change = .added
-                case ("D", _), (_, "D"): change = .deleted
-                default: change = .modified
-                }
-                status.changes[path] = change
-                var dir = (path as NSString).deletingLastPathComponent
-                while dir.count >= top.count, status.dirtyFolders.insert(dir).inserted {
-                    dir = (dir as NSString).deletingLastPathComponent
-                }
-            }
-            return status
+            return parse(porcelain: raw, top: top)
         }.value
+    }
+
+    /// `git status --porcelain=v1 -z -b` output for the repo at `top`, as a status.
+    static func parse(porcelain raw: String, top: String) -> GitStatus {
+        var status = GitStatus(repoRoot: top)
+        var fields = raw.split(separator: "\0", omittingEmptySubsequences: true).map(String.init)[...]
+        while let entry = fields.popFirst() {
+            if entry.hasPrefix("## ") {
+                // "main...origin/main [ahead 1]", "release-1.2", "No commits yet on main", "HEAD (no branch)".
+                var head = String(entry.dropFirst(3))
+                if let r = head.range(of: "...") { head = String(head[..<r.lowerBound]) }
+                if head.hasPrefix("No commits yet on ") { head = String(head.dropFirst("No commits yet on ".count)) }
+                status.branch = head.hasPrefix("HEAD (no branch)") ? nil : head.split(separator: " ").first.map(String.init)
+                continue
+            }
+            guard entry.count > 3 else { continue }
+            let x = entry[entry.startIndex], y = entry[entry.index(after: entry.startIndex)]
+            let path = top + "/" + entry.dropFirst(3)
+            let change: Change
+            switch (x, y) {
+            case ("?", "?"): change = .untracked
+            case ("U", _), (_, "U"), ("A", "A"), ("D", "D"): change = .conflicted
+            case ("R", _), ("C", _): change = .renamed; _ = fields.popFirst()   // -z: original path follows
+            case ("A", _): change = .added
+            case ("D", _), (_, "D"): change = .deleted
+            default: change = .modified
+            }
+            status.changes[path] = change
+            var dir = (path as NSString).deletingLastPathComponent
+            while dir.count >= top.count, status.dirtyFolders.insert(dir).inserted {
+                dir = (dir as NSString).deletingLastPathComponent
+            }
+        }
+        return status
     }
 
     /// Run git and return stdout, or nil on failure.
     nonisolated static func git(_ args: [String]) -> String? {
         let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+        p.executableURL = URL(filePath: "/usr/bin/git")
         p.arguments = args
         let out = Pipe()
         p.standardOutput = out
         p.standardError = FileHandle.nullDevice
         p.environment = ProcessInfo.processInfo.environment.merging(["GIT_OPTIONAL_LOCKS": "0"]) { _, b in b }
         do { try p.run() } catch { return nil }
-        let data = out.fileHandleForReading.readDataToEndOfFile()
+        let data: Data
+        do { data = try out.fileHandleForReading.readToEnd() ?? Data() }   // nil: nothing written
+        catch { p.terminate(); p.waitUntilExit(); return nil }   // unread, git could block on a full pipe
         p.waitUntilExit()
         return p.terminationStatus == 0 ? String(decoding: data, as: UTF8.self) : nil
     }
@@ -100,13 +120,15 @@ struct GitStatus: Sendable, Equatable {
     /// Run a git command that changes the repo; nil on success, else git's message.
     nonisolated static func change(_ args: [String]) -> String? {
         let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+        p.executableURL = URL(filePath: "/usr/bin/git")
         p.arguments = args
         let err = Pipe()
         p.standardOutput = FileHandle.nullDevice
         p.standardError = err
         do { try p.run() } catch { return error.localizedDescription }
-        let data = err.fileHandleForReading.readDataToEndOfFile()
+        let data: Data
+        do { data = try err.fileHandleForReading.readToEnd() ?? Data() }
+        catch { p.waitUntilExit(); return error.localizedDescription }   // let the change finish first
         p.waitUntilExit()
         guard p.terminationStatus != 0 else { return nil }
         let message = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -160,11 +182,10 @@ struct FilePatch: Equatable, Sendable {
     func apply(_ action: Action, hunk index: Int, repo: String) async -> String? {
         let patch = patch(forHunk: index)
         return await Task.detached(priority: .userInitiated) {
-            let file = FileManager.default.temporaryDirectory
-                .appendingPathComponent("sandshell-hunk-\(UUID().uuidString).patch")
+            let file = URL.temporaryDirectory.appending(path: "sandshell-hunk-\(UUID().uuidString).patch")
             do { try patch.write(to: file, atomically: true, encoding: .utf8) } catch { return error.localizedDescription }
             defer { try? FileManager.default.removeItem(at: file) }
-            return GitStatus.change(["-C", repo, "apply"] + action.applyArgs + ["--whitespace=nowarn", file.path])
+            return GitStatus.change(["-C", repo, "apply"] + action.applyArgs + ["--whitespace=nowarn", file.plainPath])
         }.value
     }
 }
@@ -221,7 +242,8 @@ final class FileNode: NSObject {
 
 /// FSEvents on a folder tree; coalesces bursts (an agent writing many files)
 /// into one callback per `latency`.
-final class FileWatcher: @unchecked Sendable {
+@MainActor
+final class FileWatcher {
     private var stream: FSEventStreamRef?
     private let onChange: @MainActor () -> Void
 
@@ -263,5 +285,5 @@ final class FileWatcher: @unchecked Sendable {
         self.stream = nil
     }
 
-    deinit { stop() }
+    isolated deinit { stop() }
 }

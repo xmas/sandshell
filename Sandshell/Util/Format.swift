@@ -66,6 +66,15 @@ extension String {
 }
 
 extension URL {
+    /// The decoded file-system path without a trailing slash: what the
+    /// soft-deprecated `path` gives. (`path(percentEncoded: false)` keeps the
+    /// slash a folder's URL often ends in, from `contentsOfDirectory(at:)` or
+    /// `URL(fileURLWithPath:)` on a folder that exists.)
+    var plainPath: String {
+        let decoded = path(percentEncoded: false)
+        return decoded.count > 1 && decoded.hasSuffix("/") ? String(decoded.dropLast()) : decoded
+    }
+
     /// The path with every symlink resolved, the way git and `realpath` report
     /// it: /tmp/x is /private/tmp/x (`resolvingSymlinksInPath` strips /private).
     /// A path that doesn't exist (a deleted file) resolves its longest leading

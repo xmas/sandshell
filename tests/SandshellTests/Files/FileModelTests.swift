@@ -11,13 +11,13 @@ extension Tag {
     @Tag fileprivate static var fileModelFileSystem: Self
 }
 
-/// Tests for `Files/FileModel.swift` (`GitStatus`, `FilePatch`, `FileNode`,
-/// `FileWatcher`) and `FileTreeController.unique(_:in:copy:)`, `.dropTarget(for:in:)`,
-/// `.outermost(_:)` and `.following(_:through:)`.
+/// Tests for `Files/FileModel.swift` (`GitStatus` and its porcelain parsing,
+/// `FilePatch`, `FileNode`, `FileWatcher`) and `FileTreeController.unique(_:in:copy:)`,
+/// `.dropTarget(for:in:)`, `.outermost(_:)` and `.following(_:through:)`.
 ///
-/// Not covered: `GitStatus.load(for:)` (its porcelain parsing is inline and runs
-/// the host's git), `GitStatus.git(_:)`, `GitStatus.change(_:)` and
-/// `FilePatch.apply(_:hunk:repo:)` — they all launch `/usr/bin/git`.
+/// Not covered: `GitStatus.load(for:)` (beyond `parse(porcelain:top:)`),
+/// `GitStatus.git(_:)`, `GitStatus.change(_:)` and `FilePatch.apply(_:hunk:repo:)`
+/// — they all launch `/usr/bin/git`.
 struct FileModelTests {
 
     // MARK: - GitStatus.Change
@@ -45,6 +45,15 @@ struct FileModelTests {
         ] as [(GitStatus.Change, NSColor)])
         func colorMatchesTheKindOfChange(change: GitStatus.Change, color: NSColor) {
             #expect(change.color == color, "\(change) should be drawn in \(color)")
+        }
+
+        /// VoiceOver says the kind of change: the letter and color alone don't.
+        @Test(arguments: [
+            (.modified, "modified"), (.added, "added"), (.deleted, "deleted"),
+            (.renamed, "renamed"), (.untracked, "untracked"), (.conflicted, "conflicted"),
+        ] as [(GitStatus.Change, String)])
+        func nameIsWhatVoiceOverSays(change: GitStatus.Change, name: String) {
+            #expect(change.name == name)
         }
     }
 
@@ -151,6 +160,88 @@ struct FileModelTests {
 
             let status = GitStatus(changes: [gitPath: .deleted])
             #expect(status.change(for: url) == .deleted, "A deleted file's open tab finds the \"D\" through its resolved folder")
+        }
+
+        /// A folder's URL usually ends in "/" (from `contentsOfDirectory`); git's paths never do.
+        @Test(.tags(.fileModelEdgeCase))
+        func folderURLsTrailingSlashIsNotPartOfTheLookup() {
+            let url = URL(filePath: missingRoot + "/repo/sub", directoryHint: .isDirectory)
+            #expect(GitStatus(changes: [missingRoot + "/repo/sub": .untracked]).change(for: url) == .untracked)
+        }
+    }
+
+    // MARK: - GitStatus.parse(porcelain:top:)
+
+    /// `git status --porcelain=v1 -z -b` output, NUL-separated, as git writes it.
+    struct Porcelain {
+        let top = "/srv/repo"
+
+        private func parse(_ fields: [String]) -> GitStatus {
+            GitStatus.parse(porcelain: fields.joined(separator: "\0") + "\0", top: top)
+        }
+
+        @Test(arguments: [
+            ("## main...origin/main [ahead 1]", "main"),
+            ("## main", "main"),
+            ("## release-1.2", "release-1.2"),
+            ("## No commits yet on main", "main"),
+            ("## feature/x...origin/feature/x", "feature/x"),
+        ])
+        func branchLineGivesTheBranch(line: String, branch: String) {
+            let status = parse([line])
+            #expect(status.branch == branch)
+            #expect(status.repoRoot == top)
+            #expect(status.changes.isEmpty)
+        }
+
+        @Test func detachedHeadHasNoBranch() {
+            #expect(parse(["## HEAD (no branch)"]).branch == nil)
+        }
+
+        @Test(arguments: [
+            (" M a.txt", .modified), ("M  a.txt", .modified), ("MM a.txt", .modified),
+            ("A  a.txt", .added), ("AM a.txt", .added),
+            ("D  a.txt", .deleted), (" D a.txt", .deleted),
+            ("?? a.txt", .untracked),
+            ("UU a.txt", .conflicted), ("AA a.txt", .conflicted), ("DD a.txt", .conflicted),
+            ("AU a.txt", .conflicted), ("UD a.txt", .conflicted),
+        ] as [(String, GitStatus.Change)])
+        func statusCodeGivesTheChange(entry: String, change: GitStatus.Change) {
+            #expect(parse(["## main", entry]).changes == [top + "/a.txt": change])
+        }
+
+        /// With -z a rename's original path is the next field, not an entry of its own.
+        @Test(arguments: ["R  new.txt", "C  new.txt", "RM new.txt"])
+        func renameOrCopyTakesItsOriginalPathAlong(entry: String) {
+            let status = parse(["## main", entry, "old.txt", " M other.txt"])
+            #expect(status.changes == [top + "/new.txt": .renamed, top + "/other.txt": .modified])
+        }
+
+        @Test func pathsKeepSpacesAndArrowsAsWritten() {
+            let status = parse(["?? notes -> draft.md", " M Read Me.md"])
+            #expect(status.changes == [top + "/notes -> draft.md": .untracked, top + "/Read Me.md": .modified])
+        }
+
+        @Test func everyFolderAboveAChangeUpToTheTopIsDirty() {
+            let status = parse([" M src/deep/a.swift", "?? docs/b.md"])
+            #expect(status.dirtyFolders == [top, top + "/src", top + "/src/deep", top + "/docs"],
+                    "Nothing above the repo's top")
+        }
+
+        @Test func aChangeAtTheTopDirtiesOnlyTheTop() {
+            #expect(parse(["?? a.txt"]).dirtyFolders == [top])
+        }
+
+        @Test(.tags(.fileModelEdgeCase), arguments: ["", "\0", "\0\0"])
+        func nothingToParseIsACleanStatus(raw: String) {
+            let status = GitStatus.parse(porcelain: raw, top: top)
+            #expect(status == GitStatus(repoRoot: top))
+        }
+
+        /// An entry too short to hold "XY path" is skipped, not trapped on.
+        @Test(.tags(.fileModelEdgeCase), arguments: ["M", " M", " M "])
+        func entryWithoutAPathIsSkipped(entry: String) {
+            #expect(parse(["## main", entry, "?? a.txt"]).changes == [top + "/a.txt": .untracked])
         }
     }
 
