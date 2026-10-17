@@ -277,13 +277,12 @@ struct SbxCommandTests {
             #expect(launch.body == Expected.pathSetup + " exec " + agent.rawValue)
         }
 
-        @Test(.tags(.sbxCommandEdgeCase))
-        func unregisteredCustomAgentNameIsShellQuoted() throws {
-            let agent = AgentKind(rawValue: "kit agent \(UUID().uuidString)")
+        @Test(.tags(.sbxCommandEdgeCase), arguments: ["kit agent ", "kit;agent$(x)-", "it's-"])
+        func unregisteredCustomAgentNameIsShellQuoted(prefix: String) throws {
+            let agent = AgentKind(rawValue: prefix + UUID().uuidString)
             let launch = try Fixture.terminal(agent: agent, home: home)
-            withKnownIssue("program(for:) returns a custom agent's raw id unquoted when it has no registered entrypoint, so bash -c splits or interprets an id holding spaces or metacharacters") {
-                #expect(launch.body == Expected.pathSetup + " exec " + SbxCommand.shellQuote(agent.rawValue))
-            }
+            #expect(launch.body == Expected.pathSetup + " exec " + SbxCommand.shellQuote(agent.rawValue),
+                    "bash -c mustn't split or interpret the id")
         }
 
         // MARK: proxy auth & inference gateway

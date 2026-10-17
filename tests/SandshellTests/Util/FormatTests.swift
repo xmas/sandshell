@@ -24,6 +24,7 @@ struct FormatTests {
         @Test(arguments: [
             (1_000, "1k"), (1_100, "1.1k"), (1_500, "1.5k"), (12_000, "12k"),
             (15_500, "15.5k"), (99_000, "99k"), (99_900, "99.9k"),
+            (1_050, "1.1k"), (99_949, "99.9k"),
         ])
         func thousandsShowOneDecimalUnlessWhole(count: Int, expected: String) {
             #expect(Format.tokens(count) == expected)
@@ -63,21 +64,17 @@ struct FormatTests {
         }
 
         @Test(.tags(.formatEdgeCase), arguments: [
-            (999_500, "1.00M"), (999_999, "1.00M"), (999_999_999, "1.00B"),
+            (999_500, "1.00M"), (999_999, "1.00M"), (999_995_000, "1.00B"), (999_999_999, "1.00B"),
         ])
         func roundingUpToTheNextUnitUsesThatUnit(count: Int, expected: String) {
-            withKnownIssue("Format.tokens picks the unit before rounding: 999_500…999_999 read \"1000k\" and 999_995_000…999_999_999 read \"1000.00M\"") {
-                #expect(Format.tokens(count) == expected)
-            }
+            #expect(Format.tokens(count) == expected, "The unit is picked after rounding: never \"1000k\" or \"1000.00M\"")
         }
 
         @Test(.tags(.formatEdgeCase), arguments: [
-            (1_001, "1k"), (1_049, "1k"), (1_999, "2k"), (99_999, "100k"),
+            (1_001, "1k"), (1_049, "1k"), (1_999, "2k"), (99_950, "100k"), (99_999, "100k"),
         ])
         func countsThatRoundToAWholeThousandDropTheDecimal(count: Int, expected: String) {
-            withKnownIssue("Format.tokens only drops the decimal for exact thousands: 1_001 reads \"1.0k\", 1_999 \"2.0k\" and 99_999 \"100.0k\", while 1_000 reads \"1k\"") {
-                #expect(Format.tokens(count) == expected)
-            }
+            #expect(Format.tokens(count) == expected, "Never \"1.0k\" or \"100.0k\"")
         }
     }
 
@@ -191,9 +188,7 @@ struct FormatTests {
 
         @Test(.tags(.formatEdgeCase), arguments: [0.001, 0.5, 0.999] as [TimeInterval])
         func subSecondTimesAreNil(seconds: TimeInterval) {
-            withKnownIssue("The doc says \"nil under a second\", but ceil rounds any positive sub-second time up to \"1s\"; only times <= 0 give nil") {
-                #expect(Format.compactWorkTime(seconds) == nil)
-            }
+            #expect(Format.compactWorkTime(seconds) == nil, "Nil under a second, as documented")
         }
     }
 
@@ -277,14 +272,27 @@ struct FormatTests {
             }
         }
 
-        @Test(.tags(.formatEdgeCase))
-        func missingFileStillResolvesItsFolder() throws {
+        @Test(.tags(.formatEdgeCase), arguments: [
+            ("alias/missing", "/a/b/missing"), ("rel/missing", "/a/b/missing"),
+            ("alias/gone/deeper", "/a/b/gone/deeper"), ("alias/./gone/../missing", "/a/b/missing"),
+        ])
+        func missingFileStillResolvesItsFolder(relative: String, expectedSuffix: String) throws {
             try withSymlinkFixture { root in
-                let missing = fileURL(in: root, "alias/missing")
-                let expected = root.realPath + "/a/b/missing"
-                withKnownIssue("realpath(3) fails when the last component doesn't exist, and the standardizedFileURL fallback leaves symlinked folders (such as /tmp or /var) unresolved, so a deleted file's path won't match git's") {
-                    #expect(missing.realPath == expected)
-                }
+                let missing = fileURL(in: root, relative)
+                let expected = root.realPath + expectedSuffix
+                #expect(missing.realPath == expected, "A deleted file still reads with its folder resolved, as git reports it")
+            }
+        }
+
+        /// alias -> a/b, so alias/.. is a, not the root a lexical standardize gives.
+        @Test(.tags(.formatEdgeCase), arguments: [
+            ("alias/../gone", "/a/gone"), ("rel/../gone", "/a/gone"), ("alias/../b/gone", "/a/b/gone"),
+            ("alias/../gone/../missing", "/a/missing"), ("a/file/../gone", "/a/gone"),
+        ])
+        func missingFileAppliesDotDotAfterASymlinkPhysically(relative: String, expectedSuffix: String) throws {
+            try withSymlinkFixture { root in
+                #expect(fileURL(in: root, relative).realPath == root.realPath + expectedSuffix,
+                        "Like realpath, .. after a symlink leaves the folder the link points at")
             }
         }
     }

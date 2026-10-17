@@ -98,7 +98,9 @@ struct WorkspaceConfig: Codable {
         let own = kits.filter(KitStore.isSandshellKit)
         if !own.isEmpty {
             kits.removeAll(where: KitStore.isSandshellKit)
-            sandshellKits = (sandshellKits ?? []) + own.filter { !(sandshellKits ?? []).contains($0) }
+            var moved = sandshellKits ?? []
+            for kit in own where !moved.contains(kit) { moved.append(kit) }
+            sandshellKits = moved
         }
     }
 

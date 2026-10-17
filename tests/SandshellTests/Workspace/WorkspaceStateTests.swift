@@ -873,13 +873,25 @@ struct WorkspaceBootstrapTests {
         let existing = "state.json\r\nstatus/\r\nstatusline.sh\r\n"
         try writeGitignore(existing)
         try WorkspaceBootstrap.openOrCreate(root: root)
-        let contents = try readGitignore()
-        withKnownIssue("""
-            openOrCreate splits .gitignore with split(separator: "\\n"), but "\\r\\n" is a single Swift \
-            Character, so CRLF lines never match and all three entries are appended again.
-            """) {
-            #expect(contents == existing)
-        }
+        #expect(try readGitignore() == existing, "\"\\r\\n\" is one Character: CRLF lines must still match")
+    }
+
+    @Test(.tags(.workspaceStateEdgeCase), arguments: [
+        ("state.json\r\nstatus/\r\n", "state.json\r\nstatus/\r\nstatusline.sh\n"),
+        ("node_modules\r\n", "node_modules\r\nstate.json\nstatus/\nstatusline.sh\n"),
+    ])
+    func crlfGitignoreGainsOnlyMissingEntries(existing: String, expected: String) throws {
+        try writeGitignore(existing)
+        try WorkspaceBootstrap.openOrCreate(root: root)
+        #expect(try readGitignore() == expected, "Appended right after the last line, with no blank line between")
+    }
+
+    @Test(.tags(.workspaceStateEdgeCase))
+    func loneCarriageReturnIsNotALineEnd() throws {
+        try writeGitignore("state.json\rstatus/\rstatusline.sh")
+        try WorkspaceBootstrap.openOrCreate(root: root)
+        #expect(try readGitignore() == "state.json\rstatus/\rstatusline.sh\nstate.json\nstatus/\nstatusline.sh\n",
+                "git splits lines only at \"\\n\", so a lone \"\\r\" line lists none of the entries")
     }
 
     @Test(arguments: [

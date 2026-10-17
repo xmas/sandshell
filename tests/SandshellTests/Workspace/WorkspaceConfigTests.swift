@@ -359,12 +359,15 @@ extension WorkspaceConfigTests {
             let config = try decodeWorkspaceConfig(
                 with: #""kits":["sandshell-claude","docker.io/sbx/github-ssh-kit:latest","sandshell-claude"]"#)
             #expect(config.kits == ["docker.io/sbx/github-ssh-kit:latest"])
-            withKnownIssue("""
-                init(from:) de-duplicates migrated kits only against the sandshellKits already stored, \
-                not among themselves, so a kit listed twice in legacy kits ends up in sandshellKits twice
-                """) {
-                #expect(config.sandshellKits == ["sandshell-claude"])
-            }
+            #expect(config.sandshellKits == ["sandshell-claude"], "sbx create would get the kit twice")
+        }
+
+        @Test(.tags(.workspaceConfigEdgeCase))
+        func ownKitAlreadyOnAndListedTwiceInLegacyKitsStaysOnce() throws {
+            let config = try decodeWorkspaceConfig(
+                with: #""sandshellKits":["sandshell-codex"],"kits":["sandshell-claude","sandshell-codex","sandshell-claude"]"#)
+            #expect(config.kits.isEmpty)
+            #expect(config.sandshellKits == ["sandshell-codex", "sandshell-claude"])
         }
     }
 }

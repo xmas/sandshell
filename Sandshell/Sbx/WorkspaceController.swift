@@ -1227,6 +1227,10 @@ final class WorkspaceController: ObservableObject {
         let existing = try await SbxClient.shared.status(name: name)
         let built: Sandbox
         if let existing {
+            // A custom agent whose kit is no longer registered can't be
+            // recreated: its sandbox is kept as it is — not offered a rebuild,
+            // and a requested one fails saying why.
+            let cannotRecreate = SbxClient.cannotRecreate(agent, sandbox: name)
             // Decide whether to rebuild. `force` skips the unchanged-mounts
             // shortcut (e.g. an MCP change that doesn't alter mounts).
             if !force {
@@ -1246,7 +1250,7 @@ final class WorkspaceController: ObservableObject {
                     refreshKitDrift(for: agent)
                     return
                 case .prompt:
-                    guard await confirmRebuild(name: name, killsRunning: existing.isRunning) else {
+                    guard cannotRecreate == nil, await confirmRebuild(name: name, killsRunning: existing.isRunning) else {
                         containers[agent] = existing
                         containerPhases[agent] = existing.isRunning ? .running : .stopped
                         refreshKitStartupIfNeeded(for: agent)
@@ -1256,6 +1260,13 @@ final class WorkspaceController: ObservableObject {
                 case .rebuild:
                     break   // fall through to rebuild
                 }
+            }
+            if let error = cannotRecreate {
+                containers[agent] = existing
+                containerPhases[agent] = existing.isRunning ? .running : .stopped
+                refreshKitStartupIfNeeded(for: agent)
+                refreshKitDrift(for: agent)
+                throw error
             }
             Log.info(.workspace, "rebuilding container '\(name)' (\(mounts.count) mounts, \(kits.count) kits, force=\(force))")
             beginBuilding(agent, .rebuilding, "Rebuilding \(name)…")
