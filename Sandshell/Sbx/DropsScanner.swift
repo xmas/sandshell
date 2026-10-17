@@ -17,23 +17,25 @@ enum DropsScanner {
     /// Walk dropDir and return every regular file whose private (unshared) byte
     /// count is > 0, meaning the agent wrote to it after the COW clone was made.
     static func scan(dropDir: URL) -> [ChangedFile] {
-        guard FileManager.default.fileExists(atPath: dropDir.path) else { return [] }
+        guard FileManager.default.fileExists(atPath: dropDir.path(percentEncoded: false)) else { return [] }
         var results: [ChangedFile] = []
         let fm = FileManager.default
+        // Relative URLs: the enumerator hands back the real path (/tmp →
+        // /private/tmp, a symlinked folder), so trimming dropDir's spelling
+        // off the front would cut the wrong number of characters.
         guard let enumerator = fm.enumerator(
             at: dropDir,
             includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey],
-            options: [.skipsHiddenFiles]
+            options: [.skipsHiddenFiles, .producesRelativePathURLs]
         ) else { return [] }
 
         for case let fileURL as URL in enumerator {
             guard (try? fileURL.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true
             else { continue }
-            let priv = privateBytes(at: fileURL.path)
+            let priv = privateBytes(at: fileURL.path(percentEncoded: false))
             guard priv > 0 else { continue }
             let size = (try? fileURL.resourceValues(forKeys: [.fileSizeKey]))?.fileSize
-            let rel = String(fileURL.path.dropFirst(dropDir.path.count + 1))
-            results.append(ChangedFile(relativePath: rel, dropURL: fileURL,
+            results.append(ChangedFile(relativePath: fileURL.relativePath, dropURL: fileURL.absoluteURL,
                                        privateBytes: priv, totalBytes: Int64(size ?? 0)))
         }
         return results
@@ -44,10 +46,10 @@ enum DropsScanner {
     static func export(_ changed: [ChangedFile], from dropDir: URL, to stagingDir: URL) throws {
         let fm = FileManager.default
         for file in changed {
-            let dest = stagingDir.appendingPathComponent(file.relativePath)
+            let dest = stagingDir.appending(path: file.relativePath)
             let parent = dest.deletingLastPathComponent()
             try fm.createDirectory(at: parent, withIntermediateDirectories: true)
-            if fm.fileExists(atPath: dest.path) { try fm.removeItem(at: dest) }
+            if fm.fileExists(atPath: dest.path(percentEncoded: false)) { try fm.removeItem(at: dest) }
             try fm.copyItem(at: file.dropURL, to: dest)
         }
     }
