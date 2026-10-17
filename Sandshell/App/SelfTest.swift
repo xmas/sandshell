@@ -785,6 +785,25 @@ enum SelfTest {
         SessionDetails.toggle()
         await wait(0.5)
         check(v.isInspectorShown == false, "View ▸ Hide Session Details hides it")
+        // A wide pane: the conversation reads in a centered column.
+        if let w = window.window {
+            let before = w.frame
+            w.setFrame(NSRect(x: before.minX, y: before.minY, width: 1700, height: before.height), display: true)
+            await wait(0.5)
+            v.layoutSubtreeIfNeeded()
+            let col = v.debugColumn
+            log("column: window \(Int(w.frame.width)), pane \(Int(v.bounds.width)), composer x \(Int(col.composer.minX)) w \(Int(col.composer.width)), text inset \(Int(col.textInset))")
+            check(col.composer.width <= ChatTranscriptView.readableWidth + 1
+                  && abs(col.composer.midX - v.bounds.midX) < 2, "a wide pane centers the composer, at most the readable width")
+            check(col.textInset == ChatTranscriptView.sideInset(forWidth: col.textWidth), "the transcript's text sits in the same column")
+            // The window can't outgrow the screen: a transcript on its own, wider.
+            let wide = ChatTranscriptView(frame: NSRect(x: 0, y: 0, width: 1600, height: 400))
+            wide.layoutSubtreeIfNeeded()
+            log("1600-wide transcript: text inset \(Int(wide.debugTextInset))")
+            check(wide.debugTextInset >= 390, "a wide transcript centers its text in an 800-point column")
+            w.setFrame(before, display: true)
+            await wait(0.3)
+        }
         SessionDetails.toggle()
         await wait(0.5)
         check(v.isInspectorShown, "and Show brings it back")

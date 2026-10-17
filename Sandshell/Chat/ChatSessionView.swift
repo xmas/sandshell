@@ -183,11 +183,22 @@ final class ChatSessionView: NSView {
         // The conversation's column: up to the edge, or to the inspector beside it.
         addLayoutGuide(column)
         columnToEdge = column.trailingAnchor.constraint(equalTo: trailingAnchor)
+        // What you type and answer lines up with the transcript's centered
+        // column: the column's width, up to the readable width (plus margins).
+        addLayoutGuide(readable)
+        let fill = readable.widthAnchor.constraint(equalTo: column.widthAnchor)
+        fill.priority = .defaultHigh
         NSLayoutConstraint.activate([
             column.leadingAnchor.constraint(equalTo: leadingAnchor),
             column.topAnchor.constraint(equalTo: topAnchor),
             column.bottomAnchor.constraint(equalTo: bottomAnchor),
             columnToEdge,
+            readable.centerXAnchor.constraint(equalTo: column.centerXAnchor),
+            readable.topAnchor.constraint(equalTo: column.topAnchor),
+            readable.bottomAnchor.constraint(equalTo: column.bottomAnchor),
+            readable.widthAnchor.constraint(lessThanOrEqualToConstant: ChatTranscriptView.readableWidth + 32),
+            readable.leadingAnchor.constraint(greaterThanOrEqualTo: column.leadingAnchor),
+            fill,
         ])
         NSLayoutConstraint.activate([
             // Edge to edge over the transcript: the sea is full bleed. It takes
@@ -203,12 +214,12 @@ final class ChatSessionView: NSView {
             transcript.trailingAnchor.constraint(equalTo: column.trailingAnchor),
 
             bottom.topAnchor.constraint(equalTo: transcript.bottomAnchor, constant: 6),
-            bottom.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
-            bottom.trailingAnchor.constraint(equalTo: column.trailingAnchor, constant: -16),
+            bottom.leadingAnchor.constraint(equalTo: readable.leadingAnchor, constant: 16),
+            bottom.trailingAnchor.constraint(equalTo: readable.trailingAnchor, constant: -16),
 
             footer.topAnchor.constraint(equalTo: bottom.bottomAnchor, constant: 6),
-            footer.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
-            footer.trailingAnchor.constraint(equalTo: column.trailingAnchor, constant: -16),
+            footer.leadingAnchor.constraint(equalTo: readable.leadingAnchor, constant: 12),
+            footer.trailingAnchor.constraint(equalTo: readable.trailingAnchor, constant: -16),
             footer.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -10),
         ])
     }
@@ -317,6 +328,7 @@ final class ChatSessionView: NSView {
     // MARK: Inspector (beside the conversation)
 
     private let column = NSLayoutGuide()
+    private let readable = NSLayoutGuide()
     private var columnToEdge: NSLayoutConstraint!
     private var inspector: NSView?
     private var inspectorConstraints: [NSLayoutConstraint] = []
@@ -440,6 +452,10 @@ final class ChatSessionView: NSView {
 
     #if DEBUG
     var debugQuestionForm: AgentQuestionForm? { questionHost?.form }
+    /// The composer's frame (in this view), the transcript's text inset and its text area's width.
+    var debugColumn: (composer: NSRect, textInset: CGFloat, textWidth: CGFloat) {
+        (composer.convert(composer.bounds, to: self), transcript.debugTextInset, transcript.debugContentWidth)
+    }
     #endif
 
     private func showPermission(_ p: PendingPermission?) {

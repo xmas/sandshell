@@ -62,7 +62,7 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
         tv.drawsBackground = false
         tv.usesFindBar = true
         tv.isIncrementalSearchingEnabled = true
-        tv.textContainerInset = NSSize(width: 20, height: 16)
+        tv.textContainerInset = NSSize(width: Self.minInset, height: 16)
         tv.delegate = self
         // Links color themselves (linkify): a tool group's line stays gray.
         tv.linkTextAttributes = [.cursor: NSCursor.pointingHand]
@@ -94,6 +94,31 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
     }
 
     required init?(coder: NSCoder) { fatalError() }
+
+    /// The text reads in a centered column at most this wide (the Claude
+    /// app's); the scroller stays at the pane's edge.
+    static let readableWidth: CGFloat = 800
+    private static let minInset: CGFloat = 20
+
+    /// The text's side inset in a transcript `width` wide: the margin, or
+    /// whatever centers a readable-width column.
+    static func sideInset(forWidth width: CGFloat) -> CGFloat {
+        max(minInset, ((width - readableWidth) / 2).rounded(.down))
+    }
+
+    override func layout() {
+        super.layout()
+        let side = Self.sideInset(forWidth: scrollView.contentSize.width)
+        guard textView.textContainerInset.width != side else { return }
+        let keep = stickToBottom
+        textView.textContainerInset.width = side
+        if keep { scrollToBottom() }
+    }
+
+    #if DEBUG
+    var debugTextInset: CGFloat { textView.textContainerInset.width }
+    var debugContentWidth: CGFloat { scrollView.contentSize.width }
+    #endif
 
     /// Coalesce bursts of streaming updates into one pass per runloop turn.
     func update(_ items: [ChatItem]) {
