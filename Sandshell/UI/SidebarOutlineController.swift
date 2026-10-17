@@ -320,7 +320,7 @@ final class SidebarListController: NSViewController {
         // posts it on its own center, not the default one.)
         NSWorkspace.shared.notificationCenter
             .publisher(for: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification)
-            .receive(on: DispatchQueue.main)
+            .receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.reload() }
             .store(in: &cancellables)
         scroll.documentView = outline
@@ -1210,7 +1210,7 @@ final class SidebarListController: NSViewController {
         // Session ▸ Rename… with the sidebar hidden: show it, and edit once it's back.
         if let window = view.window?.windowController as? MainWindowController, window.isSidebarCollapsed {
             window.setSidebarCollapsed(false)
-            return DispatchQueue.main.async { [weak self] in self?.renameInRow(id) }
+            return Self.afterEvent { [weak self] in self?.renameInRow(id) }
         }
         renameInRow(id)
     }

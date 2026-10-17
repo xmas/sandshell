@@ -337,7 +337,7 @@ extension SidebarOutlineControllerTests {
         struct Case: Sendable, CustomTestStringConvertible {
             let testDescription: String
             let query: String
-            /// Name, agent, folder (nil: the root folder, which has no label).
+            /// Name, agent, folder label (nil when there is none).
             let fields: [String?]
             let expected: Bool
         }
@@ -354,7 +354,7 @@ extension SidebarOutlineControllerTests {
                  expected: true),
             Case(testDescription: "nothing contains it", query: "zebra", fields: ["Fix the deploy", "Claude", "webapp"],
                  expected: false),
-            Case(testDescription: "the root folder has no label to match", query: "root",
+            Case(testDescription: "a missing field matches nothing", query: "nil",
                  fields: ["Fix the deploy", "Claude", nil], expected: false),
         ])
         func matchesAnyField(_ testCase: Case) {
