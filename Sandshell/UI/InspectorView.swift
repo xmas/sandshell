@@ -169,14 +169,14 @@ enum InspectorPane: String, CaseIterable, Identifiable {
 /// workspace. Added kits go in with `sbx kit add`; other changes rebuild.
 private struct KitsInspectorPane: View {
     @ObservedObject var controller: WorkspaceController
-    @StateObject private var model: KitConfigModel
+    @State private var model: KitConfigModel
     @State private var pending: Pending?
 
     private enum Pending { case add, rebuild }
 
     init(controller: WorkspaceController) {
         self.controller = controller
-        _model = StateObject(wrappedValue: {
+        _model = State(initialValue: {
             let model = KitConfigModel(enabledRefs: controller.kits)
             model.onAgentKit = { [weak controller] profile in
                 guard let controller else { return }
