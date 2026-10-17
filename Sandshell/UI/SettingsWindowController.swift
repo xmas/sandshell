@@ -37,6 +37,12 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         open.values.first { $0.workspaceWindow === owner }?.window
     }
 
+    /// The open Settings window of `controller`'s workspace, if any — for a
+    /// pane's alert to come up as a sheet on it.
+    static func window(for controller: WorkspaceController) -> NSWindow? {
+        open[ObjectIdentifier(controller)]?.window
+    }
+
     /// Close the Settings window of `owner` (its workspace window is closing).
     static func close(for owner: NSWindow) {
         for settings in open.values where settings.workspaceWindow === owner { settings.close() }

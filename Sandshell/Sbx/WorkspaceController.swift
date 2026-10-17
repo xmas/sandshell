@@ -1737,8 +1737,9 @@ extension WorkspaceController {
 
     /// Rename a folder on disk and update the rows nested in it and the
     /// workdirs (and Claude conversations) of the sessions working in it. The
-    /// root folder is not renameable (its name is the workspace root).
-    func renameFolder(_ id: UUID, to newName: String) {
+    /// root folder is not renameable (its name is the workspace root). Throws
+    /// when the move on disk fails; a name it rejects outright changes nothing.
+    func renameFolder(_ id: UUID, to newName: String) throws {
         guard let idx = state.folders.firstIndex(where: { $0.id == id }) else { return }
         let old = state.folders[idx]
         guard !old.isRoot else { return }
@@ -1763,7 +1764,7 @@ extension WorkspaceController {
             }
         } catch {
             Log.error(.workspace, "renameFolder failed: \(error.localizedDescription)")
-            return
+            throw error
         }
         // Claude files conversations by their cwd: take those of the sessions
         // working in the folder (open, or closed here and reopenable) along —
