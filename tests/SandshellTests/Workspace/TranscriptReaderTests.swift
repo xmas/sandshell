@@ -1410,9 +1410,7 @@ extension TranscriptReaderTests {
         func zeroLimitGivesNoFiles() throws {
             try home.writeCodexRollout("rollout-1", lines: [TRFixture.codexMeta()])
             let files = TranscriptReader.codexFiles(home: home.root, limit: 0)
-            withKnownIssue("codexFiles appends a file before checking the limit, so a limit of 0 (or less) still returns one file") {
-                #expect(files.isEmpty)
-            }
+            #expect(files.isEmpty)
         }
     }
 }

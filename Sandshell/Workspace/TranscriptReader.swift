@@ -389,6 +389,7 @@ enum TranscriptReader {
             includingPropertiesForKeys: [.contentModificationDateKey],
             options: [.skipsHiddenFiles]) else { return [] }
         var files: [(url: URL, date: Date)] = []
+        guard limit > 0 else { return files }
         for case let url as URL in enumerator where url.pathExtension == "jsonl" {
             let date = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?
                 .contentModificationDate ?? .distantPast
