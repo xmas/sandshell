@@ -12,7 +12,8 @@ extension Tag {
 }
 
 /// Tests for `Files/FileModel.swift` (`GitStatus`, `FilePatch`, `FileNode`,
-/// `FileWatcher`) and `FileTreeController.unique(_:in:copy:)`.
+/// `FileWatcher`) and `FileTreeController.unique(_:in:copy:)`, `.dropTarget(for:in:)`
+/// and `.outermost(_:)`.
 ///
 /// Not covered: `GitStatus.load(for:)` (its porcelain parsing is inline and runs
 /// the host's git), `GitStatus.git(_:)`, `GitStatus.change(_:)` and
@@ -585,6 +586,88 @@ struct FileModelTests {
             let url = FileTreeController.unique("untitled.txt", in: folder, copy: false)
             #expect(url.lastPathComponent == "untitled.txt")
             #expect(url.deletingLastPathComponent().lastPathComponent == "missing")
+        }
+    }
+
+    // MARK: - FileTreeController.dropTarget
+
+    @MainActor
+    struct DropTargets {
+        private let scratch: FileModelScratch
+
+        init() throws {
+            scratch = try FileModelScratch()
+        }
+
+        @Test(.tags(.fileModelFileSystem))
+        func fileDroppedIntoAnotherFolderKeepsItsName() throws {
+            let logo = try scratch.file("Downloads/logo.png")
+            let assets = try scratch.folder("assets")
+            let target = FileTreeController.dropTarget(for: logo, in: assets)
+            #expect(target.lastPathComponent == "logo.png", "Not \"logo copy.png\": the name is free there")
+            #expect(target.deletingLastPathComponent().path == assets.path)
+        }
+
+        @Test(.tags(.fileModelFileSystem))
+        func takenNameInAnotherFolderCountsUp() throws {
+            let logo = try scratch.file("Downloads/logo.png")
+            try scratch.file("assets/logo.png")
+            let target = FileTreeController.dropTarget(for: logo, in: scratch.url.appending(path: "assets"))
+            #expect(target.lastPathComponent == "logo 2.png")
+        }
+
+        @Test(.tags(.fileModelFileSystem), arguments: [true, false])
+        func fileCopiedIntoItsOwnFolderIsACopy(folderHasTrailingSlash: Bool) throws {
+            let logo = try scratch.file("assets/logo.png")
+            let assets = URL(fileURLWithPath: scratch.url.path + "/assets" + (folderHasTrailingSlash ? "/" : ""))
+            #expect(FileTreeController.dropTarget(for: logo, in: assets).lastPathComponent == "logo copy.png")
+        }
+
+        @Test(.tags(.fileModelFileSystem))
+        func folderDroppedIntoAnotherFolderKeepsItsName() throws {
+            let src = try scratch.folder("src")
+            let lib = try scratch.folder("lib")
+            #expect(FileTreeController.dropTarget(for: src, in: lib).lastPathComponent == "src")
+        }
+    }
+
+    // MARK: - FileTreeController.outermost
+
+    @MainActor
+    struct Outermost {
+        let root = URL(fileURLWithPath: "/srv/repo", isDirectory: true)
+
+        private func urls(_ paths: String...) -> [URL] {
+            paths.map { root.appending(path: $0) }
+        }
+
+        @Test func folderTakesItsOwnFilesAlong() {
+            let picked = urls("src", "src/a.txt", "src/deep/b.txt")
+            #expect(FileTreeController.outermost(picked).map(\.lastPathComponent) == ["src"])
+        }
+
+        @Test func childPickedBeforeItsFolderIsDroppedToo() {
+            let picked = urls("src/a.txt", "README.md", "src")
+            #expect(FileTreeController.outermost(picked).map(\.lastPathComponent) == ["README.md", "src"],
+                    "Order is kept; only what's inside another pick goes")
+        }
+
+        @Test(.tags(.fileModelEdgeCase))
+        func siblingWithTheSamePrefixStays() {
+            let picked = urls("src", "src2/a.txt", "src.txt")
+            #expect(FileTreeController.outermost(picked) == picked, "\"src2\" and \"src.txt\" aren't inside \"src\"")
+        }
+
+        @Test(.tags(.fileModelEdgeCase))
+        func folderWithATrailingSlashStillHoldsItsFiles() {
+            let picked = [URL(fileURLWithPath: "/srv/repo/src/", isDirectory: true), root.appending(path: "src/a.txt")]
+            #expect(FileTreeController.outermost(picked).count == 1)
+        }
+
+        @Test func unrelatedPicksAllStay() {
+            let picked = urls("a.txt", "b/c.txt", "d")
+            #expect(FileTreeController.outermost(picked) == picked)
+            #expect(FileTreeController.outermost([]).isEmpty)
         }
     }
 }
