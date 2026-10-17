@@ -197,7 +197,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Nothing opened (the launch folder is gone, or its workspace couldn't
         // be set up): choose one, rather than an app with only a menu bar.
         // (Scripted runs never put up a window, or take focus, on their own.)
-        if windows.isEmpty, setupWindow == nil, !AutomatedRun.isActive { openWorkspaceBrowser(nil) }
+        if windows.isEmpty, welcomeWindow == nil, setupWindow == nil, !AutomatedRun.isActive { openWorkspaceBrowser(nil) }
 
         #if DEBUG
         if SelfTest.requested != nil {
@@ -367,8 +367,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// table, and offers the exact fix/update/debug commands for this install
     /// (stable vs nightly). Drops into a login shell so it stays interactive.
     @MainActor @objc func checkDaemonHealth(_ sender: Any?) {
-        // One window at a time (its controller is the one kept here).
-        if let open = daemonHealthTerminal { return open.focus() }
+        // One window at a time. Asking again runs the check again (the open
+        // one ran once, then became a shell): a fresh window where it was.
+        let previousFrame = daemonHealthTerminal?.window?.frame
+        if let open = daemonHealthTerminal {
+            daemonHealthTerminal = nil
+            open.close()
+        }
         let home = URL.homeDirectory.path
         let body = """
         #!/bin/bash
@@ -471,6 +476,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         wc.onClose = { [weak self, weak wc] in
             if self?.daemonHealthTerminal === wc { self?.daemonHealthTerminal = nil }
         }
+        if let previousFrame { wc.window?.setFrame(previousFrame, display: false) }
         daemonHealthTerminal = wc
         wc.focus()
     }
@@ -571,6 +577,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         setupWindow = wc
         wc.present()
     }
+    /// The Open Folder wizard's window (the Welcome has its own, `welcomeWindow`:
+    /// a folder made from the Welcome becomes the default, one from the wizard doesn't).
     private var setupWindow: SetupWindowController?
 
     /// File ▸ Welcome to Sandshell… — re-run the first-launch setup on demand.
@@ -578,16 +586,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// First-launch Welcome (Default = today's ~/Sandshell; Advanced = wizard).
     @MainActor private func showWelcome() {
-        if let setup = setupWindow, isUp(setup) { return setup.present() }
+        if let welcome = welcomeWindow, isUp(welcome) { return welcome.present() }
         let wc = SetupWindowController(
             welcome: true,
             onCreate: { [weak self] url, profile, policy, kits in
                 self?.createWorkspace(url, profile: profile, policy: policy, kits: kits, makeDefault: true)
             },
             onDefault: { [weak self] in self?.createWorkspaceDefault() })
-        setupWindow = wc
+        welcomeWindow = wc
         wc.present()
     }
+    private var welcomeWindow: SetupWindowController?
 
     /// Create a workspace from the wizard: persist its look + mounts + kits so the
     /// window opens already-configured (no first-run prompt), then open it.
@@ -716,11 +725,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// New Claude chat seeded with text/files in the front workspace (Services,
-    /// Shortcuts). Opens the default workspace when no window is up.
+    /// Shortcuts). With no window up, the most recent folder's opens for it —
+    /// unless the Welcome or a folder chooser comes forward instead
+    /// (`reopenWorkspaceWindow`), which no chat goes behind.
     @MainActor func newChat(draft: String, urls: [URL], send: Bool) {
         NSApp.activate()
-        guard let target = activeController ?? windows.first
-                ?? openWorkspace(primaryRoot ?? WorkspaceBootstrap.defaultRoot) else { return }
+        guard let target = activeController ?? windows.first ?? reopenWorkspaceWindow() else { return }
         target.newChat(draft: draft, urls: urls, send: send)
     }
 
@@ -770,7 +780,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// New Codex/Gemini Chat items name their agent in `representedObject`.
     @MainActor @objc func newChat(_ sender: Any?) {
         let raw = (sender as? NSMenuItem)?.representedObject as? String
-        activeController?.newChat(agent: raw.map(AgentKind.init(rawValue:)) ?? .claude)
+        sessionCommandTarget()?.newChat(agent: raw.map(AgentKind.init(rawValue:)) ?? .claude)
+    }
+
+    /// The workspace window a new session or chat goes to. Asked from a window
+    /// of no workspace (a host terminal, Daemon Health, a kit log), that's the
+    /// one last used, which may be behind: it comes forward so the new
+    /// session is seen.
+    @MainActor private func sessionCommandTarget() -> MainWindowController? {
+        guard let target = activeController else { return nil }
+        if let key = NSApp.keyWindow, !target.owns(key) {
+            target.showWindow(nil)
+            target.window?.makeKeyAndOrderFront(nil)
+        }
+        return target
     }
 
     /// ⇧⌘F — the Search window (sessions + past conversations). From an open
@@ -785,7 +808,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// ⌘N — new session in the current project with the same agent.
     @MainActor @objc func newSession(_ sender: Any?) {
-        activeController?.newSession()
+        sessionCommandTarget()?.newSession()
     }
 
     /// ⌃⌘S — show or hide the sidebar.
@@ -850,6 +873,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let controller = activeController {
             controller.showWindow(nil)
             controller.window?.makeKeyAndOrderFront(nil)
+        } else {
+            reopenWorkspaceWindow()
+        }
+        NSApp.activate()
+    }
+
+    /// With no workspace window open: an open Welcome, Open Folder or Open
+    /// window comes forward (nil — no folder is set up behind it); with none
+    /// of those, no folder known shows the Welcome (nil), else the most
+    /// recent folder's window opens.
+    @MainActor @discardableResult
+    private func reopenWorkspaceWindow() -> MainWindowController? {
+        if let welcome = welcomeWindow, isUp(welcome) {
+            welcome.present()
         } else if let setup = setupWindow, isUp(setup) {
             setup.present()
         } else if let open = openWindow, isUp(open) {
@@ -857,11 +894,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else if RootFolderStore.all.isEmpty {
             showWelcome()   // no folder has had a sandbox yet
         } else if let recent = RootFolderStore.byRecency().first {
-            openWorkspace(URL(filePath: recent.path, directoryHint: .checkFileSystem))
+            return openWorkspace(URL(filePath: recent.path, directoryHint: .checkFileSystem))
         } else {
             openWorkspaceBrowser(nil)   // the folders it knows are gone
         }
-        NSApp.activate()
+        return nil
     }
 
     /// Handle files/folders passed via `open -a Sandshell /path …` or drag-onto-dock.

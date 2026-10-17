@@ -23,6 +23,13 @@ final class ShortcutsWindowController: NSWindowController {
     }
 
     private let host = NSHostingController(rootView: ShortcutsView(groups: []))
+    /// How many times the panel has opened (each starts the list over).
+    private var openings = 0
+
+    /// Where the panel's frame is saved. Not "KeyboardShortcuts", which earlier
+    /// builds overwrote with the list's minimum size, centered, on every open.
+    private static let frameName = "KeyboardShortcutsPanel"
+    private static let staleFrameKey = "NSWindow Frame KeyboardShortcuts"
 
     private init() {
         let window = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 460, height: 560),
@@ -38,14 +45,18 @@ final class ShortcutsWindowController: NSWindowController {
         window.setContentSize(NSSize(width: 460, height: 560))
         window.center()
         // …so the saved frame comes back, and saving starts, only now.
-        window.setFrameUsingName("KeyboardShortcuts")
-        window.setFrameAutosaveName("KeyboardShortcuts")
+        window.setFrameUsingName(Self.frameName)
+        window.setFrameAutosaveName(Self.frameName)
+        UserDefaults.standard.removeObject(forKey: Self.staleFrameKey)
     }
 
     @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
 
     func show() {
-        host.rootView = ShortcutsView(groups: Self.grouped(Self.collect()))
+        // Opening starts over — no filter, at the top (the view outlives the
+        // window's closing); asked for while it's open, it stays as it is.
+        if window?.isVisible != true { openings += 1 }
+        host.rootView = ShortcutsView(groups: Self.grouped(Self.collect()), opening: openings)
         showWindow(nil)
         window?.makeKeyAndOrderFront(nil)
     }

@@ -4,6 +4,9 @@ import SwiftUI
 /// filtered by what's typed above it.
 struct ShortcutsView: View {
     let groups: [ShortcutsWindowController.MenuGroup]
+    /// Which time the panel opened: each opening clears the filter and
+    /// scrolls back to the top (the window keeps this view between openings).
+    var opening = 0
     @State private var filter = ""
 
     private var query: String { filter.trimmingCharacters(in: .whitespaces) }
@@ -26,10 +29,12 @@ struct ShortcutsView: View {
                     }
                 }
             }
+            .id(opening)
             .overlay {
                 if shown.isEmpty, !query.isEmpty { ContentUnavailableView.search(text: query) }
             }
         }
         .frame(minWidth: 360, minHeight: 320)
+        .onChange(of: opening) { filter = "" }
     }
 }
