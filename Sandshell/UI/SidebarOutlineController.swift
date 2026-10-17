@@ -747,12 +747,13 @@ final class SidebarListController: NSViewController {
 
     /// Whether `session` matches the live search filter (name / agent / folder).
     private func matchesSearch(_ session: Session) -> Bool {
-        guard !searchQuery.isEmpty else { return true }
-        let q = searchQuery.lowercased()
-        if session.name.lowercased().contains(q) { return true }
-        if session.agent.displayName.lowercased().contains(q) { return true }
-        if let name = workdirName(for: session), name.lowercased().contains(q) { return true }
-        return false
+        Self.matches(searchQuery, in: [session.name, session.agent.displayName, workdirName(for: session)])
+    }
+
+    /// Whether any of `fields` contains `query`, as Finder matches (ignoring
+    /// case and accents: "cafe" finds "Café"). An empty query matches all.
+    nonisolated static func matches(_ query: String, in fields: [String?]) -> Bool {
+        query.isEmpty || fields.contains { $0?.localizedStandardContains(query) == true }
     }
 
     // MARK: Reload (preserving selection)

@@ -4,7 +4,8 @@ import Testing
 
 /// The sidebar's row logic (Sandshell/UI/SidebarOutlineController.swift): what
 /// stays picked across a reload, which session the detail shows for a
-/// selection, where a file drop lands, and when subagent changes redraw it.
+/// selection, where a file drop lands, when subagent changes redraw it, and
+/// what the filter matches.
 struct SidebarOutlineControllerTests {}
 
 /// Three sessions; A has two subagents, B a workflow:
@@ -325,6 +326,45 @@ extension SidebarOutlineControllerTests {
             #expect(shown.agentsSettled == original.agentsSettled)
             #expect(shown.phases.map { shown.progress(of: $0) }.map { [$0.done, $0.total] }
                     == original.phases.map { original.progress(of: $0) }.map { [$0.done, $0.total] })
+        }
+    }
+}
+
+// MARK: - matches(_:in:)
+
+extension SidebarOutlineControllerTests {
+    struct Filter {
+        struct Case: Sendable, CustomTestStringConvertible {
+            let testDescription: String
+            let query: String
+            /// Name, agent, folder (nil: the root folder, which has no label).
+            let fields: [String?]
+            let expected: Bool
+        }
+
+        @Test(arguments: [
+            Case(testDescription: "the session's name", query: "deploy", fields: ["Fix the deploy", "Claude", nil],
+                 expected: true),
+            Case(testDescription: "the agent", query: "codex", fields: ["Fix the deploy", "Codex", nil], expected: true),
+            Case(testDescription: "the folder", query: "web", fields: ["Fix the deploy", "Claude", "webapp"], expected: true),
+            Case(testDescription: "case is ignored", query: "DEPLOY", fields: ["Fix the deploy", "Claude", nil],
+                 expected: true),
+            Case(testDescription: "accents are ignored", query: "cafe", fields: ["Café menu", "Claude", nil], expected: true),
+            Case(testDescription: "accents in the query are ignored", query: "Café", fields: ["cafe menu", "Claude", nil],
+                 expected: true),
+            Case(testDescription: "nothing contains it", query: "zebra", fields: ["Fix the deploy", "Claude", "webapp"],
+                 expected: false),
+            Case(testDescription: "the root folder has no label to match", query: "root",
+                 fields: ["Fix the deploy", "Claude", nil], expected: false),
+        ])
+        func matchesAnyField(_ testCase: Case) {
+            #expect(SidebarListController.matches(testCase.query, in: testCase.fields) == testCase.expected)
+        }
+
+        @Test(.tags(.edgeCase))
+        func anEmptyQueryMatchesEverySession() {
+            #expect(SidebarListController.matches("", in: ["Fix the deploy", "Claude", nil]))
+            #expect(SidebarListController.matches("", in: []), "even one with nothing to match")
         }
     }
 }
