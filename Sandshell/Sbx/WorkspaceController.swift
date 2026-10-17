@@ -440,9 +440,10 @@ final class WorkspaceController: ObservableObject {
 
     /// Register servers from a standard MCP JSON document (`{ "mcpServers": { … } }`)
     /// via `sbx mcp add` — each entry maps to `--command/--args` or `--url`.
-    /// False when the text holds no servers (the caller keeps it to fix).
+    /// Whether every server in it was added: false when the text holds none or
+    /// an add failed (`mcpAddError` says why; the caller keeps the text to fix).
     @discardableResult
-    func addMCPFromJSON(_ json: String) -> Bool {
+    func addMCPFromJSON(_ json: String) async -> Bool {
         let parsed = Self.parseMCPJSON(json)
         guard !parsed.isEmpty else {
             mcpAddError = "No servers found — expected { \"mcpServers\": { … } }."
@@ -451,22 +452,20 @@ final class WorkspaceController: ObservableObject {
         mcpAddError = nil
         let url = workspace.mcpURL
         for (name, _) in parsed { mcpBusy.insert(name) }
-        Task {
-            var failures: [String] = []
-            for (name, args) in parsed {
-                do {
-                    try await SbxClient.shared.addMCP(name: name, args: args, mcpURL: url)
-                    self.mcpJustAuthenticated = name   // auto-enable
-                } catch {
-                    failures.append("\(name): \(error.localizedDescription)")
-                    Log.error(.workspace, "mcp add \(name) failed: \(error.localizedDescription)")
-                }
-                self.mcpBusy.remove(name)
+        var failures: [String] = []
+        for (name, args) in parsed {
+            do {
+                try await SbxClient.shared.addMCP(name: name, args: args, mcpURL: url)
+                mcpJustAuthenticated = name   // auto-enable
+            } catch {
+                failures.append("\(name): \(error.localizedDescription)")
+                Log.error(.workspace, "mcp add \(name) failed: \(error.localizedDescription)")
             }
-            self.mcpAddError = failures.isEmpty ? nil : failures.joined(separator: "\n")
-            self.refreshMCPStatus()
+            mcpBusy.remove(name)
         }
-        return true
+        mcpAddError = failures.isEmpty ? nil : failures.joined(separator: "\n")
+        refreshMCPStatus()
+        return failures.isEmpty
     }
 
     /// Revoke a server's hosted OAuth credential (keeps registration).
@@ -1400,11 +1399,15 @@ final class WorkspaceController: ObservableObject {
     /// works again (not on each Stepper tick or synced theme change).
     private func persistFailed(_ what: String, _ error: any Error) {
         let reason = error.localizedDescription
-        Log.error(.workspace, "saving \(what) in \(workspace.rootURL.path) failed: \(reason)")
+        let root = workspace.rootURL
+        Log.error(.workspace, "saving \(what) in \(root.path(percentEncoded: false)) failed: \(reason)")
         guard !store.saveFailureReported else { return }
         store.saveFailureReported = true
-        warn("Couldn’t save this workspace’s \(what)",
-             "\(reason)\n\nChanges made now won’t be there after Sandshell restarts.")
+        // Named: it can come from background work in a window that isn't in
+        // front, with other workspaces open.
+        warn("Couldn’t save the \(what) for “\(root.lastPathComponent)”",
+             "\(root.path(percentEncoded: false).tildeAbbreviated): \(reason)\n\n"
+                + "Changes made now won’t be there after Sandshell restarts.")
     }
 
     /// A warning for the person, on the next turn: not from inside the SwiftUI
@@ -1897,8 +1900,9 @@ extension WorkspaceController {
     func trashFolder(_ id: UUID) {
         guard let folder = folder(id: id), !folder.isRoot else { return }
         let dir = folderURL(for: folder)
-        // Already gone from disk (deleted in Finder): just drop its row.
-        guard FileManager.default.fileExists(atPath: dir.path) else { return removeFolders([id]) }
+        let rows = [id] + state.folders(nestedIn: id).map(\.id)
+        // Already gone from disk (deleted in Finder): just drop its rows.
+        guard FileManager.default.fileExists(atPath: dir.path(percentEncoded: false)) else { return removeFolders(rows) }
         do {
             try FileManager.default.trashItem(at: dir, resultingItemURL: nil)
         } catch {
@@ -1906,7 +1910,7 @@ extension WorkspaceController {
             warn("Couldn’t move “\(displayName(for: folder))” to the Trash", error.localizedDescription)
             return
         }
-        removeFolders([id] + state.folders(nestedIn: id).map(\.id))
+        removeFolders(rows)
     }
 
     /// Drop folder rows and their sessions from the sidebar.

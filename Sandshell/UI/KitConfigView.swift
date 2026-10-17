@@ -301,7 +301,10 @@ struct KitConfigView: View {
                 startupIcon(startup)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(startupHeadline(startup)).fontWeight(.medium)
-                    Text(startupSubline(startup)).font(.caption).foregroundStyle(.secondary)
+                    // "ran 12 seconds ago" keeps counting on its own.
+                    TimelineView(.periodic(from: .now, by: 1)) { context in
+                        Text(startupSubline(startup, now: context.date)).font(.caption).foregroundStyle(.secondary)
+                    }
                 }
                 Spacer()
                 if let onRefreshStartup {
@@ -361,7 +364,7 @@ struct KitConfigView: View {
         return n == 1 ? "1 kit had a problem" : "\(n) kits had problems"
     }
 
-    private func startupSubline(_ startup: KitStartupStatus) -> String {
+    private func startupSubline(_ startup: KitStartupStatus, now: Date) -> String {
         var parts: [String] = []
         let ok = startup.entries.filter { $0.outcome == .ok || $0.outcome == .noSteps }.count
         if ok > 0 { parts.append("\(ok) ok") }
@@ -372,7 +375,7 @@ struct KitConfigView: View {
         let skipped = startup.entries.filter { $0.outcome == .skipped }.count
         if skipped > 0 { parts.append("\(skipped) skipped") }
         if let started = startup.report?.startedAt {
-            parts.append("ran " + Format.relative(started))
+            parts.append("ran " + Format.relative(started, now: now))
         }
         return parts.joined(separator: " · ")
     }

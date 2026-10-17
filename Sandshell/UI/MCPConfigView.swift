@@ -77,6 +77,8 @@ struct MCPPaneView: View {
     let onCancel: () -> Void
 
     @State private var jsonText = ""
+    /// "Add from JSON" is registering the servers pasted.
+    @State private var addingJSON = false
     @State private var showInfo = false
     @FocusState private var urlFocused: Bool
 
@@ -165,10 +167,16 @@ struct MCPPaneView: View {
                     HStack {
                         Spacer()
                         Button("Add from JSON") {
-                            // Text with no servers in it stays, to fix.
-                            if controller.addMCPFromJSON(jsonText) { jsonText = "" }
+                            let text = jsonText
+                            addingJSON = true
+                            Task {
+                                // Cleared once every server in it is added: text with
+                                // none, or one that failed, stays to fix.
+                                if await controller.addMCPFromJSON(text), jsonText == text { jsonText = "" }
+                                addingJSON = false
+                            }
                         }
-                        .disabled(jsonText.trimmingCharacters(in: .whitespaces).isEmpty)
+                        .disabled(addingJSON || jsonText.trimmingCharacters(in: .whitespaces).isEmpty)
                     }
                 } header: {
                     Text("Add servers")
