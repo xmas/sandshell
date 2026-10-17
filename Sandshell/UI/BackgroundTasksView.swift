@@ -1,4 +1,3 @@
-import AppKit
 import SwiftUI
 
 /// The background tasks of one session (the title-strip popover) or of every
@@ -28,18 +27,16 @@ struct BackgroundTasksView: View {
         let groups = groups
         VStack(alignment: .leading, spacing: 0) {
             if groups.isEmpty {
-                VStack(spacing: 8) {
-                    Image(systemName: "square.stack.3d.up").font(.system(size: 26)).foregroundStyle(.secondary)
-                    Text("No background tasks").font(.headline)
-                    Text("When Claude starts a subagent, a background command or a Monitor, it shows up here, and you're notified when it finishes.")
-                        .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity).padding(24)
+                ContentUnavailableView("No Background Tasks", systemImage: "square.stack.3d.up",
+                                       description: Text("When Claude starts a subagent, a background command or a Monitor, it shows up here, and you're notified when it finishes."))
             } else {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 14) {
                         ForEach(groups, id: \.session.id) { group in
-                            section(group.session, group.tasks, titled: onSelectSession != nil)
+                            BackgroundTaskSection(session: group.session, tasks: group.tasks,
+                                                  titled: onSelectSession != nil, loadOutput: loadOutput,
+                                                  onSelectSession: onSelectSession,
+                                                  stopTask: stopTask, canStop: canStop)
                         }
                     }
                     .padding(14)
@@ -48,9 +45,21 @@ struct BackgroundTasksView: View {
         }
         .accessibilityIdentifier("background-tasks")
     }
+}
 
-    @ViewBuilder
-    private func section(_ session: Session, _ tasks: [BackgroundTask], titled: Bool) -> some View {
+/// One session's tasks: the running ones newest first, then the latest 25
+/// that finished.
+private struct BackgroundTaskSection: View {
+    let session: Session
+    let tasks: [BackgroundTask]
+    /// The window panel names each session (a click shows it).
+    let titled: Bool
+    let loadOutput: ((UUID, BackgroundTask) async -> String?)?
+    let onSelectSession: ((UUID) -> Void)?
+    let stopTask: ((UUID, BackgroundTask) async -> Bool)?
+    let canStop: ((UUID, BackgroundTask) -> Bool)?
+
+    var body: some View {
         let running = tasks.filter(\.isRunning).sorted { $0.startedAt > $1.startedAt }
         let finished = Array(tasks.filter { !$0.isRunning && !$0.orphaned }
             .sorted { ($0.finishedAt ?? $0.startedAt) > ($1.finishedAt ?? $1.startedAt) }.prefix(25))
@@ -69,8 +78,7 @@ struct BackgroundTasksView: View {
                 header("Running", running.count)
                 ForEach(running) { task in
                     BackgroundTaskRow(task: task, sessionID: session.id, loadOutput: loadOutput,
-                                      stop: canStop?(session.id, task) == true && stopTask != nil
-                                          ? { await stopTask!(session.id, task) } : nil)
+                                      stop: stopAction(for: task))
                 }
             }
             if !finished.isEmpty {
@@ -84,6 +92,13 @@ struct BackgroundTasksView: View {
         Text("\(title.uppercased()) · \(count)")
             .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
             .padding(.top, 2)
+    }
+
+    /// The row's Stop, where this task can be stopped.
+    private func stopAction(for task: BackgroundTask) -> (() async -> Bool)? {
+        guard canStop?(session.id, task) == true, let stopTask else { return nil }
+        let id = session.id
+        return { await stopTask(id, task) }
     }
 }
 
@@ -104,28 +119,23 @@ private struct BackgroundTaskRow: View {
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(.secondary)
                 .frame(width: 18, height: 18)
+                .accessibilityLabel(kindName)
             VStack(alignment: .leading, spacing: 3) {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Text(task.title).fontWeight(.medium).lineLimit(2)
+                    Text(task.title).lineLimit(2)
                     Spacer(minLength: 8)
-                    if task.isRunning, let stop {
+                    if task.isRunning, stop != nil {
                         if stopping { ProgressView().controlSize(.mini) }
-                        Button("Stop") {
-                            stopping = true
-                            Task {
-                                stopFailed = !(await stop())
-                                stopping = false
-                            }
-                        }
-                        .controlSize(.small)
-                        .disabled(stopping)
-                        .help("Stop this task (the agent is told it was stopped)")
-                        .accessibilityIdentifier("background-task-stop")
+                        Button("Stop", action: stopTask)
+                            .controlSize(.small)
+                            .disabled(stopping)
+                            .help("Stop this task (the agent is told it was stopped)")
+                            .accessibilityIdentifier("background-task-stop")
                     }
-                    stateBadge
+                    BackgroundTaskStateBadge(task: task)
                 }
                 if let detail = task.detail, detail != task.title {
-                    Text(detail).font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
+                    Text(detail).font(.subheadline.monospaced()).foregroundStyle(.secondary)
                         .lineLimit(1).truncationMode(.middle).textSelection(.enabled)
                 }
                 if let line = task.isRunning ? task.activity : (task.summary ?? task.activity) {
@@ -137,72 +147,53 @@ private struct BackgroundTaskRow: View {
                     Text("Couldn’t stop it — it may have just finished.").font(.caption).foregroundStyle(.red)
                 }
                 if task.kind == .monitor, task.events > 0 {
-                    Text("\(task.events) event\(task.events == 1 ? "" : "s")").font(.caption).foregroundStyle(.tertiary)
+                    Text("^[\(task.events) event](inflect: true)").font(.caption).foregroundStyle(.tertiary)
                 }
                 if task.kind == .shell, task.outputPath != nil, loadOutput != nil {
-                    DisclosureGroup(isExpanded: $showOutput) {
-                        Group {
-                            if loading { ProgressView().controlSize(.small) }
-                            else {
-                                Text(output ?? "No output yet.")
-                                    .font(.system(size: 10.5, design: .monospaced))
-                                    .textSelection(.enabled)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                            }
-                        }
-                        .padding(6)
-                        .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 5))
-                    } label: {
-                        Text("Output").font(.caption)
-                    }
-                    .onChange(of: showOutput) { _, open in if open { refreshOutput() } }
+                    BackgroundTaskOutput(output: output, loading: loading,
+                                         isExpanded: $showOutput, onOpen: refreshOutput)
                 }
             }
         }
         .padding(.vertical, 2)
         .contextMenu {
-            if let detail = task.detail {
-                Button("Copy Command") {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(detail, forType: .string)
-                }
-            }
+            if task.detail != nil { Button("Copy Command", action: copyCommand) }
             if showOutput { Button("Reload Output", action: refreshOutput) }
         }
     }
 
     private var kindSymbol: String {
         switch task.kind {
-        case .agent: return "person.2"
-        case .shell: return "terminal"
-        case .monitor: return "waveform.path.ecg"
-        case .workflow: return "point.3.connected.trianglepath.dotted"
+        case .agent: "person.2"
+        case .shell: "terminal"
+        case .monitor: "waveform.path.ecg"
+        case .workflow: "point.3.connected.trianglepath.dotted"
         }
     }
 
-    @ViewBuilder private var stateBadge: some View {
-        TimelineView(.periodic(from: .now, by: 1)) { context in
-            let time = Text(formatWorkTime(task.duration(at: context.date))).monospacedDigit()
-            switch task.state {
-            case .running:
-                HStack(spacing: 4) {
-                    ProgressView().controlSize(.mini)
-                    time
-                }
-                .foregroundStyle(Color(nsColor: .sessionWorking))
-            case .completed:
-                Label { time } icon: { Image(systemName: "checkmark.circle.fill") }
-                    .foregroundStyle(.secondary)
-            case .failed:
-                Label { time } icon: { Image(systemName: "xmark.octagon.fill") }
-                    .foregroundStyle(.red)
-            case .stopped:
-                Label { time } icon: { Image(systemName: "stop.circle") }
-                    .foregroundStyle(.secondary)
-            }
+    /// What VoiceOver says for the kind symbol.
+    private var kindName: String {
+        switch task.kind {
+        case .agent: "Subagent"
+        case .shell: "Background command"
+        case .monitor: "Monitor"
+        case .workflow: "Workflow"
         }
-        .font(.caption)
-        .labelStyle(.titleAndIcon)
+    }
+
+    private func stopTask() {
+        guard let stop else { return }
+        stopping = true
+        Task {
+            stopFailed = !(await stop())
+            stopping = false
+        }
+    }
+
+    private func copyCommand() {
+        guard let detail = task.detail else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(detail, forType: .string)
     }
 
     private func refreshOutput() {
@@ -216,34 +207,76 @@ private struct BackgroundTaskRow: View {
     }
 }
 
-/// Window ▸ Background Tasks: every session's background work in this window.
-@MainActor
-final class BackgroundTasksWindowController: NSWindowController {
-    init(controller: WorkspaceController, title: String,
-         loadOutput: @escaping (UUID, BackgroundTask) async -> String?,
-         onSelectSession: @escaping (UUID) -> Void,
-         canStop: ((UUID, BackgroundTask) -> Bool)? = nil,
-         stopTask: ((UUID, BackgroundTask) async -> Bool)? = nil) {
-        let view = BackgroundTasksView(
-            controller: controller,
-            sessionIDs: { [weak controller] in controller?.orderedSessions.map(\.id) ?? [] },
-            loadOutput: loadOutput,
-            onSelectSession: onSelectSession,
-            stopTask: stopTask, canStop: canStop)
-        let hosting = NSHostingController(rootView: view.frame(minWidth: 380, minHeight: 260))
-        let window = NSPanel(contentViewController: hosting)
-        window.styleMask = [.titled, .closable, .resizable, .utilityWindow, .nonactivatingPanel]
-        window.title = "Background Tasks — \(title)"
-        window.isFloatingPanel = false
-        window.hidesOnDeactivate = false
-        window.setContentSize(NSSize(width: 460, height: 420))
-        // Each window's panel remembers its own frame (a name in use by another
-        // window's panel can't be shared: take the next one).
-        for n in 0..<20 where window.setFrameAutosaveName(n == 0 ? "BackgroundTasksPanel" : "BackgroundTasksPanel \(n + 1)") {
-            break
+/// How long a task has run (ticking while it runs) and how it ended.
+private struct BackgroundTaskStateBadge: View {
+    let task: BackgroundTask
+
+    var body: some View {
+        // A finished task's time is fixed: only a running one needs the tick.
+        TimelineView(.animation(minimumInterval: 1, paused: !task.isRunning)) { context in
+            let elapsed = formatWorkTime(task.duration(at: context.date))
+            let time = Text(elapsed).monospacedDigit()
+            Group {
+                switch task.state {
+                case .running:
+                    HStack(spacing: 4) {
+                        ProgressView().controlSize(.mini)
+                        time
+                    }
+                    .foregroundStyle(Color(nsColor: .sessionWorking))
+                case .completed:
+                    Label { time } icon: { Image(systemName: "checkmark.circle.fill") }
+                        .foregroundStyle(.secondary)
+                case .failed:
+                    Label { time } icon: { Image(systemName: "xmark.octagon.fill") }
+                        .foregroundStyle(.red)
+                case .stopped:
+                    Label { time } icon: { Image(systemName: "stop.circle") }
+                        .foregroundStyle(.secondary)
+                }
+            }
+            // The state shows as an icon and colour: say it.
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(stateName)
+            .accessibilityValue(elapsed)
         }
-        super.init(window: window)
+        .font(.caption)
+        .labelStyle(.titleAndIcon)
     }
 
-    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    private var stateName: String {
+        switch task.state {
+        case .running: "Running"
+        case .completed: "Completed"
+        case .failed: "Failed"
+        case .stopped: "Stopped"
+        }
+    }
+}
+
+/// A background command's output tail, read when it's opened.
+private struct BackgroundTaskOutput: View {
+    let output: String?
+    let loading: Bool
+    @Binding var isExpanded: Bool
+    let onOpen: @MainActor () -> Void
+
+    var body: some View {
+        DisclosureGroup(isExpanded: $isExpanded) {
+            Group {
+                if loading { ProgressView().controlSize(.small) }
+                else {
+                    Text(output ?? "No output yet.")
+                        .font(.caption.monospaced())
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+            .padding(6)
+            .background(.quinary, in: .rect(cornerRadius: 5))
+        } label: {
+            Text("Output").font(.caption)
+        }
+        .onChange(of: isExpanded) { _, open in if open { onOpen() } }
+    }
 }
