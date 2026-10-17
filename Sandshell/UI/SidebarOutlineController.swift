@@ -7,11 +7,11 @@ extension AgentKind {
     /// SF Symbol used for an agent's session row.
     var symbolName: String {
         switch self {
-        case .claude, .dockerAgent: return "sparkles"
-        case .codex: return "chevron.left.forwardslash.chevron.right"
-        case .gemini: return "diamond"
-        case .shell: return "terminal"
-        default: return customSymbol ?? "cpu"
+        case .claude, .dockerAgent: "sparkles"
+        case .codex: "chevron.left.forwardslash.chevron.right"
+        case .gemini: "diamond"
+        case .shell: "terminal"
+        default: customSymbol ?? "cpu"
         }
     }
 
@@ -92,9 +92,10 @@ final class SidebarListController: NSViewController {
     private var reloading = false
     private var settingSelection = false
 
-    /// Sessions in display order — the single source of truth for row↔session
-    /// mapping. A row index is simply an index into this array; there is no
-    /// per-row identity object (NSTableView addresses rows by integer index).
+    /// Sessions in display order, after the search filter. Table rows map
+    /// through `rows`, which also holds each open session's subagent and
+    /// workflow rows, so an index here is not a row index: use `row(of:)` /
+    /// `sessionID(atRow:)`.
     private(set) var displayedSessionIDs: [UUID] = []
 
     /// What each row shows: a session, or one of its subagents beneath it.
@@ -319,7 +320,7 @@ final class SidebarListController: NSViewController {
         // posts it on its own center, not the default one.)
         NSWorkspace.shared.notificationCenter
             .publisher(for: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification)
-            .receive(on: DispatchQueue.main)
+            .receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.reload() }
             .store(in: &cancellables)
         scroll.documentView = outline
@@ -586,7 +587,7 @@ final class SidebarListController: NSViewController {
         controller.$selection.sink { [weak self] sel in
             guard let self else { return }
             let previous = self.lastActiveSession
-            self.lastActiveSession = { if case let .session(id) = sel { return id } else { return nil } }()
+            self.lastActiveSession = if case let .session(id) = sel { id } else { nil }
             self.syncSelection(sel)
             // Bold the newly-active session immediately (and un-bold the previous
             // unless it's still live) — no wait for the terminal to launch.
@@ -609,7 +610,7 @@ final class SidebarListController: NSViewController {
         controller.$backgroundTasks.dropFirst().sink { [weak self] tasks in
             guard let self else { return }
             for id in Set(tasks.keys).union(self.backgroundCounts.keys) { self.updateSessionRow(id) }
-            self.backgroundCounts = tasks.mapValues { $0.filter(\.isRunning).count }
+            self.backgroundCounts = tasks.mapValues { $0.count(where: \.isRunning) }
         }.store(in: &cancellables)
         // Only when a row would change: a running subagent's or workflow's
         // transcripts are written all the time, and every poll would rebuild
@@ -746,12 +747,13 @@ final class SidebarListController: NSViewController {
 
     /// Whether `session` matches the live search filter (name / agent / folder).
     private func matchesSearch(_ session: Session) -> Bool {
-        guard !searchQuery.isEmpty else { return true }
-        let q = searchQuery.lowercased()
-        if session.name.lowercased().contains(q) { return true }
-        if session.agent.displayName.lowercased().contains(q) { return true }
-        if let name = workdirName(for: session), name.lowercased().contains(q) { return true }
-        return false
+        Self.matches(searchQuery, in: [session.name, session.agent.displayName, workdirName(for: session)])
+    }
+
+    /// Whether any of `fields` contains `query`, as Finder matches (ignoring
+    /// case and accents: "cafe" finds "Café"). An empty query matches all.
+    nonisolated static func matches(_ query: String, in fields: [String?]) -> Bool {
+        query.isEmpty || fields.contains { $0?.localizedStandardContains(query) == true }
     }
 
     // MARK: Reload (preserving selection)
@@ -1001,21 +1003,21 @@ final class SidebarListController: NSViewController {
     func openSandshellLog() { openInConsole(Log.fileURL) }
 
     func openDaemonLog() {
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        let logURL = home.appendingPathComponent(
-            "Library/Application Support/com.docker.sandboxes/sandboxes/sandboxd/daemon.log")
+        let logURL = URL.homeDirectory.appending(
+            path: "Library/Application Support/com.docker.sandboxes/sandboxes/sandboxd/daemon.log")
         openInConsole(logURL)
     }
 
     private func openInConsole(_ logURL: URL) {
-        let consoleURL = URL(fileURLWithPath: "/System/Applications/Utilities/Console.app")
-        if FileManager.default.fileExists(atPath: consoleURL.path) {
+        let consoleURL = URL(filePath: "/System/Applications/Utilities/Console.app", directoryHint: .isDirectory)
+        if FileManager.default.fileExists(atPath: consoleURL.path(percentEncoded: false)) {
             let cfg = NSWorkspace.OpenConfiguration()
             cfg.activates = true
-            NSWorkspace.shared.open([logURL], withApplicationAt: consoleURL, configuration: cfg) { _, error in
-                if let error {
+            Task {
+                do { _ = try await NSWorkspace.shared.open([logURL], withApplicationAt: consoleURL, configuration: cfg) }
+                catch {
                     Log.error(.app, "open Console failed: \(error.localizedDescription)")
-                    DispatchQueue.main.async { NSWorkspace.shared.activateFileViewerSelecting([logURL]) }
+                    NSWorkspace.shared.activateFileViewerSelecting([logURL])
                 }
             }
         } else {
@@ -1215,7 +1217,7 @@ final class SidebarListController: NSViewController {
         // Session ▸ Rename… with the sidebar hidden: show it, and edit once it's back.
         if let window = view.window?.windowController as? MainWindowController, window.isSidebarCollapsed {
             window.setSidebarCollapsed(false)
-            return DispatchQueue.main.async { [weak self] in self?.renameInRow(id) }
+            return Self.afterEvent { [weak self] in self?.renameInRow(id) }
         }
         renameInRow(id)
     }
@@ -1246,8 +1248,8 @@ final class SidebarListController: NSViewController {
 
     // MARK: Copy
 
-    /// ⌘C: each selected session as "name — folder path" (and its folder path
-    /// alone, for one); the same as a drag carries.
+    /// ⌘C: each selected session as "name — folder path", one per line (a drag
+    /// carries the folder path alone).
     @objc func copy(_ sender: Any?) {
         guard !selectedSessionIDs.isEmpty else { return NSSound.beep() }
         writeSelection(to: .general)
@@ -1269,9 +1271,9 @@ final class SidebarListController: NSViewController {
     #endif
 
     private func pasteboardText(_ ids: [UUID]) -> String {
-        let sessions = ids.compactMap { controller.session(id: $0) }
-        if sessions.count == 1 { return "\(sessions[0].name) — \(sessions[0].workdir)" }
-        return sessions.map { "\($0.name) — \($0.workdir)" }.joined(separator: "\n")
+        ids.compactMap { controller.session(id: $0) }
+            .map { "\($0.name) — \($0.workdir)" }
+            .joined(separator: "\n")
     }
 
     /// Edit ▸ Find ▸ Filter Sessions (⌥⌘F): the sidebar's filter field.
@@ -1326,10 +1328,10 @@ final class SidebarListController: NSViewController {
 
     /// Returns (.sbx/drops, .sbx/drops-changed-<timestamp>) for a folder.
     private func dropsPaths(for folder: Folder) -> (URL, URL) {
-        let sbx = controller.folderURL(for: folder).appendingPathComponent(".sbx", isDirectory: true)
-        let drops = sbx.appendingPathComponent("drops", isDirectory: true)
-        let staging = sbx.appendingPathComponent("drops-changed-\(Int(Date().timeIntervalSince1970))",
-                                                  isDirectory: true)
+        let sbx = controller.folderURL(for: folder).appending(path: ".sbx", directoryHint: .isDirectory)
+        let drops = sbx.appending(path: "drops", directoryHint: .isDirectory)
+        let staging = sbx.appending(path: "drops-changed-\(Int(Date.now.timeIntervalSince1970))",
+                                    directoryHint: .isDirectory)
         return (drops, staging)
     }
 
@@ -1422,7 +1424,9 @@ final class SidebarListController: NSViewController {
 
     @objc private func contextReveal(_ sender: NSMenuItem) {
         guard let id = sender.representedObject as? UUID, let s = controller.session(id: id) else { return }
-        NSWorkspace.shared.open(URL(fileURLWithPath: s.workdir))
+        if !NSWorkspace.shared.open(URL(filePath: s.workdir, directoryHint: .isDirectory)) {
+            Alerts.inform("Folder Not Found", "\(s.workdir.tildeAbbreviated) no longer exists.", style: .warning)
+        }
     }
 
     @objc private func contextCopy(_ sender: NSMenuItem) {
@@ -1988,9 +1992,8 @@ final class SessionCellView: NSTableCellView {
     }
 
     private func syncHover() {
-        let hovered = window?.isKeyWindow == true
-            && bounds.contains(convert(window!.mouseLocationOutsideOfEventStream, from: nil))
-        closeButton.isHidden = !hovered
+        guard let window, window.isKeyWindow else { closeButton.isHidden = true; return }
+        closeButton.isHidden = !bounds.contains(convert(window.mouseLocationOutsideOfEventStream, from: nil))
     }
 
     override func updateTrackingAreas() {
@@ -2088,7 +2091,7 @@ extension SessionCellView: NSTextFieldDelegate {
 }
 
 /// Coarse relative time for the session subline: "just now" → "2m ago" → "3h ago".
-func relativeActivity(_ date: Date, now: Date = Date()) -> String { Format.ago(date, now: now) }
+func relativeActivity(_ date: Date, now: Date = .now) -> String { Format.ago(date, now: now) }
 func compactWorkTime(_ seconds: TimeInterval) -> String? { Format.compactWorkTime(seconds) }
 func formatWorkTime(_ seconds: TimeInterval) -> String { Format.workTime(seconds) }
 
@@ -2268,12 +2271,11 @@ final class SubagentCellView: NSTableCellView {
     private let lineColor: NSColor
 
     convenience init(_ info: SubagentInfo, isLast: Bool, theme: ThemeColors) {
-        let state: String
-        switch info.state {
-        case .running: state = "Working"
-        case .done: state = Format.ago(info.lastWrite)
-        case .failed: state = "Failed"
-        case .stopped: state = "Stopped"
+        let state = switch info.state {
+        case .running: "Working"
+        case .done: Format.ago(info.lastWrite)
+        case .failed: "Failed"
+        case .stopped: "Stopped"
         }
         self.init(title: info.title, subtitle: [info.agentType, state].compactMap { $0 }.joined(separator: " · "),
                   running: info.isRunning, failed: info.state == .failed, isLast: isLast, theme: theme,
