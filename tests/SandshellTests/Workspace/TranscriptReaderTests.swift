@@ -606,9 +606,9 @@ extension TranscriptReaderTests {
         func everyStopReasonThatEndsTheTurnMeansIdle(stopReason: String) throws {
             let url = try transcript([TRFixture.claudeUser(), TRFixture.claudeAssistant(stopReason: stopReason)])
             let live = try #require(TranscriptReader.liveState(in: url))
-            withKnownIssue("Claude live state only treats end_turn, stop_sequence and max_tokens as terminal, so a turn the API ended with refusal or model_context_window_exceeded reads as working until the next write") {
-                #expect(live.working == false)
-            }
+            #expect(live.working == false)
+            let incremental = try #require(TranscriptReader.incrementalLiveState(in: url, fromOffset: 0))
+            #expect(incremental.liveState.working == false)
         }
 
         @Test func toolResultKeepsWorkingAndThePrompt() throws {
@@ -936,11 +936,21 @@ extension TranscriptReaderTests {
             try home.append(String(reply[..<half]), to: url)
             let first = try #require(TranscriptReader.incrementalLiveState(in: url, fromOffset: 0))
             #expect(first.liveState.working, "Only the user's line is complete so far")
+            #expect(first.newOffset == TRFixture.jsonl([TRFixture.claudeUser("First task")]).utf8.count,
+                    "The next read starts where the half-written line does")
             try home.append(String(reply[half...]) + "\n", to: url)
-            withKnownIssue("incrementalLiveState sets newOffset to the end of the file even when the last line is still half-written, so the rest of that line is unparseable on the next read and its status (here end_turn) is lost") {
-                let second = try #require(TranscriptReader.incrementalLiveState(in: url, fromOffset: first.newOffset))
-                #expect(second.liveState.working == false)
-            }
+            let second = try #require(TranscriptReader.incrementalLiveState(in: url, fromOffset: first.newOffset))
+            #expect(second.liveState.working == false)
+        }
+
+        @Test(.tags(.transcriptReaderEdgeCase))
+        func halfWrittenLineAloneGivesNil() throws {
+            let url = try home.writeClaudeTranscript(id: "s", lines: firstTurn)
+            let offset = TRFixture.jsonl(firstTurn).utf8.count
+            let next = TRFixture.claudeUser("Second task")
+            try home.append(String(next.prefix(next.count / 2)), to: url)
+            #expect(TranscriptReader.incrementalLiveState(in: url, fromOffset: offset) == nil,
+                    "Nothing complete yet, so the caller keeps its offset")
         }
     }
 }
@@ -1022,11 +1032,9 @@ extension TranscriptReaderTests {
             let first = try #require(TranscriptReader.incrementalLiveState(in: url, fromOffset: 0))
             #expect(first.lastRole == "user", "Only the user's message is complete so far")
             try home.append(String(reply[half...]) + "\n", to: url)
-            withKnownIssue("incrementalLiveState sets newOffset to the end of the file even when the last line is still half-written, so the rest of that line is unparseable on the next read and the assistant's reply is lost") {
-                let second = try #require(TranscriptReader.incrementalLiveState(in: url, fromOffset: first.newOffset))
-                #expect(second.lastRole == "assistant")
-                #expect(second.liveState.working == false)
-            }
+            let second = try #require(TranscriptReader.incrementalLiveState(in: url, fromOffset: first.newOffset))
+            #expect(second.lastRole == "assistant")
+            #expect(second.liveState.working == false)
         }
     }
 }
@@ -1117,9 +1125,9 @@ extension TranscriptReaderTests {
                 TRFixture.claudeAssistant(),
             ])
             let summary = try #require(TranscriptReader.summary(at: url, agent: .claude))
-            withKnownIssue("Claude's summary takes the first user text as the History title without skipping injected <…> context, unlike Claude live state and the Codex summary, so a conversation that opened with a slash command is titled \"<command-name>/init</command-name> …\"") {
-                #expect(summary.firstPrompt == TRFixture.prompt)
-            }
+            #expect(summary.firstPrompt == TRFixture.prompt)
+            #expect(summary.messageCount == 3, "Injected context still counts as a message")
+            #expect(summary.searchText.contains("/init"), "…and is still searchable")
         }
 
         @Test func transcriptWithoutMessagesGivesNil() throws {

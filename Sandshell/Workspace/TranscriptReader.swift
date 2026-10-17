@@ -93,9 +93,9 @@ enum TranscriptReader {
         var lastRole: String?
     }
 
-    /// Read only the bytes appended to `url` since `fromOffset` and return the
-    /// updated live state. Returns `nil` when there are no new bytes or the new
-    /// bytes contain no status-bearing lines (no state change needed).
+    /// Read only the lines appended to `url` since `fromOffset` and return the
+    /// updated live state. Returns `nil` when there's no new complete line or
+    /// the new lines contain no status-bearing one (no state change needed).
     static func incrementalLiveState(in url: URL, fromOffset: Int) -> IncrementalLiveStateResult? {
         url.pathComponents.contains(".codex")
             ? codexIncrementalLiveState(in: url, fromOffset: fromOffset)
@@ -137,20 +137,32 @@ enum TranscriptReader {
             .max { $0.1 < $1.1 }?.0
     }
 
-    /// Incremental variant of `claudeLiveState`: reads only bytes from `fromOffset`
-    /// to end-of-file, avoiding a full re-read on every tick.
+    /// Claude stop reasons that end a turn; any other (`tool_use`, `pause_turn`,
+    /// none yet while the reply streams) means the agent is still at it.
+    static let claudeTurnEndingStopReasons: Set<String> = [
+        "end_turn", "stop_sequence", "max_tokens", "refusal", "model_context_window_exceeded",
+    ]
+
+    /// The complete lines appended since `fromOffset`, and the offset just past
+    /// them: a last line still being written is left for the next read, which
+    /// then gets it whole.
+    private static func appendedLines(in url: URL, fromOffset: Int) -> (text: String, newOffset: Int)? {
+        guard let fh = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? fh.close() }
+        let offset = UInt64(max(0, fromOffset))
+        guard let size = try? fh.seekToEnd(), size > offset else { return nil }
+        try? fh.seek(toOffset: offset)
+        guard let data = try? fh.readToEnd(), let lastNewline = data.lastIndex(of: 0x0A) else { return nil }
+        let complete = data[data.startIndex...lastNewline]
+        guard let text = String(data: complete, encoding: .utf8) else { return nil }
+        return (text, Int(offset) + complete.count)
+    }
+
+    /// Incremental variant of `claudeLiveState`: reads only the lines appended
+    /// since `fromOffset`, avoiding a full re-read on every tick.
     private static func claudeIncrementalLiveState(in url: URL,
                                                     fromOffset: Int) -> IncrementalLiveStateResult? {
-        guard let fh = try? FileHandle(forReadingFrom: url) else { return nil }
-        defer { fh.closeFile() }
-        let fileSize = fh.seekToEndOfFile()
-        let startOffset = UInt64(max(0, fromOffset))
-        guard fileSize > startOffset else { return nil }
-        fh.seek(toFileOffset: startOffset)
-        let data = fh.readDataToEndOfFile()
-        guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return nil }
-        let newOffset = Int(fileSize)
-        let terminal: Set<String> = ["end_turn", "stop_sequence", "max_tokens"]
+        guard let (text, newOffset) = appendedLines(in: url, fromOffset: fromOffset) else { return nil }
         var working: Bool?
         var latest: String?
         for line in text.split(separator: "\n", omittingEmptySubsequences: true) {
@@ -168,7 +180,7 @@ enum TranscriptReader {
                    !t.hasPrefix("<") { latest = t }
             case "assistant":
                 let stop = (obj["message"] as? [String: Any])?["stop_reason"] as? String
-                working = !(stop.map(terminal.contains) ?? false)
+                working = !(stop.map(claudeTurnEndingStopReasons.contains) ?? false)
             case "system":
                 // Claude Code appends one of these after every assistant turn.
                 // pendingBackgroundAgentCount is only present (and only ever
@@ -194,19 +206,11 @@ enum TranscriptReader {
             lastRole: nil)
     }
 
-    /// Incremental variant of `codexLiveState`: reads only new bytes, returning
+    /// Incremental variant of `codexLiveState`: reads only new lines, returning
     /// the updated role and a freshly-computed time-based working verdict.
     private static func codexIncrementalLiveState(in url: URL,
                                                    fromOffset: Int) -> IncrementalLiveStateResult? {
-        guard let fh = try? FileHandle(forReadingFrom: url) else { return nil }
-        defer { fh.closeFile() }
-        let fileSize = fh.seekToEndOfFile()
-        let startOffset = UInt64(max(0, fromOffset))
-        guard fileSize > startOffset else { return nil }
-        fh.seek(toFileOffset: startOffset)
-        let data = fh.readDataToEndOfFile()
-        guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return nil }
-        let newOffset = Int(fileSize)
+        guard let (text, newOffset) = appendedLines(in: url, fromOffset: fromOffset) else { return nil }
         var lastRole: String?
         var latestPrompt: String?
         for line in text.split(separator: "\n", omittingEmptySubsequences: true) {
@@ -233,7 +237,6 @@ enum TranscriptReader {
     /// assistant `tool_use` means still working. Far more precise than mtime.
     private static func claudeLiveState(in url: URL) -> LiveState? {
         guard let data = try? String(contentsOf: url, encoding: .utf8) else { return nil }
-        let terminal: Set<String> = ["end_turn", "stop_sequence", "max_tokens"]
         var working: Bool?
         var latest: String?
         for line in data.split(separator: "\n", omittingEmptySubsequences: true) {
@@ -248,7 +251,7 @@ enum TranscriptReader {
                    !text.hasPrefix("<") { latest = text }
             case "assistant":
                 let stop = (obj["message"] as? [String: Any])?["stop_reason"] as? String
-                working = !(stop.map(terminal.contains) ?? false)
+                working = !(stop.map(claudeTurnEndingStopReasons.contains) ?? false)
             case "system":
                 if obj["subtype"] as? String == "turn_duration",
                    (obj["pendingBackgroundAgentCount"] as? Int ?? 0) > 0 {
@@ -349,7 +352,9 @@ enum TranscriptReader {
                   let msg = obj["message"] as? [String: Any],
                   let raw = rawText(msg["content"]), !raw.isEmpty else { continue }
             count += 1
-            if type == "user", first == nil { first = clean(raw) }
+            // The title is what was typed, not injected `<…>` context (a slash
+            // command's `<command-name>`, a `<system-reminder>`).
+            if type == "user", first == nil, let prompt = clean(raw), !prompt.hasPrefix("<") { first = prompt }
             text.append(raw)
         }
         guard count > 0 else { return nil }

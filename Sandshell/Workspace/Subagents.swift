@@ -60,7 +60,7 @@ enum SubagentScanner {
         for line in String(decoding: data, as: UTF8.self).split(separator: "\n").reversed() {
             guard let o = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
                   o["type"] as? String == "assistant", let m = o["message"] as? [String: Any] else { continue }
-            return (m["stop_reason"] as? String).map { ["end_turn", "stop_sequence", "max_tokens"].contains($0) } ?? false
+            return (m["stop_reason"] as? String).map(TranscriptReader.claudeTurnEndingStopReasons.contains) ?? false
         }
         return false
     }

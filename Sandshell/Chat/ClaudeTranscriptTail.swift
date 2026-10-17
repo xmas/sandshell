@@ -26,7 +26,7 @@ struct ClaudeTranscriptTail {
     /// `sidechains`: read a subagent's own transcript (every line is one).
     static func parse(_ text: String, skippingEntrypoint skipped: String? = nil, sidechains: Bool = false) -> Batch {
         var batch = Batch()
-        let terminal: Set<String> = ["end_turn", "stop_sequence", "max_tokens"]
+        let terminal = TranscriptReader.claudeTurnEndingStopReasons
         for line in text.split(separator: "\n", omittingEmptySubsequences: true) {
             guard let obj = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
                   sidechains || obj["isSidechain"] as? Bool != true,
@@ -95,7 +95,10 @@ struct ClaudeTranscriptTail {
                     continue
                 }
             }
-            if let prompt = prompt(texts.joined(separator: "\n")) { batch.events.append(.user(prompt)) }
+            // Each block on its own: IDE context or a reminder rides along as
+            // a block of its own, before or after what the person typed.
+            let typed = texts.compactMap(prompt)
+            if !typed.isEmpty { batch.events.append(.user(typed.joined(separator: "\n"))) }
         }
         return batch
     }
