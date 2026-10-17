@@ -88,12 +88,17 @@ final class HistoryCache: @unchecked Sendable {
         var err: UnsafeMutablePointer<Int8>?
         sqlite3_exec(db, sql, nil, nil, &err)
         // v2 stores search_text in its original case (for display snippets);
-        // v3 keeps the conversation's latest stretch too, not just its first 60 KB.
+        // v3 keeps the conversation's latest stretch too, not just its first 60 KB;
+        // v4 re-titles Claude conversations that opened with injected <…> context
+        // (a slash command's <command-name>, a <system-reminder> block).
         // Drop older rows so they're re-parsed on the next scan.
-        if userVersion() < 3 {
-            sqlite3_exec(db, "DELETE FROM records; PRAGMA user_version = 3;", nil, nil, &err)
+        if userVersion() < Self.schemaVersion {
+            sqlite3_exec(db, "DELETE FROM records; PRAGMA user_version = \(Self.schemaVersion);", nil, nil, &err)
         }
     }
+
+    /// Bumped whenever a parse change makes cached rows wrong: older rows are dropped.
+    static let schemaVersion: Int32 = 4
 
     private func userVersion() -> Int32 {
         var stmt: OpaquePointer?

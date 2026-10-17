@@ -644,6 +644,15 @@ extension TranscriptReaderTests {
             #expect(live.latestPrompt == TRFixture.prompt, "Text starting with < (once trimmed) is injected context")
         }
 
+        @Test(.tags(.transcriptReaderEdgeCase), arguments: TRFixture.promptBesideInjectedBlocks)
+        func injectedBlocksBesideThePromptAreLeftOut(texts: [String]) throws {
+            let url = try transcript([TRFixture.claudeUser(texts.map(TRFixture.textBlock))])
+            let live = try #require(TranscriptReader.liveState(in: url))
+            #expect(live.latestPrompt == TRFixture.prompt, "Injected context is judged block by block")
+            let incremental = try #require(TranscriptReader.incrementalLiveState(in: url, fromOffset: 0))
+            #expect(incremental.liveState.latestPrompt == TRFixture.prompt)
+        }
+
         @Test func promptIsOneTrimmedLine() throws {
             let url = try transcript([TRFixture.claudeUser("  Fix the\nlogin bug \n")])
             let live = try #require(TranscriptReader.liveState(in: url))
@@ -929,6 +938,31 @@ extension TranscriptReaderTests {
         }
 
         @Test(.tags(.transcriptReaderEdgeCase))
+        func invalidByteInACompleteLineDoesNotStallTheRead() throws {
+            var bytes = Data(#"{"type":"user","message":{"role":"user","content":"Fix the "#.utf8)
+            bytes.append(0xFF)   // never valid in UTF-8
+            bytes.append(Data((#" bug"}}"# + "\n" + TRFixture.claudeAssistant() + "\n").utf8))
+            let url = try home.write(".claude/projects/\(TRFixture.encodedWorkdir)/s.jsonl", data: bytes)
+            let result = try #require(TranscriptReader.incrementalLiveState(in: url, fromOffset: 0),
+                                      "A bad byte is decoded as a replacement, not a reason to read nothing forever")
+            #expect(result.liveState.working == false)
+            #expect(result.newOffset == bytes.count)
+        }
+
+        @Test(.tags(.transcriptReaderEdgeCase))
+        func offsetInsideACharacterResyncsAtTheNextLine() throws {
+            let lines = [TRFixture.claudeUser("Caf\u{E9} au lait"), TRFixture.claudeAssistant()]
+            let url = try home.writeClaudeTranscript(id: "s", lines: lines)
+            let bytes = Data(TRFixture.jsonl(lines).utf8)
+            let insideE = try #require(bytes.firstIndex(of: 0xC3), "\u{E9} starts with 0xC3 in UTF-8") + 1
+            let result = try #require(TranscriptReader.incrementalLiveState(in: url, fromOffset: insideE),
+                                      "An offset left mid-line (a line rewritten in place) skips to the next whole one")
+            #expect(result.liveState.working == false)
+            #expect(result.liveState.latestPrompt == nil, "The cut line isn't parsed")
+            #expect(result.newOffset == bytes.count)
+        }
+
+        @Test(.tags(.transcriptReaderEdgeCase))
         func lineSplitAcrossTwoReadsIsStillParsed() throws {
             let reply = TRFixture.claudeAssistant()
             let half = reply.index(reply.startIndex, offsetBy: reply.count / 2)
@@ -1128,6 +1162,29 @@ extension TranscriptReaderTests {
             #expect(summary.firstPrompt == TRFixture.prompt)
             #expect(summary.messageCount == 3, "Injected context still counts as a message")
             #expect(summary.searchText.contains("/init"), "…and is still searchable")
+        }
+
+        @Test(.tags(.transcriptReaderEdgeCase), arguments: TRFixture.promptBesideInjectedBlocks)
+        func injectedBlocksBesideTheFirstPromptAreNotTheTitle(texts: [String]) throws {
+            let url = try transcript([TRFixture.claudeUser(texts.map(TRFixture.textBlock)), TRFixture.claudeAssistant()])
+            let summary = try #require(TranscriptReader.summary(at: url, agent: .claude))
+            #expect(summary.firstPrompt == TRFixture.prompt, "The typed block is the title, judged block by block")
+            #expect(summary.messageCount == 2)
+            for text in texts where !text.trimmingCharacters(in: .whitespaces).isEmpty {
+                #expect(summary.searchText.contains(text), "Every block is still searchable")
+            }
+        }
+
+        @Test(.tags(.transcriptReaderEdgeCase))
+        func messageOfOnlyInjectedBlocksIsSkippedForTheTitle() throws {
+            let url = try transcript([
+                TRFixture.claudeUser([TRFixture.textBlock("<ide_opened_file>Login.swift</ide_opened_file>"),
+                                      TRFixture.textBlock("<system-reminder>Be brief.</system-reminder>")]),
+                TRFixture.claudeUser(),
+            ])
+            let summary = try #require(TranscriptReader.summary(at: url, agent: .claude))
+            #expect(summary.firstPrompt == TRFixture.prompt)
+            #expect(summary.messageCount == 2)
         }
 
         @Test func transcriptWithoutMessagesGivesNil() throws {
@@ -1372,6 +1429,13 @@ fileprivate enum TRFixture {
     static let encodedOtherWorkdir = "-Users-test-Code-other"
     static let prompt = "Fix the login bug"
     static let summaryLine = #"{"type":"summary","summary":"Login fix","leafUuid":"u1"}"#
+    /// A user message's text blocks: injected context beside what was typed (`prompt`).
+    static let promptBesideInjectedBlocks: [[String]] = [
+        ["<system-reminder>Use the todo list.</system-reminder>", prompt],
+        ["<ide_opened_file>The user opened Login.swift</ide_opened_file>", prompt],
+        [prompt, "<system-reminder>Be brief.</system-reminder>"],
+        ["<ide_selection>let x = 1</ide_selection>", "  ", prompt],
+    ]
     static let codexEnvironmentContext = "<environment_context>\n  <cwd>/Users/test/Code/project</cwd>\n</environment_context>"
 
     /// One compact JSON line (JSONSerialization never pretty-prints without being asked).

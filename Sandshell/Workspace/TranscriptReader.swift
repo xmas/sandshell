@@ -145,17 +145,10 @@ enum TranscriptReader {
 
     /// The complete lines appended since `fromOffset`, and the offset just past
     /// them: a last line still being written is left for the next read, which
-    /// then gets it whole.
+    /// then gets it whole (`ClaudeTranscriptTail.readLines`, which also resyncs
+    /// after an offset lands mid-line and decodes a bad byte rather than stall).
     private static func appendedLines(in url: URL, fromOffset: Int) -> (text: String, newOffset: Int)? {
-        guard let fh = try? FileHandle(forReadingFrom: url) else { return nil }
-        defer { try? fh.close() }
-        let offset = UInt64(max(0, fromOffset))
-        guard let size = try? fh.seekToEnd(), size > offset else { return nil }
-        try? fh.seek(toOffset: offset)
-        guard let data = try? fh.readToEnd(), let lastNewline = data.lastIndex(of: 0x0A) else { return nil }
-        let complete = data[data.startIndex...lastNewline]
-        guard let text = String(data: complete, encoding: .utf8) else { return nil }
-        return (text, Int(offset) + complete.count)
+        ClaudeTranscriptTail.readLines(url, from: UInt64(max(0, fromOffset))).map { ($0.0, Int($0.1)) }
     }
 
     /// Incremental variant of `claudeLiveState`: reads only the lines appended
@@ -176,8 +169,7 @@ enum TranscriptReader {
             case "user":
                 working = true
                 if let message = obj["message"] as? [String: Any],
-                   let t = extractText(message["content"]), !t.isEmpty,
-                   !t.hasPrefix("<") { latest = t }
+                   let t = typedPrompt(message["content"]) { latest = t }
             case "assistant":
                 let stop = (obj["message"] as? [String: Any])?["stop_reason"] as? String
                 working = !(stop.map(claudeTurnEndingStopReasons.contains) ?? false)
@@ -247,8 +239,7 @@ enum TranscriptReader {
             case "user":
                 working = true
                 if let message = obj["message"] as? [String: Any],
-                   let text = extractText(message["content"]), !text.isEmpty,
-                   !text.hasPrefix("<") { latest = text }
+                   let text = typedPrompt(message["content"]) { latest = text }
             case "assistant":
                 let stop = (obj["message"] as? [String: Any])?["stop_reason"] as? String
                 working = !(stop.map(claudeTurnEndingStopReasons.contains) ?? false)
@@ -352,9 +343,9 @@ enum TranscriptReader {
                   let msg = obj["message"] as? [String: Any],
                   let raw = rawText(msg["content"]), !raw.isEmpty else { continue }
             count += 1
-            // The title is what was typed, not injected `<…>` context (a slash
-            // command's `<command-name>`, a `<system-reminder>`).
-            if type == "user", first == nil, let prompt = clean(raw), !prompt.hasPrefix("<") { first = prompt }
+            // The title is what was typed, not injected `<…>` context; the
+            // whole message still counts and is searchable.
+            if type == "user", first == nil, let prompt = typedPrompt(msg["content"]) { first = prompt }
             text.append(raw)
         }
         guard count > 0 else { return nil }
@@ -527,16 +518,22 @@ enum TranscriptReader {
         }, as: UTF16.self)
     }
 
-    private static func extractText(_ content: Any?) -> String? {
-        if let s = content as? String { return clean(s) }
-        if let blocks = content as? [[String: Any]] {
-            let texts = blocks.compactMap { block -> String? in
-                guard block["type"] as? String == "text" else { return nil }
-                return block["text"] as? String
-            }
-            return clean(texts.joined(separator: " "))
+    /// What a person typed in a Claude user message, as one trimmed line: its
+    /// text, less injected `<…>` context (a slash command's `<command-name>`, a
+    /// `<system-reminder>`, an `<ide_opened_file>`). Judged block by block, as
+    /// `ClaudeTranscriptTail` does: that context rides along as blocks of its
+    /// own, before or after the typed one.
+    private static func typedPrompt(_ content: Any?) -> String? {
+        let texts: [String]
+        if let s = content as? String {
+            texts = [s]
+        } else if let blocks = content as? [[String: Any]] {
+            texts = blocks.compactMap { $0["type"] as? String == "text" ? $0["text"] as? String : nil }
+        } else {
+            return nil
         }
-        return nil
+        let typed = texts.compactMap(clean).filter { !$0.hasPrefix("<") }
+        return typed.isEmpty ? nil : typed.joined(separator: " ")
     }
 
     private static func clean(_ s: String) -> String? {

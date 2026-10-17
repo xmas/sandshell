@@ -68,7 +68,7 @@ final class BackgroundTaskMonitor {
             guard let url = watch.url else { watches[id] = watch; continue }
 
             let offset = watch.offset
-            let read = await Task.detached(priority: .utility) { Self.readLines(url, from: offset) }.value
+            let read = await Task.detached(priority: .utility) { ClaudeTranscriptTail.readLines(url, from: offset) }.value
             if let (text, newOffset) = read {
                 watch.offset = newOffset
                 watch.parser.consume(text)
@@ -101,18 +101,5 @@ final class BackgroundTaskMonitor {
             watches[id] = watch
             controller.setBackgroundTasks(id, watch.parser.tasks)
         }
-    }
-
-    /// Bytes appended since `offset`, up to the last complete line (a line
-    /// still being written is picked up whole on the next tick).
-    nonisolated private static func readLines(_ url: URL, from offset: UInt64) -> (String, UInt64)? {
-        guard let fh = try? FileHandle(forReadingFrom: url) else { return nil }
-        defer { try? fh.close() }
-        guard let size = try? fh.seekToEnd(), size > offset else { return nil }
-        try? fh.seek(toOffset: offset)
-        guard let data = try? fh.readToEnd(), let lastNewline = data.lastIndex(of: 0x0A) else { return nil }
-        let complete = data[data.startIndex...lastNewline]
-        guard let text = String(data: complete, encoding: .utf8) else { return nil }
-        return (text, offset + UInt64(complete.count))
     }
 }
