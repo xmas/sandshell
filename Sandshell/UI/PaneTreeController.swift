@@ -47,11 +47,20 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
     private var clickMonitor: Any?
     private let container = PaneDropContainer()
     private var saveScheduled = false
-    private var layoutKey: String { "paneLayout:" + controller.rootURL.standardizedFileURL.path }
+    /// Where this window's layout is saved (see `layoutKey(root:instanceIndex:)`).
+    let layoutKey: String
 
-    init(controller: WorkspaceController) {
+    /// The layout's defaults key for window `instanceIndex` on `root`: each
+    /// window on a folder keeps its own (index 0 the legacy per-folder key).
+    nonisolated static func layoutKey(root: URL, instanceIndex: Int) -> String {
+        let path = root.standardizedFileURL.path
+        return "paneLayout:" + (instanceIndex == 0 ? path : "\(path)#\(instanceIndex)")
+    }
+
+    init(controller: WorkspaceController, instanceIndex: Int = 0) {
         self.controller = controller
         self.surfaces = SessionSurfaces(controller: controller)
+        self.layoutKey = Self.layoutKey(root: controller.rootURL, instanceIndex: instanceIndex)
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -576,8 +585,10 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
         surfaces.backgroundTasks.stop()
     }
 
+    /// Files opened with the app (Dock, `open -a`): into the toolbar's
+    /// session, which a focused Files pane leaves on the session beside it.
     @discardableResult
-    func insertExternalItems(_ urls: [URL]) -> Bool { focused?.insertExternalItems(urls) ?? false }
+    func insertExternalItems(_ urls: [URL]) -> Bool { toolbarPane?.insertExternalItems(urls) ?? false }
 
     func queueDraft(_ text: String, urls: [URL], send: Bool, for id: UUID) {
         (panes.first { $0.shownSession == id } ?? focused)?.queueDraft(text, urls: urls, send: send, for: id)

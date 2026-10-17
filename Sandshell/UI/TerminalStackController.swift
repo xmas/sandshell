@@ -306,13 +306,13 @@ final class SessionSurfaces {
     /// Every window's surfaces: a session runs in one window at a time.
     private static let all = NSHashTable<SessionSurfaces>.weakObjects()
 
+    /// This window has the session's terminal or chat up, or starting.
+    func isRunning(_ id: UUID) -> Bool { terminals[id] != nil || chats[id] != nil || pending.contains(id) }
+
     /// Another window (on the same folder) has this session running or
     /// starting. Launching here too would reap that one's agent.
     func isRunningElsewhere(_ id: UUID) -> Bool {
-        Self.all.allObjects.contains { other in
-            other !== self && !other.isTornDown
-                && (other.terminals[id] != nil || other.chats[id] != nil || other.pending.contains(id))
-        }
+        Self.all.allObjects.contains { other in other !== self && !other.isTornDown && other.isRunning(id) }
     }
 }
 

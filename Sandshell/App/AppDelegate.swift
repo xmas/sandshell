@@ -50,13 +50,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// The folder the very first window opened, used as the Window ▸ Sandshell
     /// fallback target when no window is currently key.
     private var primaryRoot: URL?
+    /// The workspace window made key most recently.
+    private weak var lastActiveController: MainWindowController?
 
-    /// The controller for the key/main window, or the primary one as a fallback.
+    /// The workspace window the menus act on: the key window's — itself, or the
+    /// one its Settings, Search or Background Tasks window or sheet belongs
+    /// to — else the main window's, else the one last made key, else the
+    /// primary one.
     @MainActor private var activeController: MainWindowController? {
-        if let key = NSApp.keyWindow,
-           let match = windows.first(where: { $0.window === key }) {
-            return match
+        for window in [NSApp.keyWindow, NSApp.mainWindow].compactMap({ $0 }) {
+            if let match = windows.first(where: { $0.owns(window) }) { return match }
         }
+        if let last = lastActiveController, windows.contains(where: { $0 === last }) { return last }
         if let mainRoot = primaryRoot?.standardizedFileURL.path,
            let main = windows.first(where: { $0.root.standardizedFileURL.path == mainRoot }) {
             return main
@@ -162,16 +167,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // chosen default root folder (falling back to ~/Sandshell).
         let restore = OpenWindows.all
         Log.info(.app, "launch: \(restore.count) window(s) to restore, \(RootFolderStore.all.count) known root(s)")
-        let fallback = RootFolderStore.defaultPath.map { URL(fileURLWithPath: $0) }
-            ?? WorkspaceBootstrap.defaultRoot
+        let fallback = RootFolderStore.launchFolder()
         primaryRoot = restore.first ?? fallback
         if !restore.isEmpty {
             for root in restore { createWindow(root: root) }
         } else if RootFolderStore.all.isEmpty {
             showWelcome()   // first launch: no folder has had a sandbox yet
-        } else {
+        } else if let fallback {
             openWorkspace(fallback)
         }
+        // Nothing opened (the launch folder is gone, or its workspace couldn't
+        // be set up): choose one, rather than an app with only a menu bar.
+        if windows.isEmpty, setupWindow == nil { openWorkspaceBrowser(nil) }
 
         #if DEBUG
         if SelfTest.requested != nil {
@@ -205,9 +212,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NotificationManager.shared.requestPermission()
         NotificationManager.shared.onSessionTap = { [weak self] id in
             guard let self else { return }
-            for window in self.windows {
-                if window.selectSession(id) { break }
-            }
+            // The window running the session (another window on its folder only
+            // says it's open elsewhere), else the first window that has it.
+            let window = self.windows.first { $0.isRunning(id) }
+                ?? self.windows.first { $0.workspaceController?.session(id: id) != nil }
+            window?.selectSession(id)
         }
     }
 
@@ -290,7 +299,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             RootFolderStore.upsert(RootProfile(
                 path: key, icon: icon, colorHex: color,
                 sidebarHex: RootProfile.sidebarTone(forIcon: color)))
-            if RootFolderStore.defaultPath == nil { RootFolderStore.defaultPath = key }
+            RootFolderStore.adoptDefault(key)
         }
 
         let home = FileManager.default.homeDirectoryForCurrentUser
@@ -465,10 +474,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         RecentRoots.record(root)
         RootFolderStore.touch(root.path)
         let key = root.standardizedFileURL.path
-        // Distinct autosave name per duplicate on the same root.
-        let instanceIndex = windows.filter { $0.root.standardizedFileURL.path == key }.count
+        // Distinct autosave names per window on the same root: an index no open
+        // window on it holds (one freed by a closed window is reused).
+        let instanceIndex = MainWindowController.freeInstanceIndex(
+            used: windows.filter { $0.root.standardizedFileURL.path == key }.map(\.instanceIndex))
         let controller = MainWindowController(root: root, instanceIndex: instanceIndex)
         controller.onOpenWorkspace = { [weak self] r in self?.openWorkspace(r) }
+        controller.onBecomeKey = { [weak self, weak controller] in self?.lastActiveController = controller }
         // Drop the window from the registry once it closes.
         controller.onClose = { [weak self, weak controller] in
             guard let self, let controller else { return }
@@ -496,6 +508,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// ⌘O / File ▸ Open… — open the recent workspaces browser.
     @MainActor @objc func openWorkspaceBrowser(_ sender: Any?) {
+        if let open = openWindow, open.window?.isVisible == true { return open.present() }
         let wc = OpenWindowController(
             onOpen: { [weak self] url in self?.openWorkspace(url) },
             onOpenNew: { [weak self] in self?.openFolder(nil) })
@@ -534,8 +547,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @MainActor private func createWorkspace(_ url: URL, profile: RootProfile,
                                             policy: MountPolicy, kits: [String], makeDefault: Bool) {
         RootFolderStore.upsert(profile)
-        if makeDefault || RootFolderStore.defaultPath == nil {
+        if makeDefault {
             RootFolderStore.defaultPath = RootFolderStore.standardize(url.path)
+        } else {
+            RootFolderStore.adoptDefault(url.path)
         }
         let home = FileManager.default.homeDirectoryForCurrentUser
         var config = WorkspaceConfig.loadOrDefault(root: url, home: home)
@@ -553,7 +568,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @MainActor private func createWorkspaceDefault() {
         let root = WorkspaceBootstrap.defaultRoot
         RootFolderStore.upsert(RootProfile.makeDefault(path: root.path))
-        if RootFolderStore.defaultPath == nil { RootFolderStore.defaultPath = RootFolderStore.standardize(root.path) }
+        RootFolderStore.adoptDefault(root.path)
         openWorkspace(root)
     }
 
@@ -774,6 +789,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             controller.window?.makeKeyAndOrderFront(nil)
         } else if let root = primaryRoot {
             openWorkspace(root)
+        } else {
+            openWorkspaceBrowser(nil)   // the launch folder is gone
         }
         NSApp.activate(ignoringOtherApps: true)
     }
@@ -793,8 +810,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         guard !files.isEmpty else { return }
-        if activeController?.insertExternalItems(files) == true { return }
-        if let parent = files.first?.deletingLastPathComponent() {
+        // A window with no session to take them (an empty pane, one still
+        // starting) beeps; only with no window open does their folder open as
+        // a workspace to take them.
+        if let controller = activeController {
+            if !controller.insertExternalItems(files) { NSSound.beep() }
+        } else if let parent = files.first?.deletingLastPathComponent() {
             openWorkspace(parent)?.insertExternalItems(files)
         }
     }

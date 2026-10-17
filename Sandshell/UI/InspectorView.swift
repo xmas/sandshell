@@ -7,17 +7,12 @@ import SwiftUI
 /// panes never resizes the window.
 struct InspectorView: View {
     @ObservedObject var controller: WorkspaceController
+    /// The pane shown, which the Settings window can change too.
+    @ObservedObject var selection: InspectorSelection
     let onClose: () -> Void
     var onPaneChange: (InspectorPane) -> Void = { _ in }
-    @State private var pane: InspectorPane
 
-    init(controller: WorkspaceController, initialPane: InspectorPane = .general, onClose: @escaping () -> Void,
-         onPaneChange: @escaping (InspectorPane) -> Void = { _ in }) {
-        self.controller = controller
-        self.onClose = onClose
-        self.onPaneChange = onPaneChange
-        _pane = State(initialValue: initialPane == .git ? .general : initialPane)
-    }
+    private var pane: InspectorPane { selection.pane }
 
     /// Post (object: the workspace's controller) to open its settings on a tab
     /// (userInfo "pane": an `InspectorPane` raw value).
@@ -44,7 +39,7 @@ struct InspectorView: View {
         HStack(spacing: 4) {
             Spacer(minLength: 0)
             ForEach(InspectorPane.allCases.filter { $0 != .git }) { p in
-                TabButton(pane: p, isSelected: pane == p) { pane = p }
+                TabButton(pane: p, isSelected: pane == p) { selection.select(p) }
             }
             Spacer(minLength: 0)
         }
@@ -75,6 +70,23 @@ struct InspectorView: View {
             TerminalPaneView(theme: controller.theme)
         }
     }
+}
+
+/// The Settings window's selected pane, kept by its window controller so the
+/// window can switch panes without rebuilding the view (and the panes' edits).
+@MainActor
+final class InspectorSelection: ObservableObject {
+    @Published private(set) var pane: InspectorPane
+
+    init(_ pane: InspectorPane) { self.pane = Self.tab(for: pane) }
+
+    func select(_ pane: InspectorPane) {
+        let tab = Self.tab(for: pane)
+        if tab != self.pane { self.pane = tab }
+    }
+
+    /// Git & Remote has no tab yet: it opens on General.
+    private static func tab(for pane: InspectorPane) -> InspectorPane { pane == .git ? .general : pane }
 }
 
 /// One tab in the inspector strip: a tinted rounded-square icon + label, with a

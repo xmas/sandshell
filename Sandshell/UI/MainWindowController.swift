@@ -76,10 +76,19 @@ final class MainWindowController: NSWindowController {
     /// Called when this window closes so `AppDelegate` can drop it from its
     /// per-folder registry (lets the folder reopen later).
     var onClose: (() -> Void)?
+    /// Called when this window becomes key (the app's menus follow it).
+    var onBecomeKey: (() -> Void)?
 
     /// Distinguishes duplicate windows on the same root so their frame-autosave
     /// names don't collide (index 0 keeps the legacy per-root name).
     let instanceIndex: Int
+
+    /// The index for a new window on a root whose open windows hold `used`:
+    /// the lowest free one, so it never shares a live window's autosave names.
+    nonisolated static func freeInstanceIndex(used: [Int]) -> Int {
+        let taken = Set(used)
+        return (0...taken.count).first { !taken.contains($0) } ?? taken.count
+    }
 
     init(root: URL, instanceIndex: Int = 0) {
         self.root = root
@@ -147,7 +156,7 @@ final class MainWindowController: NSWindowController {
         self.sidebarItem = sidebarItem
         split.addSplitViewItem(sidebarItem)
 
-        let detail = PaneTreeController(controller: controller)
+        let detail = PaneTreeController(controller: controller, instanceIndex: instanceIndex)
         self.detail = detail
         detail.onToggleSidebar = { [weak self] in self?.toggleSidebar() }
         detail.newSessionMenu = { [weak self] in self?.sidebar?.newSessionMenu() }
@@ -239,6 +248,9 @@ final class MainWindowController: NSWindowController {
             self?.applyWindowTheme(c)
         }
 
+        // Container phases, subagents and the work timers stay current in
+        // every window, a folder still being set up included.
+        controller.startMonitoring()
         // First open: configure mounts before bringing the container up
         // (scripted runs take the defaults: nobody's there to answer).
         if controller.needsConfiguration, AutomatedRun.isActive {
@@ -510,6 +522,21 @@ final class MainWindowController: NSWindowController {
         return true
     }
 
+    /// Whether the session runs in this window (its terminal or chat is up or
+    /// starting); another window on the folder only shows it's open elsewhere.
+    func isRunning(_ id: UUID) -> Bool { detail?.surfaces.isRunning(id) ?? false }
+
+    /// Whether `window` is this window or one opened for it — its Settings,
+    /// Search or Background Tasks window, or a sheet or popover on one —
+    /// so the app's menus act on this workspace while it is key.
+    func owns(_ window: NSWindow) -> Bool {
+        guard let main = self.window else { return false }
+        var window = window
+        while let parent = window.sheetParent ?? window.parent { window = parent }
+        return window === main || window === searchWindow?.window || window === backgroundTasksPanel?.window
+            || window === SettingsWindowController.window(for: main)
+    }
+
     var sidebarController: SidebarListController? { sidebar }
 
     func reopenClosedSession() {
@@ -624,6 +651,8 @@ final class TrafficLightInsetWindow: NSWindow {
 
 extension MainWindowController: NSWindowDelegate {
     func windowShouldClose(_ sender: NSWindow) -> Bool { confirmUnsavedFiles() }
+
+    func windowDidBecomeKey(_ notification: Notification) { onBecomeKey?() }
 
     /// Unsaved edits in the Files inspector or a Files pane: Save / Discard /
     /// Cancel for each (false = the person cancelled).

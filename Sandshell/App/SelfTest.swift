@@ -233,7 +233,7 @@ enum SelfTest {
 
         // Layout persists (saved asynchronously).
         await wait(1.0)
-        let key = "paneLayout:" + ws.rootURL.standardizedFileURL.path
+        let key = tree.layoutKey
         check(UserDefaults.standard.data(forKey: key) != nil, "layout saved for the window")
     }
 
@@ -673,7 +673,7 @@ enum SelfTest {
         // Equalize, then the layout (with its Files pane) is saved.
         window.equalizePanes()
         await wait(1.2)
-        let key = "paneLayout:" + ws.rootURL.standardizedFileURL.path
+        let key = tree.layoutKey
         let saved = UserDefaults.standard.data(forKey: key).map { String(decoding: $0, as: UTF8.self) } ?? ""
         log("saved layout: \(saved)")
         check(saved.contains("\"files\"") && saved.contains(a.uuidString), "layout saved with the Files pane")

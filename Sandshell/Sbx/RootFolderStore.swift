@@ -82,20 +82,24 @@ struct RootProfile: Codable, Hashable, Identifiable {
 enum RootFolderStore {
     private static let listKey = "rootProfiles"
     private static let defaultKey = "defaultRootPath"
+    /// A defaults suite to keep the registry in instead of the app's own
+    /// (a test binds its own).
+    @TaskLocal static var suiteName: String? = nil
+    private static var defaults: UserDefaults { suiteName.flatMap(UserDefaults.init(suiteName:)) ?? .standard }
 
     static func standardize(_ path: String) -> String {
         URL(fileURLWithPath: path).standardizedFileURL.path
     }
 
     static var all: [RootProfile] {
-        guard let data = UserDefaults.standard.data(forKey: listKey),
+        guard let data = defaults.data(forKey: listKey),
               let list = try? JSONDecoder().decode([RootProfile].self, from: data) else { return [] }
         return list
     }
 
     private static func save(_ list: [RootProfile]) {
         if let data = try? JSONEncoder().encode(list) {
-            UserDefaults.standard.set(data, forKey: listKey)
+            defaults.set(data, forKey: listKey)
         }
     }
 
@@ -117,13 +121,13 @@ enum RootFolderStore {
         let key = standardize(path)
         guard !all.contains(where: { $0.path == key }) else { return }
         upsert(RootProfile.makeDefault(path: key))
-        if defaultPath == nil { defaultPath = key }
+        adoptDefault(key)
     }
 
     static func remove(_ path: String) {
         let key = standardize(path)
         save(all.filter { $0.path != key })
-        if defaultPath == key { defaultPath = all.first?.path }
+        if defaultPath == key { defaultPath = existing().first?.path }
     }
 
     /// Whether `path` is a workspace the app already knows: registered here, or
@@ -142,7 +146,7 @@ enum RootFolderStore {
         var p = all.first { $0.path == key } ?? RootProfile.makeDefault(path: key)
         p.lastOpened = date
         upsert(p)
-        if defaultPath == nil { defaultPath = key }
+        adoptDefault(key)
     }
 
     /// Registered roots that still exist on disk, most recently opened first.
@@ -176,10 +180,30 @@ enum RootFolderStore {
         all.filter { FileManager.default.fileExists(atPath: $0.path) }
     }
 
-    /// The root folder opened on launch when no windows are restored.
+    /// The root folder opened on launch when no windows are restored. Set to
+    /// nil, it's kept as a choice of none (General ▸ "Open this folder at
+    /// launch" turned off), which `adoptDefault` leaves alone.
     static var defaultPath: String? {
-        get { UserDefaults.standard.string(forKey: defaultKey) }
-        set { UserDefaults.standard.set(newValue, forKey: defaultKey) }
+        get { defaults.string(forKey: defaultKey).flatMap { $0.isEmpty ? nil : $0 } }
+        set { defaults.set(newValue ?? "", forKey: defaultKey) }
+    }
+
+    /// Make `path` the launch default if none was ever chosen (the first
+    /// folder opened). A choice already made, even of none, stays.
+    static func adoptDefault(_ path: String) {
+        guard defaults.object(forKey: defaultKey) == nil else { return }
+        defaultPath = standardize(path)
+    }
+
+    /// The folder to open at launch when no windows are restored: the chosen
+    /// one, else `fallback` (~/Sandshell, made if need be). Nil when the chosen
+    /// folder is gone (an unplugged drive, a deleted folder): it isn't
+    /// recreated empty as a brand-new workspace.
+    static func launchFolder(fallback: URL = WorkspaceBootstrap.defaultRoot) -> URL? {
+        guard let path = defaultPath else { return fallback }
+        let chosen = URL(fileURLWithPath: path)
+        let usable = FileManager.default.fileExists(atPath: path) || standardize(path) == standardize(fallback.path)
+        return usable ? chosen : nil
     }
 }
 
