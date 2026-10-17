@@ -129,6 +129,9 @@ struct MCPPaneView: View {
                                 VStack(alignment: .leading, spacing: 1) {
                                     Text(row.name)
                                     Text(row.detail).font(.caption).foregroundStyle(.secondary)
+                                    if let error = controller.mcpErrors[row.name] {
+                                        Text(error).font(.caption).foregroundStyle(.red).textSelection(.enabled)
+                                    }
                                 }
                             }
                             Spacer()
@@ -156,10 +159,14 @@ struct MCPPaneView: View {
                         .frame(height: 92)
                         .overlay(RoundedRectangle(cornerRadius: 5)
                             .stroke(Color.secondary.opacity(0.25)))
+                    if let error = controller.mcpAddError {
+                        Text(error).font(.caption).foregroundStyle(.red).textSelection(.enabled)
+                    }
                     HStack {
                         Spacer()
                         Button("Add from JSON") {
-                            controller.addMCPFromJSON(jsonText); jsonText = ""
+                            // Text with no servers in it stays, to fix.
+                            if controller.addMCPFromJSON(jsonText) { jsonText = "" }
                         }
                         .disabled(jsonText.trimmingCharacters(in: .whitespaces).isEmpty)
                     }

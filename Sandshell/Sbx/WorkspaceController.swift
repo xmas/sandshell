@@ -130,7 +130,7 @@ final class WorkspaceController: ObservableObject {
         self.theme.persist = { [weak self] prefs in
             guard let self else { return }
             self.config.theme = prefs
-            try? self.config.save(root: self.workspace.rootURL)
+            self.saveConfig()
         }
         self.customAgents = config.customAgents
         // A custom agent's name/icon/color changed (any window): redraw rows.
@@ -178,7 +178,7 @@ final class WorkspaceController: ObservableObject {
         let normalized = (id?.isEmpty ?? true) ? nil : id
         guard normalized != config.claudeModel else { return }
         config.claudeModel = normalized
-        try? config.save(root: workspace.rootURL)
+        saveConfig()
     }
 
     /// `claude --effort` level used for this workspace's Claude sessions (nil = default).
@@ -189,7 +189,7 @@ final class WorkspaceController: ObservableObject {
         let normalized = (level?.isEmpty ?? true) ? nil : level
         guard normalized != config.claudeEffort else { return }
         config.claudeEffort = normalized
-        try? config.save(root: workspace.rootURL)
+        saveConfig()
     }
 
     func claudeStatus(_ id: UUID) -> ClaudeSessionStatus? { runtimes[id]?.claudeStatus }
@@ -301,7 +301,7 @@ final class WorkspaceController: ObservableObject {
         workspace.policy = policy
         config.policy = policy
         config.configured = true
-        try? config.save(root: workspace.rootURL)
+        saveConfig()
         // Rebuild the primary plus any other agent that already has a container.
         // No prompt — the caller (first-run / Settings ▸ Apply & Rebuild) already
         // confirmed via its own UI.
@@ -318,7 +318,7 @@ final class WorkspaceController: ObservableObject {
         workspace.policy = policy
         config.policy = policy
         config.configured = true
-        try? config.save(root: workspace.rootURL)
+        saveConfig()
         // Each sandbox it has, or is bringing up. One in flight read the old
         // mounts: compare the new ones once it's done, rather than take its result.
         let inflight = (availableAgents + containerPhases.keys).filter { Self.bringUps[containerName(for: $0)] != nil }
@@ -335,11 +335,11 @@ final class WorkspaceController: ObservableObject {
         // Whether or not its sandbox exists yet: one being made right now
         // records nothing until it's up, and gets the bare slug all the same.
         if state.pinSlugAgent(workspace.primaryAgent) {
-            try? state.save(root: workspace.rootURL)
+            writeState()
         }
         workspace.primaryAgent = agent
         config.primaryAgent = agent
-        try? config.save(root: workspace.rootURL)
+        saveConfig()
     }
 
     // MARK: Custom agents
@@ -356,7 +356,7 @@ final class WorkspaceController: ObservableObject {
         guard cleaned != customAgents else { return }
         customAgents = cleaned
         config.customAgents = cleaned
-        try? config.save(root: workspace.rootURL)
+        saveConfig()
         revision += 1
     }
 
@@ -370,7 +370,7 @@ final class WorkspaceController: ObservableObject {
         workspace.mcpURL = url
         config.mcpServers = servers
         config.mcpURL = url
-        try? config.save(root: workspace.rootURL)
+        saveConfig()
         // Attach the (registered) enabled servers to running containers live via
         // `sbx mcp load` — no rebuild needed. Newly-enabled servers appear
         // immediately; de-selecting one takes effect when the sandbox is next
@@ -405,6 +405,11 @@ final class WorkspaceController: ObservableObject {
     /// Set to a server name when it's freshly authenticated/added, so the UI can
     /// auto-enable it. Cleared after the UI consumes it.
     @Committed var mcpJustAuthenticated: String?
+    /// Why the last authenticate/unauthorize/remove of a server failed (shown on its row).
+    @Committed private(set) var mcpErrors: [String: String] = [:]
+    /// Why the last "Add from JSON" failed (shown under the JSON field): a
+    /// server that failed to add never registers, so it has no row to show it on.
+    @Committed private(set) var mcpAddError: String?
 
     /// Refresh the registered set + OAuth status from `sbx mcp`.
     func refreshMCPStatus() {
@@ -422,74 +427,71 @@ final class WorkspaceController: ObservableObject {
     func authenticateMCP(name: String, addArgs: [String]?) {
         let url = workspace.mcpURL
         let registered = mcpRegistered.keys.contains(name)
-        mcpBusy.insert(name)
-        Task {
-            defer { self.mcpBusy.remove(name) }
-            do {
-                if registered {
-                    try await SbxClient.shared.authMCP(name: name, mcpURL: url)
-                } else if let addArgs {
-                    try await SbxClient.shared.addMCP(name: name, args: addArgs, mcpURL: url)
-                }
-                self.mcpJustAuthenticated = name   // auto-enable
-            } catch {
-                self.lastError = error.localizedDescription
-                Log.error(.workspace, "mcp authenticate \(name) failed: \(error.localizedDescription)")
+        mcpAction(name, "authenticate") {
+            if registered {
+                try await SbxClient.shared.authMCP(name: name, mcpURL: url)
+            } else if let addArgs {
+                try await SbxClient.shared.addMCP(name: name, args: addArgs, mcpURL: url)
             }
-            self.refreshMCPStatus()
+            self.mcpJustAuthenticated = name   // auto-enable
         }
     }
 
     /// Register servers from a standard MCP JSON document (`{ "mcpServers": { … } }`)
     /// via `sbx mcp add` — each entry maps to `--command/--args` or `--url`.
-    func addMCPFromJSON(_ json: String) {
+    /// False when the text holds no servers (the caller keeps it to fix).
+    @discardableResult
+    func addMCPFromJSON(_ json: String) -> Bool {
         let parsed = Self.parseMCPJSON(json)
         guard !parsed.isEmpty else {
-            lastError = "No servers found — expected { \"mcpServers\": { … } }."
-            return
+            mcpAddError = "No servers found — expected { \"mcpServers\": { … } }."
+            return false
         }
+        mcpAddError = nil
         let url = workspace.mcpURL
         for (name, _) in parsed { mcpBusy.insert(name) }
         Task {
+            var failures: [String] = []
             for (name, args) in parsed {
                 do {
                     try await SbxClient.shared.addMCP(name: name, args: args, mcpURL: url)
                     self.mcpJustAuthenticated = name   // auto-enable
                 } catch {
-                    self.lastError = error.localizedDescription
+                    failures.append("\(name): \(error.localizedDescription)")
                     Log.error(.workspace, "mcp add \(name) failed: \(error.localizedDescription)")
                 }
                 self.mcpBusy.remove(name)
             }
+            self.mcpAddError = failures.isEmpty ? nil : failures.joined(separator: "\n")
             self.refreshMCPStatus()
         }
+        return true
     }
 
     /// Revoke a server's hosted OAuth credential (keeps registration).
     func unauthorizeMCP(_ name: String) {
         let url = workspace.mcpURL
-        mcpBusy.insert(name)
-        Task {
-            defer { self.mcpBusy.remove(name) }
-            do {
-                try await SbxClient.shared.unauthorizeMCP(name: name, mcpURL: url)
-            } catch {
-                self.lastError = error.localizedDescription
-            }
-            self.refreshMCPStatus()
-        }
+        mcpAction(name, "unauthorize") { try await SbxClient.shared.unauthorizeMCP(name: name, mcpURL: url) }
     }
 
     /// Remove a registered server entirely (`sbx mcp rm`).
     func removeMCP(_ name: String) {
         let url = workspace.mcpURL
+        mcpAction(name, "remove") { try await SbxClient.shared.removeMCP(name: name, mcpURL: url) }
+    }
+
+    /// Run an action on a server: busy meanwhile, a failure shown on its row
+    /// (cleared by the next try), then a status refresh.
+    private func mcpAction(_ name: String, _ verb: String, _ work: @escaping @MainActor () async throws -> Void) {
         mcpBusy.insert(name)
+        mcpErrors[name] = nil
         Task {
             defer { self.mcpBusy.remove(name) }
             do {
-                try await SbxClient.shared.removeMCP(name: name, mcpURL: url)
+                try await work()
             } catch {
-                self.lastError = error.localizedDescription
+                self.mcpErrors[name] = error.localizedDescription
+                Log.error(.workspace, "mcp \(verb) \(name) failed: \(error.localizedDescription)")
             }
             self.refreshMCPStatus()
         }
@@ -544,12 +546,20 @@ final class WorkspaceController: ObservableObject {
     /// True while `sbx ls` is being scanned (so the pane shows "Loading…", not
     /// a premature "no sandboxes" empty state).
     @Committed private(set) var sandboxesLoading = false
+    /// Why the last `sbx ls` for Settings ▸ Sandboxes failed (nil once one works).
+    /// The list keeps what it last showed.
+    @Committed private(set) var sandboxesError: String?
 
     func refreshSandboxes() {
         sandboxesLoading = true
         Task {
-            let list = (try? await SbxClient.shared.list()) ?? []
-            self.allSandboxes = list
+            do {
+                self.allSandboxes = try await SbxClient.shared.list()
+                self.sandboxesError = nil
+            } catch {
+                self.sandboxesError = error.localizedDescription
+                Log.error(.workspace, "sbx ls failed: \(error.localizedDescription)")
+            }
             self.sandboxesLoading = false
         }
     }
@@ -682,7 +692,7 @@ final class WorkspaceController: ObservableObject {
     func setArchiveInterval(_ interval: TimeInterval) {
         guard interval != config.archiveInterval else { return }
         config.archiveInterval = interval
-        try? config.save(root: workspace.rootURL)
+        saveConfig()
     }
 
     // MARK: - Naming & mounts
@@ -741,7 +751,7 @@ final class WorkspaceController: ObservableObject {
         workspace.kits = kits.filter { !KitStore.isSandshellKit($0) }
         config.kits = workspace.kits
         config.sandshellKits = kits.filter(KitStore.isSandshellKit)
-        try? config.save(root: workspace.rootURL)
+        saveConfig()
     }
 
     /// Look up (with `sbx kit inspect`) which agent each kit is made for, where
@@ -781,7 +791,7 @@ final class WorkspaceController: ObservableObject {
         guard on != workspace.cloneRepo else { return }
         workspace.cloneRepo = on
         config.cloneRepo = on ? true : nil
-        try? config.save(root: workspace.rootURL)
+        saveConfig()
         Log.info(.workspace, "clone mode → \(on)")
     }
 
@@ -815,7 +825,7 @@ final class WorkspaceController: ObservableObject {
         workspace.customImage = custom
         config.imageChannel = channel
         config.customImage = custom
-        try? config.save(root: workspace.rootURL)
+        saveConfig()
         Log.info(.workspace, "image channel → \(channel.rawValue)\(custom.isEmpty ? "" : " (\(custom))")")
     }
 
@@ -929,7 +939,7 @@ final class WorkspaceController: ObservableObject {
     func ignoreKitDrift(for agent: AgentKind) {
         guard let drift = kitDrift[agent] else { return }
         state.ignoredKitDrift[drift.containerName, default: []] += drift.extra
-        try? state.save(root: workspace.rootURL)
+        writeState()
         kitDrift[agent] = nil
     }
 
@@ -1338,7 +1348,7 @@ final class WorkspaceController: ObservableObject {
 
     private func recordSignature(_ signature: String, for name: String) {
         state.appliedMountSignatures[name] = signature
-        try? state.save(root: workspace.rootURL)
+        writeState()
     }
 
     // MARK: - Confirmation
@@ -1360,6 +1370,46 @@ final class WorkspaceController: ObservableObject {
             ? "The workspace mounts changed. Rebuilding stops and recreates the container, ending any running sessions in it."
             : "The workspace mounts changed. Rebuilding recreates the container with the new mounts.",
                               confirm: "Rebuild", destructive: killsRunning)
+    }
+
+    // MARK: - Persisting
+
+    /// Write the folder's config (`config.json`) after a change to it.
+    private func saveConfig() {
+        do {
+            try config.save(root: workspace.rootURL)
+            store.saveFailureReported = false
+        } catch {
+            persistFailed("settings", error)
+        }
+    }
+
+    /// Write the folder's session list (`state.json`); `saveState` also
+    /// reloads the sidebar.
+    private func writeState() {
+        do {
+            try state.save(root: workspace.rootURL)
+            store.saveFailureReported = false
+        } catch {
+            persistFailed("session list", error)
+        }
+    }
+
+    /// Log every failed write; tell the person once per folder until a write
+    /// works again (not on each Stepper tick or synced theme change).
+    private func persistFailed(_ what: String, _ error: any Error) {
+        let reason = error.localizedDescription
+        Log.error(.workspace, "saving \(what) in \(workspace.rootURL.path) failed: \(reason)")
+        guard !store.saveFailureReported else { return }
+        store.saveFailureReported = true
+        warn("Couldn’t save this workspace’s \(what)",
+             "\(reason)\n\nChanges made now won’t be there after Sandshell restarts.")
+    }
+
+    /// A warning for the person, on the next turn: not from inside the SwiftUI
+    /// action, binding or `onDisappear` (or the didSet) that ran into it.
+    private func warn(_ title: String, _ info: String) {
+        Task { Alerts.inform(title, info, style: .warning) }
     }
 
     // MARK: - Action plumbing
@@ -1606,7 +1656,7 @@ extension WorkspaceController {
             // (once per finished turn, not on every poll).
             if wasWorking, let idx = state.sessions.firstIndex(where: { $0.id == id }) {
                 state.sessions[idx].lastActiveAt = rt.lastActivityAt ?? now
-                try? state.save(root: workspace.rootURL)
+                writeState()
             }
         }
         if runtimes[id] != rt { runtimes[id] = rt }   // publish only on change
@@ -1661,13 +1711,13 @@ extension WorkspaceController {
         var ids = Set(state.expandedFolderIDs)
         if expanded { ids.insert(id) } else { ids.remove(id) }
         state.expandedFolderIDs = Array(ids)
-        try? state.save(root: workspace.rootURL)
+        writeState()
     }
 
     /// Persist a structural change and signal the sidebar to reload.
     private func saveState() {
         revision += 1
-        try? state.save(root: workspace.rootURL)
+        writeState()
     }
 
     /// Host URL for a folder (the workspace root itself for the root folder).
@@ -1713,6 +1763,7 @@ extension WorkspaceController {
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         } catch {
             Log.error(.workspace, "addFolder failed: \(error.localizedDescription)")
+            warn("Couldn’t create “\(relativePath)”", error.localizedDescription)
             return nil
         }
         return registerFolder(relativePath: relativePath)
@@ -1740,7 +1791,8 @@ extension WorkspaceController {
         let target = url.standardizedFileURL.path
         guard target != rootPath else { return rootFolder }   // the root is already a row
         guard target.hasPrefix(rootPath + "/") else {
-            lastError = "Folders must live inside \(workspace.rootURL.lastPathComponent)."
+            let name = workspace.rootURL.lastPathComponent
+            warn("Folders must live inside “\(name)”", "“\(url.lastPathComponent)” isn’t in \(name). Choose a folder inside it.")
             return nil
         }
         let relativePath = String(target.dropFirst(rootPath.count + 1))
@@ -1787,6 +1839,7 @@ extension WorkspaceController {
             }
         } catch {
             Log.error(.workspace, "renameFolder failed: \(error.localizedDescription)")
+            warn("Couldn’t rename “\(old.relativePath)”", error.localizedDescription)
             return
         }
         // Claude files conversations by their cwd: take those of the sessions
@@ -1838,16 +1891,21 @@ extension WorkspaceController {
 
     /// Move a folder's directory to the Trash, then remove it from the sidebar
     /// (with the rows nested in it: their directories went too, and the next
-    /// open would recreate them empty). The root folder cannot be trashed.
+    /// open would recreate them empty). The root folder cannot be trashed. When
+    /// the Trash refuses it, say why and keep the rows (it's still on disk).
     func trashFolder(_ id: UUID) {
         guard let folder = folder(id: id), !folder.isRoot else { return }
         let dir = folderURL(for: folder)
-        let nested = state.folders(nestedIn: id).map(\.id)
-        if (try? FileManager.default.trashItem(at: dir, resultingItemURL: nil)) != nil {
-            removeFolders([id] + nested)
-        } else {
-            removeFolders([id])
+        // Already gone from disk (deleted in Finder): just drop its row.
+        guard FileManager.default.fileExists(atPath: dir.path) else { return removeFolders([id]) }
+        do {
+            try FileManager.default.trashItem(at: dir, resultingItemURL: nil)
+        } catch {
+            Log.error(.workspace, "trashFolder failed: \(error.localizedDescription)")
+            warn("Couldn’t move “\(displayName(for: folder))” to the Trash", error.localizedDescription)
+            return
         }
+        removeFolders([id] + state.folders(nestedIn: id).map(\.id))
     }
 
     /// Drop folder rows and their sessions from the sidebar.

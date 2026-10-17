@@ -33,12 +33,17 @@ struct SandboxesPaneView: View {
                 }
             }
             Section {
+                if let error = controller.sandboxesError {
+                    Text("Couldn’t list sandboxes: \(error)")
+                        .font(.caption).foregroundStyle(.red).textSelection(.enabled)
+                        .accessibilityIdentifier("sandboxes-error")
+                }
                 if controller.sandboxesLoading && controller.allSandboxes.isEmpty {
                     HStack(spacing: 8) {
                         ProgressView().controlSize(.small)
                         Text("Loading sandboxes…").foregroundStyle(.secondary)
                     }
-                } else if controller.allSandboxes.isEmpty {
+                } else if controller.allSandboxes.isEmpty && controller.sandboxesError == nil {
                     Text("No sandboxes yet — open a session to create one.")
                         .foregroundStyle(.secondary)
                 }
