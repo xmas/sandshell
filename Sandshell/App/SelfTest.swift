@@ -94,6 +94,7 @@ enum SelfTest {
         case "background": await background(window)
         case "pane-buttons": await paneButtons(window)
         case "files-alone": await filesAlone(window)
+        case "two-windows": await twoWindows(window)
         case "sandbox-access": await sandboxAccess(window)
         case "launch-failure": await launchFailure(window)
         case "fork": await fork(window)
@@ -718,6 +719,56 @@ enum SelfTest {
               && (try? String(contentsOf: lockedFile, encoding: .utf8)) == "edit keep me\n", "then it saves and closes")
         try? FileManager.default.removeItem(at: locked)
         try? FileManager.default.removeItem(at: typed)
+    }
+
+    /// Two windows on one folder (Duplicate Window): one copy of the folder's
+    /// state and config, and a session runs in one of them. Fixture: `files`.
+    private static func twoWindows(_ window: MainWindowController) async {
+        guard let tree = window.paneTree, let a = window.workspaceController,
+              let app = NSApp.delegate as? AppDelegate else { return log("no window") }
+        guard let first = a.orderedSessions.first, let folder = a.folders.first else { return log("need a session") }
+        a.selection = .session(first.id)
+        check(await until(90) { tree.surfaces.terminals[first.id] != nil || tree.surfaces.chats[first.id] != nil },
+              "the session runs in the first window")
+
+        guard let second = app.createWindow(root: a.rootURL), let b = second.workspaceController,
+              let treeB = second.paneTree else { return check(false, "a second window opens") }
+        if let w = second.window { w.alphaValue = 0; w.ignoresMouseEvents = true; w.orderBack(nil) }
+        await wait(1)
+
+        // A session added in B shows in A; a rename in A doesn't drop it.
+        let added = b.addSession(folderID: folder.id, agent: .shell, name: "From window B \(UUID().uuidString.prefix(4))")
+        check(added != nil, "window B adds a session")
+        check(await until(3) { a.orderedSessions.contains { $0.id == added?.id } }, "window A lists it")
+        a.autoName(first.id, from: "Renamed in window A")
+        await wait(0.5)
+        let saved = (try? String(contentsOf: WorkspaceState.controlDir(root: a.rootURL).appendingPathComponent("state.json"),
+                                 encoding: .utf8)) ?? ""
+        check(saved.contains(added?.name ?? "?") && saved.contains("Renamed in window A"),
+              "state.json keeps both windows' changes")
+        check(b.orderedSessions.first { $0.id == first.id }?.name == "Renamed in window A", "window B sees the rename")
+
+        // Config: a change in B is A's too (and survives A's next save).
+        let primary = a.primaryAgent
+        let other: AgentKind = primary == .codex ? .claude : .codex
+        b.setPrimaryAgent(other)
+        check(await until(3) { a.primaryAgent == other }, "window A takes window B's config change")
+        a.setPrimaryAgent(primary)
+        check(await until(3) { b.primaryAgent == primary }, "and the other way round")
+
+        // The running session isn't started (and its agent reaped) by B.
+        b.selection = .session(first.id)
+        await wait(3)
+        check(treeB.surfaces.terminals[first.id] == nil && treeB.surfaces.chats[first.id] == nil,
+              "window B doesn't start the session running in window A")
+        check(tree.surfaces.terminals[first.id] != nil || tree.surfaces.chats[first.id] != nil,
+              "it keeps running in window A")
+        snapshot(second, "two-windows-b")
+
+        if let added { b.closeSession(added.id) }
+        check(await until(3) { !a.orderedSessions.contains { $0.id == added?.id } }, "a session closed in B leaves A")
+        second.window?.close()
+        await wait(0.5)
     }
 
     /// Second launch after `files`: the Files pane comes back beside the session.
@@ -1526,8 +1577,8 @@ enum SelfTest {
         try? FileManager.default.removeItem(at: registry)
         try? FileManager.default.createDirectory(at: sessionsDir, withIntermediateDirectories: true)
         func register(pid: Int32, sid: String, entrypoint: String, status: String, domain: String = "darwin",
-                      procStart: String? = nil, file: String? = nil) {
-            let ms = Date().timeIntervalSince1970 * 1000
+                      procStart: String? = nil, file: String? = nil, ago: TimeInterval = 0) {
+            let ms = (Date().timeIntervalSince1970 - ago) * 1000
             var o: [String: Any] = ["pid": pid, "sessionId": sid, "entrypoint": entrypoint, "status": status,
                                     "pidDomain": domain, "updatedAt": ms, "statusUpdatedAt": ms]
             if let procStart { o["procStart"] = procStart }
@@ -1667,6 +1718,22 @@ enum SelfTest {
         check(!said(c).contains("DONE") && c.phase == .ready, "the message waits while it's busy")
         register(pid: me, sid: sid2, entrypoint: "cli", status: "idle", procStart: started)
         check(await until(180) { c.phase == .ready && said(c).contains("DONE") }, "then sends once it's idle")
+
+        // A terminal Claude in a sandbox killed mid-turn: its entry still says
+        // busy, but its pid isn't in any sandbox — the chat stops waiting on it.
+        c.registryProbeAfter = 0
+        register(pid: 999_999, sid: sid2, entrypoint: "cli", status: "busy", domain: "linux::pid:[1]",
+                 procStart: "987654321", ago: 300)
+        check(await until(6) { c.otherAppIsWorking }, "a quiet busy writer in a sandbox counts as working at first")
+        check(await until(60) { !c.otherAppIsWorking }, "until the sandboxes say its process is gone")
+        // One whose process is there (the sandbox's pid 1, by its start time) still counts.
+        let start1 = (await SbxClient.shared.exec(inSandbox: c.containerName, script: "awk '{print $22}' /proc/1/stat"))?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        check(start1.map { Int($0) != nil } == true, "the sandbox reports pid 1's start time (\(start1 ?? "nil"))")
+        register(pid: 1, sid: sid2, entrypoint: "cli", status: "busy", domain: "linux::pid:[1]", procStart: start1, ago: 300)
+        check(await until(6) { c.otherAppIsWorking }, "a quiet busy writer whose process is there counts as working")
+        await wait(8)   // past its probe
+        check(c.otherAppIsWorking, "and keeps counting after the sandbox confirms it")
         try? FileManager.default.removeItem(at: registry)
         ws.closeSession(s.id)
     }

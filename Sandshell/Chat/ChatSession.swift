@@ -171,7 +171,7 @@ final class ChatSession: ObservableObject {
     private let ownSessionID: UUID
     /// A fresh launch tag for a relaunch, so a reap of the last launch can't reach it.
     private func newLaunchTag() { tag = SbxCommand.ProcessTag(session: ownSessionID) }
-    private let containerName: String
+    let containerName: String
     /// Host path of the session's working directory (mounted at the same path).
     let workdir: String
     private let home: String
@@ -980,15 +980,40 @@ final class ChatSession: ObservableObject {
         }
     }
 
+    /// Sandboxed writers found gone (killed mid-turn: their entry still says busy).
+    private var goneWriters: Set<String> = []
+    private var lastProbe: [String: Date] = [:]
+    /// How long a busy sandboxed writer may stay silent before we look inside
+    /// the sandbox for it (`registryProbeAfter` for tests).
+    var registryProbeAfter: TimeInterval = 120
+
+    /// A busy writer in a sandbox that's been silent a while: is its process
+    /// still there? (At most once a minute per writer.)
+    private func probeIfQuiet(_ writer: ClaudeSessionRegistry.Entry?) {
+        guard let w = writer, !w.isOnThisMac, w.isBusy, let last = w.lastUpdate,
+              Date().timeIntervalSince(last) > registryProbeAfter else { return }
+        let key = ClaudeSessionRegistry.key(w)
+        if let t = lastProbe[key], Date().timeIntervalSince(t) < 60 { return }
+        lastProbe[key] = Date()
+        Task { [weak self] in
+            guard await ClaudeSessionRegistry.sandboxedProcessIsAlive(w) == false, let self else { return }
+            Log.info(.sbx, "chat: \(self.otherWriterName) (pid \(w.pid) in a sandbox) is gone; not waiting on it")
+            self.goneWriters.insert(key)
+            await self.refreshOtherWriter()
+        }
+    }
+
     /// Who else has this conversation open, from the registry.
     private func refreshOtherWriter() async {
         guard let sid = sessionID else { return }
         let home = registryHome ?? home
+        let gone = goneWriters
         let (readable, writer) = await Task.detached(priority: .utility) {
             let dir = URL(fileURLWithPath: home).appendingPathComponent(".claude/sessions").path
             let readable = FileManager.default.fileExists(atPath: dir)
-            return (readable, readable ? ClaudeSessionRegistry.otherWriter(home: home, sessionID: sid) : nil)
+            return (readable, readable ? ClaudeSessionRegistry.otherWriter(home: home, sessionID: sid, gone: gone) : nil)
         }.value
+        probeIfQuiet(writer)
         registryReadable = readable
         let wasBusy = otherWriter?.isBusy ?? false
         if writer != otherWriter { otherWriter = writer }

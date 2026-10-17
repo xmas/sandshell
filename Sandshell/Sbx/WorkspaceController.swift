@@ -62,8 +62,17 @@ final class WorkspaceController: ObservableObject {
     @Committed private(set) var kitDrift: [AgentKind: KitDrift] = [:]
 
     let home = FileManager.default.homeDirectoryForCurrentUser
-    private var state: WorkspaceState
-    private var config: WorkspaceConfig
+    /// The folder's persisted state and config, shared with any other window
+    /// open on it (see `WorkspaceStore`).
+    private let store: WorkspaceStore
+    private var state: WorkspaceState {
+        get { store.state }
+        set { store.setState(newValue, by: self) }
+    }
+    private var config: WorkspaceConfig {
+        get { store.config }
+        set { store.setConfig(newValue, by: self) }
+    }
     private var containerPollTask: Task<Void, Never>?
     private var clockCancellable: AnyCancellable?
     private var statusFeedCancellable: AnyCancellable?
@@ -88,10 +97,10 @@ final class WorkspaceController: ObservableObject {
     /// Current mount policy (for the mount-config UI to edit).
     var policy: MountPolicy { workspace.policy }
 
-    init(workspace: Workspace, state: WorkspaceState, config: WorkspaceConfig) {
+    init(workspace: Workspace, store: WorkspaceStore) {
+        let config = store.config
         self.workspace = workspace
-        self.state = state
-        self.config = config
+        self.store = store
         self.rootProfile = RootFolderStore.profile(for: workspace.rootURL.path)
         self.theme = ThemeController(prefs: config.theme ?? ThemeDefaults.prefs)
         self.theme.persist = { [weak self] prefs in
@@ -106,6 +115,8 @@ final class WorkspaceController: ObservableObject {
             MainActor.assumeIsolated { self?.revision += 1 }
         }
         startStatusFeedPolling()
+        // Another window on this folder changed it: show that here.
+        store.observe(self) { [weak self] parts in self?.sharedStoreChanged(parts) }
     }
 
     deinit {
@@ -189,18 +200,38 @@ final class WorkspaceController: ObservableObject {
         }
     }
 
-    /// Bootstrap (or load) the workspace at `root` and return its controller.
+    /// Bootstrap (or load) the workspace at `root` and return a controller for
+    /// a window on it (sharing the folder's store with any other window on it).
     static func open(root: URL = WorkspaceBootstrap.defaultRoot) throws -> WorkspaceController {
-        let state = try WorkspaceBootstrap.openOrCreate(root: root)
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        let config = WorkspaceConfig.loadOrDefault(root: root, home: home)
+        let store = try WorkspaceStore.shared(root: root)
+        let config = store.config
         var workspace = Workspace(
             rootURL: root, containerName: slug(for: root), policy: config.policy,
             mcpServers: config.mcpServers, mcpURL: config.mcpURL, primaryAgent: config.primaryAgent,
             kits: config.kits.filter { !KitStore.isSandshellKit($0) })
         workspace.imageChannel = config.imageChannel
         workspace.customImage = config.customImage
-        return WorkspaceController(workspace: workspace, state: state, config: config)
+        return WorkspaceController(workspace: workspace, store: store)
+    }
+
+    /// Another window on this folder saved: take its config (mounts, agents,
+    /// kits, MCP, theme) and redraw the session list from its state.
+    private func sharedStoreChanged(_ parts: Set<WorkspaceStore.Part>) {
+        if parts.contains(.config) {
+            var w = workspace
+            w.policy = config.policy
+            w.mcpServers = config.mcpServers
+            w.mcpURL = config.mcpURL
+            w.primaryAgent = config.primaryAgent
+            w.kits = config.kits.filter { !KitStore.isSandshellKit($0) }
+            w.imageChannel = config.imageChannel
+            w.customImage = config.customImage
+            if w != workspace { workspace = w }
+            if customAgents != config.customAgents { customAgents = config.customAgents }
+            if let prefs = config.theme, prefs != theme.prefs { theme.prefs = prefs }
+        }
+        // The session list (and anything drawn from config) redraws.
+        revision += 1
     }
 
     // Current durable settings (for the Settings UI).

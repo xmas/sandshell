@@ -52,11 +52,36 @@ enum ClaudeSessionRegistry {
         return now.timeIntervalSince(last) < (e.isBusy ? 30 * 60 : 6 * 3600)
     }
 
+    /// An entry's identity for remembering it was found gone.
+    static func key(_ e: Entry) -> String { "\(e.pid):\(e.procStart ?? "")" }
+
+    /// A busy entry in a sandbox that's gone quiet: ask inside the running
+    /// sandboxes whether its process is still there — the pid, started when the
+    /// entry says (`/proc/<pid>/stat` field 22, clock ticks since boot). Each
+    /// sandbox is its own VM, so any of them could hold that pid. nil: couldn't
+    /// tell (keep trusting the entry's age).
+    static func sandboxedProcessIsAlive(_ e: Entry) async -> Bool? {
+        guard !e.isOnThisMac, let start = e.procStart, Int(start) != nil else { return nil }
+        guard let boxes = try? await SbxClient.shared.list() else { return nil }
+        let running = boxes.filter(\.isRunning).map(\.name)
+        // No sandbox running: nothing in one can be either.
+        guard !running.isEmpty else { return false }
+        let script = "s=$(sed 's/.*) //' /proc/\(e.pid)/stat 2>/dev/null | cut -d' ' -f20); "
+            + "if [ \"$s\" = \(start) ]; then echo alive; else echo gone; fi"
+        let answers = await withTaskGroup(of: String?.self) { group in
+            for name in running { group.addTask { await SbxClient.shared.exec(inSandbox: name, script: script) } }
+            return await group.reduce(into: [String]()) { if let a = $1 { $0.append(a.trimmingCharacters(in: .whitespacesAndNewlines)) } }
+        }
+        if answers.contains("alive") { return true }
+        return answers.isEmpty ? nil : false
+    }
+
     /// The live writer of `sessionID` that isn't our own chat agent (the one
     /// in a sandbox with entrypoint sdk-ts), busiest and most recent first.
-    nonisolated static func otherWriter(home: String, sessionID: String) -> Entry? {
+    /// `gone`: entries already found dead (`key`).
+    nonisolated static func otherWriter(home: String, sessionID: String, gone: Set<String> = []) -> Entry? {
         entries(home: home, sessionID: sessionID)
-            .filter { !( !$0.isOnThisMac && $0.entrypoint == "sdk-ts") && isAlive($0) }
+            .filter { !( !$0.isOnThisMac && $0.entrypoint == "sdk-ts") && !gone.contains(key($0)) && isAlive($0) }
             .sorted { ($0.isBusy ? 1 : 0, $0.lastUpdate ?? .distantPast) > ($1.isBusy ? 1 : 0, $1.lastUpdate ?? .distantPast) }
             .first
     }

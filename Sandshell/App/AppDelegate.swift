@@ -473,6 +473,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         persistOpenWindows()
         Log.info(.app, "opened window for \(root.path) (\(windows.count) open)")
         controller.showWindow(nil)
+        // (Scripted runs never take focus from the person using the Mac.)
+        guard !AutomatedRun.isActive else { return controller }
         controller.window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         return controller
