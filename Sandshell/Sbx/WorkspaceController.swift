@@ -925,6 +925,12 @@ final class WorkspaceController: ObservableObject {
     /// Ensure the primary agent's container exists with the current mounts.
     func openPrimaryContainer() {
         ensureContainer(for: workspace.primaryAgent)
+    }
+
+    /// Keep the window's live state current: container phases, subagents and
+    /// the work timers' clock. Started once per window, whether its folder is
+    /// configured yet or not (each poller starts only once).
+    func startMonitoring() {
         startContainerPolling()
         startSubagentPolling()
         startClock()

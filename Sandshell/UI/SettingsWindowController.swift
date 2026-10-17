@@ -12,13 +12,22 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     /// The workspace window it belongs to (closed with it).
     private(set) weak var workspaceWindow: NSWindow?
     private let controller: WorkspaceController
+    /// The pane shown; the view is built once, so showing the window again
+    /// keeps a pane's unapplied edits (and any confirmation it has up).
+    private let selection: InspectorSelection
 
-    /// Show `controller`'s settings (on `pane`, else the last one used).
+    /// Show `controller`'s settings: an open window as it is, or on `pane`
+    /// when one is asked for; a new one on `pane`, else the last one used.
     static func show(for controller: WorkspaceController, pane: InspectorPane? = nil, owner: NSWindow?) {
         let key = ObjectIdentifier(controller)
-        let settings = open[key] ?? SettingsWindowController(controller: controller, owner: owner)
-        open[key] = settings
-        settings.select(pane ?? lastPane)
+        let settings: SettingsWindowController
+        if let existing = open[key] {
+            settings = existing
+            if let pane { settings.selection.select(pane) }
+        } else {
+            settings = SettingsWindowController(controller: controller, pane: pane ?? lastPane, owner: owner)
+            open[key] = settings
+        }
         settings.showWindow(nil)
         settings.window?.makeKeyAndOrderFront(nil)
     }
@@ -37,9 +46,10 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         UserDefaults.standard.string(forKey: lastPaneKey).flatMap(InspectorPane.init(rawValue:)) ?? .general
     }
 
-    private init(controller: WorkspaceController, owner: NSWindow?) {
+    private init(controller: WorkspaceController, pane: InspectorPane, owner: NSWindow?) {
         self.controller = controller
         self.workspaceWindow = owner
+        self.selection = InspectorSelection(pane)
         let window = NSWindow(contentRect: .zero, styleMask: [.titled, .closable, .miniaturizable],
                               backing: .buffered, defer: true)
         window.title = "\(controller.rootURL.lastPathComponent) Settings"
@@ -47,21 +57,16 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         window.setFrameAutosaveName("SettingsWindow")
         super.init(window: window)
         window.delegate = self
+        let key = Self.lastPaneKey
+        let remember: (InspectorPane) -> Void = { p in UserDefaults.standard.set(p.rawValue, forKey: key) }
+        let view = InspectorView(controller: controller, selection: selection,
+                                 onClose: { [weak self] in self?.close() }, onPaneChange: remember)
+        window.contentViewController = NSHostingController(rootView: view)
+        remember(selection.pane)
+        if !window.setFrameUsingName("SettingsWindow") { window.center() }
     }
 
     @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
-
-    private func select(_ pane: InspectorPane) {
-        let key = Self.lastPaneKey
-        let close: () -> Void = { [weak self] in self?.close() }
-        let remember: (InspectorPane) -> Void = { p in UserDefaults.standard.set(p.rawValue, forKey: key) }
-        let view = InspectorView(controller: controller, initialPane: pane, onClose: close, onPaneChange: remember)
-        guard let window else { return }
-        let wasVisible = window.isVisible
-        window.contentViewController = NSHostingController(rootView: view)
-        remember(pane)
-        if !wasVisible, !window.setFrameUsingName("SettingsWindow") { window.center() }
-    }
 
     func windowWillClose(_ notification: Notification) {
         Self.open[ObjectIdentifier(controller)] = nil
