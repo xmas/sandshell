@@ -830,12 +830,61 @@ extension BackgroundTasksTests {
         }
 
         @Test(.tags(.backgroundTasksEdgeCase))
-        func queueEntryLeavingTheQueueIsNotANewEvent() throws {
+        func removedQueueEntryIsNotANewEvent() throws {
             let event = BGNotice.body(taskID: "mon_1", event: "ERROR: connection refused")
-            let leaving = try BGLine.json(["type": "queue-operation", "operation": "remove",
-                                           "timestamp": BGStamp.iso(11), "content": event])
-            let parser = try BGScenario.parse(launch + [BGLine.queued(event, at: 10), leaving, BGLine.delivered(event, at: 12)])
+            // Claude Code's usual order: enqueue, (an attachment delivers it), remove.
+            var parser = try BGScenario.parse(launch + [BGLine.queued(event, at: 10), BGLine.removed(event, at: 11)])
+            #expect(parser.tasks.first?.events == 1, "The remove is the queued entry leaving")
+            // The same line again, delivered without being queued: nothing queued is left to swallow it.
+            try parser.consume(BGLine.file([BGLine.delivered(event, at: 70)]))
+            #expect(parser.tasks.first?.events == 2)
+        }
+
+        @Test(.tags(.backgroundTasksEdgeCase))
+        func repeatedEventsLeavingByRemoveEachCount() throws {
+            let event = BGNotice.body(taskID: "mon_1", event: "ERROR: connection refused")
+            let parser = try BGScenario.parse(launch + [
+                BGLine.queued(event, at: 10), BGLine.removed(event, at: 11),
+                BGLine.queued(event, at: 70), BGLine.removed(event, at: 71),
+            ])
+            #expect(parser.tasks.first?.events == 2)
+        }
+
+        @Test(.tags(.backgroundTasksEdgeCase))
+        func removeWithNothingQueuedIsIgnored() throws {
+            let event = BGNotice.body(taskID: "mon_1", event: "ERROR: connection refused")
+            let parser = try BGScenario.parse(launch + [BGLine.removed(event, at: 11), BGLine.queued(event, at: 70),
+                                                        BGLine.delivered(event, at: 71)])
+            #expect(parser.tasks.first?.events == 1, "Only the enqueue is new; its delivery uses it up")
+        }
+
+        @Test(.tags(.backgroundTasksEdgeCase))
+        func dequeueWithoutContentLeavesTheDeliveryPaired() throws {
+            let event = BGNotice.body(taskID: "mon_1", event: "ERROR: connection refused")
+            let parser = try BGScenario.parse(launch + [BGLine.queued(event, at: 10), BGLine.dequeued(at: 11),
+                                                        BGLine.delivered(event, at: 11)])
             #expect(parser.tasks.first?.events == 1)
+        }
+
+        @Test(.tags(.backgroundTasksEdgeCase))
+        func lineWrittenAgainIsHandledOnce() throws {
+            let event = BGNotice.body(taskID: "mon_1", event: "ERROR: connection refused")
+            let parser = try BGScenario.parse(launch + [
+                BGLine.queued(event, at: 10),
+                BGLine.delivered(event, at: 11, uuid: "u1"),
+                BGLine.delivered(event, at: 11, uuid: "u1"),
+            ])
+            #expect(parser.tasks.first?.events == 1, "Claude Code wrote the delivery twice (same uuid)")
+        }
+
+        @Test(.tags(.backgroundTasksEdgeCase))
+        func distinctLinesWithTheSameEventEachCount() throws {
+            let event = BGNotice.body(taskID: "mon_1", event: "ERROR: connection refused")
+            let parser = try BGScenario.parse(launch + [
+                BGLine.delivered(event, at: 10, uuid: "u1"),
+                BGLine.delivered(event, at: 70, uuid: "u2"),
+            ])
+            #expect(parser.tasks.first?.events == 2)
         }
     }
 }
@@ -1275,9 +1324,22 @@ fileprivate enum BGLine {
         return try json(object)
     }
 
-    /// A user message whose content is a string.
-    static func delivered(_ content: String, at seconds: Int = 0) throws -> String {
-        try json(["type": "user", "timestamp": BGStamp.iso(seconds), "message": ["role": "user", "content": content]])
+    /// Claude Code taking `content` off the queue (delivered as an attachment, or dropped).
+    static func removed(_ content: String, at seconds: Int = 0) throws -> String {
+        try json(["type": "queue-operation", "operation": "remove", "timestamp": BGStamp.iso(seconds), "content": content])
+    }
+
+    /// Claude Code taking the next entry off the queue to deliver it (no content).
+    static func dequeued(at seconds: Int = 0) throws -> String {
+        try json(["type": "queue-operation", "operation": "dequeue", "timestamp": BGStamp.iso(seconds)])
+    }
+
+    /// A user message whose content is a string (with the line's `uuid` when given).
+    static func delivered(_ content: String, at seconds: Int = 0, uuid: String? = nil) throws -> String {
+        var object: [String: Any] = ["type": "user", "timestamp": BGStamp.iso(seconds),
+                                     "message": ["role": "user", "content": content]]
+        if let uuid { object["uuid"] = uuid }
+        return try json(object)
     }
 
     /// A user message whose content is text blocks.

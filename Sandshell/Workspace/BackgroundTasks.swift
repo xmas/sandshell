@@ -48,10 +48,26 @@ struct BackgroundTaskParser: Sendable {
 
     /// Background-capable tool calls awaiting their result, by tool_use id.
     private var launches: [String: Launch] = [:]
-    /// Notifications show up twice (queued, then delivered); handle each once.
-    /// The queued copies not yet delivered, by body: a delivery uses one up,
-    /// so the same text queued again later (a Monitor's repeated line) counts.
-    private var undelivered: [String: Int] = [:]
+    /// Notifications show up more than once (queued, then delivered or taken
+    /// off the queue); handle each once. The queued copies still in the queue,
+    /// by body: a copy leaving it uses one up, so the same text queued again
+    /// later (a Monitor's repeated line) counts.
+    private var inQueue: [String: Int] = [:]
+    /// Lines that delivered notifications, by `uuid`: Claude Code can write a
+    /// line again (same uuid), and its notifications were handled the first time.
+    private var deliveredLines: Set<String> = []
+
+    /// Where a notification's text turned up.
+    private enum Copy {
+        /// An enqueue: a new queue entry.
+        case queued
+        /// Off the queue (a remove, carrying the text): delivered as an
+        /// attachment, or dropped. Never new.
+        case leftQueue
+        /// In a user line: a queued entry's delivery, else new (Claude Code
+        /// also delivers some notifications without queueing them).
+        case delivered
+    }
 
     private struct Launch: Sendable {
         let tool: String
@@ -84,12 +100,16 @@ struct BackgroundTaskParser: Sendable {
                 for block in Self.blocks(obj["message"]) where block["type"] as? String == "tool_result" {
                     noteResult(block, toolUseResult: obj["toolUseResult"] as? [String: Any], at: at)
                 }
-                if let text = Self.text(of: obj["message"]) { noteNotifications(in: text, at: at, queued: false) }
-            case "queue-operation":
-                // Only an enqueue is a new entry (a dequeue, remove… is that entry leaving).
-                if obj["operation"] as? String ?? "enqueue" == "enqueue", let content = obj["content"] as? String {
-                    noteNotifications(in: content, at: at, queued: true)
+                if let text = Self.text(of: obj["message"]), text.contains("<task-notification>"),
+                   firstWrite(of: obj) {
+                    noteNotifications(in: text, at: at, copy: .delivered)
                 }
+            case "queue-operation":
+                // An enqueue is a new entry; any other operation that carries
+                // the text (a remove) is that entry leaving. A dequeue carries none.
+                guard let content = obj["content"] as? String else { continue }
+                let enqueue = obj["operation"] as? String ?? "enqueue" == "enqueue"
+                noteNotifications(in: content, at: at, copy: enqueue ? .queued : .leftQueue)
             default:
                 continue
             }
@@ -183,15 +203,18 @@ struct BackgroundTaskParser: Sendable {
         tasks.append(task)
     }
 
-    private mutating func noteNotifications(in text: String, at: Date, queued: Bool) {
+    private mutating func noteNotifications(in text: String, at: Date, copy: Copy) {
         guard text.contains("<task-notification>") else { return }
         for chunk in text.components(separatedBy: "<task-notification>").dropFirst() {
             let body = chunk.components(separatedBy: "</task-notification>").first ?? chunk
-            if queued {
-                undelivered[body, default: 0] += 1
-            } else if let copies = undelivered[body] {
-                undelivered[body] = copies > 1 ? copies - 1 : nil
-                continue   // the delivered copy of one already handled
+            switch copy {
+            case .queued:
+                inQueue[body, default: 0] += 1
+            case .leftQueue:
+                takeOffQueue(body)
+                continue
+            case .delivered:
+                if takeOffQueue(body) { continue }   // the delivered copy of one already handled
             }
             guard let id = Self.tag("task-id", in: body),
                   let i = tasks.firstIndex(where: { $0.id == id }) else { continue }
@@ -222,6 +245,21 @@ struct BackgroundTaskParser: Sendable {
             tasks[i].summary = summary.map(Self.oneLine) ?? tasks[i].summary
             justFinished.append(tasks[i])
         }
+    }
+
+    /// False for a line Claude Code wrote again (same `uuid`) after the one
+    /// whose notifications were already handled.
+    private mutating func firstWrite(of line: [String: Any]) -> Bool {
+        guard let uuid = line["uuid"] as? String else { return true }
+        return deliveredLines.insert(uuid).inserted
+    }
+
+    /// Uses up one queued copy of `body`; false when none is in the queue.
+    @discardableResult
+    private mutating func takeOffQueue(_ body: String) -> Bool {
+        guard let copies = inQueue[body] else { return false }
+        inQueue[body] = copies > 1 ? copies - 1 : nil
+        return true
     }
 
     // MARK: Parsing helpers
