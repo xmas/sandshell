@@ -15,11 +15,13 @@ struct BackgroundTasksView: View {
     var stopTask: ((UUID, BackgroundTask) async -> Bool)?
     var canStop: ((UUID, BackgroundTask) -> Bool)?
 
-    private var groups: [(session: Session, tasks: [BackgroundTask])] {
+    /// Each listed session with tasks, its tasks already split for the list
+    /// (once per session here, so the sections' bodies only lay them out).
+    private var groups: [(session: Session, tasks: BackgroundTaskList)] {
         sessionIDs().compactMap { id in
             guard let s = controller.session(id: id) else { return nil }
             let tasks = controller.backgroundTasks(id)
-            return tasks.isEmpty ? nil : (s, tasks)
+            return tasks.isEmpty ? nil : (s, BackgroundTaskList(tasks))
         }
     }
 
@@ -47,11 +49,26 @@ struct BackgroundTasksView: View {
     }
 }
 
-/// One session's tasks: the running ones newest first, then the latest 25
-/// that finished.
+/// A session's tasks as the list shows them: the running ones newest first,
+/// then the latest `finishedLimit` that finished (orphans — never seen
+/// finishing — left out).
+struct BackgroundTaskList: Equatable {
+    static let finishedLimit = 25
+    let running: [BackgroundTask]
+    let finished: [BackgroundTask]
+
+    init(_ tasks: [BackgroundTask]) {
+        running = tasks.filter(\.isRunning).sorted { $0.startedAt > $1.startedAt }
+        finished = Array(tasks.filter { !$0.isRunning && !$0.orphaned }
+            .sorted { ($0.finishedAt ?? $0.startedAt) > ($1.finishedAt ?? $1.startedAt) }
+            .prefix(Self.finishedLimit))
+    }
+}
+
+/// One session's tasks, split by `BackgroundTaskList`.
 private struct BackgroundTaskSection: View {
     let session: Session
-    let tasks: [BackgroundTask]
+    let tasks: BackgroundTaskList
     /// The window panel names each session (a click shows it).
     let titled: Bool
     let loadOutput: ((UUID, BackgroundTask) async -> String?)?
@@ -60,9 +77,6 @@ private struct BackgroundTaskSection: View {
     let canStop: ((UUID, BackgroundTask) -> Bool)?
 
     var body: some View {
-        let running = tasks.filter(\.isRunning).sorted { $0.startedAt > $1.startedAt }
-        let finished = Array(tasks.filter { !$0.isRunning && !$0.orphaned }
-            .sorted { ($0.finishedAt ?? $0.startedAt) > ($1.finishedAt ?? $1.startedAt) }.prefix(25))
         VStack(alignment: .leading, spacing: 8) {
             if titled {
                 Button { onSelectSession?(session.id) } label: {
@@ -74,16 +88,16 @@ private struct BackgroundTaskSection: View {
                 .buttonStyle(.plain)
                 .help("Show this session")
             }
-            if !running.isEmpty {
-                header("Running", running.count)
-                ForEach(running) { task in
+            if !tasks.running.isEmpty {
+                header("Running", tasks.running.count)
+                ForEach(tasks.running) { task in
                     BackgroundTaskRow(task: task, sessionID: session.id, loadOutput: loadOutput,
                                       stop: stopAction(for: task))
                 }
             }
-            if !finished.isEmpty {
-                header("Finished", finished.count)
-                ForEach(finished) { BackgroundTaskRow(task: $0, sessionID: session.id, loadOutput: loadOutput) }
+            if !tasks.finished.isEmpty {
+                header("Finished", tasks.finished.count)
+                ForEach(tasks.finished) { BackgroundTaskRow(task: $0, sessionID: session.id, loadOutput: loadOutput) }
             }
         }
     }

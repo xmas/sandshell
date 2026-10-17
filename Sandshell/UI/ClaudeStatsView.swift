@@ -258,12 +258,13 @@ final class ClaudeStatsView: NSView {
             gauge.fillColor = level
             gauge.trackColor = color(.track)
             gauge.isHidden = !vis.isVisible(.gauge)
-            var s = "\(p)%"
+            let percent = p.formatted(.percent)
+            var s = percent
             if let size = status?.contextWindow?.contextWindowSize, size > 0 { s += "/\(f.compact(size))" }
             ctxLabel.stringValue = s
             ctxLabel.textColor = level
             ctxLabel.isHidden = !vis.isVisible(.percent)
-            var tip = "Context window: \(p)% used"
+            var tip = "Context window: \(percent) used"
             if let used = status?.contextTokens { tip += " (\(used.formatted()) tokens)" }
             ctxLabel.toolTip = tip
             gauge.toolTip = tip
