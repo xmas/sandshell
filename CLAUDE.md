@@ -99,6 +99,7 @@ AppDelegate (@main)
 | `Chat/ACPConnection.swift` | JSON-RPC 2.0 over the agent's stdio |
 | `Chat/ChatSessionView.swift`, `ChatTranscriptView.swift`, `ChatComposerView.swift`, `ChatRenderer.swift` | Chat UI: transcript (links, reply hover Copy/Fork), composer (/ commands, @ files), rendering |
 | `Chat/AgentQuestion.swift`, `AgentQuestionView.swift` | An agent's interactive question (ACP `elicitation/create`: Claude's AskUserQuestion, Codex's request_user_input, MCP forms and sign-in links) — parsed into fields, answered in a card above the composer |
+| `Workspace/Subagents.swift`, `UI/SubagentWindowController.swift` | A Claude session's subagents (`<session>/subagents/agent-<id>.jsonl` + `.meta.json`), polled into `WorkspaceController.subagents`; shown as sidebar child rows; read-only transcript window |
 | `Chat/ClaudeTranscriptTail.swift` | Parses lines another client appended to a Claude transcript |
 | `Files/FilesPaneController.swift` | Files surface: `FileTreeController` (tree, git badges, Changed view) beside `FileEditorController` (editor, Markdown preview, Changes/hunks) |
 | `Files/FileNavigation.swift` | Open Quickly (⇧⌘O), Go to Line |

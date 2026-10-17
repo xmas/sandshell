@@ -36,6 +36,10 @@ final class WorkspaceController: ObservableObject {
     /// Each Claude session's background tasks (subagents, background shells,
     /// Monitors), kept current by the window's `BackgroundTaskMonitor`.
     @Committed private(set) var backgroundTasks: [UUID: [BackgroundTask]] = [:]
+    /// Each Claude session's subagents (the sidebar shows them under it).
+    @Committed private(set) var subagents: [UUID: [SubagentInfo]] = [:]
+    private var subagentPollTask: Task<Void, Never>?
+    private var transcriptURLs: [UUID: URL] = [:]
     /// What each sandbox is (kernel, distribution, mount types), asked once.
     @Committed private(set) var sandboxSystems: [String: SandboxSystem] = [:]
     private var probingSandboxes: Set<String> = []
@@ -126,6 +130,7 @@ final class WorkspaceController: ObservableObject {
     deinit {
         if let agentProfileObserver { NotificationCenter.default.removeObserver(agentProfileObserver) }
         containerPollTask?.cancel()
+        subagentPollTask?.cancel()
     }
 
     // MARK: Claude model/effort + status feed
@@ -833,7 +838,45 @@ final class WorkspaceController: ObservableObject {
     func openPrimaryContainer() {
         ensureContainer(for: workspace.primaryAgent)
         startContainerPolling()
+        startSubagentPolling()
         startClock()
+    }
+
+    /// Every few seconds: the subagents each Claude session's transcript has
+    /// (its `subagents/` folder), with the states the task monitor knows.
+    private func startSubagentPolling() {
+        guard subagentPollTask == nil else { return }
+        subagentPollTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                await self.refreshSubagents()
+                try? await Task.sleep(for: .seconds(3))
+            }
+        }
+    }
+
+    func refreshSubagents() async {
+        var targets: [(UUID, URL, [String: BackgroundTask.State])] = []
+        for session in state.sessions where session.agent == .claude {
+            guard let tid = session.transcriptID else { continue }
+            if transcriptURLs[session.id]?.deletingPathExtension().lastPathComponent != tid {
+                transcriptURLs[session.id] = TranscriptReader.transcriptURL(agent: .claude, workdir: session.workdir,
+                                                                           home: home, id: tid)
+            }
+            guard let url = transcriptURLs[session.id] else { continue }
+            let known = Dictionary((backgroundTasks[session.id] ?? []).filter { $0.kind == .agent }.map { ($0.id, $0.state) },
+                                   uniquingKeysWith: { a, _ in a })
+            targets.append((session.id, url, known))
+        }
+        let found = await Task.detached(priority: .utility) { () -> [UUID: [SubagentInfo]] in
+            var out: [UUID: [SubagentInfo]] = [:]
+            for (id, url, known) in targets {
+                let list = SubagentScanner.scan(sessionID: id, transcript: url, known: known)
+                if !list.isEmpty { out[id] = Array(list.suffix(12)) }
+            }
+            return out
+        }.value
+        if found != subagents { subagents = found }
     }
 
     /// Poll workspace container status every 5 s so `containerPhases` stays

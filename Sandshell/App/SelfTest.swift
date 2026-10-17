@@ -102,6 +102,7 @@ enum SelfTest {
         case "two-windows": await twoWindows(window)
         case "question": await agentQuestion(window)
         case "mac": await macBehaviors(window)
+        case "subagents": await subagentRows(window)
         case "sandbox-access": await sandboxAccess(window)
         case "launch-failure": await launchFailure(window)
         case "fork": await fork(window)
@@ -726,6 +727,65 @@ enum SelfTest {
               && (try? String(contentsOf: lockedFile, encoding: .utf8)) == "edit keep me\n", "then it saves and closes")
         try? FileManager.default.removeItem(at: locked)
         try? FileManager.default.removeItem(at: typed)
+    }
+
+    /// Subagents under their session: the scanner reads `<session>/subagents/`
+    /// (meta + transcript), and a real Claude turn that runs one shows it as a
+    /// row whose transcript opens read-only. Fixture: `chat`.
+    private static func subagentRows(_ window: MainWindowController) async {
+        // The scanner, on a made-up session folder.
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("sandshell-sub-\(UUID().uuidString)")
+        let transcript = tmp.appendingPathComponent("s1.jsonl")
+        let dir = tmp.appendingPathComponent("s1/subagents")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try? Data().write(to: transcript)
+        let lines = [
+            #"{"type":"user","isSidechain":true,"agentId":"a1","message":{"role":"user","content":"Survey the code"}}"#,
+            #"{"type":"assistant","isSidechain":true,"agentId":"a1","message":{"id":"m1","role":"assistant","stop_reason":"end_turn","content":[{"type":"text","text":"Found 3 files."}]}}"#,
+        ]
+        try? (lines.joined(separator: "\n") + "\n").write(to: dir.appendingPathComponent("agent-a1.jsonl"), atomically: true, encoding: .utf8)
+        try? #"{"agentType":"Explore","description":"Survey the code"}"#.write(to: dir.appendingPathComponent("agent-a1.meta.json"), atomically: true, encoding: .utf8)
+        let found = SubagentScanner.scan(sessionID: UUID(), transcript: transcript)
+        check(found.count == 1 && found[0].title == "Survey the code" && found[0].agentType == "Explore" && found[0].state == .done,
+              "scanner: a finished Explore subagent with its description (\(found.map(\.title)))")
+        let items = found.first.map { SubagentScanner.items($0.transcript) } ?? []
+        check(items.contains { if case .agentText(_, let t) = $0 { t == "Found 3 files." } else { false } }
+              && items.contains { if case .user(_, let t, _) = $0 { t == "Survey the code" } else { false } },
+              "its transcript reads as a conversation (sidechain lines included)")
+        try? FileManager.default.removeItem(at: tmp)
+
+        // A real one.
+        guard let tree = window.paneTree, let ws = window.workspaceController, let sidebar = window.sidebarController
+        else { return log("no window") }
+        guard let s = ws.newChatInCurrentContext() else { return log("no folder to start a chat in") }
+        func chat() -> ChatSession? { tree.surfaces.chats[s.id]?.session }
+        check(await until(600) { chat()?.phase == .ready }, "chat reaches ready")
+        guard let c = chat() else { return }
+        c.send(text: "Use the Agent tool to start one Explore subagent with the description \"List the top-level files\" "
+               + "that lists the files in the current folder. Then reply with exactly DONE.", attachments: [])
+        check(await until(240) { !(ws.subagents[s.id] ?? []).isEmpty }, "the session's subagent is found")
+        guard let info = ws.subagents[s.id]?.first else { return snapshot(window, "subagents-missing") }
+        log("subagent: \(info.title) (\(info.agentType ?? "-")) \(info.state)")
+        check(!info.title.isEmpty, "it has a title (\(info.title))")
+        ws.selection = .session(s.id)
+        await wait(1)
+        check(sidebar.rows.contains(.subagent(info)) || sidebar.rows.contains { if case .subagent(let i) = $0 { i.id == info.id } else { false } },
+              "it's a row under its session")
+        snapshot(window, "subagents")
+        check(await until(240) { c.phase == .ready && c.items.contains { if case .agentText(_, let t) = $0 { t.contains("DONE") } else { false } } },
+              "the turn finishes")
+        await ws.refreshSubagents()
+        check(await until(60) { ws.subagents[s.id]?.first?.state == .done }, "and the subagent reads as done")
+        SubagentWindowController.show(ws.subagents[s.id]?.first ?? info, workspace: ws)
+        let viewer = SubagentWindowController.debugWindow(info.id)
+        check(await until(10) { !(viewer?.debugTranscriptText.isEmpty ?? true) }, "its transcript opens read-only")
+        viewer?.window?.close()
+        // Collapsing hides it; expanding shows it again.
+        sidebar.setShowsSubagents(false, of: s.id)
+        check(!sidebar.rows.contains { if case .subagent = $0 { true } else { false } }, "collapsing hides the subagents")
+        sidebar.setShowsSubagents(true, of: s.id)
+        check(sidebar.rows.contains { if case .subagent = $0 { true } else { false } }, "expanding shows them")
+        ws.closeSession(s.id)
     }
 
     /// Mac conventions (the Mac-arsed audit): the menu bar's commands and their

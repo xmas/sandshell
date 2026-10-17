@@ -23,12 +23,13 @@ struct ClaudeTranscriptTail {
     }
 
     /// `skippingEntrypoint`: lines written by that client (the chat's own agent) are ignored.
-    static func parse(_ text: String, skippingEntrypoint skipped: String? = nil) -> Batch {
+    /// `sidechains`: read a subagent's own transcript (every line is one).
+    static func parse(_ text: String, skippingEntrypoint skipped: String? = nil, sidechains: Bool = false) -> Batch {
         var batch = Batch()
         let terminal: Set<String> = ["end_turn", "stop_sequence", "max_tokens"]
         for line in text.split(separator: "\n", omittingEmptySubsequences: true) {
             guard let obj = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
-                  obj["isSidechain"] as? Bool != true,
+                  sidechains || obj["isSidechain"] as? Bool != true,
                   let type = obj["type"] as? String, type == "user" || type == "assistant",
                   let message = obj["message"] as? [String: Any] else { continue }
             let entrypoint = obj["entrypoint"] as? String

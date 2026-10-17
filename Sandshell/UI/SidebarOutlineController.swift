@@ -33,6 +33,8 @@ final class SidebarTableView: NSTableView {
     var menuProvider: ((Int) -> NSMenu?)?
     var onDeleteKey: (() -> Void)?
     var onReturnKey: (() -> Void)?
+    /// ← / → (true): collapse / expand; false = not handled.
+    var onArrow: ((Bool) -> Bool)?
     private var keyObservers: [NSObjectProtocol] = []
 
     // The selection is drawn muted when the window isn't key or the list isn't
@@ -65,6 +67,8 @@ final class SidebarTableView: NSTableView {
             onDeleteKey?()
             return
         }
+        if (event.keyCode == 123 || event.keyCode == 124), event.modifierFlags.intersection([.command, .option, .control]).isEmpty,
+           onArrow?(event.keyCode == 124) == true { return }
         // Return renames (Finder's convention).
         if event.keyCode == 36, event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty {
             onReturnKey?()
@@ -92,6 +96,36 @@ final class SidebarListController: NSViewController {
     /// mapping. A row index is simply an index into this array; there is no
     /// per-row identity object (NSTableView addresses rows by integer index).
     private(set) var displayedSessionIDs: [UUID] = []
+
+    /// What each row shows: a session, or one of its subagents beneath it.
+    enum Row: Equatable { case session(UUID), subagent(SubagentInfo) }
+    private(set) var rows: [Row] = []
+    /// Subagent lists opened / closed by the person (else: open while one runs,
+    /// or for the selected session).
+    private var openedParents: Set<UUID> = []
+    private var closedParents: Set<UUID> = []
+
+    func sessionID(atRow row: Int) -> UUID? {
+        guard rows.indices.contains(row), case .session(let id) = rows[row] else { return nil }
+        return id
+    }
+    func subagent(atRow row: Int) -> SubagentInfo? {
+        guard rows.indices.contains(row), case .subagent(let info) = rows[row] else { return nil }
+        return info
+    }
+    func row(of id: UUID) -> Int? { rows.firstIndex(of: .session(id)) }
+
+    func showsSubagents(of id: UUID) -> Bool {
+        guard let list = controller.subagents[id], !list.isEmpty else { return false }
+        if closedParents.contains(id) { return false }
+        if openedParents.contains(id) { return true }
+        return list.contains(where: \.isRunning) || controller.selection == .session(id)
+    }
+
+    func setShowsSubagents(_ show: Bool, of id: UUID) {
+        if show { openedParents.insert(id); closedParents.remove(id) } else { closedParents.insert(id); openedParents.remove(id) }
+        reload()
+    }
     /// Live filter over `displayedSessionIDs` (session name / agent / folder).
     private var searchQuery: String = ""
 
@@ -204,7 +238,28 @@ final class SidebarListController: NSViewController {
         outline.action = #selector(rowClicked)
         outline.menuProvider = { [weak self] row in self?.contextMenu(forRow: row) }
         outline.onDeleteKey = { [weak self] in self?.closeSelectedSession() }
-        outline.onReturnKey = { [weak self] in self?.beginRenameSelected() }
+        outline.onReturnKey = { [weak self] in
+            guard let self else { return }
+            if let info = self.subagent(atRow: self.outline.selectedRow) {
+                return SubagentWindowController.show(info, workspace: self.controller)
+            }
+            self.beginRenameSelected()
+        }
+        outline.onArrow = { [weak self] right in
+            guard let self else { return false }
+            let row = self.outline.selectedRow
+            if let id = self.sessionID(atRow: row), self.controller.subagents[id]?.isEmpty == false {
+                guard self.showsSubagents(of: id) != right else { return false }
+                self.setShowsSubagents(right, of: id)
+                return true
+            }
+            // ← on a subagent: up to its session.
+            if !right, let info = self.subagent(atRow: row), let parent = self.row(of: info.sessionID) {
+                self.outline.selectRowIndexes([parent], byExtendingSelection: false)
+                return true
+            }
+            return false
+        }
         // Reduce Motion / Increase Contrast changed: redraw the rows.
         NotificationCenter.default.addObserver(forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification,
                                                object: nil, queue: .main) { [weak self] _ in
@@ -492,6 +547,9 @@ final class SidebarListController: NSViewController {
             for id in Set(tasks.keys).union(self.backgroundCounts.keys) { self.updateSessionRow(id) }
             self.backgroundCounts = tasks.mapValues { $0.filter(\.isRunning).count }
         }.store(in: &cancellables)
+        controller.$subagents.dropFirst().removeDuplicates().sink { [weak self] _ in
+            DispatchQueue.main.async { self?.reload() }
+        }.store(in: &cancellables)
         controller.$runtimes.dropFirst().sink { [weak self] runtimes in
             self?.runtimesChanged(runtimes)
         }.store(in: &cancellables)
@@ -558,7 +616,7 @@ final class SidebarListController: NSViewController {
         for id in Set(new.keys).union(lastRuntimes.keys) where new[id] != lastRuntimes[id] {
             if new[id]?.isLive != lastRuntimes[id]?.isLive {
                 // isLive drives name weight — needs a full cell reconfigure.
-                if !reloading, let row = displayedSessionIDs.firstIndex(of: id) {
+                if !reloading, let row = row(of: id) {
                     outline.reloadData(forRowIndexes: IndexSet([row]), columnIndexes: IndexSet([0]))
                 }
             } else {
@@ -582,7 +640,7 @@ final class SidebarListController: NSViewController {
 
     /// Update a session row's emphasis in place (no rebuild).
     private func refreshActive(_ id: UUID?) {
-        guard let id, let row = displayedSessionIDs.firstIndex(of: id),
+        guard let id, let row = row(of: id),
               let cell = outline.view(atColumn: 0, row: row, makeIfNecessary: false) as? SessionCellView
         else { return }
         cell.setActive(isActive(id))
@@ -593,7 +651,7 @@ final class SidebarListController: NSViewController {
     private var backgroundCounts: [UUID: Int] = [:]
 
     private func updateSessionRow(_ id: UUID) {
-        guard !reloading, let row = displayedSessionIDs.firstIndex(of: id),
+        guard !reloading, let row = row(of: id),
               let cell = outline.view(atColumn: 0, row: row, makeIfNecessary: false) as? SessionCellView
         else { return }   // off-screen rows reconfigure fresh when they reappear
         cell.backgroundRunning = controller.runningBackgroundTasks(id)
@@ -625,13 +683,17 @@ final class SidebarListController: NSViewController {
         defer { reloading = false }
 
         displayedSessionIDs = controller.orderedSessions.filter(matchesSearch).map(\.id)
+        rows = displayedSessionIDs.flatMap { id -> [Row] in
+            [.session(id)] + (showsSubagents(of: id) ? (controller.subagents[id] ?? []).map(Row.subagent) : [])
+        }
         outline.reloadData()
         applySelectionToOutline()
         updateEmptyState()
     }
 
     private func applySelectionToOutline() {
-        if case let .session(id) = controller.selection, let row = displayedSessionIDs.firstIndex(of: id) {
+        if let row = outline.selectedRowIndexes.first, subagent(atRow: row) != nil { return }   // a subagent stays picked
+        if case let .session(id) = controller.selection, let row = row(of: id) {
             outline.selectRowIndexes([row], byExtendingSelection: false)
         } else {
             outline.deselectAll(nil)
@@ -643,9 +705,11 @@ final class SidebarListController: NSViewController {
     private func syncSelection(_ sel: SidebarSelection?) {
         guard !reloading else { return }
         var targetRow = -1
-        if case let .session(id) = sel, let row = displayedSessionIDs.firstIndex(of: id) {
+        if case let .session(id) = sel, let row = row(of: id) {
             targetRow = row
             updateSessionRow(id)   // selecting a session marks it seen — clear the dot
+            // One of its subagents is the picked row: leave it.
+            if let picked = subagent(atRow: outline.selectedRow), picked.sessionID == id { return }
         }
         guard targetRow != outline.selectedRow else { return }
         // Part of a multi-selection the person made: keep it.
@@ -672,8 +736,12 @@ final class SidebarListController: NSViewController {
     /// (re-clicking an already-selected row doesn't fire selectionDidChange).
     @objc private func rowClicked() {
         let row = outline.clickedRow
-        guard row >= 0, row < displayedSessionIDs.count else { return }
-        controller.selection = .session(displayedSessionIDs[row])
+        if let info = subagent(atRow: row) {
+            controller.selection = .session(info.sessionID)
+            return SubagentWindowController.show(info, workspace: controller)
+        }
+        guard let id = sessionID(atRow: row) else { return }
+        controller.selection = .session(id)
     }
 
     /// Create a blank folder (its look/rename lives in the Folders inspector
@@ -967,14 +1035,14 @@ final class SidebarListController: NSViewController {
 
     /// The selected sessions, in list order.
     var selectedSessionIDs: [UUID] {
-        outline.selectedRowIndexes.compactMap { displayedSessionIDs.indices.contains($0) ? displayedSessionIDs[$0] : nil }
+        outline.selectedRowIndexes.compactMap { sessionID(atRow: $0) }
     }
 
     /// What a context menu at `row` acts on: the whole selection when the row
     /// is part of it, else just that row (Finder's rule).
     private func menuTargets(row: Int) -> [UUID] {
-        guard displayedSessionIDs.indices.contains(row) else { return [] }
-        return outline.selectedRowIndexes.contains(row) ? selectedSessionIDs : [displayedSessionIDs[row]]
+        guard let id = sessionID(atRow: row) else { return [] }
+        return outline.selectedRowIndexes.contains(row) ? selectedSessionIDs : [id]
     }
 
     // MARK: Rename (Return, Session ▸ Rename…, the context menu)
@@ -985,7 +1053,7 @@ final class SidebarListController: NSViewController {
     }
 
     func beginRename(_ id: UUID) {
-        guard let row = displayedSessionIDs.firstIndex(of: id) else { return }
+        guard let row = row(of: id) else { return }
         outline.scrollRowToVisible(row)
         guard let cell = outline.view(atColumn: 0, row: row, makeIfNecessary: true) as? SessionCellView else { return }
         cell.beginRenaming { [weak self] name in
@@ -1011,11 +1079,11 @@ final class SidebarListController: NSViewController {
 
     #if DEBUG
     func debugSelect(_ ids: [UUID]) {
-        outline.selectRowIndexes(IndexSet(ids.compactMap { displayedSessionIDs.firstIndex(of: $0) }), byExtendingSelection: false)
+        outline.selectRowIndexes(IndexSet(ids.compactMap { row(of: $0) }), byExtendingSelection: false)
     }
     func debugFilter(_ text: String) { searchField.debugSetText(text) }
     func debugCell(_ id: UUID) -> SessionCellView? {
-        displayedSessionIDs.firstIndex(of: id).flatMap { outline.view(atColumn: 0, row: $0, makeIfNecessary: true) as? SessionCellView }
+        row(of: id).flatMap { outline.view(atColumn: 0, row: $0, makeIfNecessary: true) as? SessionCellView }
     }
     #endif
 
@@ -1088,8 +1156,8 @@ final class SidebarListController: NSViewController {
 
     private func contextMenu(forRow row: Int) -> NSMenu? {
         let menu = NSMenu()
-        guard row >= 0, row < displayedSessionIDs.count,
-              let session = controller.session(id: displayedSessionIDs[row]) else {
+        if let info = subagent(atRow: row) { return subagentMenu(info) }
+        guard let id = sessionID(atRow: row), let session = controller.session(id: id) else {
             // Empty-area click: offer the same menu as the "+" button.
             for item in newSessionMenuItems() { menu.addItem(item) }
             return menu
@@ -1121,6 +1189,23 @@ final class SidebarListController: NSViewController {
         guard let id = sender.representedObject as? UUID, let session = controller.session(id: id) else { return }
         controller.setChat(id, !session.isChat)
         controller.selection = .session(id)
+    }
+
+    /// A subagent row's menu.
+    private func subagentMenu(_ info: SubagentInfo) -> NSMenu {
+        let menu = NSMenu()
+        menu.addItem(NSMenuItem("Open Transcript") { [weak self] in
+            guard let self else { return }
+            SubagentWindowController.show(info, workspace: self.controller)
+        })
+        menu.addItem(NSMenuItem("Reveal Transcript in Finder") { NSWorkspace.shared.activateFileViewerSelecting([info.transcript]) })
+        menu.addItem(NSMenuItem("Copy Description") {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(info.title, forType: .string)
+        })
+        menu.addItem(.separator())
+        menu.addItem(NSMenuItem("Hide Subagents") { [weak self] in self?.setShowsSubagents(false, of: info.sessionID) })
+        return menu
     }
 
     private func menuItem(_ title: String, _ action: Selector, object: Any? = nil) -> NSMenuItem {
@@ -1160,12 +1245,12 @@ final class SidebarListController: NSViewController {
 // MARK: - Data source
 
 extension SidebarListController: NSTableViewDataSource {
-    func numberOfRows(in tableView: NSTableView) -> Int { displayedSessionIDs.count }
+    func numberOfRows(in tableView: NSTableView) -> Int { rows.count }
 
     /// A session row drags out as a session (onto a pane edge: split there).
     func tableView(_ tableView: NSTableView, pasteboardWriterForRow row: Int) -> (any NSPasteboardWriting)? {
-        guard row >= 0, row < displayedSessionIDs.count else { return nil }
-        let id = displayedSessionIDs[row]
+        if let info = subagent(atRow: row) { return info.transcript as NSURL }   // its transcript, as a file
+        guard let id = sessionID(atRow: row) else { return nil }
         let item = NSPasteboardItem()
         item.setString(id.uuidString, forType: .sandshellSession)
         // Out of the app: its folder's path as text (Terminal, TextEdit…). Not
@@ -1175,7 +1260,7 @@ extension SidebarListController: NSTableViewDataSource {
     }
 
     func tableView(_ tableView: NSTableView, typeSelectStringFor tableColumn: NSTableColumn?, row: Int) -> String? {
-        displayedSessionIDs.indices.contains(row) ? controller.session(id: displayedSessionIDs[row])?.name : nil
+        subagent(atRow: row)?.title ?? sessionID(atRow: row).flatMap { controller.session(id: $0)?.name }
     }
 
     /// Files dragged onto a session row attach to that session (chat: as
@@ -1185,17 +1270,20 @@ extension SidebarListController: NSTableViewDataSource {
         guard !displayedSessionIDs.isEmpty, info.draggingSource as? NSTableView !== tableView,
               info.draggingPasteboard.canReadObject(forClasses: [NSURL.self],
                                                     options: [.urlReadingFileURLsOnly: true]) else { return [] }
-        tableView.setDropRow(min(max(row, 0), displayedSessionIDs.count - 1), dropOperation: .on)
+        // Onto a session (a subagent row's drop goes to its session).
+        var target = min(max(row, 0), rows.count - 1)
+        while target > 0, sessionID(atRow: target) == nil { target -= 1 }
+        tableView.setDropRow(target, dropOperation: .on)
         return .copy
     }
 
     func tableView(_ tableView: NSTableView, acceptDrop info: NSDraggingInfo, row: Int,
                    dropOperation: NSTableView.DropOperation) -> Bool {
-        guard row >= 0, row < displayedSessionIDs.count,
+        guard let id = sessionID(atRow: row),
               let urls = info.draggingPasteboard.readObjects(forClasses: [NSURL.self],
                                                              options: [.urlReadingFileURLsOnly: true]) as? [URL],
               !urls.isEmpty else { return false }
-        onDropFiles?(displayedSessionIDs[row], urls)
+        onDropFiles?(id, urls)
         return true
     }
 }
@@ -1207,11 +1295,14 @@ extension SidebarListController: NSTableViewDelegate {
         SidebarRowView(theme: sidebarTheme, drawsSelection: true)
     }
 
-    func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat { 50 }
+    func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat { subagent(atRow: row) == nil ? 50 : 34 }
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
-        guard row < displayedSessionIDs.count else { return nil }
-        let id = displayedSessionIDs[row]
+        if let info = subagent(atRow: row) {
+            let last = subagent(atRow: row + 1)?.sessionID != info.sessionID
+            return SubagentCellView(info, isLast: last, theme: sidebarTheme)
+        }
+        guard let id = sessionID(atRow: row) else { return nil }
         let cell = SessionCellView(owner: self)
         cell.sessionID = id
         if let session = controller.session(id: id) {
@@ -1223,12 +1314,23 @@ extension SidebarListController: NSTableViewDelegate {
                 theme: sidebarTheme,
                 workdirName: workdirName(for: session),
                 backgroundCount: controller.runningBackgroundTasks(id))
+            if let list = controller.subagents[id], !list.isEmpty {
+                cell.showDisclosure(expanded: showsSubagents(of: id), count: list.count) { [weak self] in
+                    guard let self else { return }
+                    self.setShowsSubagents(!self.showsSubagents(of: id), of: id)
+                }
+            }
         }
         return cell
     }
 
     func tableViewSelectionDidChange(_ notification: Notification) {
         guard !reloading, !settingSelection else { return }
+        // A subagent row: its session stays the one shown.
+        if let info = subagent(atRow: outline.selectedRow), outline.selectedRowIndexes.count == 1 {
+            if controller.selection != .session(info.sessionID) { controller.selection = .session(info.sessionID) }
+            return
+        }
         // With several picked, the detail follows the last one picked.
         var row = outline.selectedRow
         if outline.selectedRowIndexes.count > 1, case .session(let id)? = controller.selection,
@@ -1236,8 +1338,7 @@ extension SidebarListController: NSTableViewDelegate {
            NSApp.currentEvent?.modifierFlags.contains(.shift) == true {
             row = current   // a shift-extension keeps the one already shown
         }
-        let newSelection: SidebarSelection? = (row >= 0 && row < displayedSessionIDs.count)
-            ? .session(displayedSessionIDs[row]) : nil
+        let newSelection: SidebarSelection? = sessionID(atRow: row).map { .session($0) }
         if controller.selection != newSelection { controller.selection = newSelection }
     }
 }
@@ -1508,7 +1609,16 @@ final class SessionCellView: NSTableCellView {
         timeLabel.font = .monospacedSystemFont(ofSize: 10, weight: .regular)
         timeLabel.textColor = .secondaryLabelColor
 
-        let metaRow = NSStackView(views: [statusSlot, timeLabel, subLabel])
+        disclosure.isBordered = false
+        disclosure.imagePosition = .imageLeading
+        disclosure.font = .systemFont(ofSize: 11, weight: .medium)
+        disclosure.target = self
+        disclosure.action = #selector(disclosureClicked)
+        disclosure.isHidden = true
+        disclosure.setContentHuggingPriority(.required, for: .horizontal)
+        disclosure.setContentCompressionResistancePriority(.required, for: .horizontal)
+        subLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        let metaRow = NSStackView(views: [statusSlot, timeLabel, subLabel, disclosure])
         metaRow.orientation = .horizontal
         metaRow.alignment = .centerY
         metaRow.spacing = 5
@@ -1655,6 +1765,28 @@ final class SessionCellView: NSTableCellView {
     override func mouseMoved(with event: NSEvent) { syncHover() }
 
     @objc private func closeClicked() { if let sessionID { owner?.closeSessionFromRow(sessionID) } }
+
+    // MARK: Subagents
+
+    private let disclosure = NSButton()
+    private var onDisclosure: (() -> Void)?
+
+    /// "▸ 3 subagents": shows or hides them under the row.
+    func showDisclosure(expanded: Bool, count: Int, toggle: @escaping () -> Void) {
+        onDisclosure = toggle
+        disclosure.isHidden = false
+        disclosure.image = NSImage(systemSymbolName: expanded ? "chevron.down" : "chevron.right", accessibilityDescription: nil)?
+            .withSymbolConfiguration(.init(pointSize: 8, weight: .bold))
+        // Just the count: the status beside it keeps its room.
+        let words = "\(count) subagent\(count == 1 ? "" : "s")"
+        disclosure.contentTintColor = subLabel.textColor
+        disclosure.attributedTitle = NSAttributedString(string: "\(count)", attributes: [
+            .font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .semibold), .foregroundColor: subLabel.textColor ?? .secondaryLabelColor])
+        disclosure.toolTip = "\(expanded ? "Hide" : "Show") \(words)"
+        disclosure.setAccessibilityLabel(disclosure.toolTip)
+    }
+
+    @objc private func disclosureClicked() { onDisclosure?() }
 
     // MARK: Inline rename
 
@@ -1844,6 +1976,76 @@ extension SidebarListController: NSMenuItemValidation {
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         if item.action == #selector(copy(_:)) { return !selectedSessionIDs.isEmpty }
         return true
+    }
+}
+
+/// A subagent under its session: tree line, what it's doing, its state.
+final class SubagentCellView: NSTableCellView {
+    private let info: SubagentInfo
+    private let isLast: Bool
+    private let lineColor: NSColor
+
+    init(_ info: SubagentInfo, isLast: Bool, theme: ThemeColors) {
+        self.info = info
+        self.isLast = isLast
+        lineColor = theme.sidebarMuted.withAlphaComponent(0.45)
+        super.init(frame: .zero)
+        let title = NSTextField(labelWithString: info.title)
+        title.font = .systemFont(ofSize: 12.5, weight: info.isRunning ? .medium : .regular)
+        title.textColor = theme.sidebarFg.withAlphaComponent(info.isRunning ? 1 : 0.8)
+        title.lineBreakMode = .byTruncatingTail
+        let state: String
+        switch info.state {
+        case .running: state = "Working"
+        case .done: state = Format.ago(info.lastWrite)
+        case .failed: state = "Failed"
+        case .stopped: state = "Stopped"
+        }
+        let sub = NSTextField(labelWithString: [info.agentType, state].compactMap { $0 }.joined(separator: " · "))
+        sub.font = .systemFont(ofSize: 10.5)
+        sub.textColor = theme.sidebarMuted
+        sub.lineBreakMode = .byTruncatingTail
+        let dot = NSView()
+        dot.wantsLayer = true
+        dot.layer?.cornerRadius = 3
+        dot.layer?.backgroundColor = (info.state == .running ? NSColor.sessionWorking
+            : info.state == .failed ? .systemRed : theme.sidebarMuted.withAlphaComponent(0.5)).cgColor
+        let text = NSStackView(views: [title, sub])
+        text.orientation = .vertical
+        text.alignment = .leading
+        text.spacing = 1
+        for v in [dot, text] as [NSView] {
+            v.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(v)
+        }
+        NSLayoutConstraint.activate([
+            dot.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 40),
+            dot.centerYAnchor.constraint(equalTo: title.centerYAnchor),
+            dot.widthAnchor.constraint(equalToConstant: 6),
+            dot.heightAnchor.constraint(equalToConstant: 6),
+            text.leadingAnchor.constraint(equalTo: dot.trailingAnchor, constant: 7),
+            text.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -10),
+            text.centerYAnchor.constraint(equalTo: centerYAnchor),
+        ])
+        setAccessibilityElement(true)
+        setAccessibilityRole(.row)
+        setAccessibilityLabel("Subagent: \(info.title), \(state)")
+        toolTip = info.title
+    }
+
+    @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
+
+    /// The tree: a line down from the session, an elbow into this row.
+    override func draw(_ dirtyRect: NSRect) {
+        lineColor.setStroke()
+        let x: CGFloat = 19, mid = bounds.midY
+        let path = NSBezierPath()
+        path.lineWidth = 1
+        path.move(to: NSPoint(x: x, y: isFlipped ? 0 : bounds.maxY))
+        path.line(to: NSPoint(x: x, y: isLast ? mid : (isFlipped ? bounds.maxY : 0)))
+        path.move(to: NSPoint(x: x, y: mid))
+        path.line(to: NSPoint(x: 34, y: mid))
+        path.stroke()
     }
 }
 
