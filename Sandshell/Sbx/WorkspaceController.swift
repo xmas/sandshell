@@ -390,9 +390,10 @@ final class WorkspaceController: ObservableObject {
     @Committed private(set) var mcpAuth: [String: String] = [:]
     /// Servers with an in-flight authenticate/unauthorize/remove action.
     @Committed private(set) var mcpBusy: Set<String> = []
-    /// Set to a server name when it's freshly authenticated/added, so the UI can
-    /// auto-enable it. Cleared after the UI consumes it.
-    @Committed var mcpJustAuthenticated: String?
+    /// Servers freshly authenticated/added, in order, for Settings ▸ MCP to
+    /// auto-enable. It enables and clears them when it next shows, so a list:
+    /// several can finish while it's closed.
+    @Committed var mcpPendingEnable: [String] = []
 
     /// Refresh the registered set + OAuth status from `sbx mcp`.
     func refreshMCPStatus() {
@@ -419,7 +420,7 @@ final class WorkspaceController: ObservableObject {
                 } else if let addArgs {
                     try await SbxClient.shared.addMCP(name: name, args: addArgs, mcpURL: url)
                 }
-                self.mcpJustAuthenticated = name   // auto-enable
+                self.mcpPendingEnable.append(name)   // auto-enable
             } catch {
                 self.lastError = error.localizedDescription
                 Log.error(.workspace, "mcp authenticate \(name) failed: \(error.localizedDescription)")
@@ -442,7 +443,7 @@ final class WorkspaceController: ObservableObject {
             for (name, args) in parsed {
                 do {
                     try await SbxClient.shared.addMCP(name: name, args: args, mcpURL: url)
-                    self.mcpJustAuthenticated = name   // auto-enable
+                    self.mcpPendingEnable.append(name)   // auto-enable
                 } catch {
                     self.lastError = error.localizedDescription
                     Log.error(.workspace, "mcp add \(name) failed: \(error.localizedDescription)")

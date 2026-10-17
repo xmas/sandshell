@@ -1,138 +1,10 @@
-import AppKit
 import SwiftUI
-
-/// Editable state behind `MountConfigView`. Built from a `MountPolicy`; emits a
-/// new policy on confirm. Enforces the sbx mount cap (`MountPolicy.mountLimit`).
-@MainActor
-final class MountConfigModel: ObservableObject {
-    let home: URL
-    let root: URL
-
-    struct Suggestion: Identifiable { let id = UUID(); let url: URL; var enabled: Bool }
-
-    /// The common `$HOME` folders, each toggleable (mounted read-only).
-    @Published var suggestions: [Suggestion]
-    /// User-added folders beyond the suggestions (each rw or ro).
-    @Published var others: [MountSpec]
-    /// UI-only: reveal the agent config dot-folder list (off by default).
-    @Published var showDotFolders = false
-
-    /// The saved policy this editor started from; drives dirty/revert/highlight.
-    private(set) var baseline: MountPolicy
-
-    init(home: URL, root: URL, policy: MountPolicy) {
-        self.home = home
-        self.root = root
-        self.suggestions = []
-        self.others = []
-        self.baseline = policy
-        load(from: policy)
-        self.baseline = self.policy()   // canonical baseline (so isDirty starts false)
-    }
-
-    /// Populate the editable state from a policy (used by init and `revert`).
-    private func load(from policy: MountPolicy) {
-        let fm = FileManager.default
-        let selectedPaths = Set(policy.selections.map { $0.path.standardizedFileURL.path })
-        let suggestionURLs = MountPolicy.defaultReadOnlyFolders
-            .map { home.appendingPathComponent($0) }
-            .filter { fm.fileExists(atPath: $0.path) }
-        suggestions = suggestionURLs.map {
-            Suggestion(url: $0, enabled: selectedPaths.contains($0.standardizedFileURL.path))
-        }
-        let suggestionPaths = Set(suggestionURLs.map { $0.standardizedFileURL.path })
-        others = policy.selections.filter { !suggestionPaths.contains($0.path.standardizedFileURL.path) }
-    }
-
-    // MARK: Dirty tracking / revert
-
-    /// Whether the editor differs from the saved baseline (order-independent).
-    var isDirty: Bool {
-        Set(policy().selections) != Set(baseline.selections)
-    }
-
-    /// Discard edits, restoring the saved baseline.
-    func revert() { load(from: baseline) }
-
-    /// Adopt the current state as the new saved baseline (after Apply).
-    func commitBaseline() { baseline = policy() }
-
-    private var baselineReadonlyByPath: [String: Bool] {
-        Dictionary(baseline.selections.map { ($0.path.standardizedFileURL.path, $0.readonly) },
-                   uniquingKeysWith: { a, _ in a })
-    }
-
-    func isChanged(_ suggestion: Suggestion) -> Bool {
-        suggestion.enabled != (baselineReadonlyByPath[suggestion.url.standardizedFileURL.path] != nil)
-    }
-
-    func isChanged(other spec: MountSpec) -> Bool {
-        baselineReadonlyByPath[spec.path.standardizedFileURL.path] != spec.readonly
-    }
-
-    /// Managed agent config/state mounts that will actually be bound (`.claude`
-    /// mounted surgically). Pure — no seeding side effects.
-    var agentMounts: [MountSpec] {
-        MountPolicy.agentMountSpecs(home: home)
-    }
-
-    /// Live total: root + (agent mounts) + enabled suggestions + others.
-    var mountCount: Int {
-        1 + agentMounts.count + suggestions.filter(\.enabled).count + others.count
-    }
-
-    var atLimit: Bool { mountCount >= MountPolicy.mountLimit }
-
-    func policy() -> MountPolicy {
-        var selections = suggestions.filter(\.enabled).map { MountSpec(path: $0.url, readonly: true) }
-        selections += others
-        return MountPolicy(selections: selections)
-    }
-
-    func shortPath(_ url: URL) -> String {
-        let p = url.path, h = home.path
-        if p == h { return "~" }
-        if p.hasPrefix(h + "/") { return "~" + p.dropFirst(h.count) }
-        return p
-    }
-
-    /// Prompt for folders to add (skips duplicates and respects the cap).
-    func addFolders() {
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.allowsMultipleSelection = true
-        panel.prompt = "Add"
-        panel.message = "Add folders to mount in the sandbox"
-        guard panel.runModal() == .OK else { return }
-
-        var existing = Set(others.map { $0.path.standardizedFileURL.path })
-        existing.formUnion(suggestions.map { $0.url.standardizedFileURL.path })
-        existing.insert(root.standardizedFileURL.path)
-        for url in panel.urls {
-            guard !existing.contains(url.standardizedFileURL.path) else { continue }
-            guard mountCount < MountPolicy.mountLimit else { break }
-            others.append(MountSpec(path: url, readonly: true))
-            existing.insert(url.standardizedFileURL.path)
-        }
-    }
-
-    /// Flip a user-added folder between read-only and read-write.
-    func toggleReadonly(_ spec: MountSpec) {
-        guard let i = others.firstIndex(where: { $0.path == spec.path }) else { return }
-        others[i].readonly.toggle()
-    }
-
-    func removeOther(_ spec: MountSpec) {
-        others.removeAll { $0.path.standardizedFileURL.path == spec.path.standardizedFileURL.path }
-    }
-}
 
 /// Mount-configuration UI, shown on first open of a workspace and reused by
 /// Settings. Lets the user pick which host folders the sandbox can see, with a
 /// hard stop at the sbx mount limit.
 struct MountConfigView: View {
-    @ObservedObject var model: MountConfigModel
+    let model: MountConfigModel
     var confirmTitle: String
     /// Explanation shown by the (i) button next to the confirm action.
     var confirmInfo: String
@@ -148,12 +20,8 @@ struct MountConfigView: View {
     /// are dropped — the host provides the title and Next/Back navigation.
     var embedded: Bool = false
 
-    @State private var showInfo = false
-
-    private var actionsEnabled: Bool { !requireChanges || model.isDirty }
-
     var body: some View {
-        let stack = VStack(alignment: .leading, spacing: 0) {
+        VStack(alignment: .leading, spacing: 0) {
             if !embedded {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Workspace Mounts").font(.headline)
@@ -164,30 +32,43 @@ struct MountConfigView: View {
                 .padding(.bottom, 10)
                 Divider()
             }
-            ScrollView { content.padding() }
+            ScrollView { MountList(model: model, requireChanges: requireChanges).padding() }
             if !embedded {
                 Divider()
-                footer
+                MountConfigFooter(model: model, confirmTitle: confirmTitle, confirmInfo: confirmInfo,
+                                  cancelTitle: cancelTitle, requireChanges: requireChanges,
+                                  onConfirm: onConfirm, onCancel: onCancel)
             }
         }
-        return embedded ? AnyView(stack) : AnyView(stack.frame(width: InspectorMetrics.paneWidth, height: InspectorMetrics.paneHeight))
+        // Embedded sizes to the host's step area; otherwise the fixed pane size.
+        .frame(width: embedded ? nil : InspectorMetrics.paneWidth,
+               height: embedded ? nil : InspectorMetrics.paneHeight)
     }
+}
 
-    private var content: some View {
+/// The mounts, by group: the workspace root, the suggested and other folders,
+/// and the managed agent mounts.
+private struct MountList: View {
+    @Bindable var model: MountConfigModel
+    let requireChanges: Bool
+
+    var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             // Workspace root (always mounted rw).
-            section("Workspace") {
-                row(icon: "folder.fill", title: model.shortPath(model.root), tag: "rw") {
+            MountSection(title: "Workspace") {
+                HStack {
+                    Label(model.shortPath(model.root), systemImage: "folder.fill")
+                    Spacer()
                     Text("Root").foregroundStyle(.secondary).font(.caption)
                 }
             }
 
             // Suggested read-only folders.
             if !model.suggestions.isEmpty {
-                section("Suggested folders (read-only)") {
+                MountSection(title: "Suggested folders (read-only)") {
                     ForEach($model.suggestions) { $s in
                         HStack(spacing: 6) {
-                            changeDot(requireChanges && model.isChanged(s))
+                            ChangeDot(visible: requireChanges && model.isChanged(s))
                             Toggle(isOn: $s.enabled) {
                                 Label(model.shortPath(s.url), systemImage: "lock")
                             }
@@ -197,11 +78,11 @@ struct MountConfigView: View {
                 }
             }
 
-            // Other user-added folders.
-            section("Other folders") {
-                ForEach(model.others) { spec in
+            // Other user-added folders. Keyed by path: ro/rw is edited in place.
+            MountSection(title: "Other folders") {
+                ForEach(model.others, id: \.path) { spec in
                     HStack(spacing: 6) {
-                        changeDot(requireChanges && model.isChanged(other: spec))
+                        ChangeDot(visible: requireChanges && model.isChanged(other: spec))
                         Label(model.shortPath(spec.path), systemImage: spec.readonly ? "lock" : "pencil")
                         Spacer()
                         // Click to flip read-only ↔ read-write (applies on Apply & Rebuild).
@@ -213,26 +94,26 @@ struct MountConfigView: View {
                                 .foregroundStyle(spec.readonly ? Color.secondary : Color.orange)
                                 .frame(minWidth: 22)
                                 .padding(.horizontal, 5).padding(.vertical, 2)
-                                .background(Capsule().fill(Color.secondary.opacity(0.12)))
+                                .background(.quinary, in: .capsule)
                         }
                         .buttonStyle(.plain)
                         .help(spec.readonly ? "Read-only — click to make read-write" : "Read-write — click to make read-only")
+                        .accessibilityLabel(spec.readonly ? "Read-only" : "Read-write")
                         .accessibilityIdentifier("mount-access-toggle")
-                        Button {
+                        Button("Remove \(model.shortPath(spec.path))", systemImage: "minus.circle") {
                             model.removeOther(spec)
-                        } label: { Image(systemName: "minus.circle") }
-                            .buttonStyle(.borderless)
+                        }
+                        .labelStyle(.iconOnly)
+                        .buttonStyle(.borderless)
                     }
                 }
-                Button {
-                    model.addFolders()
-                } label: { Label("Add Folder…", systemImage: "plus") }
+                Button("Add Folder…", systemImage: "plus", action: model.addFolders)
                     .disabled(model.atLimit)
             }
 
             // Managed agent config/state mounts — always mounted; info only.
-            // `.claude` is mounted surgically (specific subpaths), some read-only.
-            section("Agent configuration") {
+            // Whole directories (`.agents`, `.claude`, `.codex` if present), all read-write.
+            MountSection(title: "Agent configuration") {
                 Toggle("Show agent config mounts", isOn: $model.showDotFolders)
                 if model.showDotFolders {
                     ForEach(model.agentMounts) { spec in
@@ -246,8 +127,23 @@ struct MountConfigView: View {
             }
         }
     }
+}
 
-    private var footer: some View {
+/// The mount count against the sbx limit, unsaved changes, and the actions.
+private struct MountConfigFooter: View {
+    let model: MountConfigModel
+    let confirmTitle: String
+    let confirmInfo: String
+    let cancelTitle: String
+    let requireChanges: Bool
+    let onConfirm: (MountPolicy) -> Void
+    let onCancel: () -> Void
+
+    @State private var showInfo = false
+
+    private var actionsEnabled: Bool { !requireChanges || model.isDirty }
+
+    var body: some View {
         HStack {
             Image(systemName: model.atLimit ? "exclamationmark.triangle.fill" : "externaldrive")
                 .foregroundStyle(model.atLimit ? .orange : .secondary)
@@ -261,11 +157,10 @@ struct MountConfigView: View {
                 Text("• Unsaved changes").font(.caption).foregroundStyle(.orange)
             }
             Spacer()
-            Button {
+            Button("About \(confirmTitle)", systemImage: "info.circle") {
                 showInfo.toggle()
-            } label: {
-                Image(systemName: "info.circle")
             }
+            .labelStyle(.iconOnly)
             .buttonStyle(.borderless)
             .help("What does “\(confirmTitle)” do?")
             .popover(isPresented: $showInfo, arrowEdge: .bottom) {
@@ -274,7 +169,7 @@ struct MountConfigView: View {
                     .frame(width: 280, alignment: .leading)
                     .padding(12)
             }
-            Button(cancelTitle, role: .cancel) { onCancel() }
+            Button(cancelTitle, role: .cancel, action: onCancel)
                 .keyboardShortcut(.cancelAction)
                 .disabled(!actionsEnabled)
             Button(confirmTitle) { onConfirm(model.policy()) }
@@ -283,29 +178,29 @@ struct MountConfigView: View {
         }
         .padding()
     }
+}
 
-    /// A small orange dot marking a row that differs from the saved baseline
-    /// (occupies fixed space so rows stay aligned).
-    private func changeDot(_ visible: Bool) -> some View {
+/// A small orange dot marking a row that differs from the saved baseline
+/// (occupies fixed space so rows stay aligned).
+private struct ChangeDot: View {
+    let visible: Bool
+
+    var body: some View {
         Circle()
             .fill(visible ? Color.orange : Color.clear)
             .frame(width: 7, height: 7)
     }
+}
 
-    @ViewBuilder
-    private func section<Content: View>(_ title: String, @ViewBuilder _ content: () -> Content) -> some View {
+/// A titled group of mount rows.
+private struct MountSection<Content: View>: View {
+    let title: String
+    @ViewBuilder let content: Content
+
+    var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(title).font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
-            content()
-        }
-    }
-
-    @ViewBuilder
-    private func row<Trailing: View>(icon: String, title: String, tag: String, @ViewBuilder trailing: () -> Trailing) -> some View {
-        HStack {
-            Label(title, systemImage: icon)
-            Spacer()
-            trailing()
+            content
         }
     }
 }

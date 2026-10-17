@@ -165,64 +165,82 @@ enum InspectorPane: String, CaseIterable, Identifiable {
     }
 }
 
+/// Holds a Settings pane's editing model, built once when the pane first shows;
+/// switching to another pane drops it, discarding unapplied edits.
+///
+/// The model can't come from `State(initialValue:)` in the pane's init: that
+/// argument is evaluated on every init, and the panes are re-created whenever
+/// `InspectorView`'s controller changes — its clock ticks every second — while
+/// the models' inits read UserDefaults or stat folders in `$HOME`.
+private struct PaneModelHost<Model: AnyObject, Content: View>: View {
+    let make: () -> Model
+    @ViewBuilder let content: (Model) -> Content
+
+    @State private var model: Model?
+
+    var body: some View {
+        if let model {
+            content(model)
+        } else {
+            Color.clear.onAppear { model = make() }
+        }
+    }
+}
+
 /// Kits pane for the inspector: choose which registered kits apply to this
 /// workspace. Added kits go in with `sbx kit add`; other changes rebuild.
 private struct KitsInspectorPane: View {
     @ObservedObject var controller: WorkspaceController
-    @StateObject private var model: KitConfigModel
     @State private var pending: Pending?
 
     private enum Pending { case add, rebuild }
 
-    init(controller: WorkspaceController) {
-        self.controller = controller
-        _model = StateObject(wrappedValue: {
+    var body: some View {
+        let agent = controller.primaryAgent
+        PaneModelHost { [controller] in
             let model = KitConfigModel(enabledRefs: controller.kits)
             model.onAgentKit = { [weak controller] profile in
                 guard let controller else { return }
                 controller.setCustomAgents(controller.customAgents + [profile.kind])
             }
             return model
-        }())
-    }
-
-    var body: some View {
-        let agent = controller.primaryAgent
-        KitConfigView(
-            model: model,
-            onConfirm: { _ in pending = model.isAdditionsOnly ? .add : .rebuild },
-            onCancel: { model.revert() },
-            startup: controller.kitStartupStatus(for: agent),
-            onShowLog: { controller.openKitLog(for: agent) },
-            onRefreshStartup: {
-                controller.refreshKitStartup(for: agent)
-                controller.refreshKitDrift(for: agent)
-            },
-            onRebuild: { pending = .rebuild },
-            drift: controller.kitDrift[agent],
-            onAdoptDrift: {
-                let refs = controller.kitDrift[agent]?.extra ?? []
-                controller.adoptKitDrift(for: agent)
-                model.adopt(refs)
-            },
-            onIgnoreDrift: { controller.ignoreKitDrift(for: agent) })
-        .onAppear { controller.refreshKitDrift(for: agent) }
-        .confirmationDialog(pending == .add ? "Add kits to the sandbox?" : "Apply kit changes and rebuild?",
-                            isPresented: Binding(get: { pending != nil }, set: { if !$0 { pending = nil } }),
-                            presenting: pending) { action in
-            Button(action == .add ? "Add to Sandbox" : "Apply & Rebuild") {
-                controller.applyKits(model.enabledRefs, rebuild: action == .rebuild)
-                model.commitBaseline()
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: { action in
-            if action == .add {
-                Text("Each new kit is added with sbx kit add, which recreates the container with the kit appended "
-                     + "and keeps agent state; running sessions in it end. Where sbx can’t add a kit in place, "
-                     + "the sandbox is rebuilt instead. Workspace files are preserved.")
-            } else {
-                Text("The workspace’s container(s) will be stopped and recreated with the new kit set, "
-                     + "ending any running sessions. Workspace files are preserved.")
+        } content: { model in
+            KitConfigView(
+                model: model,
+                onConfirm: { _ in pending = model.isAdditionsOnly ? .add : .rebuild },
+                onCancel: { model.revert() },
+                startup: controller.kitStartupStatus(for: agent),
+                onShowLog: { controller.openKitLog(for: agent) },
+                onRefreshStartup: {
+                    controller.refreshKitStartup(for: agent)
+                    controller.refreshKitDrift(for: agent)
+                },
+                onRebuild: { pending = .rebuild },
+                drift: controller.kitDrift[agent],
+                onAdoptDrift: {
+                    let refs = controller.kitDrift[agent]?.extra ?? []
+                    controller.adoptKitDrift(for: agent)
+                    model.adopt(refs)
+                },
+                onIgnoreDrift: { controller.ignoreKitDrift(for: agent) })
+            .onAppear { controller.refreshKitDrift(for: agent) }
+            .confirmationDialog(pending == .add ? "Add kits to the sandbox?" : "Apply kit changes and rebuild?",
+                                isPresented: Binding(get: { pending != nil }, set: { if !$0 { pending = nil } }),
+                                presenting: pending) { action in
+                Button(action == .add ? "Add to Sandbox" : "Apply & Rebuild") {
+                    controller.applyKits(model.enabledRefs, rebuild: action == .rebuild)
+                    model.commitBaseline()
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: { action in
+                if action == .add {
+                    Text("Each new kit is added with sbx kit add, which recreates the container with the kit appended "
+                         + "and keeps agent state; running sessions in it end. Where sbx can’t add a kit in place, "
+                         + "the sandbox is rebuilt instead. Workspace files are preserved.")
+                } else {
+                    Text("The workspace’s container(s) will be stopped and recreated with the new kit set, "
+                         + "ending any running sessions. Workspace files are preserved.")
+                }
             }
         }
     }
@@ -231,49 +249,48 @@ private struct KitsInspectorPane: View {
 /// Agents pane for the inspector: register custom (kit-defined) agents and pick
 /// which this workspace offers. Applies immediately — nothing to rebuild.
 private struct AgentsInspectorPane: View {
-    @StateObject private var model: AgentConfigModel
+    let controller: WorkspaceController   // only read to build the model
 
-    init(controller: WorkspaceController) {
-        _model = StateObject(wrappedValue: AgentConfigModel(
-            enabled: controller.customAgents, apply: { [weak controller] in controller?.setCustomAgents($0) }))
+    var body: some View {
+        PaneModelHost { [controller] in
+            AgentConfigModel(enabled: controller.customAgents,
+                             apply: { [weak controller] in controller?.setCustomAgents($0) })
+        } content: { model in
+            AgentConfigView(model: model)
+        }
     }
-
-    var body: some View { AgentConfigView(model: model) }
 }
 
 /// Mounts pane for the inspector: edits the workspace mount policy and applies it
 /// (rebuilding the container) on confirmation. Switching panes discards edits.
 private struct MountsInspectorPane: View {
     @ObservedObject var controller: WorkspaceController
-    @StateObject private var model: MountConfigModel
     @State private var confirming = false
 
-    init(controller: WorkspaceController) {
-        self.controller = controller
-        _model = StateObject(wrappedValue: MountConfigModel(
-            home: controller.home, root: controller.rootURL, policy: controller.policy))
-    }
-
     var body: some View {
-        MountConfigView(
-            model: model,
-            confirmTitle: "Apply & Rebuild",
-            confirmInfo: "Saves these mount changes and rebuilds the workspace’s container(s): "
-                + "each is stopped and recreated with the new mounts, which ends any sessions "
-                + "currently running in it. Files in the workspace are preserved.",
-            cancelTitle: "Revert",
-            requireChanges: true,
-            onConfirm: { _ in confirming = true },
-            onCancel: { model.revert() })
-        .confirmationDialog("Apply mount changes and rebuild?", isPresented: $confirming) {
-            Button("Apply & Rebuild") {
-                controller.applyConfiguration(policy: model.policy())
-                model.commitBaseline()
+        PaneModelHost {
+            MountConfigModel(home: controller.home, root: controller.rootURL, policy: controller.policy)
+        } content: { model in
+            MountConfigView(
+                model: model,
+                confirmTitle: "Apply & Rebuild",
+                confirmInfo: "Saves these mount changes and rebuilds the workspace’s container(s): "
+                    + "each is stopped and recreated with the new mounts, which ends any sessions "
+                    + "currently running in it. Files in the workspace are preserved.",
+                cancelTitle: "Revert",
+                requireChanges: true,
+                onConfirm: { _ in confirming = true },
+                onCancel: { model.revert() })
+            .confirmationDialog("Apply mount changes and rebuild?", isPresented: $confirming) {
+                Button("Apply & Rebuild") {
+                    controller.applyConfiguration(policy: model.policy())
+                    model.commitBaseline()
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("The workspace’s container(s) will be stopped and recreated with the new mounts, "
+                     + "ending any running sessions. Workspace files are preserved.")
             }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("The workspace’s container(s) will be stopped and recreated with the new mounts, "
-                 + "ending any running sessions. Workspace files are preserved.")
         }
     }
 }
@@ -282,27 +299,23 @@ private struct MountsInspectorPane: View {
 /// applies them (rebuilding the container) on confirmation.
 private struct MCPInspectorPane: View {
     @ObservedObject var controller: WorkspaceController
-    @StateObject private var model: MCPConfigModel
-
-    init(controller: WorkspaceController) {
-        self.controller = controller
-        _model = StateObject(wrappedValue: MCPConfigModel(
-            url: controller.mcpURL, servers: controller.mcpServers))
-    }
 
     var body: some View {
-        MCPPaneView(
-            model: model,
-            controller: controller,
-            onConfirm: { servers, url in
-                controller.applyMCP(servers: servers, url: url)
-                model.commitBaseline()
-            },
-            onCancel: { model.revert() })
-        .onAppear { controller.refreshMCPStatus() }
+        PaneModelHost {
+            MCPConfigModel(url: controller.mcpURL, servers: controller.mcpServers)
+        } content: { model in
+            MCPPaneView(
+                model: model,
+                controller: controller,
+                onConfirm: { servers, url in
+                    controller.applyMCP(servers: servers, url: url)
+                    model.commitBaseline()
+                },
+                onCancel: { model.revert() })
+            .onAppear { controller.refreshMCPStatus() }
+        }
     }
 }
-
 
 /// Shared size of the inspector sheet's pane area; every pane view fixes its
 /// own frame to these so switching tabs never resizes the sheet.
