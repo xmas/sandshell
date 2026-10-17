@@ -32,7 +32,7 @@ final class ACPSparePool {
         guard spare.connection.isRunning else { retire(spare); return nil }
         // Still in its handshake: leave it for the next chat, start this one cold.
         guard spare.ready else { spares[key] = spare; return nil }
-        Log.info(.sbx, "chat: claimed a warm agent in “\(spare.container)” (\(Int(Date().timeIntervalSince(spare.created)))s old)")
+        Log.info(.sbx, "chat: claimed a warm agent in “\(spare.container)” (\(Int(Date.now.timeIntervalSince(spare.created)))s old)")
         return spare
     }
 
@@ -47,9 +47,10 @@ final class ACPSparePool {
         }
         let conn = ACPConnection(executable: PathFixer.sbxPath(), arguments: arguments)
         do { try conn.start() } catch { return }
-        spares[key] = Spare(connection: conn, tag: tag, container: container, created: Date())
+        spares[key] = Spare(connection: conn, tag: tag, container: container, created: .now)
         Task { [weak self] in
-            // Drain its stream until claimed (stderr chatter); the claimer re-reads nothing from before.
+            // Nothing reads `incoming` until a chat claims this spare: its launch stderr
+            // (extras/launch markers) stays buffered and the claimer's pump replays it.
             let ok = (try? await conn.request("initialize", ChatSession.initializeParams)) != nil
             guard let self, var spare = self.spares[key], spare.connection === conn else { return }
             if ok { spare.ready = true; self.spares[key] = spare } else { self.spares[key] = nil; self.retire(spare) }

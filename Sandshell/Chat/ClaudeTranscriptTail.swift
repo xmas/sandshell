@@ -121,10 +121,10 @@ struct ClaudeTranscriptTail {
     /// How to name the writer in "Continued in …".
     static func writerName(_ entrypoint: String?) -> String {
         switch entrypoint {
-        case "claude-desktop": return "the Claude app"
-        case "cli": return "Claude Code in a terminal"
-        case "claude-vscode", "vscode": return "VS Code"
-        default: return "another app"
+        case "claude-desktop": "the Claude app"
+        case "cli": "Claude Code in a terminal"
+        case "claude-vscode", "vscode": "VS Code"
+        default: "another app"
         }
     }
 

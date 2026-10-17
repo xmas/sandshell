@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import Foundation
 
 /// One transcript entry, transport-agnostic: an ACP adapter (or any future
@@ -21,15 +22,15 @@ enum ChatItem: Identifiable, Equatable {
 
     var id: String {
         switch self {
-        case .user(let id, _, _): return "user-\(id)"
-        case .agentText(let id, _): return "text-\(id)"
-        case .thought(let id, _): return "thought-\(id)"
-        case .tool(let call): return "tool-\(call.id)"
-        case .plan(let id, _): return "plan-\(id)"
-        case .notice(let id, _, _): return "notice-\(id)"
-        case .image(let id, _): return "image-\(id)"
-        case .toolGroup(let calls): return "group-\(calls.first?.id ?? "")"
-        case .fileChanges(let turn, _, _): return "changes-\(turn)"
+        case .user(let id, _, _): "user-\(id)"
+        case .agentText(let id, _): "text-\(id)"
+        case .thought(let id, _): "thought-\(id)"
+        case .tool(let call): "tool-\(call.id)"
+        case .plan(let id, _): "plan-\(id)"
+        case .notice(let id, _, _): "notice-\(id)"
+        case .image(let id, _): "image-\(id)"
+        case .toolGroup(let calls): "group-\(calls.first?.id ?? "")"
+        case .fileChanges(let turn, _, _): "changes-\(turn)"
         }
     }
 
@@ -73,8 +74,8 @@ struct ChatAttachment: Equatable {
     let kind: Kind
     var displayName: String {
         switch kind {
-        case .file(let url): return url.lastPathComponent
-        case .image(_, _, let name): return name
+        case .file(let url): url.lastPathComponent
+        case .image(_, _, let name): name
         }
     }
 }
@@ -94,10 +95,10 @@ final class ChatSession: ObservableObject {
             if phase != .starting { isCatchingUp = false }
             if oldValue == .running, phase == .ready, let next = afterTurn {
                 afterTurn = nil
-                DispatchQueue.main.async { next() }
+                Task { next() }
             } else if oldValue == .running, phase == .ready, queued != nil {
                 // A message sent while the turn ran goes now.
-                DispatchQueue.main.async { [weak self] in
+                Task { [weak self] in
                     guard let self, self.phase == .ready, let (text, files) = self.queued else { return }
                     self.queued = nil
                     self.send(text: text, attachments: files)
@@ -286,7 +287,7 @@ final class ChatSession: ObservableObject {
         connection = conn
         let auth = agent == .claude ? (sbxProxyAuth ? "sbx proxy" : "~/.claude credentials") : "sbx proxy"
         Log.info(.sbx, "chat: launched \(agent.rawValue) ACP agent in “\(containerName)” at \(workdir) (auth: \(auth))")
-        let launchedAt = Date()
+        let launchedAt = Date.now
         // An agent that never answers (its sandbox restarted under it, say)
         // would leave the chat "Starting…" forever: give up on it, so the
         // pane offers Reconnect. The first start may install the adapter.
@@ -361,10 +362,10 @@ final class ChatSession: ObservableObject {
                 guard conn.isRunning else { return }
                 if catchUpMissedTurn() { return }
                 if let sid = sessionID { onSessionID?(sid) }
-                readyAfter = Date().timeIntervalSince(launchedAt)
+                readyAfter = Date.now.timeIntervalSince(launchedAt)
                 startedWarm = spare != nil
                 Log.info(.sbx, String(format: "chat: %@ ready %.1fs after launch%@", agent.rawValue,
-                                      Date().timeIntervalSince(launchedAt), spare != nil ? " (warm)" : ""))
+                                      Date.now.timeIntervalSince(launchedAt), spare != nil ? " (warm)" : ""))
                 phase = .ready
                 warmSpare()
                 startFollowing()
@@ -404,10 +405,10 @@ final class ChatSession: ObservableObject {
     /// (sbx's proxy injects the real credential; nothing secret enters the sandbox).
     static func credentialService(for agent: AgentKind) -> String? {
         switch agent {
-        case .claude: return "anthropic"
-        case .codex: return "openai"
-        case .gemini: return "google"
-        default: return nil
+        case .claude: "anthropic"
+        case .codex: "openai"
+        case .gemini: "google"
+        default: nil
         }
     }
 
@@ -415,18 +416,18 @@ final class ChatSession: ObservableObject {
     static func credentialHelp(for agent: AgentKind) -> String? {
         let rebuild = " A sandbox picks up a new credential when it’s created, so then rebuild this agent’s sandbox "
             + "(Settings ▸ Sandboxes ▸ Rebuild) and restart the chat."
-        switch agent {
+        return switch agent {
         case .claude:
-            return "Claude isn’t signed in for this sandbox. Run `sbx secret set anthropic --oauth` in Terminal "
+            "Claude isn’t signed in for this sandbox. Run `sbx secret set anthropic --oauth` in Terminal "
                 + "(or sign in to Claude Code on this Mac)." + rebuild
         case .codex:
-            return "Codex has no OpenAI credential for this sandbox. Run `sbx secret set openai --oauth` in Terminal "
+            "Codex has no OpenAI credential for this sandbox. Run `sbx secret set openai --oauth` in Terminal "
                 + "to sign in with ChatGPT, or `sbx secret set openai` to store an API key." + rebuild
         case .gemini:
-            return "Gemini has no Google credential for this sandbox. Run `sbx secret set google` in Terminal "
+            "Gemini has no Google credential for this sandbox. Run `sbx secret set google` in Terminal "
                 + "and paste a Gemini API key (aistudio.google.com/apikey)." + rebuild
         default:
-            return nil
+            nil
         }
     }
 
@@ -524,7 +525,7 @@ final class ChatSession: ObservableObject {
         var params: JSONValue = ["sessionId": .string(sid), "prompt": .array(blocks)]
         if agent == .claude {
             // Ask for the turn's file-change report, keyed by our own id.
-            let turn = "t" + UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
+            let turn = "t" + UUID().uuidString.replacing("-", with: "").lowercased()
             turns[turn] = Turn(id: turn, prompt: trimmed,
                                transcriptOffset: transcriptURL.map(ClaudeTranscriptTail.fileSize) ?? 0)
             params = ["sessionId": .string(sid), "prompt": .array(blocks),
@@ -546,8 +547,7 @@ final class ChatSession: ObservableObject {
                         var run = codexNotice ?? (UUID(), [])
                         run.refused.append(refused)
                         codexNotice = run
-                        let names = run.refused.count == 1 ? run.refused[0]
-                            : run.refused.dropLast().joined(separator: ", ") + " and " + run.refused.last!
+                        let names = run.refused.formatted()
                         upsert(.notice(id: run.id, text: "\(names) \(run.refused.count == 1 ? "isn’t" : "aren’t") available "
                                        + "with a ChatGPT sign-in — using \(Self.modelBase(next)).", isError: false))
                         UserDefaults.standard.set(next, forKey: Self.codexModelKey)
@@ -656,6 +656,14 @@ final class ChatSession: ObservableObject {
     #if DEBUG
     /// Tests: the agent asks `q` (nil: it takes its question back).
     func debugAsk(_ q: AgentQuestion?) { question = q }
+    /// Tests: the agent sends this `session/update`.
+    func debugApply(_ update: JSONValue) { apply(update) }
+    /// Tests: talk to `connection` as session `sessionID` (nil and nil: as a
+    /// reload or close leaves it, with the old agent going away).
+    func debugAttach(_ connection: ACPConnection?, sessionID: String?) {
+        self.connection = connection
+        self.sessionID = sessionID
+    }
     #endif
 
     /// Answer the pending permission prompt; nil = cancelled.
@@ -671,7 +679,8 @@ final class ChatSession: ObservableObject {
         Task { _ = await switchModel(id) }
     }
 
-    /// Switch the session's model; false (with a notice) if the agent refused.
+    /// Switch the session's model; false if the agent refused (with a notice),
+    /// or if the chat was closed or reloaded meanwhile (silently).
     @discardableResult
     private func switchModel(_ id: String) async -> Bool {
         guard let conn = connection, let sid = sessionID, id != currentModel else { return true }
@@ -680,13 +689,18 @@ final class ChatSession: ObservableObject {
         do {
             if modelViaSetModel {
                 _ = try await conn.request("session/set_model", ["sessionId": .string(sid), "modelId": .string(id)])
-                return true
+                return !isClosed && connection === conn
             }
             let result = try await conn.request("session/set_config_option", [
                 "sessionId": .string(sid), "configId": "model", "value": .string(id)])
+            // Closed or reloaded meanwhile: that session's options aren't this one's.
+            guard !isClosed, connection === conn else { return false }
             applyConfig(result["configOptions"])
             return true
         } catch {
+            // Closed or reloaded meanwhile (the request failed because its agent
+            // went away): the new session has its own model, and nothing to say.
+            guard !isClosed, connection === conn else { return false }
             if currentModel == id { currentModel = previous }   // still on the old one
             notice("Couldn’t switch model: \(error.localizedDescription)", isError: true)
             return false
@@ -747,8 +761,10 @@ final class ChatSession: ObservableObject {
             do {
                 let r = try await conn.request("session/set_config_option", [
                     "sessionId": .string(sid), "configId": "effort", "value": .string(level ?? "default")])
+                guard !isClosed, connection === conn else { return }
                 applyConfig(r["configOptions"])
             } catch {
+                guard !isClosed, connection === conn else { return }
                 notice("Couldn’t change the effort level: \(error.localizedDescription)", isError: true)
             }
         }
@@ -756,8 +772,18 @@ final class ChatSession: ObservableObject {
 
     func setMode(_ id: String) {
         guard let conn = connection, let sid = sessionID else { return }
+        let previous = currentMode
         currentMode = id
-        Task { _ = try? await conn.request("session/set_mode", ["sessionId": .string(sid), "modeId": .string(id)]) }
+        Task {
+            do {
+                _ = try await conn.request("session/set_mode", ["sessionId": .string(sid), "modeId": .string(id)])
+            } catch {
+                // Closed or reloaded meanwhile: the new session has its own mode.
+                guard !isClosed, connection === conn else { return }
+                if currentMode == id { currentMode = previous }   // still on the old one
+                notice("Couldn’t switch mode: \(error.localizedDescription)", isError: true)
+            }
+        }
     }
 
     // MARK: Turns: Undo (rewind), background tasks, MCP — Claude, via the adapter wrapper
@@ -808,8 +834,8 @@ final class ChatSession: ObservableObject {
     private func extra(_ request: [String: JSONValue]) async throws -> JSONValue {
         guard let conn = connection, let sid = sessionID else { throw ExtraError("The chat isn’t connected.") }
         let json = try JSONEncoder().encode(JSONValue.object(request))
-        let b64 = json.base64EncodedString().replacingOccurrences(of: "+", with: "-")
-            .replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
+        let b64 = json.base64EncodedString().replacing("+", with: "-")
+            .replacing("/", with: "_").replacing("=", with: "")
         let result = try await conn.request("_session/async_task/stop",
                                             ["sessionId": .string(sid), "asyncTaskId": .string("sandshell:" + b64)])
         return result["_meta"]?["sandshell"] ?? .null
@@ -902,11 +928,10 @@ final class ChatSession: ObservableObject {
 
     /// This conversation's Claude transcript on the host.
     private var transcriptURL: URL? {
-        sessionID.map { URL(fileURLWithPath: home)
-            .appendingPathComponent(".claude/projects/\(TranscriptReader.claudeEncodedDir(for: workdir))/\($0).jsonl") }
+        sessionID.map { URL(filePath: home)
+            .appending(path: ".claude/projects/\(TranscriptReader.claudeEncodedDir(for: workdir))/\($0).jsonl") }
     }
 
-    /// Ask Claude Code which MCP servers this session has, and how they're doing.
     /// Claude Code's /context breakdown (nil until asked, or when the
     /// sandbox's kit predates it — then `contextUsageUnavailable` says why).
     @Published private(set) var contextUsage: ContextUsage?
@@ -936,6 +961,7 @@ final class ChatSession: ObservableObject {
         send(text: "/compact", attachments: [])
     }
 
+    /// Ask Claude Code which MCP servers this session has, and how they're doing.
     func refreshMCP() async throws {
         mcpServers = Self.mcpServers(try await extra(["op": "mcpStatus"]))
     }
@@ -969,16 +995,14 @@ final class ChatSession: ObservableObject {
         // The registry knows; the transcript only hints (it said "working" and
         // wrote in the last two minutes).
         if registryReadable { return otherWriter?.isBusy ?? false }
-        return otherWriterWorking && (otherWriterLastWrite.map { Date().timeIntervalSince($0) < 120 } ?? false)
+        return otherWriterWorking && (otherWriterLastWrite.map { Date.now.timeIntervalSince($0) < 120 } ?? false)
     }
 
     /// Who else is writing, for messages ("the Claude app").
     private(set) var otherWriterName = "another app"
 
     private func startFollowing() {
-        guard agent == .claude, follower == nil, let sid = sessionID else { return }
-        let url = URL(fileURLWithPath: home)
-            .appendingPathComponent(".claude/projects/\(TranscriptReader.claudeEncodedDir(for: workdir))/\(sid).jsonl")
+        guard agent == .claude, follower == nil, let url = transcriptURL else { return }
         followURL = url
         followOffset = ClaudeTranscriptTail.fileSize(url)
         followFileID = ClaudeTranscriptTail.fileID(url)
@@ -1019,7 +1043,8 @@ final class ChatSession: ObservableObject {
             MainActor.assumeIsolated {
                 if replaced {
                     // Rewritten by rename: watch the new file once it's there.
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                    Task { [weak self] in
+                        try? await Task.sleep(for: .milliseconds(300))
                         guard let self, self.follower != nil else { return }
                         self.watchTranscript()
                         self.scheduleTick()
@@ -1037,10 +1062,11 @@ final class ChatSession: ObservableObject {
     private func scheduleTick() {
         guard !tickScheduled else { return }
         tickScheduled = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+        Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(250))
             guard let self else { return }
             self.tickScheduled = false
-            Task { await self.followTick() }
+            await self.followTick()
         }
     }
 
@@ -1055,10 +1081,10 @@ final class ChatSession: ObservableObject {
     /// still there? (At most once a minute per writer.)
     private func probeIfQuiet(_ writer: ClaudeSessionRegistry.Entry?) {
         guard let w = writer, !w.isOnThisMac, w.isBusy, let last = w.lastUpdate,
-              Date().timeIntervalSince(last) > registryProbeAfter else { return }
+              Date.now.timeIntervalSince(last) > registryProbeAfter else { return }
         let key = ClaudeSessionRegistry.key(w)
-        if let t = lastProbe[key], Date().timeIntervalSince(t) < 60 { return }
-        lastProbe[key] = Date()
+        if let t = lastProbe[key], Date.now.timeIntervalSince(t) < 60 { return }
+        lastProbe[key] = .now
         Task { [weak self] in
             guard await ClaudeSessionRegistry.sandboxedProcessIsAlive(w) == false, let self else { return }
             Log.info(.sbx, "chat: \(self.otherWriterName) (pid \(w.pid) in a sandbox) is gone; not waiting on it")
@@ -1073,7 +1099,7 @@ final class ChatSession: ObservableObject {
         let home = registryHome ?? home
         let gone = goneWriters
         let (readable, writer) = await Task.detached(priority: .utility) {
-            let dir = URL(fileURLWithPath: home).appendingPathComponent(".claude/sessions").path
+            let dir = URL(filePath: home).appending(path: ".claude/sessions").path
             let readable = FileManager.default.fileExists(atPath: dir)
             return (readable, readable ? ClaudeSessionRegistry.otherWriter(home: home, sessionID: sid, gone: gone) : nil)
         }.value
@@ -1090,9 +1116,9 @@ final class ChatSession: ObservableObject {
         // Our own turns are written to the same file: skip past them, with a
         // moment after each for its last lines to land.
         if phase == .running { sawOwnTurn = true; return }
-        if sawOwnTurn { sawOwnTurn = false; ownTurnEnded = Date(); return }
+        if sawOwnTurn { sawOwnTurn = false; ownTurnEnded = .now; return }
         if let ended = ownTurnEnded {
-            guard Date().timeIntervalSince(ended) >= 2 else { return }
+            guard Date.now.timeIntervalSince(ended) >= 2 else { return }
             ownTurnEnded = nil
             followOffset = ClaudeTranscriptTail.fileSize(url)
             return
@@ -1126,7 +1152,7 @@ final class ChatSession: ObservableObject {
     func applyExternal(_ batch: ClaudeTranscriptTail.Batch) {
         guard batch.sawConversation else { return }
         agentIsBehind = true
-        otherWriterLastWrite = Date()
+        otherWriterLastWrite = .now
         if let working = batch.working {
             // Without a registry to say so, the transcript's turn end is the signal.
             if otherWriterWorking, !working, !registryReadable { onOtherAppIdle?() }
@@ -1368,17 +1394,20 @@ final class ChatSession: ObservableObject {
             return
         }
         guard let text = u["content"]?["text"]?.string else { return }
-        let mid = u["messageId"]?.string ?? "current"
+        let mid = u["messageId"]?.string
+        // Without a messageId, chunks continue the trailing id-less item; each new one gets its own id.
+        func continues(_ id: String) -> Bool { mid.map { $0 == id } ?? id.hasPrefix("local-") }
         if let last = items.last {
             switch (last, thought) {
-            case (.agentText(let id, let t), false) where id == mid:
+            case (.agentText(let id, let t), false) where continues(id):
                 items[items.count - 1] = .agentText(id: id, text: t + text); return
-            case (.thought(let id, let t), true) where id == mid:
+            case (.thought(let id, let t), true) where continues(id):
                 items[items.count - 1] = .thought(id: id, text: t + text); return
             default: break
             }
         }
-        items.append(thought ? .thought(id: mid, text: text) : .agentText(id: mid, text: text))
+        let id = mid ?? "local-\(UUID().uuidString)"
+        items.append(thought ? .thought(id: id, text: text) : .agentText(id: id, text: text))
     }
 
     /// The most telling field of a tool's raw input, for display.

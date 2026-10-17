@@ -27,10 +27,10 @@ enum ClaudeSessionRegistry {
 
     /// Every registered writer of `sessionID`, live or not. Blocks: call off main.
     nonisolated static func entries(home: String, sessionID: String) -> [Entry] {
-        let dir = URL(fileURLWithPath: home).appendingPathComponent(".claude/sessions", isDirectory: true)
-        guard let names = try? FileManager.default.contentsOfDirectory(atPath: dir.path) else { return [] }
+        let dir = URL(filePath: home).appending(path: ".claude/sessions", directoryHint: .isDirectory)
+        guard let names = try? FileManager.default.contentsOfDirectory(atPath: dir.path(percentEncoded: false)) else { return [] }
         return names.filter { $0.hasSuffix(".json") }.compactMap { name in
-            guard let data = FileManager.default.contents(atPath: dir.appendingPathComponent(name).path),
+            guard let data = FileManager.default.contents(atPath: dir.appending(path: name).path(percentEncoded: false)),
                   data.range(of: Data(sessionID.utf8)) != nil,
                   let entry = try? JSONDecoder().decode(Entry.self, from: data),
                   entry.sessionId == sessionID else { return nil }
@@ -42,7 +42,7 @@ enum ClaudeSessionRegistry {
     /// the pid exists and started when the entry says (pids get reused). In a
     /// sandbox we can't see the process: trust it while it's been heard from
     /// recently, or busy without having gone quiet for long.
-    nonisolated static func isAlive(_ e: Entry, now: Date = Date()) -> Bool {
+    nonisolated static func isAlive(_ e: Entry, now: Date = .now) -> Bool {
         if e.isOnThisMac {
             // (kill with 0 or a negative pid probes a process group, not a process.)
             guard e.pid > 0, kill(e.pid, 0) == 0 || errno == EPERM else { return false }
@@ -98,14 +98,14 @@ enum ClaudeSessionRegistry {
     /// `ps -o lstart=` in UTC: how Claude Code records `procStart` on macOS.
     nonisolated static func processStart(_ pid: Int32) -> String? {
         let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/bin/ps")
+        p.executableURL = URL(filePath: "/bin/ps")
         p.arguments = ["-o", "lstart=", "-p", "\(pid)"]
         p.environment = ["TZ": "UTC"]   // Claude Code records it in UTC
         let out = Pipe()
         p.standardOutput = out
         p.standardError = FileHandle.nullDevice
         guard (try? p.run()) != nil else { return nil }
-        let data = out.fileHandleForReading.readDataToEndOfFile()
+        let data = (try? out.fileHandleForReading.readToEnd()) ?? Data()
         p.waitUntilExit()
         let s = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
         // ps pads single-digit days ("Oct  5"); the registry doesn't.

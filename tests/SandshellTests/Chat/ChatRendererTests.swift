@@ -573,24 +573,30 @@ struct ChatRendererTests {
             #expect(ChatRenderer.groupSummary([call], running: testCase.running) == testCase.expected)
         }
 
+        /// Each verb's phrase, listed the way the locale lists things ("Ran a command and read 2 files").
         @Test(arguments: [
-            (["execute", "execute"], false, "Ran 2 commands"),
-            (["execute", "read", "read"], false, "Ran a command, read 2 files"),
-            (["read", "execute", "read"], false, "Read 2 files, ran a command"),
-            (["grep", "glob"], false, "Searched 2 times"),
-            (["grep", "read"], false, "Searched once, read a file"),
-            (["edit", "write", "multiedit"], false, "Edited 3 files"),
-            (["fetch", "websearch"], false, "Fetched 2 pages"),
-            (["think", "task"], false, "Used 2 tools"),
-            (["Bash", "execute"], false, "Ran 2 commands"),
+            (["execute", "execute"], false, ["Ran 2 commands"]),
+            (["execute", "read", "read"], false, ["Ran a command", "read 2 files"]),
+            (["read", "execute", "read"], false, ["Read 2 files", "ran a command"]),
+            (["grep", "glob"], false, ["Searched 2 times"]),
+            (["grep", "read"], false, ["Searched once", "read a file"]),
+            (["edit", "write", "multiedit"], false, ["Edited 3 files"]),
+            (["fetch", "websearch"], false, ["Fetched 2 pages"]),
+            (["think", "task"], false, ["Used 2 tools"]),
+            (["Bash", "execute"], false, ["Ran 2 commands"]),
             (["read", "grep", "edit", "fetch", "think", "execute"], false,
-             "Read a file, searched once, edited a file, fetched a page, used a tool, ran a command"),
-            (["execute", "read"], true, "Running a command, reading a file…"),
-            (["execute", "execute", "edit"], true, "Running 2 commands, editing a file…"),
-        ] as [([String], Bool, String)])
-        func severalCallsAreCountedPerVerbInFirstSeenOrder(kinds: [String], running: Bool, expected: String) {
+             ["Read a file", "searched once", "edited a file", "fetched a page", "used a tool", "ran a command"]),
+            (["execute", "read"], true, ["Running a command", "reading a file"]),
+            (["execute", "execute", "edit"], true, ["Running 2 commands", "editing a file"]),
+        ] as [([String], Bool, [String])])
+        func severalCallsAreCountedPerVerbInFirstSeenOrder(kinds: [String], running: Bool, phrases: [String]) {
             let calls = kinds.enumerated().map { CRFixture.call(id: "c\($0.offset)", title: "ignored", kind: $0.element) }
-            #expect(ChatRenderer.groupSummary(calls, running: running) == expected)
+            #expect(ChatRenderer.groupSummary(calls, running: running) == phrases.formatted() + (running ? "…" : ""))
+        }
+
+        @Test func twoVerbsAreJoinedByAnd() {
+            let calls = [CRFixture.call(id: "c0", kind: "execute"), CRFixture.call(id: "c1", kind: "read")]
+            #expect(ChatRenderer.groupSummary(calls, running: false).hasPrefix("Ran a command and read a file"))
         }
 
         @Test(.tags(.edgeCase), arguments: [(false, ""), (true, "…")])
@@ -662,16 +668,17 @@ struct ChatRendererTests {
             #expect(CRFixture.link(in: rendered, at: 1) == nil, "Only Undo is a link")
         }
 
+        /// Listed the way the locale lists things ("f1.swift and f2.swift").
         @Test(arguments: [
-            (2, "Changed 2 files: f1.swift, f2.swift"),
-            (4, "Changed 4 files: f1.swift, f2.swift, f3.swift, f4.swift"),
-            (5, "Changed 5 files: f1.swift, f2.swift, f3.swift, f4.swift +1 more"),
-            (7, "Changed 7 files: f1.swift, f2.swift, f3.swift, f4.swift +3 more"),
+            (2, ["f1.swift", "f2.swift"]),
+            (4, ["f1.swift", "f2.swift", "f3.swift", "f4.swift"]),
+            (5, ["f1.swift", "f2.swift", "f3.swift", "f4.swift", "1 more"]),
+            (7, ["f1.swift", "f2.swift", "f3.swift", "f4.swift", "3 more"]),
         ])
-        func upToFourNamesAreListed(count: Int, summary: String) {
+        func upToFourNamesAreListed(count: Int, names: [String]) {
             let paths = (1...count).map { "/repo/Sources/f\($0).swift" }
             let rendered = ChatRenderer.render(.fileChanges(turn: "t", paths: paths, restored: false), expanded: false)
-            #expect(rendered.string == "\n✎  \(summary)   Undo\n\n")
+            #expect(rendered.string == "\n✎  Changed \(count) files: \(names.formatted())   Undo\n\n")
         }
 
         @Test func toolTipListsEveryPath() {
@@ -696,7 +703,8 @@ struct ChatRendererTests {
         @Test(arguments: [true, false])
         func noticeIsOneSmallLineBetweenSpacers(isError: Bool) {
             let rendered = ChatRenderer.render(.notice(id: UUID(), text: "Connection lost", isError: isError), expanded: false)
-            #expect(rendered.string == "\nConnection lost\n\n")
+            #expect(rendered.string == (isError ? "\n⚠︎  Connection lost\n\n" : "\nConnection lost\n\n"),
+                    "Errors are marked by more than color")
             CRFixture.verifyFace(CRFixture.font(in: rendered, at: 1), matches: .systemFont(ofSize: 11.5))
             #expect(CRFixture.blockRuns(rendered).isEmpty)
         }
@@ -1232,6 +1240,16 @@ struct ChatRendererTests {
             HighlightCase(language: "swift", source: "var s: String", token: "String", role: "type"),
             HighlightCase(language: "swift", source: "let s = \"hello\"", token: "\"hello\"", role: "string"),
             HighlightCase(language: "js", source: "const c = 'x'", token: "'x'", role: "string"),
+            HighlightCase(language: "", source: "it's 'quoted'", token: "'quoted'", role: "string"),
+            HighlightCase(language: "python", source: "s = f'{n}'", token: "f'{n}'", role: "string"),
+            HighlightCase(language: "python", source: "p = rb'\\d'", token: "rb'\\d'", role: "string"),
+            HighlightCase(language: "shell", source: "echo 'a\\' b", token: "'a\\'", role: "string"),
+            // ' opens only a character literal in Rust (and Swift, Go, the C family…).
+            HighlightCase(language: "rust", source: "let c = 'x';", token: "'x'", role: "string"),
+            HighlightCase(language: "rust", source: "let c = '\\'';", token: "'\\''", role: "string"),
+            HighlightCase(language: "rust", source: "let c = '\\u{1F600}';", token: "'\\u{1F600}'", role: "string"),
+            HighlightCase(language: "rust", source: "fn f<'a>(x: &'a str) -> &'a str", token: "'a>(x: &'", role: "plain"),
+            HighlightCase(language: "go", source: "r := '\\n'", token: "'\\n'", role: "string"),
             HighlightCase(language: "js", source: "const t = `tpl ${x}`", token: "`tpl ${x}`", role: "string"),
             HighlightCase(language: "swift", source: "x // note", token: "// note", role: "comment"),
             HighlightCase(language: "swift", source: "a /* one\ntwo */ b", token: "/* one\ntwo */", role: "comment"),
@@ -1312,10 +1330,47 @@ struct ChatRendererTests {
         func commentMarkersInsideStringsStayString(language: String, source: String, inside: String) throws {
             let highlighted = SyntaxHighlighter.highlight(source, language: language, font: font)
             let range = try #require(CRFixture.range(of: inside, in: highlighted))
-            let color = CRFixture.color(in: highlighted, at: range.location)
-            withKnownIssue("Comments are painted after strings by a regex that knows nothing about string literals, so a // (or # in hash-comment languages) inside a string, such as a URL, turns the rest of the line comment-gray") {
-                #expect(color == NSColor.systemRed)
-            }
+            #expect(CRFixture.color(in: highlighted, at: range.location) == NSColor.systemRed)
+        }
+
+        @Test(.tags(.edgeCase), arguments: [
+            ("swift", "x // don't \"quote\" me", "quote"),
+            ("swift", "/* \"a\" */ let b = 1", "a"),
+            ("python", "x = 1  # it's \"here\"", "here"),
+        ])
+        func quotesInsideCommentsStayComment(language: String, source: String, inside: String) throws {
+            let highlighted = SyntaxHighlighter.highlight(source, language: language, font: font)
+            let range = try #require(CRFixture.range(of: inside, in: highlighted))
+            #expect(CRFixture.color(in: highlighted, at: range.location) == NSColor.secondaryLabelColor)
+        }
+
+        /// A ' that opens no string — a Rust lifetime or label, an escaped
+        /// shell quote, an apostrophe in a word — doesn't run on into the comment
+        /// after it, ending at an apostrophe there.
+        @Test(.tags(.edgeCase), arguments: [
+            ("rust", "fn f() -> &'static str { // it's", "it"),
+            ("rust", "pub fn name(&self) -> &'static str { // it's fixed", "fixed"),
+            ("rust", "fn f<'a>(x: &'a str) {} // it's", "it"),
+            ("rust", "'outer: loop { // don't", "don"),
+            ("shell", "echo it\\'s # it's here", "here"),
+            ("", "Don't panic // it's fine", "fine"),
+            ("js", "x = y // it's", "it"),
+            ("yaml", "note: it's here # it's fine", "fine"),
+        ])
+        func apostrophesThatOpenNoStringLeaveTheCommentAlone(language: String, source: String, inside: String) throws {
+            let highlighted = SyntaxHighlighter.highlight(source, language: language, font: font)
+            let comment = try #require(source.range(of: language == "shell" || language == "yaml" ? "# " : "// "))
+            let start = source.distance(from: source.startIndex, to: comment.lowerBound)
+            try CRFixture.verifyTokenColor(String(source[comment.lowerBound...]), in: highlighted, is: .secondaryLabelColor)
+            let range = try #require(CRFixture.range(of: inside, in: highlighted))
+            #expect(range.location > start, "\(inside.debugDescription) is in the comment")
+            #expect(CRFixture.color(in: highlighted, at: range.location) == NSColor.secondaryLabelColor)
+        }
+
+        @Test func aStringAfterACommentOnTheNextLineIsStillAString() throws {
+            let highlighted = SyntaxHighlighter.highlight("// see \"x\"\nlet s = \"https://a.b\" // c", language: "swift", font: font)
+            try CRFixture.verifyTokenColor("\"https://a.b\"", in: highlighted, is: .systemRed)
+            try CRFixture.verifyTokenColor("// c", in: highlighted, is: .secondaryLabelColor)
         }
     }
 

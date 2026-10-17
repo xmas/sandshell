@@ -36,17 +36,16 @@ enum JSONValue: Sendable, Equatable, Codable {
     }
 
     subscript(key: String) -> JSONValue? {
-        if case .object(let o) = self { return o[key] }
-        return nil
+        if case .object(let o) = self { o[key] } else { nil }
     }
 
-    var string: String? { if case .string(let s) = self { return s }; return nil }
+    var string: String? { if case .string(let s) = self { s } else { nil } }
     /// Truncated toward zero; nil for NaN, infinity or a number past Int's range.
-    var int: Int? { if case .number(let n) = self { return Int(exactly: n.rounded(.towardZero)) }; return nil }
-    var double: Double? { if case .number(let n) = self { return n }; return nil }
-    var bool: Bool? { if case .bool(let b) = self { return b }; return nil }
-    var array: [JSONValue]? { if case .array(let a) = self { return a }; return nil }
-    var object: [String: JSONValue]? { if case .object(let o) = self { return o }; return nil }
+    var int: Int? { if case .number(let n) = self { Int(exactly: n.rounded(.towardZero)) } else { nil } }
+    var double: Double? { if case .number(let n) = self { n } else { nil } }
+    var bool: Bool? { if case .bool(let b) = self { b } else { nil } }
+    var array: [JSONValue]? { if case .array(let a) = self { a } else { nil } }
+    var object: [String: JSONValue]? { if case .object(let o) = self { o } else { nil } }
 
     /// Compact single-line JSON (for logs and raw tool input display).
     var compactString: String {
