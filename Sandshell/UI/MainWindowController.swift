@@ -123,7 +123,8 @@ final class MainWindowController: NSWindowController {
         let split = NSSplitViewController()
         // Sidebar and inspector widths (and whether they're collapsed), per window.
         split.splitView.autosaveName = instanceIndex == 0 ? "MainSplit-\(root.path)" : "MainSplit-\(root.path)#\(instanceIndex)"
-        filesVisibleKey = "filesPaneVisible:" + (instanceIndex == 0 ? root.path : "\(root.path)#\(instanceIndex)")
+        let thisWindow = instanceIndex == 0 ? root.path : "\(root.path)#\(instanceIndex)"
+        filesVisibleKey = "filesPaneVisible:" + thisWindow
 
         let sidebarVC = SidebarListController(controller: controller)
         self.sidebar = sidebarVC
@@ -183,7 +184,9 @@ final class MainWindowController: NSWindowController {
         detailItem.minimumThickness = 420
         split.addSplitViewItem(detailItem)
 
-        let files = FilesPaneController()
+        // Its tabs are this window's, whichever session's folder it shows
+        // (not shared with a split Files pane on the same folder).
+        let files = FilesPaneController(tabsKey: "filesTabs:inspector:" + thisWindow)
         self.filesPane = files
         files.onAddToChat = { [weak self] urls in
             guard let self, case .session(let id)? = self.workspace?.selection else { return }
