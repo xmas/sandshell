@@ -1,33 +1,9 @@
-import AppKit
 import SwiftUI
-
-// MARK: - Window controller
-
-@MainActor
-final class StatusDebugWindowController: NSWindowController {
-    init(controller: WorkspaceController) {
-        let view = StatusDebugView(controller: controller)
-        let hosting = NSHostingController(rootView: view)
-        let window = NSWindow(contentViewController: hosting)
-        window.title = "Sandbox Status  ·  ⌥ ladybug"
-        window.styleMask = [.titled, .closable, .resizable, .miniaturizable]
-        window.setContentSize(NSSize(width: 600, height: 540))
-        window.minSize = NSSize(width: 480, height: 320)
-        window.center()
-        super.init(window: window)
-    }
-
-    required init?(coder: NSCoder) { fatalError() }
-
-    func show() {
-        window?.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: false)
-    }
-}
+import System
 
 // MARK: - Root view
 
-private struct StatusDebugView: View {
+struct StatusDebugView: View {
     @ObservedObject var controller: WorkspaceController
 
     var body: some View {
@@ -35,12 +11,13 @@ private struct StatusDebugView: View {
             VStack(alignment: .leading, spacing: 20) {
                 workspaceHeader
                 containerSection
-                kitSection
+                KitStartupSection(kitStartup: controller.kitStartup,
+                                  openLog: { [controller] in controller.openKitLog(for: $0) })
                 sessionSection
             }
             .padding(18)
         }
-        .background(Color(NSColor.windowBackgroundColor))
+        .background(.windowBackground)
     }
 
     // MARK: Sections
@@ -50,7 +27,7 @@ private struct StatusDebugView: View {
             Text("WORKSPACE")
                 .font(.system(.caption2, design: .monospaced))
                 .foregroundStyle(.secondary)
-            Text(controller.rootURL.path)
+            Text(FilePath(controller.rootURL)?.string ?? "")
                 .font(.system(.caption, design: .monospaced))
                 .textSelection(.enabled)
         }
@@ -58,9 +35,9 @@ private struct StatusDebugView: View {
 
     private var containerSection: some View {
         VStack(alignment: .leading, spacing: 6) {
-            sectionHeader("Containers", count: controller.containerPhases.count)
+            DebugSectionHeader(title: "Containers", count: controller.containerPhases.count)
             if controller.containerPhases.isEmpty {
-                emptyLabel("none created")
+                DebugEmptyLabel(text: "none created")
             } else {
                 VStack(alignment: .leading, spacing: 1) {
                     containerTableHeader
@@ -77,7 +54,7 @@ private struct StatusDebugView: View {
                     }
                 }
                 .padding(8)
-                .background(RoundedRectangle(cornerRadius: 6).fill(Color(NSColor.controlBackgroundColor)))
+                .background(Color(nsColor: .controlBackgroundColor), in: .rect(cornerRadius: 6))
             }
         }
     }
@@ -94,82 +71,23 @@ private struct StatusDebugView: View {
         .padding(.bottom, 2)
     }
 
-    private var kitSection: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            sectionHeader("Kit startup", count: controller.kitStartup.count)
-            if controller.kitStartup.isEmpty {
-                emptyLabel("not read yet")
-            } else {
-                VStack(alignment: .leading, spacing: 1) {
-                    HStack(spacing: 0) {
-                        Text("Agent").frame(width: 70, alignment: .leading)
-                        Text("Kit").frame(width: 130, alignment: .leading)
-                        Text("Outcome").frame(width: 130, alignment: .leading)
-                        Text("Detail").frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .font(.system(.caption2, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                    .padding(.bottom, 2)
-                    Divider()
-                    ForEach(controller.kitStartup.keys.sorted(by: { $0.rawValue < $1.rawValue }), id: \.self) { agent in
-                        if let status = controller.kitStartup[agent] {
-                            if let err = status.fetchError {
-                                HStack(spacing: 0) {
-                                    Text(agent.rawValue).frame(width: 70, alignment: .leading)
-                                    Text("log unavailable: \(err)").foregroundStyle(.tertiary).lineLimit(1)
-                                }
-                                .font(.system(.caption, design: .monospaced)).padding(.vertical, 2)
-                            } else {
-                                HStack(spacing: 0) {
-                                    Text(agent.rawValue).frame(width: 70, alignment: .leading)
-                                    Text("dispatcher").foregroundStyle(.secondary).frame(width: 130, alignment: .leading)
-                                    Text(status.isComplete ? "complete" : (status.report?.isAborted == true ? "ABORTED" : "in progress"))
-                                        .foregroundStyle(status.report?.isAborted == true ? .red : .secondary)
-                                        .frame(width: 130, alignment: .leading)
-                                    Button("Show Log") { controller.openKitLog(for: agent) }
-                                        .controlSize(.mini)
-                                }
-                                .font(.system(.caption, design: .monospaced)).padding(.vertical, 2)
-                                ForEach(status.entries) { entry in
-                                    HStack(alignment: .top, spacing: 0) {
-                                        Text("").frame(width: 70)
-                                        Text(entry.name).frame(width: 130, alignment: .leading)
-                                        Text(entry.outcome.label)
-                                            .foregroundStyle(entry.outcome.isProblem ? .red : (entry.outcome == .running ? .secondary : .green))
-                                            .frame(width: 130, alignment: .leading)
-                                        Text(entry.detail.first ?? "")
-                                            .foregroundStyle(.tertiary).lineLimit(1).truncationMode(.tail)
-                                            .frame(maxWidth: .infinity, alignment: .leading)
-                                    }
-                                    .font(.system(.caption, design: .monospaced)).padding(.vertical, 2)
-                                }
-                            }
-                        }
-                    }
-                }
-                .padding(8)
-                .background(RoundedRectangle(cornerRadius: 6).fill(Color(NSColor.controlBackgroundColor)))
-            }
-        }
-    }
-
     private var sessionSection: some View {
         VStack(alignment: .leading, spacing: 6) {
-            sectionHeader("Sessions", count: controller.runtimes.count)
+            DebugSectionHeader(title: "Sessions", count: controller.runtimes.count)
             if controller.runtimes.isEmpty {
-                emptyLabel("none")
+                DebugEmptyLabel(text: "none")
             } else {
                 VStack(alignment: .leading, spacing: 1) {
                     sessionTableHeader
                     Divider()
-                    ForEach(controller.orderedSessions, id: \.id) { session in
+                    ForEach(controller.orderedSessions) { session in
                         SessionRuntimeRow(
                             session: session,
                             rt: controller.runtime(session.id))
                     }
                 }
                 .padding(8)
-                .background(RoundedRectangle(cornerRadius: 6).fill(Color(NSColor.controlBackgroundColor)))
+                .background(Color(nsColor: .controlBackgroundColor), in: .rect(cornerRadius: 6))
             }
         }
     }
@@ -188,10 +106,15 @@ private struct StatusDebugView: View {
         .foregroundStyle(.secondary)
         .padding(.bottom, 2)
     }
+}
 
-    // MARK: Helpers
+// MARK: - Shared pieces
 
-    private func sectionHeader(_ title: String, count: Int) -> some View {
+private struct DebugSectionHeader: View {
+    let title: String
+    let count: Int
+
+    var body: some View {
         HStack(spacing: 6) {
             Text(title.uppercased())
                 .font(.system(.caption2, design: .monospaced).weight(.semibold))
@@ -201,12 +124,93 @@ private struct StatusDebugView: View {
                 .foregroundStyle(.tertiary)
         }
     }
+}
 
-    private func emptyLabel(_ text: String) -> some View {
+private struct DebugEmptyLabel: View {
+    let text: String
+
+    var body: some View {
         Text(text)
             .font(.system(.caption, design: .monospaced))
             .foregroundStyle(.tertiary)
             .padding(.leading, 4)
+    }
+}
+
+// MARK: - Kit startup section
+
+private struct KitStartupSection: View {
+    let kitStartup: [AgentKind: KitStartupStatus]
+    let openLog: @MainActor (AgentKind) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            DebugSectionHeader(title: "Kit startup", count: kitStartup.count)
+            if kitStartup.isEmpty {
+                DebugEmptyLabel(text: "not read yet")
+            } else {
+                VStack(alignment: .leading, spacing: 1) {
+                    HStack(spacing: 0) {
+                        Text("Agent").frame(width: 70, alignment: .leading)
+                        Text("Kit").frame(width: 130, alignment: .leading)
+                        Text("Outcome").frame(width: 130, alignment: .leading)
+                        Text("Detail").frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .padding(.bottom, 2)
+                    Divider()
+                    ForEach(kitStartup.keys.sorted(by: { $0.rawValue < $1.rawValue }), id: \.self) { agent in
+                        if let status = kitStartup[agent] {
+                            KitStartupRows(agent: agent, status: status, openLog: { openLog(agent) })
+                        }
+                    }
+                }
+                .padding(8)
+                .background(Color(nsColor: .controlBackgroundColor), in: .rect(cornerRadius: 6))
+            }
+        }
+    }
+}
+
+/// One agent's dispatcher line plus a line per configured kit (or the fetch error).
+private struct KitStartupRows: View {
+    let agent: AgentKind
+    let status: KitStartupStatus
+    let openLog: @MainActor () -> Void
+
+    var body: some View {
+        if let err = status.fetchError {
+            HStack(spacing: 0) {
+                Text(agent.rawValue).frame(width: 70, alignment: .leading)
+                Text("log unavailable: \(err)").foregroundStyle(.tertiary).lineLimit(1)
+            }
+            .font(.system(.caption, design: .monospaced)).padding(.vertical, 2)
+        } else {
+            HStack(spacing: 0) {
+                Text(agent.rawValue).frame(width: 70, alignment: .leading)
+                Text("dispatcher").foregroundStyle(.secondary).frame(width: 130, alignment: .leading)
+                Text(status.isComplete ? "complete" : (status.report?.isAborted == true ? "ABORTED" : "in progress"))
+                    .foregroundStyle(status.report?.isAborted == true ? .red : .secondary)
+                    .frame(width: 130, alignment: .leading)
+                Button("Show Log", action: openLog)
+                    .controlSize(.mini)
+            }
+            .font(.system(.caption, design: .monospaced)).padding(.vertical, 2)
+            ForEach(status.entries) { entry in
+                HStack(alignment: .top, spacing: 0) {
+                    Text("").frame(width: 70)
+                    Text(entry.name).frame(width: 130, alignment: .leading)
+                    Text(entry.outcome.label)
+                        .foregroundStyle(entry.outcome.isProblem ? .red : (entry.outcome == .running ? .secondary : .green))
+                        .frame(width: 130, alignment: .leading)
+                    Text(entry.detail.first ?? "")
+                        .foregroundStyle(.tertiary).lineLimit(1).truncationMode(.tail)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .font(.system(.caption, design: .monospaced)).padding(.vertical, 2)
+            }
+        }
     }
 }
 
@@ -260,10 +264,10 @@ private struct SessionRuntimeRow: View {
                 .truncationMode(.tail)
                 .frame(width: 150, alignment: .leading)
 
-            statusDot(rt?.isLive == true, activeColor: .green)
+            statusDot(rt?.isLive == true, activeColor: .green, label: "Live")
                 .frame(width: 36)
 
-            statusDot(rt?.isUnread == true, activeColor: .accentColor)
+            statusDot(rt?.isUnread == true, activeColor: .accentColor, label: "Unread")
                 .frame(width: 36)
 
             Text(rt?.status == .working ? "working" : "ready")
@@ -284,16 +288,15 @@ private struct SessionRuntimeRow: View {
         .padding(.vertical, 2)
     }
 
-    private func statusDot(_ active: Bool, activeColor: Color) -> some View {
+    /// A filled dot when on, an outline when off; VoiceOver hears the column and Yes / No.
+    private func statusDot(_ active: Bool, activeColor: Color, label: String) -> some View {
         Circle()
             .fill(active ? activeColor : Color.clear)
-            .overlay {
-                Circle()
-                    .strokeBorder(
-                        active ? Color.clear : Color.secondary.opacity(0.35),
-                        lineWidth: 1)
-            }
+            .strokeBorder(active ? Color.clear : Color.secondary.opacity(0.35), lineWidth: 1)
             .frame(width: 7, height: 7)
+            .accessibilityElement()
+            .accessibilityLabel(label)
+            .accessibilityValue(active ? "Yes" : "No")
     }
 
     private func formatWork(_ rt: SessionRuntime) -> String {
@@ -318,11 +321,11 @@ private struct SessionRuntimeRow: View {
 extension ContainerPhase {
     var debugDotColor: Color {
         switch self {
-        case .running:              return .green
-        case .creating, .rebuilding: return .yellow
-        case .stopped:              return Color(NSColor.secondaryLabelColor)
-        case .absent:               return Color(NSColor.tertiaryLabelColor)
-        case .failed:               return .red
+        case .running:               .green
+        case .creating, .rebuilding: .yellow
+        case .stopped:               .secondary
+        case .absent:                Color(nsColor: .tertiaryLabelColor)
+        case .failed:                .red
         }
     }
 }

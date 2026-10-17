@@ -86,12 +86,10 @@ final class SessionContextBar: NSStackView {
     /// Re-read the branch and changed count (cheap; called on a slow tick).
     func refreshGit() {
         guard let folder, gitTask == nil else { return }
-        gitTask = Task { [weak self] in
+        // A background poll: the git calls run at utility priority.
+        gitTask = Task(priority: .utility) { [weak self] in
             let status = await GitStatus.load(for: folder)
-            // Lines added/removed vs HEAD (tracked files), like a PR's +/- count.
-            let numstat = status.repoRoot == nil ? nil : await Task.detached(priority: .utility) {
-                GitStatus.git(["-C", folder.path, "diff", "--numstat", "HEAD"])
-            }.value
+            let numstat = status.repoRoot == nil ? nil : await GitStatus.numstat(for: folder)
             guard let self else { return }
             self.gitTask = nil
             // The bar moved to another folder meanwhile: this is old news; read that one.
@@ -193,7 +191,8 @@ final class ContextChip: NSButton {
         self.added = added
         self.removed = removed
         toolTip = tip
-        setAccessibilityLabel(added + removed > 0 ? "\(title), \(added) lines added, \(removed) removed" : title)
+        let counts = String(AttributedString(localized: "^[\(added) line](inflect: true) added, \(removed) removed").characters)
+        setAccessibilityLabel(added + removed > 0 ? "\(title), \(counts)" : title)
         restyle()
     }
 
@@ -214,6 +213,14 @@ final class ContextChip: NSButton {
     override var intrinsicContentSize: NSSize {
         let size = super.intrinsicContentSize
         return NSSize(width: size.width + 14, height: 20)
+    }
+}
+
+private extension GitStatus {
+    /// Lines added/removed vs HEAD (tracked files), like a PR's +/- count; off
+    /// the main actor.
+    @concurrent static func numstat(for folder: URL) async -> String? {
+        git(["-C", folder.path, "diff", "--numstat", "HEAD"])
     }
 }
 

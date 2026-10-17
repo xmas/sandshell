@@ -60,7 +60,7 @@ final class ClaudeStatsView: NSView {
         fillModels()
         Self.fill(effortButton, with: ClaudeEffortChoice.catalog.map { ($0.id, $0.title) })
 
-        infoButton.bezelStyle = .inline
+        infoButton.bezelStyle = .badge
         infoButton.isBordered = false
         infoButton.image = NSImage(systemSymbolName: "info.circle", accessibilityDescription: "Session details")
         infoButton.imagePosition = .imageOnly
@@ -160,7 +160,11 @@ final class ClaudeStatsView: NSView {
         alert.window.initialFirstResponder = field
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         let id = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !id.isEmpty, !id.contains(where: \.isWhitespace) else { return }
+        guard !id.isEmpty else { return }
+        guard !id.contains(where: \.isWhitespace) else {
+            Alerts.inform("Invalid Model ID", "A model id can’t contain spaces.", style: .warning, in: window)
+            return
+        }
         ClaudeModelCatalog.shared.addCustom(id)
         onModelPicked?(id)
     }
@@ -204,19 +208,18 @@ final class ClaudeStatsView: NSView {
     }
 
     private func detailView() -> ClaudeStatsDetailView {
-        ClaudeStatsDetailView(status: status, defaultModel: defaultModel,
-                              defaultEffort: defaultEffort, theme: colors)
+        ClaudeStatsDetailView(status: status, defaultModel: defaultModel, defaultEffort: defaultEffort)
     }
 
     /// Terminal-palette colour for a role when the user hasn't overridden it.
     static func themeFallback(_ role: ClaudeStatsColorRole, _ c: ThemeColors?) -> NSColor {
         switch role {
-        case .low: return c?.termGreen ?? .systemGreen
-        case .mid: return c?.termAccent ?? .systemOrange
-        case .high: return c?.termRed ?? .systemRed
-        case .track: return (c?.termDim ?? .secondaryLabelColor).withAlphaComponent(0.3)
-        case .secondary: return c?.termDim ?? .secondaryLabelColor
-        case .model: return c?.termText ?? .labelColor
+        case .low: c?.termGreen ?? .systemGreen
+        case .mid: c?.termAccent ?? .systemOrange
+        case .high: c?.termRed ?? .systemRed
+        case .track: (c?.termDim ?? .secondaryLabelColor).withAlphaComponent(0.3)
+        case .secondary: c?.termDim ?? .secondaryLabelColor
+        case .model: c?.termText ?? .labelColor
         }
     }
 
@@ -255,12 +258,13 @@ final class ClaudeStatsView: NSView {
             gauge.fillColor = level
             gauge.trackColor = color(.track)
             gauge.isHidden = !vis.isVisible(.gauge)
-            var s = "\(p)%"
+            let percent = p.formatted(.percent)
+            var s = percent
             if let size = status?.contextWindow?.contextWindowSize, size > 0 { s += "/\(f.compact(size))" }
             ctxLabel.stringValue = s
             ctxLabel.textColor = level
             ctxLabel.isHidden = !vis.isVisible(.percent)
-            var tip = "Context window: \(p)% used"
+            var tip = "Context window: \(percent) used"
             if let used = status?.contextTokens { tip += " (\(used.formatted()) tokens)" }
             ctxLabel.toolTip = tip
             gauge.toolTip = tip
@@ -284,14 +288,14 @@ final class ClaudeStatsView: NSView {
         // --resume), else Claude Code's estimate for the current run.
         let convo = status?.sessionID.flatMap { ClaudeUsageStore.shared.sessionTotals[$0] }
         if let convo, convo.messages > 0 {
-            costLabel.stringValue = String(format: "$%.2f", convo.costUSD)
+            costLabel.stringValue = f.usd(convo.costUSD)
             costLabel.textColor = dim
-            costLabel.toolTip = String(format: "Estimated conversation cost: $%.4f over %d messages", convo.costUSD, convo.messages)
+            costLabel.toolTip = "Estimated conversation cost: \(f.usd(convo.costUSD, fractionDigits: 4)) over \(convo.messages.formatted()) messages"
             costLabel.isHidden = !vis.isVisible(.cost)
         } else if let usd = status?.cost?.totalCostUSD {
-            costLabel.stringValue = String(format: "$%.2f", usd)
+            costLabel.stringValue = f.usd(usd)
             costLabel.textColor = dim
-            costLabel.toolTip = String(format: "Estimated session cost: $%.4f", usd)
+            costLabel.toolTip = "Estimated session cost: \(f.usd(usd, fractionDigits: 4))"
             costLabel.isHidden = !vis.isVisible(.cost)
         } else {
             costLabel.isHidden = true
