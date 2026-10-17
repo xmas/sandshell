@@ -236,7 +236,11 @@ final class BackgroundTasksWindowController: NSWindowController {
         window.isFloatingPanel = false
         window.hidesOnDeactivate = false
         window.setContentSize(NSSize(width: 460, height: 420))
-        window.setFrameAutosaveName("BackgroundTasksPanel")
+        // Each window's panel remembers its own frame (a name in use by another
+        // window's panel can't be shared: take the next one).
+        for n in 0..<20 where window.setFrameAutosaveName(n == 0 ? "BackgroundTasksPanel" : "BackgroundTasksPanel \(n + 1)") {
+            break
+        }
         super.init(window: window)
     }
 
