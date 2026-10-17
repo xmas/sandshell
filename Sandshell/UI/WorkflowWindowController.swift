@@ -64,7 +64,7 @@ final class WorkflowWindowModel {
         workspace.$backgroundTasks.sink { [weak self] all in
             self?.task = all[sessionID]?.first { $0.runID == run.id }
         }.store(in: &bag)
-        workspace.$clockTick.sink { [weak self] tick in
+        workspace.clockTick.sink { [weak self] tick in
             guard let self, self.isRunning else { return }
             self.now = tick
         }.store(in: &bag)

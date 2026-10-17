@@ -103,7 +103,7 @@ final class SessionInspectorModel {
         workspace.$backgroundTasks.sink { [weak self] all in self?.tasks = all[sessionID] ?? [] }.store(in: &bag)
         workspace.$workflows.sink { [weak self] all in self?.workflows = all[sessionID] ?? [] }.store(in: &bag)
         workspace.$subagents.sink { [weak self] all in self?.subagents = all[sessionID] ?? [] }.store(in: &bag)
-        workspace.$clockTick.sink { [weak self] tick in
+        workspace.clockTick.sink { [weak self] tick in
             guard let self, self.tasks.contains(where: \.isRunning) || self.workflows.contains(where: { !$0.agentsSettled }) else { return }
             self.now = tick
         }.store(in: &bag)

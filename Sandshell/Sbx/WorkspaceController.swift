@@ -52,8 +52,12 @@ final class WorkspaceController: ObservableObject {
     /// busy/error). The sidebar reloads on this, so opening an inline editor or
     /// changing selection doesn't tear the outline down.
     @Committed private(set) var revision = 0
-    /// Fires every second — the single shared clock for all work-timer displays.
-    @Committed private(set) var clockTick: Date = Date()
+    /// Fires every second — the single shared clock for all work-timer displays
+    /// (replaying the latest tick on subscribe). Deliberately not `@Committed`:
+    /// a tick mustn't send `objectWillChange` and re-render every SwiftUI view
+    /// observing the controller. SwiftUI timers use a `TimelineView` instead.
+    var clockTick: AnyPublisher<Date, Never> { clockSubject.eraseToAnyPublisher() }
+    private let clockSubject = CurrentValueSubject<Date, Never>(.now)
 
     /// Kit startup outcome per agent container, read from the sandbox's
     /// dispatcher log after the container comes up (see `KitStartup.swift`).
@@ -994,7 +998,7 @@ final class WorkspaceController: ObservableObject {
         guard clockCancellable == nil else { return }
         clockCancellable = Timer.publish(every: 1, on: .main, in: .common)
             .autoconnect()
-            .sink { [weak self] date in self?.clockTick = date }
+            .sink { [weak self] date in self?.clockSubject.send(date) }
     }
 
     /// What to do when an existing container's mounts no longer match the policy.

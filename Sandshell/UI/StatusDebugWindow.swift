@@ -246,42 +246,44 @@ private struct ContainerPhaseRow: View {
 }
 
 // MARK: - Session runtime row
-// Re-renders every second because StatusDebugView observes WorkspaceController
-// whose clockTick @Published fires — no separate timer needed here.
+// Its own once-a-second timeline ticks the work time and "Xs ago" (the
+// workspace clock doesn't re-render the views observing the controller).
 
 private struct SessionRuntimeRow: View {
     let session: Session
     let rt: SessionRuntime?
 
     var body: some View {
-        HStack(spacing: 0) {
-            Text(session.name.isEmpty ? "—" : session.name)
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .frame(width: 150, alignment: .leading)
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            HStack(spacing: 0) {
+                Text(session.name.isEmpty ? "—" : session.name)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(width: 150, alignment: .leading)
 
-            statusDot(rt?.isLive == true, activeColor: .green)
-                .frame(width: 36)
+                statusDot(rt?.isLive == true, activeColor: .green)
+                    .frame(width: 36)
 
-            statusDot(rt?.isUnread == true, activeColor: .accentColor)
-                .frame(width: 36)
+                statusDot(rt?.isUnread == true, activeColor: .accentColor)
+                    .frame(width: 36)
 
-            Text(rt?.status == .working ? "working" : "ready")
-                .foregroundStyle(rt?.status == .working ? Color(nsColor: .sessionWorking) : Color.secondary)
-                .frame(width: 70, alignment: .leading)
+                Text(rt?.status == .working ? "working" : "ready")
+                    .foregroundStyle(rt?.status == .working ? Color(nsColor: .sessionWorking) : Color.secondary)
+                    .frame(width: 70, alignment: .leading)
 
-            Text(rt.map { formatWork($0) } ?? "—")
-                .foregroundStyle(.secondary)
-                .frame(width: 60, alignment: .trailing)
+                Text(rt.map { formatWork($0, at: context.date) } ?? "—")
+                    .foregroundStyle(.secondary)
+                    .frame(width: 60, alignment: .trailing)
 
-            Spacer()
+                Spacer()
 
-            Text(rt?.lastActivityAt.map { relativeTime($0) } ?? "—")
-                .foregroundStyle(.tertiary)
-                .frame(width: 84, alignment: .trailing)
+                Text(rt?.lastActivityAt.map { relativeTime($0, at: context.date) } ?? "—")
+                    .foregroundStyle(.tertiary)
+                    .frame(width: 84, alignment: .trailing)
+            }
+            .font(.system(.caption, design: .monospaced))
+            .padding(.vertical, 2)
         }
-        .font(.system(.caption, design: .monospaced))
-        .padding(.vertical, 2)
     }
 
     private func statusDot(_ active: Bool, activeColor: Color) -> some View {
@@ -296,15 +298,15 @@ private struct SessionRuntimeRow: View {
             .frame(width: 7, height: 7)
     }
 
-    private func formatWork(_ rt: SessionRuntime) -> String {
-        let s = Int(ceil(rt.liveWorkSeconds()))
+    private func formatWork(_ rt: SessionRuntime, at now: Date) -> String {
+        let s = Int(ceil(rt.liveWorkSeconds(at: now)))
         guard s >= 1 else { return "—" }
         let m = s / 60; let sec = s % 60
         return m > 0 ? "\(m)m\(sec)s" : "\(sec)s"
     }
 
-    private func relativeTime(_ date: Date) -> String {
-        let s = Int(-date.timeIntervalSinceNow)
+    private func relativeTime(_ date: Date, at now: Date) -> String {
+        let s = Int(now.timeIntervalSince(date))
         if s < 5  { return "now" }
         if s < 60 { return "\(s)s ago" }
         let m = s / 60

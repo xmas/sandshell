@@ -624,7 +624,7 @@ final class SidebarListController: NSViewController {
             self?.runtimesChanged(runtimes)
         }.store(in: &cancellables)
         // Tick the work timer label on working rows via the workspace clock.
-        controller.$clockTick.dropFirst()
+        controller.clockTick.dropFirst()
             .sink { [weak self] _ in self?.tickWorkingTimers() }
             .store(in: &cancellables)
         // Tick the relative "Xm ago" labels on idle rows. Cheap and low-frequency.
