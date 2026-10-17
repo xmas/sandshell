@@ -90,6 +90,15 @@ struct FormatTests {
             #expect(Format.tokens(count, locale: Locale(identifier: "de_DE")) == expected,
                     "A German reader sees a decimal comma, and no grouping")
         }
+
+        @Test(arguments: [
+            (999, "٩٩٩"), (12_000, "١٢k"), (15_500, "١٥٫٥k"), (200_000, "٢٠٠k"),
+            (1_250_000, "١٫٢٥M"), (1_500_000_000, "١٫٥٠B"),
+        ])
+        func wholeAndDecimalCountsUseTheSameDigits(count: Int, expected: String) {
+            #expect(Format.tokens(count, locale: Locale(identifier: "ar@numbers=arab")) == expected,
+                    "Whole counts are in the locale's digits like the decimals, so a list never mixes digit systems")
+        }
     }
 
     // MARK: - Format.ago

@@ -15,6 +15,7 @@ struct SearchStoreTests {
 
     @Test(arguments: [
         ("Fix the login bug", "LOGIN"),
+        ("FIX THE LOGIN", "fix"),
         ("Résumé draft", "resume"),
         ("Résumé draft", "RÉSUMÉ"),
         ("resume draft", "résumé"),
@@ -24,8 +25,9 @@ struct SearchStoreTests {
         #expect(result.tier == .title)
     }
 
-    @Test func folderMatchesIgnoringAccents() throws {
-        let result = try #require(rank([session("Untitled", workdir: "/work/Café")], "cafe").first)
+    @Test(arguments: [("/work/Café", "cafe"), ("/Code/MyIOSApp", "ios")])
+    func foldersMatchIgnoringCaseAndAccents(folder: String, query: String) throws {
+        let result = try #require(rank([session("Untitled", workdir: folder)], query).first)
         #expect(result.tier == .folder, "The title doesn't match, so the folder does")
     }
 

@@ -157,6 +157,12 @@ final class SearchStore: ObservableObject {
 
     // MARK: Ranking
 
+    /// How a typed query matches a title or folder (and so what a result
+    /// highlights): case and accents fold the same in every locale. "Résumé"
+    /// holds "resume", and "FIX" holds "fix" in Turkish too, where
+    /// `localizedStandardContains` pairs I with ı instead.
+    nonisolated static let matchOptions: String.CompareOptions = [.caseInsensitive, .diacriticInsensitive]
+
     /// Merge + rank. Pure, so it can be checked without a window: sessions in
     /// the given (most-recent-first) order, records newest first; `matches`
     /// are the cache's hits by transcript path; `query` is lowercased.
@@ -168,10 +174,11 @@ final class SearchStore: ObservableObject {
         var recordByID: [String: ConversationRecord] = [:]
         for r in records where recordByID[r.id] == nil { recordByID[r.id] = r }
 
+        func contains(_ text: String) -> Bool { text.range(of: q, options: matchOptions) != nil }
         func tier(title: String, folder: String?, hit: HistoryCache.Match?) -> MatchTier? {
             var best = hit?.tier
-            if title.localizedStandardContains(q) { best = .title }
-            else if let folder, folder.localizedStandardContains(q) { best = min(best ?? .folder, .folder) }
+            if contains(title) { best = .title }
+            else if let folder, contains(folder) { best = min(best ?? .folder, .folder) }
             return best
         }
 

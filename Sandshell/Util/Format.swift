@@ -7,26 +7,29 @@ enum Format {
     /// 15500 → "15.5k", 200000 → "200k", 1_250_000 → "1.25M". The unit is
     /// the one the rounded count reads in (999_999 → "1.00M", not "1000k"),
     /// and a count that rounds to whole thousands drops the decimal (1_999 → "2k").
-    /// The decimal separator is the locale's ("15,5k" in German).
+    /// The digits and decimal separator are the locale's ("15,5k" in German),
+    /// whole counts included, so one readout never mixes digit systems.
     static func tokens(_ n: Int, locale: Locale = .current) -> String {
         switch n {
-        case ..<1000: return "\(n)"
+        case ..<1000: return number(n, places: 0, locale)
         case ..<100_000:
             let tenths = (n + 50) / 100
-            return tenths % 10 == 0 ? "\(tenths / 10)k" : decimal(tenths, places: 1, locale) + "k"
-        case ..<999_500: return "\((n + 500) / 1000)k"
-        case ..<999_995_000: return decimal((n + 5_000) / 10_000, places: 2, locale) + "M"
+            return tenths % 10 == 0 ? number(tenths / 10, places: 0, locale) + "k"
+                                    : number(tenths, places: 1, locale) + "k"
+        case ..<999_500: return number((n + 500) / 1000, places: 0, locale) + "k"
+        case ..<999_995_000: return number((n + 5_000) / 10_000, places: 2, locale) + "M"
         default:
             // Rounded in whole numbers like the other units (n + 5_000_000 can overflow).
             let (q, r) = n.quotientAndRemainder(dividingBy: 10_000_000)
-            return decimal(q + (r >= 5_000_000 ? 1 : 0), places: 2, locale) + "B"
+            return number(q + (r >= 5_000_000 ? 1 : 0), places: 2, locale) + "B"
         }
     }
 
-    /// A count of tenths or hundredths (`places` 1 or 2) as an exact decimal:
-    /// 125 hundredths → "1.25".
-    private static func decimal(_ units: Int, places: Int, _ locale: Locale) -> String {
-        (Decimal(units) / pow(10, places))
+    /// A count of tenths or hundredths (`places` 1 or 2) as an exact decimal,
+    /// or a whole number (`places` 0), ungrouped: 125 hundredths → "1.25".
+    private static func number(_ units: Int, places: Int, _ locale: Locale) -> String {
+        guard places > 0 else { return units.formatted(.number.grouping(.never).locale(locale)) }
+        return (Decimal(units) / pow(10, places))
             .formatted(.number.precision(.fractionLength(places)).grouping(.never).locale(locale))
     }
 
