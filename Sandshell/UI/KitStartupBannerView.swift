@@ -30,8 +30,8 @@ final class KitStartupBannerView: NSView {
         /// Identity for dismissal: a dismissed banner stays hidden until this changes.
         var signature: String {
             switch finding {
-            case .startup(let status): return status.signature
-            case .drift(let drift): return "drift|" + drift.signature
+            case .startup(let status): status.signature
+            case .drift(let drift): "drift|" + drift.signature
             }
         }
 
@@ -44,17 +44,17 @@ final class KitStartupBannerView: NSView {
 
         var isVisible: Bool {
             switch finding {
-            case .startup(let status): return status.hasProblems || (status.isInProgress && !status.installing.isEmpty)
-            case .drift(let drift): return !drift.isEmpty
+            case .startup(let status): status.hasProblems || (status.isInProgress && !status.installing.isEmpty)
+            case .drift(let drift): !drift.isEmpty
             }
         }
 
-        var drift: KitDrift? { if case .drift(let d) = finding { return d }; return nil }
+        var drift: KitDrift? { if case .drift(let d) = finding { d } else { nil } }
 
         var title: String {
             switch finding {
-            case .startup(let status): return Self.startupTitle(status)
-            case .drift(let drift): return Self.driftTitle(drift)
+            case .startup(let status): Self.startupTitle(status)
+            case .drift(let drift): Self.driftTitle(drift)
             }
         }
 
@@ -85,7 +85,7 @@ final class KitStartupBannerView: NSView {
         private static func startupTitle(_ status: KitStartupStatus) -> String {
             let problems = status.problems
             if problems.count > 1 {
-                let list = problems.map { "\($0.name) (\($0.outcome.label))" }.joined(separator: ", ")
+                let list = problems.map { "\($0.name) (\($0.outcome.label))" }.formatted()
                 return "\(problems.count) kits had startup problems in “\(status.containerName)”: \(list)."
             }
             let sandbox = "sandbox “\(status.containerName)”"
@@ -101,18 +101,18 @@ final class KitStartupBannerView: NSView {
                     return "Kit “\(p.name)” in \(sandbox): \(p.outcome.label)."
                 }
             }
-            let names = status.installing.map(\.name).joined(separator: ", ")
+            let names = status.installing.map(\.name).formatted()
             return "Kits still installing in “\(status.containerName)”: \(names)…"
         }
 
         private static func driftTitle(_ drift: KitDrift) -> String {
             let sandbox = "Sandbox “\(drift.containerName)”"
             if !drift.extra.isEmpty {
-                let names = drift.extra.map(KitStartupParser.kitName(forRef:)).joined(separator: ", ")
+                let names = drift.extra.map(KitStartupParser.kitName(forRef:)).formatted()
                 let what = drift.extra.count == 1 ? "a kit" : "\(drift.extra.count) kits"
                 return "\(sandbox) has \(what) this workspace doesn’t list: \(names)."
             }
-            let names = drift.missing.map(KitStartupParser.kitName(forRef:)).joined(separator: ", ")
+            let names = drift.missing.map(KitStartupParser.kitName(forRef:)).formatted()
             return "\(sandbox) is missing configured kit\(drift.missing.count == 1 ? "" : "s"): \(names)."
         }
     }
@@ -170,24 +170,24 @@ final class KitStartupBannerView: NSView {
         text.spacing = 2
         text.translatesAutoresizingMaskIntoConstraints = false
 
-        logButton.bezelStyle = .rounded
+        logButton.bezelStyle = .push
         logButton.controlSize = .small
         logButton.target = self
         logButton.action = #selector(showLogClicked)
         logButton.setAccessibilityIdentifier("kit-startup-show-log")
-        rebuildButton.bezelStyle = .rounded
+        rebuildButton.bezelStyle = .push
         rebuildButton.controlSize = .small
         rebuildButton.target = self
         rebuildButton.action = #selector(rebuildClicked)
         rebuildButton.toolTip = "Recreate this sandbox with the current kits and mounts (ends its running sessions)."
         rebuildButton.setAccessibilityIdentifier("kit-startup-rebuild")
-        adoptButton.bezelStyle = .rounded
+        adoptButton.bezelStyle = .push
         adoptButton.controlSize = .small
         adoptButton.target = self
         adoptButton.action = #selector(adoptClicked)
         adoptButton.toolTip = "Add these kits to the workspace’s kit list. The sandbox already has them, so nothing is rebuilt."
         adoptButton.setAccessibilityIdentifier("kit-drift-adopt")
-        ignoreButton.bezelStyle = .rounded
+        ignoreButton.bezelStyle = .push
         ignoreButton.controlSize = .small
         ignoreButton.target = self
         ignoreButton.action = #selector(ignoreClicked)
@@ -270,12 +270,11 @@ final class KitStartupBannerView: NSView {
     }
 
     private func applyTone() {
-        let tint: NSColor
-        switch content?.tone {
-        case .failure?: tint = .systemRed
-        case .warning?: tint = .systemOrange
-        case .drift?: tint = .systemBlue
-        default: tint = themeColors?.text2 ?? .secondaryLabelColor
+        let tint: NSColor = switch content?.tone {
+        case .failure?: .systemRed
+        case .warning?: .systemOrange
+        case .drift?: .systemBlue
+        default: themeColors?.text2 ?? .secondaryLabelColor
         }
         layer?.backgroundColor = tint.withAlphaComponent(0.10).cgColor
         layer?.borderColor = tint.withAlphaComponent(0.35).cgColor
