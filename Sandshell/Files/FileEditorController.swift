@@ -6,9 +6,10 @@ import UniformTypeIdentifiers
 @MainActor
 final class OpenFile {
     enum Mode: Int { case preview, source, changes }
-    let url: URL
+    private(set) var url: URL
     var text: String
     var savedText: String
+    /// The disk's modification date for the version last read or saved.
     var modified: Date?
     var mode: Mode
     var isText: Bool
@@ -26,9 +27,40 @@ final class OpenFile {
         isText = decoded != nil
         text = decoded ?? ""
         savedText = text
-        modified = try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
+        modified = Self.modificationDate(of: url)
         mode = Self.isMarkdown(url) ? .preview : .source
     }
+
+    /// When the file on disk was last written; nil when it's gone. Read
+    /// fresh: a URL caches resource values until the run loop turns, so a read
+    /// right after a save would still see the date from before it.
+    static func modificationDate(of url: URL) -> Date? {
+        var url = url
+        url.removeAllCachedResourceValues()
+        return try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
+    }
+
+    enum DiskChange { case rewritten, gone }
+
+    /// How the file on disk differs from the version last read or saved:
+    /// rewritten (an agent, another app), or gone (moved, deleted, trashed).
+    /// Nil when it's that same version.
+    var diskChange: DiskChange? {
+        let onDisk = Self.modificationDate(of: url)
+        guard onDisk != modified else { return nil }
+        return onDisk == nil ? .gone : .rewritten
+    }
+
+    /// Write the text to disk; from then on it's the saved version.
+    func write() throws {
+        try text.write(to: url, atomically: true, encoding: .utf8)
+        savedText = text
+        modified = Self.modificationDate(of: url)
+    }
+
+    /// It (or a folder holding it) was renamed or moved: same edits, same
+    /// version to compare the disk with, new place.
+    func move(to url: URL) { self.url = url }
 
     static func isMarkdown(_ url: URL) -> Bool { ["md", "markdown", "mdx"].contains(url.pathExtension.lowercased()) }
     var language: String { Self.language(for: url) }
@@ -111,23 +143,33 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
     }
 
     /// A file (or a folder holding it) was renamed or moved: its tab follows,
-    /// unsaved edits and all.
+    /// unsaved edits and all — still comparing the disk with the version it
+    /// was opened from, so a save asks before replacing someone else's.
     func fileMoved(from old: URL, to new: URL) {
-        commitEditorText()
-        for (i, file) in files.enumerated() {
+        for file in files {
             let path = file.url.path
             guard path == old.path || path.hasPrefix(old.path + "/") else { continue }
-            let moved = OpenFile(url: URL(fileURLWithPath: new.path + path.dropFirst(old.path.count)))
-            moved.text = file.text
-            moved.savedText = file.savedText
-            moved.selection = file.selection
-            moved.mode = file.mode
-            files[i] = moved
-            if current === file { current = moved; shownInEditor = moved }
+            file.move(to: URL(fileURLWithPath: new.path + path.dropFirst(old.path.count)))
         }
-        if let current { pathLabel.stringValue = displayPath(current.url) }
+        saveTabs()
+        if let current {
+            pathLabel.stringValue = displayPath(current.url)
+            pathLabel.toolTip = current.url.path
+        }
         rebuildTabs()
     }
+
+    /// Files (or folders holding them) were moved to the Trash here: their
+    /// tabs close, except ones with unsaved edits — those stay, marked, and
+    /// saving one asks before putting it back.
+    func filesTrashed(_ urls: [URL]) {
+        commitEditorText()
+        let paths = urls.map(\.path)
+        let trashed = { (file: OpenFile) in paths.contains { file.url.path == $0 || file.url.path.hasPrefix($0 + "/") } }
+        for (i, file) in files.enumerated().reversed() where trashed(file) && !file.isDirty { close(i) }
+        filesChangedOnDisk()
+    }
+
     private var current: OpenFile?
     private var git = GitStatus.empty
     /// What Changes diffs against: uncommitted (with stage/revert), or a
@@ -149,6 +191,7 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
                                                  target: nil, action: nil)
     private let banner = NSStackView()
     private let bannerLabel = NSTextField(labelWithString: "")
+    private let reloadButton = NSButton(title: "Reload", target: nil, action: nil)
     private let container = NSView()
     private let emptyLabel = NSTextField(labelWithString: "Select a file")
     /// Path + mode row (popovers anchor here).
@@ -188,10 +231,11 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
         header.edgeInsets = NSEdgeInsets(top: 0, left: 12, bottom: 0, right: 10)
 
         bannerLabel.font = .systemFont(ofSize: 12)
-        let reload = NSButton(title: "Reload", target: self, action: #selector(reloadFromDisk))
+        reloadButton.target = self
+        reloadButton.action = #selector(reloadFromDisk)
         let keep = NSButton(title: "Keep Mine", target: self, action: #selector(dismissBanner))
-        for b in [reload, keep] { b.controlSize = .small; b.bezelStyle = .rounded }
-        banner.setViews([bannerLabel, NSView(), keep, reload], in: .leading)
+        for b in [reloadButton, keep] { b.controlSize = .small; b.bezelStyle = .rounded }
+        banner.setViews([bannerLabel, NSView(), keep, reloadButton], in: .leading)
         banner.orientation = .horizontal
         banner.edgeInsets = NSEdgeInsets(top: 6, left: 12, bottom: 6, right: 10)
         banner.wantsLayer = true
@@ -360,6 +404,7 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
     var currentURL: URL? { current?.url }
     var openURLs: [URL] { files.map(\.url) }
     var debugIsDirty: Bool { current?.isDirty ?? false }
+    var debugDiskChange: OpenFile.DiskChange? { current?.diskChange }
     /// Type at the caret, as a person would.
     func debugType(_ text: String, at location: Int) {
         view.window?.makeFirstResponder(editor)
@@ -422,19 +467,26 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
     }
 
     /// Files changed on disk (FSEvents via the tree): reload clean files,
-    /// offer a choice for ones with unsaved edits.
+    /// flag ones with unsaved edits (rewritten, or moved or deleted).
     func filesChangedOnDisk() {
         commitEditorText()
         for file in files {
-            let mtime = try? file.url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
-            guard let mtime, mtime != file.modified else { continue }
-            if !file.isDirty {
+            guard let change = file.diskChange else { continue }
+            if file.isDirty {
+                if file === current { showDiskBanner(change, for: file) }
+            } else if change == .rewritten {
                 reload(file)
-            } else if file === current {
-                bannerLabel.stringValue = "\(file.url.lastPathComponent) changed on disk."
-                banner.isHidden = false
             }
         }
+    }
+
+    /// The current file has unsaved edits and isn't what's on disk any more:
+    /// say so (Reload only when there's something to reload).
+    private func showDiskBanner(_ change: OpenFile.DiskChange, for file: OpenFile) {
+        let name = file.url.lastPathComponent
+        bannerLabel.stringValue = change == .gone ? "\(name) was moved or deleted." : "\(name) changed on disk."
+        reloadButton.isHidden = change == .gone
+        banner.isHidden = false
     }
 
     private func reload(_ file: OpenFile) {
@@ -460,7 +512,7 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
 
     @objc private func dismissBanner() {
         banner.isHidden = true
-        current?.modified = try? current?.url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
+        if let current { current.modified = OpenFile.modificationDate(of: current.url) }
     }
 
     // MARK: Showing
@@ -498,11 +550,7 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
 
         switch file.mode {
         case .source:
-            if file.isDirty, let onDisk = try? file.url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate,
-               onDisk != file.modified {
-                bannerLabel.stringValue = "\(file.url.lastPathComponent) changed on disk."
-                banner.isHidden = false
-            }
+            if file.isDirty, let change = file.diskChange { showDiskBanner(change, for: file) }
             editor.isEditable = true
             // The same text already showing (a refresh): leave the caret,
             // scroll and undo alone.
@@ -983,17 +1031,22 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
 
     private func save(_ file: OpenFile) {
         // Changed on disk since it was opened (an agent, while this tab sat in
-        // the background): don't overwrite that without asking.
-        let onDisk = try? file.url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
-        if let onDisk, onDisk != file.modified,
-           !Alerts.confirm("\(file.url.lastPathComponent) changed on disk since you opened it.",
-                           "Saving replaces that version with yours.", confirm: "Save Anyway", destructive: true) {
-            return
+        // the background), or moved, deleted or trashed since: don't overwrite
+        // that, or quietly bring it back, without asking.
+        let name = file.url.lastPathComponent
+        switch file.diskChange {
+        case .rewritten?:
+            guard Alerts.confirm("\(name) changed on disk since you opened it.",
+                                 "Saving replaces that version with yours.", confirm: "Save Anyway", destructive: true)
+            else { return }
+        case .gone?:
+            guard Alerts.confirm("\(name) was moved or deleted since you opened it.",
+                                 "Saving puts your version back where it was.", confirm: "Save Anyway")
+            else { return }
+        case nil: break
         }
         do {
-            try file.text.write(to: file.url, atomically: true, encoding: .utf8)
-            file.savedText = file.text
-            file.modified = try? file.url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
+            try file.write()
             rebuildTabs()
             refreshChanges(for: file)
         } catch {
@@ -1001,11 +1054,20 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
         }
     }
 
-    /// File ▸ Print: the open file as text.
+    /// What File ▸ Print prints: the tab as it shows — its text in Source, the
+    /// rendered Markdown in Preview, the diff in Changes. (Only Source puts the
+    /// file's text in `editor`; otherwise it holds whichever file was last
+    /// shown there.) Nil for a file that isn't text.
+    var printView: NSView? {
+        guard let file = current, file.isText else { return nil }
+        return file.mode == .source ? editor : preview
+    }
+
+    /// File ▸ Print.
     @objc func printDocument(_ sender: Any?) {
-        guard current?.isText == true else { return NSSound.beep() }
-        let op = NSPrintOperation(view: editor)
-        op.jobTitle = current?.url.lastPathComponent ?? "Untitled"
+        guard let file = current, let printView else { return NSSound.beep() }
+        let op = NSPrintOperation(view: printView)
+        op.jobTitle = file.url.lastPathComponent
         if let window = view.window { op.runModal(for: window, delegate: nil, didRun: nil, contextInfo: nil) } else { op.run() }
     }
 
