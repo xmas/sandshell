@@ -155,26 +155,27 @@ struct FileEditorControllerTests {
 
     @MainActor
     struct Lines {
-        /// The editor's count matches NSString.lineRange (what Go to Line and
-        /// the ruler use): CRLF is one break, a lone CR or U+2028 one too, a
-        /// form feed or vertical tab none.
+        /// The editor's count (Go to Line, the caret line) and the ruler's
+        /// lines agree, as NSString.lineRange breaks them: CRLF is one break,
+        /// a lone CR, NEL, U+2028 or U+2029 one too, a form feed or vertical
+        /// tab none — and a final break of any kind starts an empty last line.
         @Test(arguments: [
             ("", 1), ("one", 1), ("one\n", 2), ("one\ntwo", 2), ("one\ntwo\n", 3),
             ("one\r\ntwo\r\nthree", 3), ("one\r\n", 2), ("one\rtwo", 2), ("one\u{2028}two", 2),
             ("one\u{0C}two\u{0B}three", 1), ("\n\n", 3),
+            ("one\r", 2), ("a\rb\r", 3), ("one\u{85}", 2), ("one\u{2028}", 2), ("one\u{2029}", 2),
         ])
         func lineCountIsWhatTheRulerNumbers(text: String, lines: Int) {
             #expect(FileEditorController.lineCount(of: text) == lines)
-            // The same breaks NSString finds, line by line.
-            let ns = text as NSString
-            var breaks = 0, location = 0
-            while location < ns.length {
-                var end = 0, contentsEnd = 0
-                ns.getLineStart(nil, end: &end, contentsEnd: &contentsEnd, for: NSRange(location: location, length: 0))
-                if contentsEnd < end { breaks += 1 }
-                location = end
-            }
-            #expect(breaks + 1 == lines)
+            #expect(LineNumberRuler.lineStarts(in: text as NSString).count == lines)
+        }
+
+        /// Each line starts after the whole break before it (both halves of a
+        /// CRLF), in UTF-16 offsets.
+        @Test func rulerLinesStartAfterEachBreak() {
+            #expect(LineNumberRuler.lineStarts(in: "ab\r\ncd\re\n") == [0, 4, 7, 9])
+            #expect(LineNumberRuler.lineStarts(in: "😀\nx") == [0, 3])
+            #expect(LineNumberRuler.lineStarts(in: "") == [0])
         }
 
         @Test func untrackedFileIsAllAddedOneLineEach() {
@@ -320,6 +321,18 @@ struct FileEditorControllerTests {
             try FileManager.default.moveItem(at: notes, to: docs)
             editor.fileMoved(from: notes, to: docs)
             #expect(editor.openURLs.map(\.path) == [inside.path])
+        }
+
+        /// Go to Line's column stops at the end of the line's text, before
+        /// its break (a CRLF or a lone CR too), not on the next line.
+        @Test(.tags(.fileSystem, .edgeCase), arguments: ["ab\ncd\n", "ab\r\ncd\r\n", "ab\rcd\r"])
+        func goToLineColumnStopsBeforeTheLineBreak(text: String) throws {
+            editor.open(try scratch.file("lines.txt", text))
+            editor.goToLineForTesting(1, column: 10)
+            #expect(editor.debugCaret == 2)
+            #expect(editor.caretLineForTesting == 1)
+            editor.goToLineForTesting(2, column: 2)
+            #expect(editor.caretLineForTesting == 2)
         }
 
         /// It says why it couldn't be read, with nothing to edit, save or print.

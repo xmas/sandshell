@@ -232,7 +232,7 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
     private let bannerLabel = NSTextField(labelWithString: "")
     private let reloadButton = NSButton(title: "Reload", target: nil, action: nil)
     private let container = NSView()
-    private let emptyLabel = NSTextField(labelWithString: "Select a file")
+    private let emptyLabel = NSTextField(wrappingLabelWithString: "Select a file")
     /// Path + mode row (popovers anchor here).
     let headerView = NSStackView()
     private var header: NSStackView { headerView }
@@ -284,7 +284,11 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
         setUpPreview()
         emptyLabel.textColor = .tertiaryLabelColor
         emptyLabel.font = .systemFont(ofSize: 13)
-        emptyLabel.lineBreakMode = .byTruncatingMiddle   // a read error can be long
+        // A read error is a sentence with the reason in its middle: it wraps,
+        // centered, rather than truncate in a narrow pane.
+        emptyLabel.alignment = .center
+        emptyLabel.maximumNumberOfLines = 0
+        emptyLabel.isSelectable = false
 
         let stack = NSStackView(views: [tabScroll, header, banner, container])
         stack.orientation = .vertical
@@ -313,9 +317,9 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
             tabScroll.heightAnchor.constraint(equalToConstant: 30),
             tabBar.heightAnchor.constraint(equalTo: tabScroll.heightAnchor),
             header.heightAnchor.constraint(equalToConstant: 30),
-            emptyLabel.centerXAnchor.constraint(equalTo: container.centerXAnchor),
+            emptyLabel.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 16),
+            emptyLabel.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -16),
             emptyLabel.centerYAnchor.constraint(equalTo: container.centerYAnchor),
-            emptyLabel.widthAnchor.constraint(lessThanOrEqualTo: container.widthAnchor, constant: -32),
         ])
         view = root
         show(nil)
@@ -398,8 +402,11 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
             start = NSMaxRange(ns.lineRange(for: NSRange(location: start, length: 0)))
             n += 1
         }
-        let lineRange = ns.lineRange(for: NSRange(location: min(start, ns.length), length: 0))
-        let content = lineRange.length - (ns.substring(with: lineRange).hasSuffix("\n") ? 1 : 0)
+        var lineStart = 0, lineEnd = 0, contentsEnd = 0
+        ns.getLineStart(&lineStart, end: &lineEnd, contentsEnd: &contentsEnd,
+                        for: NSRange(location: min(start, ns.length), length: 0))
+        let lineRange = NSRange(location: lineStart, length: lineEnd - lineStart)
+        let content = contentsEnd - lineStart   // without its break: LF, CRLF, a lone CR…
         var target = NSRange(location: lineRange.location, length: 0)
         if let column, column > 1 { target.location += min(column - 1, content) }
         if !highlight.isEmpty {
@@ -583,7 +590,6 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
         previewScroll.isHidden = true
         quickLook.isHidden = true
         emptyLabel.stringValue = "Select a file"
-        emptyLabel.toolTip = nil
         emptyLabel.isHidden = file != nil
         guard let file else {
             pathLabel.stringValue = ""
@@ -597,7 +603,6 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
             if let error = file.readError {
                 // It couldn't be read: say why (it names the file), rather than an empty preview.
                 emptyLabel.stringValue = error.localizedDescription
-                emptyLabel.toolTip = error.localizedDescription
                 emptyLabel.isHidden = false
             } else {
                 quickLook.previewItem = file.url as NSURL
@@ -1296,18 +1301,26 @@ final class LineNumberRuler: NSRulerView {
 
     func lineCountChanged() {
         guard let s = textView?.string as NSString? else { return }
-        var starts = [0]
-        var i = 0
-        while i < s.length {
-            let r = s.lineRange(for: NSRange(location: i, length: 0))
-            i = NSMaxRange(r)
-            if i < s.length || (i == s.length && s.length > 0 && s.character(at: s.length - 1) == 10) { starts.append(i) }
-            if r.length == 0 { break }
-        }
-        lineStarts = starts
-        let digits = max(3, String(starts.count).count)
+        lineStarts = Self.lineStarts(in: s)
+        let digits = max(3, String(lineStarts.count).count)
         ruleThickness = CGFloat(digits) * 7.5 + 22
         needsDisplay = true
+    }
+
+    /// Where each line starts (UTF-16 offsets): after every break NSString
+    /// finds (LF, CR, CRLF, NEL, U+2028, U+2029), so a final break of any kind
+    /// starts an empty last line — the lines `FileEditorController.lineCount(of:)` counts.
+    nonisolated static func lineStarts(in s: NSString) -> [Int] {
+        var starts = [0]
+        var location = 0
+        while location < s.length {
+            var end = 0, contentsEnd = 0
+            s.getLineStart(nil, end: &end, contentsEnd: &contentsEnd, for: NSRange(location: location, length: 0))
+            guard contentsEnd < end, end > location else { break }   // the last line, with no break
+            starts.append(end)
+            location = end
+        }
+        return starts
     }
 
     private func line(forOffset offset: Int) -> Int {

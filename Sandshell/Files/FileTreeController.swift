@@ -530,7 +530,9 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
                 p.standardOutput = out
                 p.standardError = FileHandle.nullDevice
                 guard (try? p.run()) != nil else { return "" }
-                let data = out.fileHandleForReading.readDataToEndOfFile()
+                let data: Data
+                do { data = try out.fileHandleForReading.readToEnd() ?? Data() }   // nil: no matches
+                catch { p.terminate(); p.waitUntilExit(); return "" }   // unread, grep could block on a full pipe
                 p.waitUntilExit()
                 return String(decoding: data, as: UTF8.self)
             }.value
@@ -897,13 +899,13 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
 
     func duplicate(_ urls: [URL]) {
         var made: [URL] = []
-        var failures: [(url: URL, error: any Error)] = []
+        var failures: [CopyFailure] = []
         for url in urls {
             let copy = Self.unique(url.lastPathComponent, in: url.deletingLastPathComponent(), copy: true)
             do {
                 try FileManager.default.copyItem(at: url, to: copy)
                 made.append(copy)
-            } catch { failures.append((url, error)) }
+            } catch { failures.append((url, error.localizedDescription)) }
         }
         // What was copied can be undone, even when something else couldn't be.
         if !made.isEmpty {
@@ -913,10 +915,13 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
         if !failures.isEmpty { Self.informCopyFailed("duplicate", failures) } else if made.isEmpty { NSSound.beep() }
     }
 
-    /// Couldn't `verb` “a”, “b”: each one's reason, from the file system.
-    private static func informCopyFailed(_ verb: String, _ failures: [(url: URL, error: any Error)]) {
+    /// A copy that didn't happen: what, and the file system's reason.
+    private typealias CopyFailure = (url: URL, reason: String)
+
+    /// Couldn't `verb` “a”, “b”: each one's reason — a sheet on `window`, app-modal without one.
+    private static func informCopyFailed(_ verb: String, _ failures: [CopyFailure], in window: NSWindow? = nil) {
         let names = failures.map { " “\($0.url.lastPathComponent)”" }.joined(separator: ",")
-        Alerts.inform("Couldn’t \(verb)\(names).", failures.map { $0.error.localizedDescription }.joined(separator: "\n"))
+        Alerts.inform("Couldn’t \(verb)\(names).", failures.map(\.reason).joined(separator: "\n"), in: window)
     }
 
     /// Move to Trash (⌘⌫); Undo puts them back.
@@ -979,7 +984,7 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
                                                              options: [.urlReadingFileURLsOnly: true]) as? [URL] else { return false }
         let isInternal = info.draggingSource as? NSOutlineView === outlineView && !NSEvent.modifierFlags.contains(.option)
         var done = false
-        var failures: [(url: URL, error: any Error)] = []
+        var failures: [CopyFailure] = []
         undo?.beginUndoGrouping()
         for url in Self.outermost(urls)
         where url.deletingLastPathComponent().standardizedFileURL != dest.standardizedFileURL || !isInternal {
@@ -992,12 +997,16 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
                     try FileManager.default.copyItem(at: url, to: target)
                     Self.registerUndo("Copy", on: undo, tree: self) { _, tree in Self.trash([target], undo: nil, tree: tree) }
                     done = true
-                } catch { failures.append((url, error)) }
+                } catch { failures.append((url, error.localizedDescription)) }
             }
         }
         undo?.endUndoGrouping()
         refreshNow()
-        if !failures.isEmpty { Self.informCopyFailed("copy", failures) }
+        if !failures.isEmpty {
+            // Once the drop has returned, as a sheet: an app-modal alert here
+            // would hold the other app's drag session open until dismissed.
+            Task { [weak self, failures] in Self.informCopyFailed("copy", failures, in: self?.view.window) }
+        }
         return done
     }
 
