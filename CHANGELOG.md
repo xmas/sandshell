@@ -2,7 +2,7 @@
 
 A running log of what changed, newest first. Yes, we actually write these.
 
-## Unreleased
+## v0.2.28 — "In Detail"
 - **Chats read in a centered column** up to 800 points wide in a wide pane, like the Claude app — the transcript, the composer and its controls line up; the scroller stays at the edge.
 - **Session Details beside each chat** (View ▸ Show Session Details, ⌥⌘I), like the Claude app's side panel, with cards you can collapse and drag into any order: **Context** (Claude Code's /context breakdown — messages, tools, MCP tools, memory, skills, the auto-compact buffer and free space — the MCP tools and memory files behind it, how far until auto-compact, and Compact Session), **Background tasks** (workflows, subagents, commands and monitors with their time and Stop; finished ones folded away), **Connectors** (the chat's MCP servers and their state) and **Environment** (the sandbox and its system, the folder and how the sandbox sees it, git branch, worktree and ahead/behind, published ports you can open, the network policy, kits).
 - **Workflows** Claude runs show as background tasks and as rows under their session; open one for a window like the Claude app's: elapsed time, agents and tokens, each phase's progress, and every agent's model, tokens and time (click one to read its conversation).
