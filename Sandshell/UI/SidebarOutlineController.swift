@@ -1032,6 +1032,13 @@ final class SidebarListController: NSViewController {
         statusDebugWindow?.show()
     }
 
+    /// The workspace window closed: its status window goes with it (it holds
+    /// the workspace, whose `sbx` polling would otherwise outlive the window).
+    func closeAuxiliaryWindows() {
+        statusDebugWindow?.close()
+        statusDebugWindow = nil
+    }
+
     /// Present the per-root settings inspector (gear next to Search, and ⌘,) as a
     /// native macOS sheet — a fixed-size SwiftUI view; Close or Esc dismisses it.
     /// No-op if a sheet is already up (so ⌘, doesn't stack inspectors).
