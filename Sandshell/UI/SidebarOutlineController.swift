@@ -7,11 +7,11 @@ extension AgentKind {
     /// SF Symbol used for an agent's session row.
     var symbolName: String {
         switch self {
-        case .claude, .dockerAgent: return "sparkles"
-        case .codex: return "chevron.left.forwardslash.chevron.right"
-        case .gemini: return "diamond"
-        case .shell: return "terminal"
-        default: return customSymbol ?? "cpu"
+        case .claude, .dockerAgent: "sparkles"
+        case .codex: "chevron.left.forwardslash.chevron.right"
+        case .gemini: "diamond"
+        case .shell: "terminal"
+        default: customSymbol ?? "cpu"
         }
     }
 
@@ -92,9 +92,10 @@ final class SidebarListController: NSViewController {
     private var reloading = false
     private var settingSelection = false
 
-    /// Sessions in display order — the single source of truth for row↔session
-    /// mapping. A row index is simply an index into this array; there is no
-    /// per-row identity object (NSTableView addresses rows by integer index).
+    /// Sessions in display order, after the search filter. Table rows map
+    /// through `rows`, which also holds each open session's subagent and
+    /// workflow rows, so an index here is not a row index: use `row(of:)` /
+    /// `sessionID(atRow:)`.
     private(set) var displayedSessionIDs: [UUID] = []
 
     /// What each row shows: a session, or one of its subagents beneath it.
@@ -586,7 +587,7 @@ final class SidebarListController: NSViewController {
         controller.$selection.sink { [weak self] sel in
             guard let self else { return }
             let previous = self.lastActiveSession
-            self.lastActiveSession = { if case let .session(id) = sel { return id } else { return nil } }()
+            self.lastActiveSession = if case let .session(id) = sel { id } else { nil }
             self.syncSelection(sel)
             // Bold the newly-active session immediately (and un-bold the previous
             // unless it's still live) — no wait for the terminal to launch.
@@ -609,7 +610,7 @@ final class SidebarListController: NSViewController {
         controller.$backgroundTasks.dropFirst().sink { [weak self] tasks in
             guard let self else { return }
             for id in Set(tasks.keys).union(self.backgroundCounts.keys) { self.updateSessionRow(id) }
-            self.backgroundCounts = tasks.mapValues { $0.filter(\.isRunning).count }
+            self.backgroundCounts = tasks.mapValues { $0.count(where: \.isRunning) }
         }.store(in: &cancellables)
         // Only when a row would change: a running subagent's or workflow's
         // transcripts are written all the time, and every poll would rebuild
@@ -1239,8 +1240,8 @@ final class SidebarListController: NSViewController {
 
     // MARK: Copy
 
-    /// ⌘C: each selected session as "name — folder path" (and its folder path
-    /// alone, for one); the same as a drag carries.
+    /// ⌘C: each selected session as "name — folder path", one per line (a drag
+    /// carries the folder path alone).
     @objc func copy(_ sender: Any?) {
         guard !selectedSessionIDs.isEmpty else { return NSSound.beep() }
         writeSelection(to: .general)
@@ -1262,9 +1263,9 @@ final class SidebarListController: NSViewController {
     #endif
 
     private func pasteboardText(_ ids: [UUID]) -> String {
-        let sessions = ids.compactMap { controller.session(id: $0) }
-        if sessions.count == 1 { return "\(sessions[0].name) — \(sessions[0].workdir)" }
-        return sessions.map { "\($0.name) — \($0.workdir)" }.joined(separator: "\n")
+        ids.compactMap { controller.session(id: $0) }
+            .map { "\($0.name) — \($0.workdir)" }
+            .joined(separator: "\n")
     }
 
     /// Edit ▸ Find ▸ Filter Sessions (⌥⌘F): the sidebar's filter field.
@@ -1981,9 +1982,8 @@ final class SessionCellView: NSTableCellView {
     }
 
     private func syncHover() {
-        let hovered = window?.isKeyWindow == true
-            && bounds.contains(convert(window!.mouseLocationOutsideOfEventStream, from: nil))
-        closeButton.isHidden = !hovered
+        guard let window, window.isKeyWindow else { closeButton.isHidden = true; return }
+        closeButton.isHidden = !bounds.contains(convert(window.mouseLocationOutsideOfEventStream, from: nil))
     }
 
     override func updateTrackingAreas() {
@@ -2081,7 +2081,7 @@ extension SessionCellView: NSTextFieldDelegate {
 }
 
 /// Coarse relative time for the session subline: "just now" → "2m ago" → "3h ago".
-func relativeActivity(_ date: Date, now: Date = Date()) -> String { Format.ago(date, now: now) }
+func relativeActivity(_ date: Date, now: Date = .now) -> String { Format.ago(date, now: now) }
 func compactWorkTime(_ seconds: TimeInterval) -> String? { Format.compactWorkTime(seconds) }
 func formatWorkTime(_ seconds: TimeInterval) -> String { Format.workTime(seconds) }
 
@@ -2261,12 +2261,11 @@ final class SubagentCellView: NSTableCellView {
     private let lineColor: NSColor
 
     convenience init(_ info: SubagentInfo, isLast: Bool, theme: ThemeColors) {
-        let state: String
-        switch info.state {
-        case .running: state = "Working"
-        case .done: state = Format.ago(info.lastWrite)
-        case .failed: state = "Failed"
-        case .stopped: state = "Stopped"
+        let state = switch info.state {
+        case .running: "Working"
+        case .done: Format.ago(info.lastWrite)
+        case .failed: "Failed"
+        case .stopped: "Stopped"
         }
         self.init(title: info.title, subtitle: [info.agentType, state].compactMap { $0 }.joined(separator: " · "),
                   running: info.isRunning, failed: info.state == .failed, isLast: isLast, theme: theme,
