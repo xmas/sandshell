@@ -411,6 +411,8 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
         }
     }
     var debugReplyActionsShown: Bool { !replyActions.isHidden }
+    /// Whether the hover bar offers Fork to New Chat (only where forking is wired).
+    var debugForkShown: Bool { !replyActions.isHidden && forkButton?.isHidden == false }
     /// Self-test: every link in the transcript as (text, link).
     var debugLinks: [(String, String)] {
         guard let storage = textView.textStorage else { return [] }

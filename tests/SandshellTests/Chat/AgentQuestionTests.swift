@@ -180,13 +180,21 @@ fileprivate enum AQFixture {
         (.number(-.infinity), "-inf"),
     ]
 
-    /// A number field's kind, a default too big for Int (or not finite), and the text it fills in.
-    static let hugeNumberDefaults: [(Bool, Double, String)] = [
-        (true, 1e20, "1e+20"),
-        (true, Double(UInt64.max), "1.8446744073709552e+19"),
-        (false, -1e300, "-1e+300"),
-        (false, .infinity, "inf"),
+    /// A number field's kind (integer?), a default at the edge of what it can
+    /// send, and the text it fills in — nil when the default couldn't be sent.
+    static let edgeNumberDefaults: [(Bool, Double, String?)] = [
         (true, 9_007_199_254_740_991, "9007199254740991"),
+        (false, 1e20, "1e+20"),
+        (false, -1e300, "-1e+300"),
+        // Integers a Double doesn't hold exactly (an "unlimited" sentinel), or
+        // not whole, or not finite: the placeholder shows instead.
+        (true, 9_007_199_254_740_992, nil),
+        (true, 1e20, nil),
+        (true, Double(UInt64.max), nil),
+        (true, 2.5, nil),
+        (false, .infinity, nil),
+        (true, -.infinity, nil),
+        (false, .nan, nil),
     ]
 
     static let unrenderableValues: [JSONValue] = [.null, [:], [], [1, 2]]
@@ -722,11 +730,16 @@ struct AgentQuestionFormTests {
         #expect(form.value(field) == nil, "JSON can't carry \(typed)")
     }
 
-    @Test(.tags(.agentQuestionEdgeCase), arguments: AQFixture.hugeNumberDefaults)
-    func hugeNumberDefaultsFillTheForm(integer: Bool, number: Double, shown: String) {
-        let question = AQFixture.form([AQFixture.field("n", kind: .number(integer: integer), defaultValue: .number(number))])
-        let (form, _) = AQFixture.makeForm(question)
+    @Test(.tags(.agentQuestionEdgeCase), arguments: AQFixture.edgeNumberDefaults)
+    func numberDefaultsFillTheFormOnlyWithAnAnswer(integer: Bool, number: Double, shown: String?) {
+        let field = AQFixture.field("n", kind: .number(integer: integer), required: true, defaultValue: .number(number))
+        let (form, log) = AQFixture.makeForm(AQFixture.form([field]))
         #expect(form.texts["n"] == shown)
+        // What's filled in is an answer as it stands: the default itself, sent as is.
+        #expect(form.value(field) == (shown == nil ? nil : .number(number)))
+        #expect(form.canSubmit == (shown != nil), "a required field is answered exactly when its default is filled in")
+        form.submit()
+        #expect(log.answers == (shown == nil ? [] : [.accept(["n": .number(number)])]))
     }
 
     @Test func toggleValueDefaultsToOff() {

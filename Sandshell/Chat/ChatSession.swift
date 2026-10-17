@@ -653,6 +653,11 @@ final class ChatSession: ObservableObject {
         if question == q { question = waitingQuestions.isEmpty ? nil : waitingQuestions.removeFirst() }
     }
 
+    #if DEBUG
+    /// Tests: the agent asks `q` (nil: it takes its question back).
+    func debugAsk(_ q: AgentQuestion?) { question = q }
+    #endif
+
     /// Answer the pending permission prompt; nil = cancelled.
     func answerPermission(_ p: PendingPermission, optionID: String?) {
         let outcome: JSONValue = optionID.map { ["outcome": "selected", "optionId": .string($0)] }

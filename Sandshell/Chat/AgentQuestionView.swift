@@ -43,7 +43,11 @@ final class AgentQuestionForm: ObservableObject {
             case (.choice, .string(let s)?): picks[field.id] = s
             case (.multiChoice, .array(let a)?): multiPicks[field.id] = Set(a.compactMap(\.string))
             case (.text, .string(let s)?): texts[field.id] = s
-            case (.number, .number(let n)?): texts[field.id] = AgentQuestion.text(of: n)
+            // Only a default the field would send: one past 2^53 (an "unlimited"
+            // sentinel, say) or non-finite stays a placeholder, rather than text
+            // that leaves Submit disabled or is silently left out.
+            case (.number(let integer), .number(let n)?) where Self.isAnswer(n, integer: integer):
+                texts[field.id] = AgentQuestion.text(of: n)
             case (.toggle, .bool(let b)?): toggles[field.id] = b
             default: break
             }
@@ -62,13 +66,17 @@ final class AgentQuestionForm: ObservableObject {
             let s = (texts[field.id] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             return s.isEmpty ? nil : .string(s)
         case .number(let integer):
-            // JSON can't carry inf or nan, and past 2^53 a Double isn't the
-            // whole number that was typed.
             let s = (texts[field.id] ?? "").trimmingCharacters(in: .whitespaces)
-            guard let n = Double(s), n.isFinite, !integer || (n == n.rounded() && abs(n) < 0x1p53) else { return nil }
+            guard let n = Double(s), Self.isAnswer(n, integer: integer) else { return nil }
             return .number(n)
         case .toggle: return .bool(toggles[field.id] ?? false)
         }
+    }
+
+    /// Whether `n` can answer a number field: JSON can't carry inf or nan, and
+    /// past 2^53 a Double isn't the whole number that was typed.
+    nonisolated static func isAnswer(_ n: Double, integer: Bool) -> Bool {
+        n.isFinite && (!integer || (n == n.rounded() && abs(n) < 0x1p53))
     }
 
     var canSubmit: Bool {

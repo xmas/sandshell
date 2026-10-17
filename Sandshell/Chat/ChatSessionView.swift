@@ -53,8 +53,14 @@ final class ChatSessionView: NSView {
     required init?(coder: NSCoder) { fatalError() }
 
     /// The keyboard to the chat: to the agent's open question, else the composer.
+    /// One of the card's own text fields being typed in keeps it (the host would
+    /// turn the next keys into picks, a skip or a half-typed submit).
     func focusComposer() {
-        if let questionHost { window?.makeFirstResponder(questionHost) } else { composer.focus() }
+        if let questionHost {
+            if !keyboardIsIn(questionHost) { window?.makeFirstResponder(questionHost) }
+        } else {
+            composer.focus()
+        }
     }
 
     #if DEBUG
@@ -481,6 +487,11 @@ final class ChatSessionView: NSView {
 
     #if DEBUG
     var debugQuestionForm: AgentQuestionForm? { questionHost?.form }
+    var debugQuestionHost: NSView? { questionHost }
+    /// Where the keyboard is in this chat: the question card (or a field in
+    /// it), the composer, or neither.
+    var debugQuestionHasKeyboard: Bool { questionHost.map { keyboardIsIn($0) } ?? false }
+    var debugComposerHasKeyboard: Bool { keyboardIsIn(composer) }
     /// The composer's frame (in this view), the transcript's text inset and its text area's width.
     var debugColumn: (composer: NSRect, textInset: CGFloat, textWidth: CGFloat) {
         (composer.convert(composer.bounds, to: self), transcript.debugTextInset, transcript.debugContentWidth)
