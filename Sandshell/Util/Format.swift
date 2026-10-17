@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 
 /// Text formatting shared across the app, so the same thing reads the same
 /// everywhere (token counts, ages, work times, home-relative paths).
@@ -6,18 +7,30 @@ enum Format {
     /// 15500 → "15.5k", 200000 → "200k", 1_250_000 → "1.25M". The unit is
     /// the one the rounded count reads in (999_999 → "1.00M", not "1000k"),
     /// and a count that rounds to whole thousands drops the decimal (1_999 → "2k").
-    static func tokens(_ n: Int) -> String {
+    /// The digits and decimal separator are the locale's ("15,5k" in German),
+    /// whole counts included, so one readout never mixes digit systems.
+    static func tokens(_ n: Int, locale: Locale = .current) -> String {
         switch n {
-        case ..<1000: return "\(n)"
+        case ..<1000: return number(n, places: 0, locale)
         case ..<100_000:
             let tenths = (n + 50) / 100
-            return tenths % 10 == 0 ? "\(tenths / 10)k" : "\(tenths / 10).\(tenths % 10)k"
-        case ..<999_500: return "\((n + 500) / 1000)k"
-        case ..<999_995_000:
-            let hundredths = (n + 5_000) / 10_000
-            return String(format: "%d.%02dM", hundredths / 100, hundredths % 100)
-        default: return String(format: "%.2fB", Double(n) / 1_000_000_000)
+            return tenths % 10 == 0 ? number(tenths / 10, places: 0, locale) + "k"
+                                    : number(tenths, places: 1, locale) + "k"
+        case ..<999_500: return number((n + 500) / 1000, places: 0, locale) + "k"
+        case ..<999_995_000: return number((n + 5_000) / 10_000, places: 2, locale) + "M"
+        default:
+            // Rounded in whole numbers like the other units (n + 5_000_000 can overflow).
+            let (q, r) = n.quotientAndRemainder(dividingBy: 10_000_000)
+            return number(q + (r >= 5_000_000 ? 1 : 0), places: 2, locale) + "B"
         }
+    }
+
+    /// A count of tenths or hundredths (`places` 1 or 2) as an exact decimal,
+    /// or a whole number (`places` 0), ungrouped: 125 hundredths → "1.25".
+    private static func number(_ units: Int, places: Int, _ locale: Locale) -> String {
+        guard places > 0 else { return units.formatted(.number.grouping(.never).locale(locale)) }
+        return (Decimal(units) / pow(10, places))
+            .formatted(.number.precision(.fractionLength(places)).grouping(.never).locale(locale))
     }
 
     /// "just now", "45s ago", "3m ago", "2h ago", "4d ago".
@@ -32,11 +45,14 @@ enum Format {
         }
     }
 
-    /// "5 minutes ago", "yesterday": the system's wording, for longer lines.
+    /// "5 minutes ago", "in 2 hours": the system's wording, for longer lines.
     static func relative(_ date: Date, now: Date = Date()) -> String {
-        relativeFormatter.localizedString(for: date, relativeTo: now)
+        relativeFormatter.withLock { $0.localizedString(for: date, relativeTo: now) }
     }
-    nonisolated(unsafe) private static let relativeFormatter = RelativeDateTimeFormatter()
+    /// One formatter, used under its lock (it isn't Sendable). Not a
+    /// `Date.AnchoredRelativeFormatStyle`: that rounds ("1 hour ago" at 59m 59s)
+    /// where this truncates ("59 minutes ago").
+    private static let relativeFormatter = Mutex(RelativeDateTimeFormatter())
 
     /// A work time: "1s" → "3m 20s" → "1h 05m"; `compact` for narrow places:
     /// "1s" → "2m" → "1h" (nil under a second).
@@ -44,7 +60,8 @@ enum Format {
         let s = Int(ceil(seconds))
         if s < 60 { return "\(s)s" }
         if s < 3600 { return "\(s / 60)m \(s % 60)s" }
-        return String(format: "%dh %02dm", s / 3600, (s % 3600) / 60)
+        let m = (s % 3600) / 60
+        return "\(s / 3600)h \(m < 10 ? "0" : "")\(m)m"
     }
     static func compactWorkTime(_ seconds: TimeInterval) -> String? {
         guard seconds >= 1 else { return nil }

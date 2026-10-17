@@ -74,13 +74,11 @@ final class ThemeController: ObservableObject {
         // read a consistent value. (AppAppearance.$isDark publishes in willSet, so
         // AppAppearance.shared.isDark still holds the old value for the entire
         // synchronous Combine chain — mainDark is the only reliable source.)
-        terminalIsDark = {
-            switch prefs.terminalMode {
-            case .followApp: return mainDark
-            case .forceLight: return false
-            case .forceDark: return true
-            }
-        }()
+        terminalIsDark = switch prefs.terminalMode {
+        case .followApp: mainDark
+        case .forceLight: false
+        case .forceDark: true
+        }
         colors = mainColors(dark: mainDark)
         sidebarColors = sidebarPalette(dark: sidebarDark)
     }

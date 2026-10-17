@@ -34,7 +34,7 @@ struct BackgroundTask: Identifiable, Equatable, Sendable {
 
     var isRunning: Bool { state == .running }
 
-    func duration(at now: Date = Date()) -> TimeInterval {
+    func duration(at now: Date = .now) -> TimeInterval {
         (finishedAt ?? now).timeIntervalSince(startedAt)
     }
 }
@@ -90,7 +90,7 @@ struct BackgroundTaskParser: Sendable {
                     || line.contains("toolUseResult") else { continue }
             guard let obj = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
                   obj["isSidechain"] as? Bool != true else { continue }
-            let at = Self.date(obj["timestamp"]) ?? Date()
+            let at = Self.date(obj["timestamp"]) ?? .now
             switch obj["type"] as? String {
             case "assistant":
                 for block in Self.blocks(obj["message"]) where block["type"] as? String == "tool_use" {
@@ -126,7 +126,7 @@ struct BackgroundTaskParser: Sendable {
     }
 
     /// The session's Claude process ended: nothing it launched is still running.
-    mutating func endAll(at date: Date = Date()) {
+    mutating func endAll(at date: Date = .now) {
         for i in tasks.indices where tasks[i].isRunning {
             tasks[i].state = .stopped
             tasks[i].finishedAt = date
@@ -236,10 +236,10 @@ struct BackgroundTaskParser: Sendable {
                 continue
             }
             guard tasks[i].isRunning else { continue }
-            switch status {
-            case "failed", "error": tasks[i].state = .failed
-            case "killed", "stopped", "cancelled", "canceled", "timeout", "timed_out": tasks[i].state = .stopped
-            default: tasks[i].state = .completed
+            tasks[i].state = switch status {
+            case "failed", "error": .failed
+            case "killed", "stopped", "cancelled", "canceled", "timeout", "timed_out": .stopped
+            default: .completed
             }
             tasks[i].finishedAt = at
             tasks[i].summary = summary.map(Self.oneLine) ?? tasks[i].summary
@@ -308,7 +308,7 @@ struct BackgroundTaskParser: Sendable {
 enum SubagentProgress {
     static func transcriptURL(sessionTranscript: URL, agentID: String) -> URL {
         sessionTranscript.deletingPathExtension()
-            .appendingPathComponent("subagents/agent-\(agentID).jsonl")
+            .appending(path: "subagents/agent-\(agentID).jsonl")
     }
 
     static func latestStep(in url: URL, maxBytes: Int = 64 * 1024) -> String? {

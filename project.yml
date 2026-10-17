@@ -51,6 +51,9 @@ targets:
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         LSMinimumSystemVersion: $(MACOSX_DEPLOYMENT_TARGET)
         NSHighResolutionCapable: true
+        # Finder / Launchpad category. (Keys reach the bundle from here: an
+        # INFOPLIST_KEY_* setting is ignored without GENERATE_INFOPLIST_FILE.)
+        LSApplicationCategoryType: public.app-category.developer-tools
         # Opt out of the macOS 26 (Tahoe) Liquid Glass redesign so the app
         # renders with the prior (Sequoia) appearance.
         UIDesignRequiresCompatibility: true
@@ -101,7 +104,6 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.xmas.sandshell
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
-        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.developer-tools
 
   # Swift Testing unit tests for the app's core logic, hosted in the app (which
   # opens no windows when it sees it's hosting tests — see AppDelegate).

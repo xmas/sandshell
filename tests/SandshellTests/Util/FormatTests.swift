@@ -16,9 +16,14 @@ struct FormatTests {
     // MARK: - Format.tokens
 
     struct Tokens {
+        /// The pinned cases read with "." whatever this Mac's locale.
+        private func tokens(_ count: Int) -> String {
+            Format.tokens(count, locale: Locale(identifier: "en_US_POSIX"))
+        }
+
         @Test(arguments: [(0, "0"), (1, "1"), (999, "999")])
         func underAThousandIsThePlainNumber(count: Int, expected: String) {
-            #expect(Format.tokens(count) == expected)
+            #expect(tokens(count) == expected)
         }
 
         @Test(arguments: [
@@ -27,7 +32,7 @@ struct FormatTests {
             (1_050, "1.1k"), (99_949, "99.9k"),
         ])
         func thousandsShowOneDecimalUnlessWhole(count: Int, expected: String) {
-            #expect(Format.tokens(count) == expected)
+            #expect(tokens(count) == expected)
         }
 
         @Test(arguments: [
@@ -35,7 +40,7 @@ struct FormatTests {
             (200_000, "200k"), (999_499, "999k"),
         ])
         func hundredsOfThousandsRoundToWholeThousands(count: Int, expected: String) {
-            #expect(Format.tokens(count) == expected, "From 100k up there is no decimal; halves round up")
+            #expect(tokens(count) == expected, "From 100k up there is no decimal; halves round up")
         }
 
         @Test(arguments: [
@@ -43,38 +48,56 @@ struct FormatTests {
             (2_000_000, "2.00M"), (999_994_999, "999.99M"),
         ])
         func millionsShowTwoDecimals(count: Int, expected: String) {
-            #expect(Format.tokens(count) == expected)
+            #expect(tokens(count) == expected)
         }
 
         @Test(arguments: [(1_000_000_000, "1.00B"), (1_500_000_000, "1.50B")])
         func billionsShowTwoDecimals(count: Int, expected: String) {
-            #expect(Format.tokens(count) == expected)
+            #expect(tokens(count) == expected)
         }
 
         @Test(.tags(.formatEdgeCase))
         func largestCountStillFormatsAsBillions() {
-            #expect(Format.tokens(Int.max) == "9223372036.85B", "There's no unit above B, and Int.max doesn't overflow")
+            #expect(tokens(Int.max) == "9223372036.85B", "There's no unit above B, and Int.max doesn't overflow")
         }
 
         @Test(.tags(.formatEdgeCase), arguments: [
             (-1, "-1"), (-1_500, "-1500"), (Int.min, "-9223372036854775808"),
         ])
         func negativeCountsAreNotAbbreviated(count: Int, expected: String) {
-            #expect(Format.tokens(count) == expected, "Anything under 1000, negatives included, prints as is")
+            #expect(tokens(count) == expected, "Anything under 1000, negatives included, prints as is")
         }
 
         @Test(.tags(.formatEdgeCase), arguments: [
             (999_500, "1.00M"), (999_999, "1.00M"), (999_995_000, "1.00B"), (999_999_999, "1.00B"),
         ])
         func roundingUpToTheNextUnitUsesThatUnit(count: Int, expected: String) {
-            #expect(Format.tokens(count) == expected, "The unit is picked after rounding: never \"1000k\" or \"1000.00M\"")
+            #expect(tokens(count) == expected, "The unit is picked after rounding: never \"1000k\" or \"1000.00M\"")
         }
 
         @Test(.tags(.formatEdgeCase), arguments: [
             (1_001, "1k"), (1_049, "1k"), (1_999, "2k"), (99_950, "100k"), (99_999, "100k"),
         ])
         func countsThatRoundToAWholeThousandDropTheDecimal(count: Int, expected: String) {
-            #expect(Format.tokens(count) == expected, "Never \"1.0k\" or \"100.0k\"")
+            #expect(tokens(count) == expected, "Never \"1.0k\" or \"100.0k\"")
+        }
+
+        @Test(arguments: [
+            (15_500, "15,5k"), (12_000, "12k"), (200_000, "200k"), (1_250_000, "1,25M"),
+            (1_500_000_000, "1,50B"), (Int.max, "9223372036,85B"),
+        ])
+        func decimalsUseTheLocalesSeparator(count: Int, expected: String) {
+            #expect(Format.tokens(count, locale: Locale(identifier: "de_DE")) == expected,
+                    "A German reader sees a decimal comma, and no grouping")
+        }
+
+        @Test(arguments: [
+            (999, "٩٩٩"), (12_000, "١٢k"), (15_500, "١٥٫٥k"), (200_000, "٢٠٠k"),
+            (1_250_000, "١٫٢٥M"), (1_500_000_000, "١٫٥٠B"),
+        ])
+        func wholeAndDecimalCountsUseTheSameDigits(count: Int, expected: String) {
+            #expect(Format.tokens(count, locale: Locale(identifier: "ar@numbers=arab")) == expected,
+                    "Whole counts are in the locale's digits like the decimals, so a list never mixes digit systems")
         }
     }
 
@@ -116,12 +139,12 @@ struct FormatTests {
 
     // MARK: - Format.relative
 
-    /// Serialized because `Format.relative` shares one formatter across calls.
-    @Suite(.serialized)
     struct Relative {
         let now = Date(timeIntervalSinceReferenceDate: 800_000_000)
 
-        @Test(arguments: [-259_200, -86_400, -300, -45, 300, 3_600, 604_800] as [TimeInterval])
+        /// -3_599 and 45_000: the system's formatter truncates ("59 minutes
+        /// ago", "in 12 hours") where the relative format style would round.
+        @Test(arguments: [-259_200, -86_400, -3_599, -300, -45, 300, 3_600, 45_000, 604_800] as [TimeInterval])
         func usesTheSystemWordingForTheDateAgainstNow(offset: TimeInterval) {
             let date = now.addingTimeInterval(offset)
             let expected = RelativeDateTimeFormatter().localizedString(for: date, relativeTo: now)

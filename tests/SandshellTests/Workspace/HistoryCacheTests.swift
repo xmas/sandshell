@@ -50,6 +50,38 @@ struct HistoryCacheTests {
                 "Rows an older parse made (v3: titles from injected <…> context) are parsed again")
         #expect(try folder.userVersion() == HistoryCache.schemaVersion)
     }
+
+    /// `%`, `_` and `\` in a query match themselves, not as LIKE wildcards.
+    @Test(arguments: [("100%", "100% done"), ("a_b", "rename a_b"), ("C:\\x", "open C:\\x")])
+    func wildcardsInTheQueryMatchLiterally(query: String, matching title: String) throws {
+        let cache = try #require(HistoryCache(directory: folder.url))
+        let decoy = URL(filePath: "/Users/test/.claude/projects/-Users-test-Code-project/decoy.jsonl")
+        cache.upsert(url: transcript, mtime: mtime, record: record(title: title), searchText: title)
+        // What each query would match as a pattern: `%` any run, `_` any
+        // character, `\x` a plain x.
+        cache.upsert(url: decoy, mtime: mtime, record: record(title: "100 dollars, axb, C:x"),
+                     searchText: "100 dollars, axb, C:x")
+        let hits = cache.search(query: query)
+        #expect(hits.map(\.path) == [transcript.path(percentEncoded: false)])
+        #expect(hits.first?.tier == .title)
+    }
+
+    @Test func usableFromManyTasksAtOnce() async throws {
+        let cache = try #require(HistoryCache(directory: folder.url))
+        let base = URL(filePath: "/Users/test/.claude/projects/-Users-test-Code-project")
+        let record = record(), mtime = mtime
+        await withTaskGroup(of: Void.self) { group in
+            for i in 0..<20 {
+                group.addTask {
+                    let url = base.appending(path: "\(i).jsonl")
+                    cache.upsert(url: url, mtime: mtime, record: record, searchText: "task \(i)")
+                    _ = cache.lookup(url: url, mtime: mtime)
+                    _ = cache.search(query: "task")
+                }
+            }
+        }
+        #expect(cache.search(query: "task").count == 20)
+    }
 }
 
 /// A fresh folder for one test's cache file, removed when the test ends.

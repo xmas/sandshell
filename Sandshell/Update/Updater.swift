@@ -101,7 +101,7 @@ final class Updater {
         guard let v = quoted("version"), !v.isEmpty,
               v.allSatisfy({ $0.isNumber || $0 == "." }),
               let rawURL = quoted("url"), rawURL.contains("/sandshell-v") else { return nil }
-        return (v, URL(string: rawURL.replacingOccurrences(of: "#{version}", with: v)))
+        return (v, URL(string: rawURL.replacing("#{version}", with: v)))
     }
 
     /// Numeric, component-wise semver-ish comparison ("0.10.0" > "0.9.0").
@@ -176,21 +176,19 @@ final class Updater {
         "\(brew)" update && "\(brew)" upgrade --cask \(Self.caskToken) && /usr/bin/open "\(app)"
         """
         do {
-            let url = FileManager.default.temporaryDirectory
-                .appendingPathComponent("sandshell-upgrade-\(UUID().uuidString).command")
+            let url = URL.temporaryDirectory.appending(path: "sandshell-upgrade-\(UUID().uuidString).command")
             try script.write(to: url, atomically: true, encoding: .utf8)
             try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
-            let terminal = URL(fileURLWithPath: "/System/Applications/Utilities/Terminal.app")
+            let terminal = URL(filePath: "/System/Applications/Utilities/Terminal.app", directoryHint: .isDirectory)
             Log.info(.app, "handing update to Homebrew: \(Self.upgradeCommand)")
-            NSWorkspace.shared.open([url], withApplicationAt: terminal,
-                                    configuration: NSWorkspace.OpenConfiguration()) { _, error in
-                Task { @MainActor in
-                    if let error {
-                        Log.error(.app, "could not open Terminal for brew upgrade: \(error.localizedDescription)")
-                        self.inform("Couldn’t open Terminal", "Run this yourself:\n\n\(Self.upgradeCommand)")
-                    } else {
-                        NSApp.terminate(nil)
-                    }
+            Task {
+                do {
+                    _ = try await NSWorkspace.shared.open([url], withApplicationAt: terminal,
+                                                          configuration: NSWorkspace.OpenConfiguration())
+                    NSApp.terminate(nil)
+                } catch {
+                    Log.error(.app, "could not open Terminal for brew upgrade: \(error.localizedDescription)")
+                    inform("Couldn’t open Terminal", "Run this yourself:\n\n\(Self.upgradeCommand)")
                 }
             }
         } catch {
@@ -202,7 +200,7 @@ final class Updater {
     private func download(_ url: URL) async throws -> URL {
         let (tmp, resp) = try await URLSession.shared.download(from: url)
         try Self.check(resp, nil)
-        let dest = FileManager.default.temporaryDirectory.appendingPathComponent(url.lastPathComponent)
+        let dest = URL.temporaryDirectory.appending(path: url.lastPathComponent)
         try? FileManager.default.removeItem(at: dest)
         try FileManager.default.moveItem(at: tmp, to: dest)
         return dest
@@ -212,8 +210,7 @@ final class Updater {
     /// that waits for us to quit, swaps the bundle in place, and relaunches.
     private func installAndRelaunch(dmgURL: URL) throws {
         Log.info(.app, "installing update from \(dmgURL.lastPathComponent) and relaunching")
-        let mount = FileManager.default.temporaryDirectory
-            .appendingPathComponent("sandshell-mnt-\(UUID().uuidString)")
+        let mount = URL.temporaryDirectory.appending(path: "sandshell-mnt-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: mount, withIntermediateDirectories: true)
         try run("/usr/bin/hdiutil", ["attach", dmgURL.path, "-nobrowse", "-noverify",
                                      "-mountpoint", mount.path])
@@ -229,9 +226,8 @@ final class Updater {
             .first(where: { $0.hasSuffix(".app") }) else {
             throw Err("No .app found in the downloaded disk image.")
         }
-        let newApp = mount.appendingPathComponent(appName)
-        let staged = FileManager.default.temporaryDirectory
-            .appendingPathComponent("sandshell-new-\(UUID().uuidString).app")
+        let newApp = mount.appending(path: appName)
+        let staged = URL.temporaryDirectory.appending(path: "sandshell-new-\(UUID().uuidString).app")
         try run("/usr/bin/ditto", [newApp.path, staged.path])
 
         let dest = Bundle.main.bundleURL   // e.g. /Applications/Sandshell.app
@@ -245,11 +241,10 @@ final class Updater {
         /usr/bin/xattr -dr com.apple.quarantine "$2" 2>/dev/null
         /usr/bin/open "$2"
         """
-        let scriptURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("sandshell-swap-\(UUID().uuidString).sh")
+        let scriptURL = URL.temporaryDirectory.appending(path: "sandshell-swap-\(UUID().uuidString).sh")
         try script.write(to: scriptURL, atomically: true, encoding: .utf8)
         let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/bin/bash")
+        task.executableURL = URL(filePath: "/bin/bash")
         task.arguments = [scriptURL.path, staged.path, dest.path]
         try task.run()
         NSApp.terminate(nil)
@@ -267,10 +262,14 @@ final class Updater {
         }
     }
 
-    @discardableResult
-    private func run(_ launchPath: String, _ args: [String]) throws -> Int32 {
-        let p = Process(); p.executableURL = URL(fileURLWithPath: launchPath); p.arguments = args
-        try p.run(); p.waitUntilExit(); return p.terminationStatus
+    /// Run a tool to completion; a non-zero exit throws, so a failed mount or
+    /// copy stops the update (and says so) instead of swapping in a broken app.
+    private func run(_ launchPath: String, _ args: [String]) throws {
+        let p = Process(); p.executableURL = URL(filePath: launchPath); p.arguments = args
+        try p.run(); p.waitUntilExit()
+        guard p.terminationStatus == 0 else {
+            throw Err("\(URL(filePath: launchPath).lastPathComponent) failed (exit \(p.terminationStatus)).")
+        }
     }
 
     private func inform(_ title: String, _ body: String) {

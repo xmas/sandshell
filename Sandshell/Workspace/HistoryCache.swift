@@ -1,5 +1,6 @@
 import Foundation
 import SQLite3
+import Synchronization
 
 /// How strongly a search query matched a conversation or session — lower ranks
 /// first: the title beats the folder, which beats a hit in the body text.
@@ -12,14 +13,13 @@ enum MatchTier: Int, Comparable, Sendable {
 /// on disk rather than in-process RAM, and avoids re-parsing transcript files
 /// whose mtime hasn't changed since the last scan.
 ///
-/// All SQLite operations run on a private serial queue, making the cache
+/// All SQLite operations run holding the database's lock, making the cache
 /// safe to use from any thread or concurrency context.
-final class HistoryCache: @unchecked Sendable {
-    private let q = DispatchQueue(label: "com.xmas.sandshell.historycache", qos: .utility)
-    private nonisolated(unsafe) var db: OpaquePointer?
+final class HistoryCache: Sendable {
+    private let db: Mutex<OpaquePointer?>
 
     // SQLITE_TRANSIENT sentinel: tells SQLite to copy the string before returning.
-    private let transient = unsafeBitCast(-1 as Int, to: sqlite3_destructor_type?.self)
+    private static var transient: sqlite3_destructor_type? { unsafeBitCast(-1 as Int, to: sqlite3_destructor_type?.self) }
 
     struct CachedRecord {
         let id: String
@@ -33,23 +33,23 @@ final class HistoryCache: @unchecked Sendable {
 
     init?(directory: URL) {
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let path = directory.appendingPathComponent("history-cache.sqlite").path
+        let path = directory.appending(path: "history-cache.sqlite").path(percentEncoded: false)
         var handle: OpaquePointer?
         guard sqlite3_open(path, &handle) == SQLITE_OK else { return nil }
-        db = handle
-        q.sync { self.setupSchema() }
+        db = Mutex(handle)
+        db.withLock { Self.setupSchema($0) }
     }
 
-    deinit { sqlite3_close(db) }
+    deinit { db.withLock { _ = sqlite3_close($0) } }
 
     // MARK: - Public API
 
     func lookup(url: URL, mtime: Date) -> CachedRecord? {
-        q.sync { _lookup(url: url, mtime: mtime) }
+        db.withLock { Self._lookup($0, url: url, mtime: mtime) }
     }
 
     func upsert(url: URL, mtime: Date, record: CachedRecord, searchText: String) {
-        q.sync { _upsert(url: url, mtime: mtime, record: record, searchText: searchText) }
+        db.withLock { Self._upsert($0, url: url, mtime: mtime, record: record, searchText: searchText) }
     }
 
     /// One ranked hit: the transcript path, its best tier, and (for body hits)
@@ -63,12 +63,12 @@ final class HistoryCache: @unchecked Sendable {
     /// Records whose title, cwd, or full text contains `query` (substring,
     /// case-insensitive), best tier first, then newest.
     func search(query: String) -> [Match] {
-        q.sync { _search(query: query) }
+        db.withLock { Self._search($0, query: query) }
     }
 
     // MARK: - Schema
 
-    private func setupSchema() {
+    private static func setupSchema(_ db: OpaquePointer?) {
         let sql = """
             PRAGMA journal_mode = WAL;
             CREATE TABLE IF NOT EXISTS records (
@@ -92,15 +92,15 @@ final class HistoryCache: @unchecked Sendable {
         // v4 re-titles Claude conversations that opened with injected <…> context
         // (a slash command's <command-name>, a <system-reminder> block).
         // Drop older rows so they're re-parsed on the next scan.
-        if userVersion() < Self.schemaVersion {
-            sqlite3_exec(db, "DELETE FROM records; PRAGMA user_version = \(Self.schemaVersion);", nil, nil, &err)
+        if userVersion(db) < schemaVersion {
+            sqlite3_exec(db, "DELETE FROM records; PRAGMA user_version = \(schemaVersion);", nil, nil, &err)
         }
     }
 
     /// Bumped whenever a parse change makes cached rows wrong: older rows are dropped.
     static let schemaVersion: Int32 = 4
 
-    private func userVersion() -> Int32 {
+    private static func userVersion(_ db: OpaquePointer?) -> Int32 {
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, "PRAGMA user_version", -1, &stmt, nil) == SQLITE_OK else { return 0 }
         defer { sqlite3_finalize(stmt) }
@@ -109,7 +109,7 @@ final class HistoryCache: @unchecked Sendable {
 
     // MARK: - Queries
 
-    private func _lookup(url: URL, mtime: Date) -> CachedRecord? {
+    private static func _lookup(_ db: OpaquePointer?, url: URL, mtime: Date) -> CachedRecord? {
         let sql = """
             SELECT mtime, record_id, agent, title, cwd, message_count, recorded_date, session_id
             FROM records WHERE url = ?1
@@ -117,7 +117,7 @@ final class HistoryCache: @unchecked Sendable {
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return nil }
         defer { sqlite3_finalize(stmt) }
-        sqlite3_bind_text(stmt, 1, url.path, -1, transient)
+        sqlite3_bind_text(stmt, 1, url.path(percentEncoded: false), -1, transient)
         guard sqlite3_step(stmt) == SQLITE_ROW else { return nil }
         let storedMtime = sqlite3_column_double(stmt, 0)
         guard abs(storedMtime - mtime.timeIntervalSince1970) < 0.001 else { return nil }
@@ -136,7 +136,7 @@ final class HistoryCache: @unchecked Sendable {
                             messageCount: messageCount, date: recordedDate, sessionID: sessionID)
     }
 
-    private func _upsert(url: URL, mtime: Date, record: CachedRecord, searchText: String) {
+    private static func _upsert(_ db: OpaquePointer?, url: URL, mtime: Date, record: CachedRecord, searchText: String) {
         let sql = """
             INSERT OR REPLACE INTO records
                 (url, mtime, record_id, agent, title, cwd, message_count,
@@ -146,7 +146,7 @@ final class HistoryCache: @unchecked Sendable {
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
         defer { sqlite3_finalize(stmt) }
-        sqlite3_bind_text(stmt, 1, url.path, -1, transient)
+        sqlite3_bind_text(stmt, 1, url.path(percentEncoded: false), -1, transient)
         sqlite3_bind_double(stmt, 2, mtime.timeIntervalSince1970)
         sqlite3_bind_text(stmt, 3, record.id, -1, transient)
         sqlite3_bind_text(stmt, 4, record.agent.rawValue, -1, transient)
@@ -162,18 +162,18 @@ final class HistoryCache: @unchecked Sendable {
         sqlite3_step(stmt)
     }
 
-    private func _search(query: String) -> [Match] {
+    private static func _search(_ db: OpaquePointer?, query: String) -> [Match] {
         let needle = query.lowercased()
         // LIKE is already ASCII case-insensitive; escape its wildcards so a
         // literal `%`, `_` or `\` in the query matches itself.
-        let escaped = needle.replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "%", with: "\\%")
-            .replacingOccurrences(of: "_", with: "\\_")
+        let escaped = needle.replacing("\\", with: "\\\\")
+            .replacing("%", with: "\\%")
+            .replacing("_", with: "\\_")
         let sql = """
             SELECT url, tier,
                    CASE WHEN tier = 2 THEN instr(lower(search_text), ?2) END AS pos,
                    CASE WHEN tier = 2 THEN substr(search_text,
-                        max(1, instr(lower(search_text), ?2) - \(Self.snippetLead)), \(Self.snippetLength)) END
+                        max(1, instr(lower(search_text), ?2) - \(snippetLead)), \(snippetLength)) END
             FROM (
                 SELECT url, recorded_date, search_text,
                        CASE WHEN COALESCE(title, '') LIKE ?1 ESCAPE '\\' THEN 0
@@ -198,7 +198,7 @@ final class HistoryCache: @unchecked Sendable {
             var snippet: String?
             if sqlite3_column_type(stmt, 3) != SQLITE_NULL, let text = sqlite3_column_text(stmt, 3) {
                 let pos = Int(sqlite3_column_int(stmt, 2))
-                snippet = Self.tidySnippet(String(cString: text), truncatedStart: pos > Self.snippetLead + 1)
+                snippet = tidySnippet(String(cString: text), truncatedStart: pos > snippetLead + 1)
             }
             matches.append(Match(path: String(cString: ptr), tier: tier, snippet: snippet))
         }
