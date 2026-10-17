@@ -22,20 +22,20 @@ final class BlockStyle: NSObject, @unchecked Sendable {
 
     var fill: NSColor {
         switch kind {
-        case .code: return NSColor.labelColor.withAlphaComponent(0.055)
-        case .card: return NSColor.labelColor.withAlphaComponent(0.04)
-        case .user: return NSColor.controlAccentColor.withAlphaComponent(0.11)
-        case .added: return NSColor.systemGreen.withAlphaComponent(0.14)
-        case .removed: return NSColor.systemRed.withAlphaComponent(0.13)
-        case .hunk: return NSColor.systemBlue.withAlphaComponent(0.08)
+        case .code: NSColor.labelColor.withAlphaComponent(0.055)
+        case .card: NSColor.labelColor.withAlphaComponent(0.04)
+        case .user: NSColor.controlAccentColor.withAlphaComponent(0.11)
+        case .added: NSColor.systemGreen.withAlphaComponent(0.14)
+        case .removed: NSColor.systemRed.withAlphaComponent(0.13)
+        case .hunk: NSColor.systemBlue.withAlphaComponent(0.08)
         }
     }
 
     /// Diff lines span the full width with square corners.
     var isFullWidth: Bool {
         switch kind {
-        case .added, .removed, .hunk: return true
-        default: return false
+        case .added, .removed, .hunk: true
+        default: false
         }
     }
 }
@@ -152,7 +152,9 @@ enum ChatRenderer {
         case .fileChanges(let turn, let paths, let restored):
             return spaced(fileChanges(turn: turn, paths: paths, restored: restored), before: 2, after: 6)
         case .notice(_, let text, let isError):
-            return spaced(line(text, font: .systemFont(ofSize: 11.5), color: isError ? .systemRed : .secondaryLabelColor),
+            // Errors carry a warning mark, not only red, so they read as errors without color.
+            return spaced(line(isError ? "⚠︎  \(text)" : text, font: .systemFont(ofSize: 11.5),
+                               color: isError ? .systemRed : .secondaryLabelColor),
                           before: 4, after: 4)
         }
     }
@@ -166,12 +168,12 @@ enum ChatRenderer {
         return URL(string: "sandshell-chat://undo/\(turn.addingPercentEncoding(withAllowedCharacters: component) ?? turn)")!
     }
 
-    /// "Changed 3 files: a.swift, b.swift, c.swift · Undo", or once undone,
+    /// "Changed 3 files: a.swift, b.swift, and c.swift · Undo", or once undone,
     /// "Restored 3 files to before this message".
     private static func fileChanges(turn: String, paths: [String], restored: Bool) -> NSAttributedString {
         let font = NSFont.systemFont(ofSize: 11.5)
         let names = paths.map { ($0 as NSString).lastPathComponent }
-        let list = names.prefix(4).joined(separator: ", ") + (names.count > 4 ? " +\(names.count - 4) more" : "")
+        let list = (Array(names.prefix(4)) + (names.count > 4 ? ["\(names.count - 4) more"] : [])).formatted()
         let count = paths.count == 1 ? "1 file" : "\(paths.count) files"
         let out = NSMutableAttributedString()
         if restored {
@@ -260,11 +262,11 @@ enum ChatRenderer {
     // MARK: Tool groups
 
     /// One quiet line for a run of tool calls ("Ran git status…", "Ran 3
-    /// commands, read 2 files ›"); clicked, it opens to the cards.
+    /// commands and read 2 files ›"); clicked, it opens to the cards.
     private static func toolGroup(_ calls: [ChatItem.ToolCall], id: String, expanded: Bool,
                                   isExpanded: (String) -> Bool) -> NSAttributedString {
         let running = calls.contains { $0.status == "pending" || $0.status == "in_progress" }
-        let failed = calls.filter { $0.status == "failed" }.count
+        let failed = calls.count { $0.status == "failed" }
         let head = NSMutableAttributedString(string: groupSummary(calls, running: running) + (expanded ? "  ⌄" : "  ›"),
                                              attributes: [.font: NSFont.systemFont(ofSize: 12.5),
                                                           .foregroundColor: NSColor.secondaryLabelColor,
@@ -311,7 +313,7 @@ enum ChatRenderer {
     }
 
     static func groupSummary(_ calls: [ChatItem.ToolCall], running: Bool) -> String {
-        func clean(_ s: String) -> String { s.replacingOccurrences(of: "`", with: "").trimmingCharacters(in: .whitespacesAndNewlines) }
+        func clean(_ s: String) -> String { s.replacing("`", with: "").trimmingCharacters(in: .whitespacesAndNewlines) }
         if calls.count == 1, let call = calls.first {
             let verb = ToolVerb(call.kind)
             let words = verb.words
@@ -348,7 +350,7 @@ enum ChatRenderer {
             let object = n == 1 ? w.one : verb == .search ? "\(n) times" : "\(n) \(w.many)"
             return "\(i == 0 ? lead : lead.lowercased()) \(object)"
         }
-        return phrases.joined(separator: ", ") + (running ? "…" : "")
+        return phrases.formatted() + (running ? "…" : "")
     }
 
     // MARK: Tool cards
@@ -530,9 +532,9 @@ enum ChatRenderer {
         let columns = cells.map(\.count).max() ?? 0
         guard columns > 0 else { return NSAttributedString() }
         let headFont = prose.font(weight: .semibold)
+        let lineBreak = /<br\s*\/?>/.ignoresCase()
         func render(_ cell: String, _ font: NSFont, _ color: NSColor = .labelColor) -> NSAttributedString {
-            inline(cell.replacingOccurrences(of: #"<br\s*/?>"#, with: "\u{2028}", options: [.regularExpression, .caseInsensitive]),
-                   font: font, color: color)
+            inline(cell.replacing(lineBreak, with: "\u{2028}"), font: font, color: color)
         }
         func cell(_ row: [String], _ c: Int) -> String { c < row.count ? row[c] : "" }
 
@@ -543,7 +545,7 @@ enum ChatRenderer {
         for (r, row) in ([header] + body).enumerated() {
             for c in 0..<columns {
                 let text = cell(row, c)
-                breaks = breaks || text.range(of: #"<br\s*/?>"#, options: [.regularExpression, .caseInsensitive]) != nil
+                breaks = breaks || text.contains(lineBreak)
                 widths[c] = max(widths[c], ceil(render(text, r == 0 ? headFont : prose.font()).size().width))
             }
         }

@@ -2254,7 +2254,7 @@ enum SelfTest {
         let text = view.debugText
         log("collapsed:\n\(text)")
         check(text.contains("Ran git status --short  ›"), "one command reads as “Ran git status --short ›”")
-        check(text.contains("Ran 2 commands, read a file  ›  · 1 failed"), "a mixed run is summed up, with its failure")
+        check(text.contains("Ran 2 commands and read a file  ›  · 1 failed"), "a mixed run is summed up, with its failure")
         check(text.contains("Running sed -n 1,40p Sandshell/Chat/ChatTranscriptVie…  ›"), "a running command says Running, cut short")
         check(!text.contains("M Sandshell/App/SelfTest.swift") && !text.contains("no Package.swift"),
               "cards stay closed until asked")
@@ -2262,7 +2262,7 @@ enum SelfTest {
         view.debugToggle("group-t2")
         await wait(0.3)
         let open = view.debugText
-        check(open.contains("Ran 2 commands, read a file  ⌄") && open.contains("no Package.swift"),
+        check(open.contains("Ran 2 commands and read a file  ⌄") && open.contains("no Package.swift"),
               "clicking a group opens its cards")
         check(!open.contains("M Sandshell/App/SelfTest.swift"), "other groups stay closed")
         snapshot(view, "tool-groups-open")

@@ -573,24 +573,30 @@ struct ChatRendererTests {
             #expect(ChatRenderer.groupSummary([call], running: testCase.running) == testCase.expected)
         }
 
+        /// Each verb's phrase, listed the way the locale lists things ("Ran a command and read 2 files").
         @Test(arguments: [
-            (["execute", "execute"], false, "Ran 2 commands"),
-            (["execute", "read", "read"], false, "Ran a command, read 2 files"),
-            (["read", "execute", "read"], false, "Read 2 files, ran a command"),
-            (["grep", "glob"], false, "Searched 2 times"),
-            (["grep", "read"], false, "Searched once, read a file"),
-            (["edit", "write", "multiedit"], false, "Edited 3 files"),
-            (["fetch", "websearch"], false, "Fetched 2 pages"),
-            (["think", "task"], false, "Used 2 tools"),
-            (["Bash", "execute"], false, "Ran 2 commands"),
+            (["execute", "execute"], false, ["Ran 2 commands"]),
+            (["execute", "read", "read"], false, ["Ran a command", "read 2 files"]),
+            (["read", "execute", "read"], false, ["Read 2 files", "ran a command"]),
+            (["grep", "glob"], false, ["Searched 2 times"]),
+            (["grep", "read"], false, ["Searched once", "read a file"]),
+            (["edit", "write", "multiedit"], false, ["Edited 3 files"]),
+            (["fetch", "websearch"], false, ["Fetched 2 pages"]),
+            (["think", "task"], false, ["Used 2 tools"]),
+            (["Bash", "execute"], false, ["Ran 2 commands"]),
             (["read", "grep", "edit", "fetch", "think", "execute"], false,
-             "Read a file, searched once, edited a file, fetched a page, used a tool, ran a command"),
-            (["execute", "read"], true, "Running a command, reading a file…"),
-            (["execute", "execute", "edit"], true, "Running 2 commands, editing a file…"),
-        ] as [([String], Bool, String)])
-        func severalCallsAreCountedPerVerbInFirstSeenOrder(kinds: [String], running: Bool, expected: String) {
+             ["Read a file", "searched once", "edited a file", "fetched a page", "used a tool", "ran a command"]),
+            (["execute", "read"], true, ["Running a command", "reading a file"]),
+            (["execute", "execute", "edit"], true, ["Running 2 commands", "editing a file"]),
+        ] as [([String], Bool, [String])])
+        func severalCallsAreCountedPerVerbInFirstSeenOrder(kinds: [String], running: Bool, phrases: [String]) {
             let calls = kinds.enumerated().map { CRFixture.call(id: "c\($0.offset)", title: "ignored", kind: $0.element) }
-            #expect(ChatRenderer.groupSummary(calls, running: running) == expected)
+            #expect(ChatRenderer.groupSummary(calls, running: running) == phrases.formatted() + (running ? "…" : ""))
+        }
+
+        @Test func twoVerbsAreJoinedByAnd() {
+            let calls = [CRFixture.call(id: "c0", kind: "execute"), CRFixture.call(id: "c1", kind: "read")]
+            #expect(ChatRenderer.groupSummary(calls, running: false).hasPrefix("Ran a command and read a file"))
         }
 
         @Test(.tags(.edgeCase), arguments: [(false, ""), (true, "…")])
@@ -662,16 +668,17 @@ struct ChatRendererTests {
             #expect(CRFixture.link(in: rendered, at: 1) == nil, "Only Undo is a link")
         }
 
+        /// Listed the way the locale lists things ("f1.swift and f2.swift").
         @Test(arguments: [
-            (2, "Changed 2 files: f1.swift, f2.swift"),
-            (4, "Changed 4 files: f1.swift, f2.swift, f3.swift, f4.swift"),
-            (5, "Changed 5 files: f1.swift, f2.swift, f3.swift, f4.swift +1 more"),
-            (7, "Changed 7 files: f1.swift, f2.swift, f3.swift, f4.swift +3 more"),
+            (2, ["f1.swift", "f2.swift"]),
+            (4, ["f1.swift", "f2.swift", "f3.swift", "f4.swift"]),
+            (5, ["f1.swift", "f2.swift", "f3.swift", "f4.swift", "1 more"]),
+            (7, ["f1.swift", "f2.swift", "f3.swift", "f4.swift", "3 more"]),
         ])
-        func upToFourNamesAreListed(count: Int, summary: String) {
+        func upToFourNamesAreListed(count: Int, names: [String]) {
             let paths = (1...count).map { "/repo/Sources/f\($0).swift" }
             let rendered = ChatRenderer.render(.fileChanges(turn: "t", paths: paths, restored: false), expanded: false)
-            #expect(rendered.string == "\n✎  \(summary)   Undo\n\n")
+            #expect(rendered.string == "\n✎  Changed \(count) files: \(names.formatted())   Undo\n\n")
         }
 
         @Test func toolTipListsEveryPath() {
@@ -696,7 +703,8 @@ struct ChatRendererTests {
         @Test(arguments: [true, false])
         func noticeIsOneSmallLineBetweenSpacers(isError: Bool) {
             let rendered = ChatRenderer.render(.notice(id: UUID(), text: "Connection lost", isError: isError), expanded: false)
-            #expect(rendered.string == "\nConnection lost\n\n")
+            #expect(rendered.string == (isError ? "\n⚠︎  Connection lost\n\n" : "\nConnection lost\n\n"),
+                    "Errors are marked by more than color")
             CRFixture.verifyFace(CRFixture.font(in: rendered, at: 1), matches: .systemFont(ofSize: 11.5))
             #expect(CRFixture.blockRuns(rendered).isEmpty)
         }
