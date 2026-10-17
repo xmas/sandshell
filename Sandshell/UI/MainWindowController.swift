@@ -133,6 +133,7 @@ final class MainWindowController: NSWindowController {
             self?.detail?.openFiles(FilesTarget(session: id, folder: s.workdir))
         }
         sidebarVC.onShowSearch = { [weak self] folder in self?.showSearch(preferredFolder: folder) }
+        sidebarVC.onStopTask = { [weak self] sid, task in await self?.detail?.surfaces.chats[sid]?.session.stopBackgroundTask(task) ?? false }
         sidebarVC.onDropFiles = { [weak self] id, urls in
             self?.workspace?.selection = .session(id)
             self?.detail?.dropFiles(urls, on: id)

@@ -98,7 +98,7 @@ final class SidebarListController: NSViewController {
     private(set) var displayedSessionIDs: [UUID] = []
 
     /// What each row shows: a session, or one of its subagents beneath it.
-    enum Row: Equatable { case session(UUID), subagent(SubagentInfo) }
+    enum Row: Equatable { case session(UUID), subagent(SubagentInfo), workflow(UUID, WorkflowRun) }
     private(set) var rows: [Row] = []
     /// Subagent lists opened / closed by the person (else: open while one runs,
     /// or for the selected session).
@@ -113,14 +113,38 @@ final class SidebarListController: NSViewController {
         guard rows.indices.contains(row), case .subagent(let info) = rows[row] else { return nil }
         return info
     }
+    func workflow(atRow row: Int) -> (session: UUID, run: WorkflowRun)? {
+        guard rows.indices.contains(row), case .workflow(let session, let run) = rows[row] else { return nil }
+        return (session, run)
+    }
+    /// The session a child row (subagent or workflow) sits under; nil for a session row.
+    func parentSession(ofRow row: Int) -> UUID? { subagent(atRow: row)?.sessionID ?? workflow(atRow: row)?.session }
+
+    private func openWorkflow(_ run: WorkflowRun, in session: UUID) {
+        controller.selection = .session(session)
+        let taskID = controller.backgroundTasks[session]?.first { $0.runID == run.id }?.id
+        let stop: (() async -> Bool)? = taskID.map { tid in { [weak self] in await self?.onStopTask?(session, tid) ?? false } }
+        WorkflowWindowController.show(run, sessionID: session, workspace: controller, stop: stop)
+    }
+    /// Stops a session's background task (the pane that runs its chat does it).
+    var onStopTask: ((UUID, String) async -> Bool)?
     func row(of id: UUID) -> Int? { rows.firstIndex(of: .session(id)) }
 
     func showsSubagents(of id: UUID) -> Bool {
-        guard let list = controller.subagents[id], !list.isEmpty else { return false }
+        let list = controller.subagents[id] ?? [], runs = controller.workflows[id] ?? []
+        guard !list.isEmpty || !runs.isEmpty else { return false }
         if closedParents.contains(id) { return false }
         if openedParents.contains(id) { return true }
-        return list.contains(where: \.isRunning) || controller.selection == .session(id)
+        return list.contains(where: \.isRunning) || runs.contains { !$0.agentsSettled } || controller.selection == .session(id)
     }
+
+    /// A session's child rows: its subagents and workflows, oldest first.
+    private func childRows(of id: UUID) -> [Row] {
+        let subs = (controller.subagents[id] ?? []).map { (date: $0.startedAt, row: Row.subagent($0)) }
+        let runs = (controller.workflows[id] ?? []).map { (date: $0.startedAt ?? .distantPast, row: Row.workflow(id, $0)) }
+        return (subs + runs).sorted { $0.date < $1.date }.map(\.row)
+    }
+    private func childCount(of id: UUID) -> Int { (controller.subagents[id]?.count ?? 0) + (controller.workflows[id]?.count ?? 0) }
 
     func setShowsSubagents(_ show: Bool, of id: UUID) {
         if show { openedParents.insert(id); closedParents.remove(id) } else { closedParents.insert(id); openedParents.remove(id) }
@@ -243,18 +267,19 @@ final class SidebarListController: NSViewController {
             if let info = self.subagent(atRow: self.outline.selectedRow) {
                 return SubagentWindowController.show(info, workspace: self.controller)
             }
+            if let wf = self.workflow(atRow: self.outline.selectedRow) { return self.openWorkflow(wf.run, in: wf.session) }
             self.beginRenameSelected()
         }
         outline.onArrow = { [weak self] right in
             guard let self else { return false }
             let row = self.outline.selectedRow
-            if let id = self.sessionID(atRow: row), self.controller.subagents[id]?.isEmpty == false {
+            if let id = self.sessionID(atRow: row), self.childCount(of: id) > 0 {
                 guard self.showsSubagents(of: id) != right else { return false }
                 self.setShowsSubagents(right, of: id)
                 return true
             }
             // ← on a subagent: up to its session.
-            if !right, let info = self.subagent(atRow: row), let parent = self.row(of: info.sessionID) {
+            if !right, let session = self.parentSession(ofRow: row), let parent = self.row(of: session) {
                 self.outline.selectRowIndexes([parent], byExtendingSelection: false)
                 return true
             }
@@ -550,6 +575,9 @@ final class SidebarListController: NSViewController {
         controller.$subagents.dropFirst().removeDuplicates().sink { [weak self] _ in
             DispatchQueue.main.async { self?.reload() }
         }.store(in: &cancellables)
+        controller.$workflows.dropFirst().removeDuplicates().sink { [weak self] _ in
+            DispatchQueue.main.async { self?.reload() }
+        }.store(in: &cancellables)
         controller.$runtimes.dropFirst().sink { [weak self] runtimes in
             self?.runtimesChanged(runtimes)
         }.store(in: &cancellables)
@@ -684,7 +712,7 @@ final class SidebarListController: NSViewController {
 
         displayedSessionIDs = controller.orderedSessions.filter(matchesSearch).map(\.id)
         rows = displayedSessionIDs.flatMap { id -> [Row] in
-            [.session(id)] + (showsSubagents(of: id) ? (controller.subagents[id] ?? []).map(Row.subagent) : [])
+            [.session(id)] + (showsSubagents(of: id) ? childRows(of: id) : [])
         }
         outline.reloadData()
         applySelectionToOutline()
@@ -692,7 +720,7 @@ final class SidebarListController: NSViewController {
     }
 
     private func applySelectionToOutline() {
-        if let row = outline.selectedRowIndexes.first, subagent(atRow: row) != nil { return }   // a subagent stays picked
+        if let row = outline.selectedRowIndexes.first, parentSession(ofRow: row) != nil { return }   // a child row stays picked
         if case let .session(id) = controller.selection, let row = row(of: id) {
             outline.selectRowIndexes([row], byExtendingSelection: false)
         } else {
@@ -709,7 +737,7 @@ final class SidebarListController: NSViewController {
             targetRow = row
             updateSessionRow(id)   // selecting a session marks it seen — clear the dot
             // One of its subagents is the picked row: leave it.
-            if let picked = subagent(atRow: outline.selectedRow), picked.sessionID == id { return }
+            if parentSession(ofRow: outline.selectedRow) == id { return }
         }
         guard targetRow != outline.selectedRow else { return }
         // Part of a multi-selection the person made: keep it.
@@ -740,6 +768,7 @@ final class SidebarListController: NSViewController {
             controller.selection = .session(info.sessionID)
             return SubagentWindowController.show(info, workspace: controller)
         }
+        if let wf = workflow(atRow: row) { return openWorkflow(wf.run, in: wf.session) }
         guard let id = sessionID(atRow: row) else { return }
         controller.selection = .session(id)
     }
@@ -1157,6 +1186,7 @@ final class SidebarListController: NSViewController {
     private func contextMenu(forRow row: Int) -> NSMenu? {
         let menu = NSMenu()
         if let info = subagent(atRow: row) { return subagentMenu(info) }
+        if let wf = workflow(atRow: row) { return workflowMenu(wf.run, in: wf.session) }
         guard let id = sessionID(atRow: row), let session = controller.session(id: id) else {
             // Empty-area click: offer the same menu as the "+" button.
             for item in newSessionMenuItems() { menu.addItem(item) }
@@ -1189,6 +1219,16 @@ final class SidebarListController: NSViewController {
         guard let id = sender.representedObject as? UUID, let session = controller.session(id: id) else { return }
         controller.setChat(id, !session.isChat)
         controller.selection = .session(id)
+    }
+
+    /// A workflow row's menu.
+    private func workflowMenu(_ run: WorkflowRun, in session: UUID) -> NSMenu {
+        let menu = NSMenu()
+        menu.addItem(NSMenuItem("Open Workflow") { [weak self] in self?.openWorkflow(run, in: session) })
+        menu.addItem(NSMenuItem("Reveal Run in Finder") { NSWorkspace.shared.activateFileViewerSelecting([run.dir]) })
+        menu.addItem(.separator())
+        menu.addItem(NSMenuItem("Hide Subagents and Workflows") { [weak self] in self?.setShowsSubagents(false, of: session) })
+        return menu
     }
 
     /// A subagent row's menu.
@@ -1250,6 +1290,7 @@ extension SidebarListController: NSTableViewDataSource {
     /// A session row drags out as a session (onto a pane edge: split there).
     func tableView(_ tableView: NSTableView, pasteboardWriterForRow row: Int) -> (any NSPasteboardWriting)? {
         if let info = subagent(atRow: row) { return info.transcript as NSURL }   // its transcript, as a file
+        if workflow(atRow: row) != nil { return nil }
         guard let id = sessionID(atRow: row) else { return nil }
         let item = NSPasteboardItem()
         item.setString(id.uuidString, forType: .sandshellSession)
@@ -1260,7 +1301,7 @@ extension SidebarListController: NSTableViewDataSource {
     }
 
     func tableView(_ tableView: NSTableView, typeSelectStringFor tableColumn: NSTableColumn?, row: Int) -> String? {
-        subagent(atRow: row)?.title ?? sessionID(atRow: row).flatMap { controller.session(id: $0)?.name }
+        subagent(atRow: row)?.title ?? workflow(atRow: row)?.run.name ?? sessionID(atRow: row).flatMap { controller.session(id: $0)?.name }
     }
 
     /// Files dragged onto a session row attach to that session (chat: as
@@ -1295,12 +1336,16 @@ extension SidebarListController: NSTableViewDelegate {
         SidebarRowView(theme: sidebarTheme, drawsSelection: true)
     }
 
-    func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat { subagent(atRow: row) == nil ? 50 : 34 }
+    func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat { parentSession(ofRow: row) == nil ? 50 : 34 }
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
-        if let info = subagent(atRow: row) {
-            let last = subagent(atRow: row + 1)?.sessionID != info.sessionID
-            return SubagentCellView(info, isLast: last, theme: sidebarTheme)
+        if let parent = parentSession(ofRow: row) {
+            let last = parentSession(ofRow: row + 1) != parent
+            if let info = subagent(atRow: row) { return SubagentCellView(info, isLast: last, theme: sidebarTheme) }
+            if let wf = workflow(atRow: row) {
+                let task = controller.backgroundTasks[wf.session]?.first { $0.runID == wf.run.id }
+                return SubagentCellView(workflow: wf.run, task: task, isLast: last, theme: sidebarTheme)
+            }
         }
         guard let id = sessionID(atRow: row) else { return nil }
         let cell = SessionCellView(owner: self)
@@ -1314,8 +1359,8 @@ extension SidebarListController: NSTableViewDelegate {
                 theme: sidebarTheme,
                 workdirName: workdirName(for: session),
                 backgroundCount: controller.runningBackgroundTasks(id))
-            if let list = controller.subagents[id], !list.isEmpty {
-                cell.showDisclosure(expanded: showsSubagents(of: id), count: list.count) { [weak self] in
+            if childCount(of: id) > 0 {
+                cell.showDisclosure(expanded: showsSubagents(of: id), count: childCount(of: id)) { [weak self] in
                     guard let self else { return }
                     self.setShowsSubagents(!self.showsSubagents(of: id), of: id)
                 }
@@ -1327,8 +1372,8 @@ extension SidebarListController: NSTableViewDelegate {
     func tableViewSelectionDidChange(_ notification: Notification) {
         guard !reloading, !settingSelection else { return }
         // A subagent row: its session stays the one shown.
-        if let info = subagent(atRow: outline.selectedRow), outline.selectedRowIndexes.count == 1 {
-            if controller.selection != .session(info.sessionID) { controller.selection = .session(info.sessionID) }
+        if let parent = parentSession(ofRow: outline.selectedRow), outline.selectedRowIndexes.count == 1 {
+            if controller.selection != .session(parent) { controller.selection = .session(parent) }
             return
         }
         // With several picked, the detail follows the last one picked.
@@ -1981,19 +2026,10 @@ extension SidebarListController: NSMenuItemValidation {
 
 /// A subagent under its session: tree line, what it's doing, its state.
 final class SubagentCellView: NSTableCellView {
-    private let info: SubagentInfo
     private let isLast: Bool
     private let lineColor: NSColor
 
-    init(_ info: SubagentInfo, isLast: Bool, theme: ThemeColors) {
-        self.info = info
-        self.isLast = isLast
-        lineColor = theme.sidebarMuted.withAlphaComponent(0.45)
-        super.init(frame: .zero)
-        let title = NSTextField(labelWithString: info.title)
-        title.font = .systemFont(ofSize: 12.5, weight: info.isRunning ? .medium : .regular)
-        title.textColor = theme.sidebarFg.withAlphaComponent(info.isRunning ? 1 : 0.8)
-        title.lineBreakMode = .byTruncatingTail
+    convenience init(_ info: SubagentInfo, isLast: Bool, theme: ThemeColors) {
         let state: String
         switch info.state {
         case .running: state = "Working"
@@ -2001,36 +2037,78 @@ final class SubagentCellView: NSTableCellView {
         case .failed: state = "Failed"
         case .stopped: state = "Stopped"
         }
-        let sub = NSTextField(labelWithString: [info.agentType, state].compactMap { $0 }.joined(separator: " · "))
+        self.init(title: info.title, subtitle: [info.agentType, state].compactMap { $0 }.joined(separator: " · "),
+                  running: info.isRunning, failed: info.state == .failed, isLast: isLast, theme: theme,
+                  accessibility: "Subagent: \(info.title), \(state)")
+    }
+
+    /// A workflow under its session: its name, and where it's got to.
+    convenience init(workflow run: WorkflowRun, task: BackgroundTask?, isLast: Bool, theme: ThemeColors) {
+        let running = task.map(\.isRunning) ?? !run.agentsSettled
+        var parts = ["Workflow"]
+        if running, let phase = run.phases.last(where: { run.progress(of: $0).total > 0 }) {
+            let p = run.progress(of: phase)
+            parts.append("\(phase.title) \(p.done)/\(p.total)")
+        } else if let last = run.lastWrite {
+            parts.append(task?.state == .failed ? "Failed" : Format.ago(last))
+        }
+        parts.append("\(run.agents.count) agents")
+        self.init(title: run.name, subtitle: parts.joined(separator: " · "), running: running,
+                  failed: task?.state == .failed, isLast: isLast, theme: theme,
+                  accessibility: "Workflow: \(run.name), \(parts.dropFirst().joined(separator: ", "))",
+                  symbol: "point.3.connected.trianglepath.dotted")
+        toolTip = run.summary ?? run.name
+    }
+
+    init(title: String, subtitle: String, running: Bool, failed: Bool, isLast: Bool, theme: ThemeColors,
+         accessibility: String, symbol: String? = nil) {
+        self.isLast = isLast
+        lineColor = theme.sidebarMuted.withAlphaComponent(0.45)
+        super.init(frame: .zero)
+        let titleLabel = NSTextField(labelWithString: title)
+        titleLabel.font = .systemFont(ofSize: 12.5, weight: running ? .medium : .regular)
+        titleLabel.textColor = theme.sidebarFg.withAlphaComponent(running ? 1 : 0.8)
+        titleLabel.lineBreakMode = .byTruncatingTail
+        let sub = NSTextField(labelWithString: subtitle)
         sub.font = .systemFont(ofSize: 10.5)
         sub.textColor = theme.sidebarMuted
         sub.lineBreakMode = .byTruncatingTail
-        let dot = NSView()
-        dot.wantsLayer = true
-        dot.layer?.cornerRadius = 3
-        dot.layer?.backgroundColor = (info.state == .running ? NSColor.sessionWorking
-            : info.state == .failed ? .systemRed : theme.sidebarMuted.withAlphaComponent(0.5)).cgColor
-        let text = NSStackView(views: [title, sub])
+        let mark: NSView
+        if let symbol {
+            let image = NSImageView(image: NSImage(systemSymbolName: symbol, accessibilityDescription: nil) ?? NSImage())
+            image.symbolConfiguration = .init(pointSize: 10, weight: .semibold)
+            image.contentTintColor = running ? .sessionWorking : failed ? .systemRed : theme.sidebarMuted
+            mark = image
+        } else {
+            let dot = NSView()
+            dot.wantsLayer = true
+            dot.layer?.cornerRadius = 3
+            dot.layer?.backgroundColor = (running ? NSColor.sessionWorking
+                : failed ? .systemRed : theme.sidebarMuted.withAlphaComponent(0.5)).cgColor
+            mark = dot
+        }
+        let text = NSStackView(views: [titleLabel, sub])
         text.orientation = .vertical
         text.alignment = .leading
         text.spacing = 1
-        for v in [dot, text] as [NSView] {
+        for v in [mark, text] as [NSView] {
             v.translatesAutoresizingMaskIntoConstraints = false
             addSubview(v)
         }
+        let markSize: CGFloat = symbol == nil ? 6 : 12
         NSLayoutConstraint.activate([
-            dot.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 40),
-            dot.centerYAnchor.constraint(equalTo: title.centerYAnchor),
-            dot.widthAnchor.constraint(equalToConstant: 6),
-            dot.heightAnchor.constraint(equalToConstant: 6),
-            text.leadingAnchor.constraint(equalTo: dot.trailingAnchor, constant: 7),
+            mark.centerXAnchor.constraint(equalTo: leadingAnchor, constant: 43),
+            mark.centerYAnchor.constraint(equalTo: titleLabel.centerYAnchor),
+            mark.widthAnchor.constraint(equalToConstant: markSize),
+            mark.heightAnchor.constraint(equalToConstant: markSize),
+            text.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 53),
             text.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -10),
             text.centerYAnchor.constraint(equalTo: centerYAnchor),
         ])
         setAccessibilityElement(true)
         setAccessibilityRole(.row)
-        setAccessibilityLabel("Subagent: \(info.title), \(state)")
-        toolTip = info.title
+        setAccessibilityLabel(accessibility)
+        toolTip = title
     }
 
     @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }

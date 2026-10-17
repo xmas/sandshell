@@ -847,6 +847,21 @@ enum SelfTest {
         let viewer = SubagentWindowController.debugWindow(info.id)
         check(await until(10) { !(viewer?.debugTranscriptText.isEmpty ?? true) }, "its transcript opens read-only")
         viewer?.window?.close()
+        // A workflow run beside it (made in this session's folder the way Claude Code writes one).
+        let runDir = info.transcript.deletingLastPathComponent().appendingPathComponent("workflows/wf_selftest-1")
+        try? FileManager.default.createDirectory(at: runDir, withIntermediateDirectories: true)
+        try? (#"{"type":"started","agentId":"w1","label":"scan:a","phase":"Scan"}"# + "\n")
+            .write(to: runDir.appendingPathComponent("journal.jsonl"), atomically: true, encoding: .utf8)
+        try? (#"{"type":"user","isSidechain":true,"timestamp":"2026-10-17T07:00:00.000Z","message":{"role":"user","content":"go"}}"# + "\n")
+            .write(to: runDir.appendingPathComponent("agent-w1.jsonl"), atomically: true, encoding: .utf8)
+        await ws.refreshSubagents()
+        check(ws.workflows[s.id]?.contains { $0.id == "wf_selftest-1" } == true, "a workflow run in the session's folder is found")
+        sidebar.setShowsSubagents(true, of: s.id)
+        check(sidebar.rows.contains { if case .workflow(_, let run) = $0 { run.id == "wf_selftest-1" } else { false } },
+              "it's a row under its session, beside the subagent")
+        snapshot(window, "subagents-workflow")
+        try? FileManager.default.removeItem(at: runDir)
+        await ws.refreshSubagents()
         // Collapsing hides it; expanding shows it again.
         sidebar.setShowsSubagents(false, of: s.id)
         check(!sidebar.rows.contains { if case .subagent = $0 { true } else { false } }, "collapsing hides the subagents")
