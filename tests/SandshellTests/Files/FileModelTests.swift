@@ -12,8 +12,8 @@ extension Tag {
 }
 
 /// Tests for `Files/FileModel.swift` (`GitStatus`, `FilePatch`, `FileNode`,
-/// `FileWatcher`) and `FileTreeController.unique(_:in:copy:)`, `.dropTarget(for:in:)`
-/// and `.outermost(_:)`.
+/// `FileWatcher`) and `FileTreeController.unique(_:in:copy:)`, `.dropTarget(for:in:)`,
+/// `.outermost(_:)` and `.following(_:through:)`.
 ///
 /// Not covered: `GitStatus.load(for:)` (its porcelain parsing is inline and runs
 /// the host's git), `GitStatus.git(_:)`, `GitStatus.change(_:)` and
@@ -668,6 +668,49 @@ struct FileModelTests {
             let picked = urls("a.txt", "b/c.txt", "d")
             #expect(FileTreeController.outermost(picked) == picked)
             #expect(FileTreeController.outermost([]).isEmpty)
+        }
+    }
+
+    // MARK: - FileTreeController.following
+
+    /// Where a selected file is after renames and moves, so the selection follows it.
+    @MainActor
+    struct Following {
+        let root = URL(fileURLWithPath: "/srv/repo", isDirectory: true)
+
+        private func url(_ path: String) -> URL { root.appending(path: path) }
+
+        @Test func renamedFileIsFoundUnderItsNewName() {
+            let moved = FileTreeController.following(url("notes.md"), through: [(url("notes.md"), url("todo.md"))])
+            #expect(moved.path == "/srv/repo/todo.md")
+        }
+
+        @Test func fileInsideAMovedFolderMovesWithIt() {
+            let moved = FileTreeController.following(url("src/deep/a.swift"), through: [(url("src"), url("lib/src"))])
+            #expect(moved.path == "/srv/repo/lib/src/deep/a.swift")
+        }
+
+        @Test func movesApplyInOrder() {
+            let moves = [(from: url("a.txt"), to: url("b.txt")), (from: url("b.txt"), to: url("dir/c.txt"))]
+            #expect(FileTreeController.following(url("a.txt"), through: moves).path == "/srv/repo/dir/c.txt")
+        }
+
+        @Test func undoingARenameComesBack() {
+            let moves = [(from: url("a.txt"), to: url("b.txt")), (from: url("b.txt"), to: url("a.txt"))]
+            #expect(FileTreeController.following(url("a.txt"), through: moves).path == "/srv/repo/a.txt")
+        }
+
+        @Test(.tags(.fileModelEdgeCase))
+        func siblingWithTheSamePrefixStaysPut() {
+            let moves = [(from: url("src"), to: url("lib"))]
+            #expect(FileTreeController.following(url("src2/a.txt"), through: moves).path == "/srv/repo/src2/a.txt")
+            #expect(FileTreeController.following(url("src.txt"), through: moves).path == "/srv/repo/src.txt")
+        }
+
+        @Test func untouchedFileIsReturnedAsItWas() {
+            let file = url("README.md")
+            #expect(FileTreeController.following(file, through: [(url("a"), url("b"))]) == file)
+            #expect(FileTreeController.following(file, through: []) == file)
         }
     }
 }

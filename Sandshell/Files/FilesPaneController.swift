@@ -126,10 +126,22 @@ final class FilesPaneController: NSViewController, NSSplitViewDelegate {
         _ = view   // make sure children are loaded
         tree.setRoot(folder)
         tree.sandboxAccess = access
-        if editor.tabsKey == nil, let key = tabsKey ?? folder.map({ "filesTabs:" + $0.standardizedFileURL.path }) {
+        if editor.tabsKey == nil, let key = tabsKey ?? folder.map(Self.folderTabsKey) {
+            if tabsKey != nil, let folder { Self.adoptTabs(from: Self.folderTabsKey(folder), into: key) }
             editor.tabsKey = key
             editor.restoreTabs()
         }
+    }
+
+    /// A split Files pane's tabs: under the first folder it shows.
+    static func folderTabsKey(_ folder: URL) -> String { "filesTabs:" + folder.standardizedFileURL.path }
+
+    /// The inspector's tabs used to be kept under the first folder it showed:
+    /// the first time it has its own key, it starts from that list. Copied, not
+    /// moved — a split Files pane on that folder may be using it too.
+    static func adoptTabs(from old: String, into key: String, defaults: UserDefaults = .standard) {
+        guard defaults.object(forKey: key) == nil else { return }
+        defaults.set(defaults.stringArray(forKey: old) ?? [], forKey: key)
     }
 
     func open(_ url: URL) {

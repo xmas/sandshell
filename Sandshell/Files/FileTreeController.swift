@@ -33,6 +33,9 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
     /// its cell and ends the edit) and run once it's done.
     private var renaming = false
     private var refreshAfterRename = false
+    /// Renames and moves made here since the outline last reloaded: the
+    /// selection follows them (the outline still holds the old paths' nodes).
+    private var movesSinceReload: [(from: URL, to: URL)] = []
     private var filterResults: [FileNode]?
     /// "?query" content-search results, grouped by file.
     private var searchGroups: [SearchGroup]?
@@ -213,6 +216,7 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
         scope = .uncommitted
         scoped = [:]
         wantsChanges = nil
+        movesSinceReload = []
         commits.select(nil)
         // The last root's status and scope mean nothing here (and the editor
         // mustn't keep diffing the old repo's commit).
@@ -267,26 +271,39 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
 
     /// Reload the outline with the same files selected: reloadData keeps the
     /// selected rows, not items, so a file created above would take the
-    /// selection (and ⌘⌫ would trash it). `update` changes what's listed first.
+    /// selection (and ⌘⌫ would trash it). A renamed or moved file stays
+    /// selected under its new path. `update` changes what's listed first.
     private func reloadOutline(_ update: () -> Void = {}) {
-        let selected = selectedURLs
+        let items = outline.selectedRowIndexes.compactMap { outline.item(atRow: $0).map { $0 as AnyObject } }
+        let paths = Set(items.compactMap { ($0 as? FileNode)?.url }.map { Self.following($0, through: movesSinceReload).path })
+        let others = items.filter { !($0 is FileNode) }
+        movesSinceReload = []
         let wasList = filterResults != nil || searchGroups != nil
         update()
         outline.reloadData()
         // Back to the tree from a list: the outline forgot which folders were
         // open (their nodes weren't in it), so reopen the remembered ones.
         if wasList, filterResults == nil, searchGroups == nil { restoreExpansion() }
-        select(selected)
-    }
-
-    /// Select the rows of those of `urls` still showing.
-    private func select(_ urls: [URL]) {
-        guard !urls.isEmpty else { return }
-        let paths = Set(urls.map(\.path))
+        // Files by path (the tree makes new nodes for what changed); a search
+        // match or file group only if it's still listed. Nothing left: nothing
+        // selected, not whatever moved into the old rows.
         let rows = (0..<outline.numberOfRows).filter { row in
-            (outline.item(atRow: row) as? FileNode).map { paths.contains($0.url.path) } ?? false
+            guard let item = outline.item(atRow: row) else { return false }
+            if let node = item as? FileNode { return paths.contains(node.url.path) }
+            return others.contains { $0 === item as AnyObject }
         }
         outline.selectRowIndexes(IndexSet(rows), byExtendingSelection: false)
+    }
+
+    /// Where `url` is after `moves` (in order): moved itself, or inside a
+    /// folder that moved; as it was otherwise.
+    static func following(_ url: URL, through moves: [(from: URL, to: URL)]) -> URL {
+        var path = url.path
+        for (from, to) in moves {
+            if path == from.path { path = to.path }
+            else if path.hasPrefix(from.path + "/") { path = to.path + path.dropFirst(from.path.count) }
+        }
+        return path == url.path ? url : URL(fileURLWithPath: path)
     }
 
     private func refreshGit() {
@@ -476,6 +493,7 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
     private func searchContents(_ query: String, in root: URL) {
         filterResults = nil
         searchQuery = query
+        movesSinceReload = []   // no files listed to follow
         guard !query.isEmpty else {
             searchGroups = []
             outline.reloadData()
@@ -856,6 +874,7 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
         Self.registerUndo(action, on: undo, tree: tree) { undo, tree in
             _ = Self.move(to, to: from, action: action, undo: undo, tree: tree)
         }
+        tree?.movesSinceReload.append((from, to))   // selected, it stays selected
         tree?.refreshNow()
         return true
     }
