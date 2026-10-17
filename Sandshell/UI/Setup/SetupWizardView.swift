@@ -68,7 +68,7 @@ struct SetupWizardView: View {
             HStack(spacing: 8) {
                 ForEach(SetupStep.allCases, id: \.rawValue) { s in
                     Circle()
-                        .fill(s.rawValue <= step.rawValue ? AnyShapeStyle(.tint) : AnyShapeStyle(.quaternary))
+                        .fill(s.rawValue <= step.rawValue ? AnyShapeStyle(.tint) : AnyShapeStyle(.tertiary))
                         .frame(width: 8, height: 8)
                 }
                 Text("Step \(step.rawValue + 1) of \(SetupStep.allCases.count) · \(step.title)")

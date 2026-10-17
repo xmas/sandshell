@@ -5,6 +5,9 @@ import SwiftUI
 /// the load it replaces.
 struct SearchPreviewPane: View {
     let selection: SearchResult?
+    /// The results list has rows. When it doesn't, it shows its own empty state
+    /// and this pane stays blank instead of asking for a selection.
+    let hasResults: Bool
     let matchedQuery: String
     let home: URL
 
@@ -54,10 +57,12 @@ struct SearchPreviewPane: View {
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            } else {
+            } else if hasResults {
                 ContentUnavailableView("No Selection", systemImage: "text.magnifyingglass",
                                        description: Text("Select a result to preview its conversation."))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                Color.clear
             }
         }
         .background(Color(nsColor: .textBackgroundColor))

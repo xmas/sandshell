@@ -24,10 +24,11 @@ struct OpenFoldersRow: View {
                 if let opened = root.lastOpened {
                     Text(Format.relative(opened))
                         .font(.caption)
-                        .foregroundStyle(.tertiary)
+                        // Tertiary is too faint on the accent fill; secondary reads there.
+                        .foregroundStyle(isSelected ? AnyShapeStyle(.secondary) : AnyShapeStyle(.tertiary))
                 }
             }
-            // On the accent fill, primary/secondary/tertiary turn white.
+            // On the accent fill, primary/secondary/tertiary turn white (fading with each level).
             .environment(\.backgroundProminence, isSelected ? .increased : .standard)
             .padding(.horizontal, 16)
             .padding(.vertical, 9)

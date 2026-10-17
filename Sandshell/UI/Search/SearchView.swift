@@ -37,7 +37,8 @@ struct SearchView: View {
             HSplitView {
                 SearchResultsList(store: store, onOpen: onOpen)
                     .frame(minWidth: 300, idealWidth: 400, maxWidth: .infinity)
-                SearchPreviewPane(selection: store.selected, matchedQuery: store.matchedQuery, home: store.home)
+                SearchPreviewPane(selection: store.selected, hasResults: !store.results.isEmpty,
+                                  matchedQuery: store.matchedQuery, home: store.home)
                     .frame(minWidth: 260, maxWidth: .infinity)
             }
             Divider()

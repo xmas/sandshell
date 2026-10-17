@@ -57,4 +57,12 @@ enum SymbolCatalog {
         let q = query.trimmingCharacters(in: .whitespaces)
         return q.isEmpty ? available : available.filter { $0.localizedStandardContains(q) }
     }
+
+    /// What VoiceOver reads (and Voice Control answers to) for a symbol in the
+    /// picker: its name in words ("folder.badge.plus" → "folder badge plus").
+    /// Not the system's own symbol description, which often names a use rather
+    /// than the picture ("folder" reads "move", "star" reads "favorite").
+    static func spokenName(_ symbol: String) -> String {
+        symbol.replacing(".", with: " ")
+    }
 }

@@ -27,4 +27,14 @@ struct SymbolCatalogTests {
     @Test func noMatchOffersNothing() {
         #expect(SymbolCatalog.available(matching: "zebra-unicorn").isEmpty)
     }
+
+    @Test(arguments: [
+        ("folder", "folder"),
+        ("folder.badge.plus", "folder badge plus"),
+        ("wrench.and.screwdriver.fill", "wrench and screwdriver fill"),
+        ("square.grid.2x2", "square grid 2x2"),
+    ])
+    func spokenNameIsTheSymbolNameInWords(symbol: String, spoken: String) {
+        #expect(SymbolCatalog.spokenName(symbol) == spoken)
+    }
 }

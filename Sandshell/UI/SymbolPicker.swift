@@ -25,7 +25,7 @@ struct SymbolPickerView: View {
                 LazyVGrid(columns: cols, spacing: 8) {
                     ForEach(symbols, id: \.self) { s in
                         Button { choose(s) } label: {
-                            Label(s, systemImage: s)
+                            Label(SymbolCatalog.spokenName(s), systemImage: s)
                                 .labelStyle(.iconOnly)
                                 .font(.system(size: 18))
                                 .frame(width: 42, height: 42)
