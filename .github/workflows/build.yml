@@ -7,12 +7,13 @@ on:
 
 jobs:
   build:
-    runs-on: macos-15
+    # The app targets macOS 27 with Swift 6.4: only the Xcode 27 image can build it.
+    runs-on: xcode-27
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Select Xcode
-        run: sudo xcode-select -s /Applications/Xcode_16.3.app
+        run: sudo xcode-select -s /Applications/Xcode_27.1.app
 
       - name: Install XcodeGen
         run: brew install xcodegen
