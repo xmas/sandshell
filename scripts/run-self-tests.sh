@@ -164,6 +164,8 @@ prepare fresh; rmboxes fresh
 run building       fresh  fresh
 prepare fresh; rmboxes fresh
 run kit-extras     fresh  fresh   # also Undo / Stop / MCP (extras) with the kit
+prepare clone; rmboxes clone
+run clone          clone  fresh   # sbx create --clone: the agent's commits come back by git
 
 echo ""
 echo "${#PASSED[@]} passed, ${#FAILED[@]} failed${FAILED[*]:+: ${FAILED[*]}}"

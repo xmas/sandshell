@@ -222,6 +222,7 @@ final class WorkspaceController: ObservableObject {
             kits: config.kits.filter { !KitStore.isSandshellKit($0) })
         workspace.imageChannel = config.imageChannel
         workspace.customImage = config.customImage
+        workspace.cloneRepo = config.cloneRepo ?? false
         return WorkspaceController(workspace: workspace, store: store)
     }
 
@@ -237,6 +238,7 @@ final class WorkspaceController: ObservableObject {
             w.kits = config.kits.filter { !KitStore.isSandshellKit($0) }
             w.imageChannel = config.imageChannel
             w.customImage = config.customImage
+            w.cloneRepo = config.cloneRepo ?? false
             if w != workspace { workspace = w }
             if customAgents != config.customAgents { customAgents = config.customAgents }
             if let prefs = config.theme, prefs != theme.prefs { theme.prefs = prefs }
@@ -688,6 +690,22 @@ final class WorkspaceController: ObservableObject {
         mountSignature(mounts) + "\n--kits--\n"
             + KitStore.kits(kits, for: agent).filter { !KitStore.isSandshellKit($0) }.joined(separator: "\n")
             + "\n--image--\n" + (agent.isBuiltin ? imageSignature : "")
+            + (workspace.cloneRepo ? "\n--clone--" : "")
+    }
+
+    /// Agents on a private clone of the repo (`sbx create --clone`) or on the
+    /// folder itself. Takes effect at the next (re)build, like the image.
+    func setCloneRepo(_ on: Bool) {
+        guard on != workspace.cloneRepo else { return }
+        workspace.cloneRepo = on
+        config.cloneRepo = on ? true : nil
+        try? config.save(root: workspace.rootURL)
+        Log.info(.workspace, "clone mode → \(on)")
+    }
+
+    /// Whether the workspace folder is a git repository (clone mode needs one).
+    var isGitRepository: Bool {
+        FileManager.default.fileExists(atPath: workspace.rootURL.appendingPathComponent(".git").path)
     }
 
     /// Base-image part of the signature. Empty whenever sbx's default image is

@@ -105,6 +105,7 @@ enum SelfTest {
         case "mac": await macBehaviors(window)
         case "subagents": await subagentRows(window)
         case "details": await sessionDetails(window)
+        case "clone": await cloneMode(window)
         case "sandbox-access": await sandboxAccess(window)
         case "launch-failure": await launchFailure(window)
         case "fork": await fork(window)
@@ -729,6 +730,40 @@ enum SelfTest {
               && (try? String(contentsOf: lockedFile, encoding: .utf8)) == "edit keep me\n", "then it saves and closes")
         try? FileManager.default.removeItem(at: locked)
         try? FileManager.default.removeItem(at: typed)
+    }
+
+    /// Clone mode (`sbx create --clone`): the sandbox works on a private clone
+    /// of the repo, a commit made in it comes back through the
+    /// `sandbox-<name>` remote, and Session Details sees it. Fixture: `clone`
+    /// (a repo whose sandboxes the runner removed).
+    private static func cloneMode(_ window: MainWindowController) async {
+        guard let tree = window.paneTree, let ws = window.workspaceController else { return log("no window") }
+        guard let a = ws.orderedSessions.first else { return log("need a session") }
+        let root = ws.rootURL
+        check(ws.isGitRepository, "the folder is a git repo")
+        ws.setCloneRepo(true)
+        check(ws.workspace.cloneRepo, "clone mode is on")
+        ws.selection = .session(a.id)
+        check(await until(900) { tree.surfaces.terminals[a.id] != nil }, "a session starts in a clone-mode sandbox")
+        let name = ws.containerName(for: a.containerAgentKind)
+        let remotes = GitStatus.git(["-C", root.path, "remote"]) ?? ""
+        log("remotes: \(remotes.split(separator: "\n"))")
+        check(remotes.split(separator: "\n").contains { $0 == "sandbox-\(name)" }, "sbx added the sandbox-\(name) remote")
+        // Where the agent works, and a commit made there.
+        let probe = await SbxClient.shared.exec(inSandbox: name, script: "cd '\(root.path)' && pwd && git status -sb | head -1 && git remote -v | head -2") ?? "-"
+        log("in the sandbox: \(probe)")
+        let commit = await SbxClient.shared.exec(inSandbox: name, script:
+            "cd '\(root.path)' && git -c user.name=Agent -c user.email=agent@sandbox -c commit.gpgsign=false commit -q --allow-empty -m 'from the agent' && git log --oneline -1") ?? "-"
+        log("agent commit: \(commit)")
+        check(commit.contains("from the agent"), "the agent commits in its clone")
+        let hostLog = GitStatus.git(["-C", root.path, "log", "--oneline", "-1"]) ?? ""
+        check(hostLog.contains("from the agent") == false, "the folder itself doesn't change")
+        _ = GitStatus.git(["-C", root.path, "fetch", "sandbox-\(name)"])
+        let facts = GitFacts.load(root, sandbox: name)
+        log("clone facts: remote \(facts.sandboxRemote ?? "-"), ahead \(facts.sandboxAhead.map(String.init) ?? "-")")
+        check(facts.sandboxRemote == "sandbox-\(name)" && facts.sandboxAhead == 1,
+              "after a fetch, Session Details sees the agent's commit")
+        ws.setCloneRepo(false)
     }
 
     /// Session Details beside a chat: shown with the setting on, its cards

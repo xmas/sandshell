@@ -16,7 +16,36 @@ struct EnvironmentCard: View {
                 }
                 InspectorRow(symbol: "folder", title: env.folderName, subtitle: env.folderParent)
                     .help(env.folderPath)
-                InspectorRow(symbol: env.accessSymbol, title: env.access)
+                if let remote = env.cloneRemote {
+                    InspectorRow(symbol: "arrow.triangle.pull", title: "Clone", subtitle: remote) {
+                        Button(model.fetchingClone ? "Fetching…" : "Fetch") { model.fetchClone() }
+                            .controlSize(.small)
+                            .disabled(model.fetchingClone)
+                            .help("git fetch \(remote): bring the agent's commits here")
+                    }
+                    if let ahead = env.cloneAhead, ahead > 0 {
+                        InspectorRow(symbol: "arrow.down.circle",
+                                     title: "\(ahead) commit\(ahead == 1 ? "" : "s") from the agent",
+                                     subtitle: env.branch.map { "\(remote)/\($0)" })
+                    }
+                } else {
+                    InspectorRow(symbol: env.accessSymbol, title: env.access)
+                }
+                ForEach(env.ports, id: \.self) { port in
+                    InspectorRow(symbol: "network", title: "localhost:\(port.hostPort)", subtitle: "port \(port.sandboxPort)") {
+                        Button("Open", systemImage: "arrow.up.forward.app") {
+                            if let url = URL(string: "http://localhost:\(port.hostPort)") { NSWorkspace.shared.open(url) }
+                        }
+                        .labelStyle(.iconOnly)
+                        .buttonStyle(.borderless)
+                        .help("Open http://localhost:\(port.hostPort)")
+                    }
+                }
+                if let network = env.network {
+                    InspectorRow(symbol: "globe", title: "Network: \(network.allowed) hosts allowed",
+                                 subtitle: network.denied > 0 ? "\(network.denied) denied" : nil)
+                        .help("sbx policy ls \(env.sandbox)")
+                }
                 if let branch = env.branch {
                     InspectorRow(symbol: "arrow.triangle.branch", title: branch) {
                         if let ahead = env.ahead, let behind = env.behind, ahead + behind > 0 {

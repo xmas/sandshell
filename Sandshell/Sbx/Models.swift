@@ -10,9 +10,21 @@ struct Sandbox: Identifiable, Codable, Hashable {
     var agent: String
     var status: String
     var workspaces: [String]
+    /// Ports published to the Mac (`sbx ports`).
+    var ports: [PublishedPort] = []
+
+    struct PublishedPort: Codable, Hashable, Sendable {
+        var hostIP: String
+        var hostPort: Int
+        var sandboxPort: Int
+        var proto: String
+        enum CodingKeys: String, CodingKey {
+            case hostIP = "host_ip", hostPort = "host_port", sandboxPort = "sandbox_port", proto = "protocol"
+        }
+    }
 
     enum CodingKeys: String, CodingKey {
-        case name, id, agent, status, workspaces
+        case name, id, agent, status, workspaces, ports
     }
 
     init(from decoder: Decoder) throws {
@@ -23,6 +35,13 @@ struct Sandbox: Identifiable, Codable, Hashable {
         agent = (try? c.decode(String.self, forKey: .agent)) ?? ""
         status = (try? c.decode(String.self, forKey: .status)) ?? ""
         workspaces = (try? c.decode([String].self, forKey: .workspaces)) ?? []
+        ports = (try? c.decode([PublishedPort].self, forKey: .ports)) ?? []
+    }
+
+    /// Published ports, one per sandbox port (an IPv4 and IPv6 binding are one).
+    var distinctPorts: [PublishedPort] {
+        var seen = Set<Int>()
+        return ports.filter { seen.insert($0.sandboxPort).inserted }
     }
 
     /// Whether the sandbox is currently running.

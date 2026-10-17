@@ -35,6 +35,10 @@ struct WorkspaceConfig: Codable {
     /// Custom (kit-defined) agents this workspace offers next to the builtins;
     /// their display identity lives app-globally in `AgentProfileStore`.
     var customAgents: [AgentKind] = []
+    /// Agents work on a private clone of the repo inside the sandbox
+    /// (`sbx create --clone`) instead of the folder itself; their commits come
+    /// back through the `sandbox-<name>` git remote. nil = off.
+    var cloneRepo: Bool?
 
     static let defaultArchiveInterval: TimeInterval = 1800   // 30 min
 
@@ -68,7 +72,7 @@ struct WorkspaceConfig: Codable {
 
     enum CodingKeys: String, CodingKey {
         case schemaVersion, policy, mcpServers, mcpURL, primaryAgent, configured, archiveInterval, theme, kits
-        case imageChannel, customImage, claudeModel, claudeEffort, customAgents, sandshellKits
+        case imageChannel, customImage, claudeModel, claudeEffort, customAgents, sandshellKits, cloneRepo
     }
 
     init(from decoder: Decoder) throws {
@@ -89,6 +93,7 @@ struct WorkspaceConfig: Codable {
         claudeEffort = try c.decodeIfPresent(String.self, forKey: .claudeEffort)
         customAgents = try c.decodeIfPresent([AgentKind].self, forKey: .customAgents) ?? []
         sandshellKits = try c.decodeIfPresent([String].self, forKey: .sandshellKits)
+        cloneRepo = try c.decodeIfPresent(Bool.self, forKey: .cloneRepo)
         // Builds before this field kept them in `kits`: move them over.
         let own = kits.filter(KitStore.isSandshellKit)
         if !own.isEmpty {

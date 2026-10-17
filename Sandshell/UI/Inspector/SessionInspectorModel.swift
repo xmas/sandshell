@@ -37,6 +37,20 @@ struct SessionEnvironment: Equatable, Sendable {
     var upstream: String?
     var changedFiles: Int?
     var kits: [String] = []
+    var ports: [Sandbox.PublishedPort] = []
+    var network: (allowed: Int, denied: Int)?
+    /// Clone mode: the git remote the agent's commits come back through.
+    var cloneRemote: String?
+    /// Commits on the remote's copy of this branch that aren't here (after a fetch).
+    var cloneAhead: Int?
+
+    static func == (a: Self, b: Self) -> Bool {
+        a.sandbox == b.sandbox && a.sandboxState == b.sandboxState && a.system == b.system && a.resources == b.resources
+            && a.folderPath == b.folderPath && a.access == b.access && a.branch == b.branch && a.worktree == b.worktree
+            && a.ahead == b.ahead && a.behind == b.behind && a.changedFiles == b.changedFiles && a.kits == b.kits
+            && a.ports == b.ports && a.network?.allowed == b.network?.allowed && a.network?.denied == b.network?.denied
+            && a.cloneRemote == b.cloneRemote && a.cloneAhead == b.cloneAhead
+    }
 }
 
 /// The session inspector's live state: what the chat, the workspace and the
@@ -133,8 +147,10 @@ final class SessionInspectorModel {
         let sandbox = workspace.containerName(for: kind)
         let phase = workspace.containerPhases[kind]?.displayLabel ?? "not created"
         let kits = workspace.kits(for: kind, from: workspace.resolvedKits()).map { ($0 as NSString).lastPathComponent }
+        let ports = workspace.containers[kind]?.distinctPorts ?? []
         Task {
-            let git = await Task.detached(priority: .utility) { GitFacts.load(folder) }.value
+            let git = await Task.detached(priority: .utility) { GitFacts.load(folder, sandbox: sandbox) }.value
+            let network = await SbxClient.shared.networkPolicy(sandbox: sandbox)
             let parent = folder.deletingLastPathComponent().path.tildeAbbreviated
             environment = SessionEnvironment(
                 sandbox: sandbox, sandboxState: phase,
@@ -147,7 +163,21 @@ final class SessionInspectorModel {
                 access: access.summary, accessSymbol: access.symbol,
                 branch: git.branch, worktree: git.worktree, mainCheckout: git.mainCheckout,
                 ahead: git.ahead, behind: git.behind, upstream: git.upstream, changedFiles: git.changed,
-                kits: kits)
+                kits: kits, ports: ports, network: network, cloneRemote: git.sandboxRemote, cloneAhead: git.sandboxAhead)
+        }
+    }
+
+    private(set) var fetchingClone = false
+
+    /// Clone mode: fetch the agent's commits from the sandbox's remote.
+    func fetchClone() {
+        guard let env = environment, let remote = env.cloneRemote, !fetchingClone else { return }
+        fetchingClone = true
+        let folder = env.folderPath
+        Task {
+            _ = await Task.detached(priority: .userInitiated) { GitStatus.git(["-C", folder, "fetch", remote]) }.value
+            fetchingClone = false
+            loadEnvironment()
         }
     }
 }
@@ -161,8 +191,11 @@ struct GitFacts: Sendable {
     var ahead: Int?
     var behind: Int?
     var changed: Int?
+    /// Clone mode: the sandbox's git remote, and how far its copy of this branch is ahead.
+    var sandboxRemote: String?
+    var sandboxAhead: Int?
 
-    nonisolated static func load(_ folder: URL) -> GitFacts {
+    nonisolated static func load(_ folder: URL, sandbox: String? = nil) -> GitFacts {
         func git(_ args: [String]) -> String? {
             GitStatus.git(["-C", folder.path] + args)?.trimmingCharacters(in: .whitespacesAndNewlines)
         }
@@ -183,6 +216,14 @@ struct GitFacts: Sendable {
             if parts.count == 2 { facts.upstream = upstream; facts.behind = parts[0]; facts.ahead = parts[1] }
         }
         facts.changed = git(["status", "--porcelain", "-z"]).map { $0.split(separator: "\0").count }
+        if let sandbox, let remotes = git(["remote"]),
+           remotes.split(separator: "\n").contains(where: { $0 == "sandbox-\(sandbox)" }) {
+            facts.sandboxRemote = "sandbox-\(sandbox)"
+            if let branch = facts.branch, !branch.hasPrefix("detached"),
+               let count = git(["rev-list", "--count", "HEAD..refs/remotes/sandbox-\(sandbox)/\(branch)"]) {
+                facts.sandboxAhead = Int(count)
+            }
+        }
         return facts
     }
 }

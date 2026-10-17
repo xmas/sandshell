@@ -18,6 +18,21 @@ struct SandboxesPaneView: View {
     var body: some View {
         Form {
             Section {
+                Toggle(isOn: Binding(get: { controller.workspace.cloneRepo }, set: { controller.setCloneRepo($0) })) {
+                    Text("Agents work on a private clone of the repo")
+                    Text("sbx --clone: the folder stays read-only to agents; their commits come back through the "
+                         + "sandbox-<name> git remote. Takes effect when a sandbox is next rebuilt.")
+                }
+                .disabled(controller.isGitRepository == false && controller.workspace.cloneRepo == false)
+                .accessibilityIdentifier("sandboxes-clone-repo")
+            } header: {
+                Text("This folder")
+            } footer: {
+                if controller.isGitRepository == false {
+                    Text("Needs a git repository.").foregroundStyle(.secondary)
+                }
+            }
+            Section {
                 if controller.sandboxesLoading && controller.allSandboxes.isEmpty {
                     HStack(spacing: 8) {
                         ProgressView().controlSize(.small)

@@ -55,6 +55,8 @@ struct Workspace: Codable, Hashable {
     /// Template tag channel + custom `-t` reference (see `ImageChannel`).
     var imageChannel: ImageChannel = .stable
     var customImage: String = ""
+    /// `sbx create --clone`: agents work on a private clone of the repo (see `WorkspaceConfig.cloneRepo`).
+    var cloneRepo = false
 
     /// The `-t` template reference for an agent's sandbox, or nil for sbx's default.
     func templateImage(for agent: AgentKind) -> String? {

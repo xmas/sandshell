@@ -17,6 +17,21 @@ actor SbxClient {
     // MARK: - Listing
 
     /// `sbx ls --json`
+    /// A sandbox's network policy in brief: hosts allowed and denied
+    /// (`sbx policy ls <name> --json`); nil if sbx can't say.
+    func networkPolicy(sandbox: String) async -> (allowed: Int, denied: Int)? {
+        guard let out = try? await run(["policy", "ls", sandbox, "--json"], routine: true, timeout: 15), out.ok,
+              let data = out.stdout.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let rules = json["rules"] as? [[String: Any]] else { return nil }
+        var allowed = Set<String>(), denied = Set<String>()
+        for rule in rules where rule["resource_type"] as? String == "network" && (rule["status"] as? String ?? "active") == "active" {
+            let hosts = rule["resources"] as? [String] ?? []
+            if rule["decision"] as? String == "deny" { denied.formUnion(hosts) } else { allowed.formUnion(hosts) }
+        }
+        return (allowed.count, denied.count)
+    }
+
     func list() async throws -> [Sandbox] {
         let out = try await run(["ls", "--json"], routine: true)
         guard out.ok else { throw SbxError.command(out.stderr.isEmpty ? out.stdout : out.stderr) }
@@ -310,6 +325,11 @@ actor SbxClient {
         // Base image channel: nil = sbx's default (stable) template; the tag is
         // pulled fresh either way (sbx defaults to --pull always).
         if let template = workspace.templateImage(for: agent) { args += ["-t", template] }
+        // A private clone of the repo instead of the folder (only for a repo).
+        if workspace.cloneRepo,
+           FileManager.default.fileExists(atPath: workspace.rootURL.appendingPathComponent(".git").path) {
+            args.append("--clone")
+        }
         args += kits.flatMap { ["--kit", KitStore.resolve($0)] }
         args.append(agent.createReference)   // a custom agent is created from its kit
         args += mounts.map(\.spec)

@@ -154,6 +154,13 @@ def _fresh(d):
     git_repo(d, {}, [("init", {"README.md": README})])
     set_sessions(d, [{"agent": "shell", "name": "Shell A"}])
 
+@fixture("clone")
+def _clone(d):
+    # A repo whose sandboxes don't exist yet, for sbx --clone (the runner removes them).
+    shutil.rmtree(d, ignore_errors=True)
+    git_repo(d, {}, [("init", {"README.md": README})])
+    set_sessions(d, [{"agent": "shell", "name": "Shell A"}])
+
 @fixture("broken")
 def _broken(d):
     git_repo(d, {}, [("init", {"README.md": README})])
