@@ -27,8 +27,10 @@ struct FoldersPaneView: View {
                         .accessibilityIdentifier("folders-add-existing")
                 }
             } footer: {
-                Text("Sessions start in one of these folders. Renaming moves the directory on disk; "
-                     + "sessions already running keep their old working directory until reopened.")
+                Text("""
+                    Sessions start in one of these folders. Renaming moves the directory on disk; \
+                    sessions already running keep their old working directory until reopened.
+                    """)
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
@@ -36,33 +38,39 @@ struct FoldersPaneView: View {
         .frame(width: InspectorMetrics.paneWidth, height: InspectorMetrics.paneHeight)
         .confirmationDialog(
             "Remove “\(pendingRemove.map(controller.displayName(for:)) ?? "")” from Sandshell?",
-            isPresented: Binding(get: { pendingRemove != nil },
-                                 set: { if !$0 { pendingRemove = nil } }),
-            presenting: pendingRemove
+            item: $pendingRemove
         ) { folder in
-            Button("Remove", role: .destructive) { controller.hideFolder(folder.id); pendingRemove = nil }
+            Button("Remove", role: .destructive) { controller.hideFolder(folder.id) }
                 .accessibilityIdentifier("folders-confirm-remove")
-            Button("Cancel", role: .cancel) { pendingRemove = nil }
+            Button("Cancel", role: .cancel) {}
         } message: { folder in
-            Text(sessionImpact(folder) + "The directory stays on disk.")
+            Text(removeMessage(folder))
         }
         .confirmationDialog(
             "Move “\(pendingTrash.map(controller.displayName(for:)) ?? "")” to the Trash?",
-            isPresented: Binding(get: { pendingTrash != nil },
-                                 set: { if !$0 { pendingTrash = nil } }),
-            presenting: pendingTrash
+            item: $pendingTrash
         ) { folder in
-            Button("Move to Trash", role: .destructive) { controller.trashFolder(folder.id); pendingTrash = nil }
+            Button("Move to Trash", role: .destructive) { controller.trashFolder(folder.id) }
                 .accessibilityIdentifier("folders-confirm-trash")
-            Button("Cancel", role: .cancel) { pendingTrash = nil }
+            Button("Cancel", role: .cancel) {}
         } message: { folder in
-            Text(sessionImpact(folder) + "The directory and everything in it moves to the Trash.")
+            Text(trashMessage(folder))
         }
     }
 
-    private func sessionImpact(_ folder: Folder) -> String {
+    private func removeMessage(_ folder: Folder) -> LocalizedStringKey {
         let n = controller.sessions(in: folder.id).count
-        return n == 0 ? "" : "Its \(n) session\(n == 1 ? "" : "s") will be removed from the sidebar. "
+        return n == 0 ? "The directory stays on disk."
+            : "Its ^[\(n) session](inflect: true) will be removed from the sidebar. The directory stays on disk."
+    }
+
+    private func trashMessage(_ folder: Folder) -> LocalizedStringKey {
+        let n = controller.sessions(in: folder.id).count
+        return n == 0 ? "The directory and everything in it moves to the Trash."
+            : """
+              Its ^[\(n) session](inflect: true) will be removed from the sidebar. \
+              The directory and everything in it moves to the Trash.
+              """
     }
 
     private func chooseExisting() {
@@ -101,25 +109,25 @@ private struct FolderRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 if folder.isRoot {
                     // The root's name is the workspace folder itself — not renameable.
-                    Text(controller.displayName(for: folder)).fontWeight(.medium)
+                    Text(controller.displayName(for: folder))
                 } else {
                     HStack(spacing: 0) {
                         if !parentPrefix.isEmpty { Text(parentPrefix).foregroundStyle(.secondary) }
                         TextField("Folder name", text: $name)
-                            .textFieldStyle(.plain).fontWeight(.medium)
+                            .textFieldStyle(.plain)
                             .onSubmit(commitRename)
                             .onDisappear(perform: commitRename)
                             .accessibilityIdentifier("folder-name-\(folder.relativePath)")
                     }
                 }
                 Text(controller.folderURL(for: folder).path)
-                    .font(.system(size: 10.5, design: .monospaced)).foregroundStyle(.tertiary)
+                    .font(.caption.monospaced()).foregroundStyle(.tertiary)
                     .lineLimit(1).truncationMode(.head)
             }
             Spacer()
             let n = controller.sessions(in: folder.id).count
-            Text(n == 1 ? "1 session" : "\(n) sessions").font(.caption).foregroundStyle(.secondary)
-            Menu {
+            Text("^[\(n) session](inflect: true)").font(.caption).foregroundStyle(.secondary)
+            Menu("Folder Actions", systemImage: "ellipsis.circle") {
                 Button("Reveal in Finder") {
                     NSWorkspace.shared.activateFileViewerSelecting([controller.folderURL(for: folder)])
                 }
@@ -128,10 +136,9 @@ private struct FolderRow: View {
                     Button("Remove from Sandshell…", action: requestRemove)
                     Button("Move to Trash…", role: .destructive, action: requestTrash)
                 }
-            } label: {
-                Image(systemName: "ellipsis.circle")
             }
-            .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+            .labelStyle(.iconOnly)
+            .menuStyle(.button).buttonStyle(.borderless).menuIndicator(.hidden).fixedSize()
             .accessibilityIdentifier("folder-actions-\(folder.relativePath)")
         }
         // A rename can sanitize the name (e.g. "/" → "-"); show what was applied.
@@ -139,8 +146,16 @@ private struct FolderRow: View {
     }
 
     private func commitRename() {
-        controller.renameFolder(folder.id, to: name)
-        // Reset if rejected (empty, or the move failed); onChange covers success.
+        do {
+            try controller.renameFolder(folder.id, to: name)
+        } catch {
+            // The move failed (e.g. a folder by that name is already there).
+            name = Self.leaf(folder)
+            Alerts.inform("Couldn’t rename “\(Self.leaf(folder))”", error.localizedDescription, style: .warning)
+            return
+        }
+        // Reset if rejected without an error (empty, or unchanged once sanitized);
+        // onChange covers success.
         if controller.folder(id: folder.id)?.relativePath == folder.relativePath { name = Self.leaf(folder) }
     }
 }
