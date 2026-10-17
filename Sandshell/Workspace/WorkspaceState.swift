@@ -337,6 +337,56 @@ struct WorkspaceState: Codable {
     }
 }
 
+/// A control file (`state.json`, `config.json`) that was there when its folder
+/// opened but couldn't be read: it was copied aside and the folder runs on a
+/// fresh one, which the first window on the folder says
+/// (`WorkspaceStore.takeOpenProblems`).
+struct UnreadableWorkspaceFile: Equatable, Sendable {
+    enum Kind: Sendable { case state, config }
+    let kind: Kind
+    let file: URL
+    /// The copy kept of it; nil when that failed too.
+    let keptAs: URL?
+    let reason: String
+
+    /// Keep a copy of `file` (`WorkspaceState.keepUnreadableCopy`) before
+    /// anything saves a fresh one over it, and log why it couldn't be read.
+    static func setAside(_ kind: Kind, file: URL, _ error: any Error) -> Self {
+        let copy = WorkspaceState.keepUnreadableCopy(of: file)
+        let fallback = kind == .state ? "starting a fresh one" : "using defaults"
+        Log.error(.workspace, "\(file.path(percentEncoded: false)) couldn't be read (\(error.localizedDescription)); "
+                  + fallback + (copy.map { ", the original is kept as \($0.lastPathComponent)" } ?? ""))
+        return Self(kind: kind, file: file, keptAs: copy, reason: error.localizedDescription)
+    }
+
+    /// The warning a window opening on the folder shows for `problems` (both
+    /// files in one alert, the first problem of each), or nil for none.
+    static func warning(for problems: [Self]) -> (title: String, message: String)? {
+        let shown = [Kind.config, .state].compactMap { kind in problems.first { $0.kind == kind } }
+        guard !shown.isEmpty else { return nil }
+        let what = shown.map { $0.kind == .config ? "settings" : "session list" }.joined(separator: " and ")
+        return ("This workspace’s \(what) couldn’t be read", shown.map(\.explanation).joined(separator: "\n\n"))
+    }
+
+    /// The file and why, then what Sandshell runs on instead and where the original went.
+    private var explanation: String {
+        let instead = switch (kind, keptAs) {
+        case (.config, let copy?):
+            "Sandshell is using default settings. The original is kept as \(copy.lastPathComponent)."
+        case (.config, nil):
+            "Sandshell is using default settings and couldn’t keep a copy of the original: "
+                + "fix or move it before changing settings."
+        case (.state, let copy?):
+            "Sandshell started a new session list, so the sidebar’s folders and sessions are missing. "
+                + "The original is kept as \(copy.lastPathComponent)."
+        case (.state, nil):
+            "Sandshell started a new session list (the sidebar’s folders and sessions are missing) "
+                + "and couldn’t keep a copy of the original."
+        }
+        return "\(file.path(percentEncoded: false).tildeAbbreviated): \(reason)\n\n\(instead)"
+    }
+}
+
 /// Opens or bootstraps a workspace root: ensures the root, the `.sandshell/`
 /// control dir (+ its `.gitignore`), the root folder row, and each non-root
 /// folder's directory. Pure filesystem + state seeding — no container behavior.
@@ -346,12 +396,20 @@ enum WorkspaceBootstrap {
         URL.homeDirectory.appending(path: "Sandshell", directoryHint: .isDirectory)
     }
 
-    /// Files under `.sandshell/` that are volatile and must not be committed.
-    private static let gitignoredControlFiles = ["state.json", "status/", "statusline.sh"]
+    /// Files under `.sandshell/` that are volatile and must not be committed
+    /// (an unreadable state.json's copies are as per-user as it is).
+    private static let gitignoredControlFiles = ["state.json", "status/", "statusline.sh", "state.unreadable-*.json"]
 
     /// Ensure the workspace exists on disk and return its (seeded) state.
     @discardableResult
     static func openOrCreate(root: URL = defaultRoot) throws -> WorkspaceState {
+        try openReportingProblems(root: root).state
+    }
+
+    /// `openOrCreate`, also saying when state.json was there but couldn't be
+    /// read (it was copied aside and a fresh one started).
+    static func openReportingProblems(root: URL = defaultRoot) throws
+        -> (state: WorkspaceState, unreadable: UnreadableWorkspaceFile?) {
         let fm = FileManager.default
 
         // 1. Root + control dir.
@@ -377,13 +435,11 @@ enum WorkspaceBootstrap {
         // 3. Load existing state or start fresh (legacy projects migrate here).
         //    One that can't be read is kept beside it: step 6 saves over it.
         var state: WorkspaceState
+        var unreadable: UnreadableWorkspaceFile?
         do {
             state = try WorkspaceState.load(root: root) ?? WorkspaceState()
         } catch {
-            let url = WorkspaceState.stateURL(root: root)
-            let copy = WorkspaceState.keepUnreadableCopy(of: url)
-            Log.error(.workspace, "\(url.path(percentEncoded: false)) couldn't be read (\(error.localizedDescription)); "
-                      + "starting a fresh one" + (copy.map { ", the original is kept as \($0.lastPathComponent)" } ?? ""))
+            unreadable = .setAside(.state, file: WorkspaceState.stateURL(root: root), error)
             state = WorkspaceState()
         }
 
@@ -424,7 +480,7 @@ enum WorkspaceBootstrap {
 
         // 6. Persist (creates state.json on first run; idempotent thereafter).
         try state.save(root: root)
-        return state
+        return (state, unreadable)
     }
 }
 

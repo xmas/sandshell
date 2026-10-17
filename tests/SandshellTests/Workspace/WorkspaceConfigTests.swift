@@ -572,19 +572,7 @@ extension WorkspaceConfigTests {
             #expect(object["sandshellKits"] as? [String] == ["sandshell-claude"])
         }
 
-        @Test func loadOrDefaultReturnsSavedConfig() throws {
-            let saved = makeCustomizedWorkspaceConfig()
-            try saved.save(root: root)
-            let home = root.appendingPathComponent("home", isDirectory: true)
-
-            let config = WorkspaceConfig.loadOrDefault(root: root, home: home)
-
-            expectSameWorkspaceConfig(config, saved)
-            let files = try FileManager.default.contentsOfDirectory(atPath: controlDirPath)
-            #expect(files == ["config.json"], "A readable config must not be copied aside")
-        }
-
-        @Test func aReadableConfigReportsNoProblem() throws {
+        @Test func aReadableConfigIsLoadedAndReportsNoProblem() throws {
             let saved = makeCustomizedWorkspaceConfig()
             try saved.save(root: root)
             let home = root.appendingPathComponent("home", isDirectory: true)
@@ -593,6 +581,26 @@ extension WorkspaceConfigTests {
 
             expectSameWorkspaceConfig(config, saved)
             #expect(unreadable == nil)
+            let files = try FileManager.default.contentsOfDirectory(atPath: controlDirPath)
+            #expect(files == ["config.json"], "A readable config must not be copied aside")
+        }
+
+        /// What the CLI's open and the setup wizard load an unreadable config.json
+        /// as: unconfigured defaults (the first-run mount sheet comes up), and the
+        /// problem to pass on to the window.
+        @Test(.tags(.workspaceConfigEdgeCase))
+        func anUnreadableConfigLoadsAsUnconfiguredDefaultsAndIsReported() throws {
+            try writeConfigFile("{ \"policy\": ")
+            let home = root.appendingPathComponent("home", isDirectory: true)
+
+            let (config, unreadable) = WorkspaceConfig.loadReportingProblems(root: root, home: home)
+
+            #expect(!config.configured)
+            #expect(config.mcpServers.isEmpty)
+            let problem = try #require(unreadable)
+            #expect(problem.kind == .config)
+            #expect(problem.file == configURL)
+            #expect(problem.keptAs != nil, "The original is copied aside before anything saves over it")
         }
 
         /// What the window reports when config.json can't be read: the file, the
@@ -604,6 +612,7 @@ extension WorkspaceConfigTests {
 
             let problem = WorkspaceConfig.setAside(root: root, error)
 
+            #expect(problem.kind == .config)
             #expect(problem.file == configURL)
             #expect(problem.reason == error.localizedDescription)
             let copy = try #require(problem.keptAs, "A copy of the unreadable file is kept")

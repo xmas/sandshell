@@ -108,7 +108,7 @@ struct WorkspaceStoreSharingTests {
         let gitignore = WorkspaceState.controlDir(root: root).appendingPathComponent(".gitignore")
         let contents = try String(contentsOf: gitignore, encoding: .utf8)
         let ignored = Set(contents.split(separator: "\n").map(String.init))
-        #expect(ignored == ["state.json", "status/", "statusline.sh"])
+        #expect(ignored == ["state.json", "status/", "statusline.sh", "state.unreadable-*.json"])
     }
 
     @Test func aFreshFolderStartsWithJustTheExpandedRootFolder() throws {
@@ -216,6 +216,134 @@ struct WorkspaceStoreSharingTests {
 
         #expect(reopened.state.sessions.isEmpty, "The released store's unsaved session went with it")
         #expect(reopened.config.primaryAgent == .gemini, "config.json is read again")
+    }
+}
+
+// MARK: - Unreadable files
+
+/// What couldn't be read when a folder opened reaches its first window
+/// (`takeOpenProblems`), whether the store found it or something before it
+/// did (the bootstrap ahead of a window, the CLI's open, the setup wizard).
+@MainActor
+@Suite(.tags(.workspaceStoreFileSystem))
+struct WorkspaceStoreOpenProblemTests {
+    private let scratch = WorkspaceStoreScratch()
+
+    private func writeUnreadableState(root: URL) throws {
+        try Data("{ \"folders\": [".utf8).write(to: WorkspaceState.stateURL(root: root))
+    }
+
+    private func configProblem(root: URL, reason: String = "bad comma") -> UnreadableWorkspaceFile {
+        UnreadableWorkspaceFile(kind: .config, file: WorkspaceConfig.url(root: root),
+                                keptAs: WorkspaceState.controlDir(root: root).appending(path: "config.unreadable-1.json"),
+                                reason: reason)
+    }
+
+    @Test func aReadableFolderHasNothingToSay() throws {
+        let root = try scratch.makeRoot()
+
+        let store = try WorkspaceStore.shared(root: root)
+
+        #expect(store.takeOpenProblems().isEmpty)
+    }
+
+    @Test func anUnreadableStateFileTheStoreFindsIsSaidOnce() throws {
+        let root = try scratch.makeRoot()
+        try writeUnreadableState(root: root)
+
+        let store = try WorkspaceStore.shared(root: root)
+
+        let problems = store.takeOpenProblems()
+        #expect(problems.map(\.kind) == [.state])
+        #expect(problems.first?.keptAs != nil)
+        #expect(store.takeOpenProblems().isEmpty, "Only the first window on the folder says it")
+    }
+
+    /// The window's bootstrap (or the CLI's open) set the file aside and saved a
+    /// fresh one, so the store reads a good file: the report is what tells.
+    @Test func aProblemReportedBeforeTheStoreOpensIsSaid() throws {
+        let root = try scratch.makeRoot()
+        let reported = configProblem(root: root)
+
+        WorkspaceStore.report(reported, root: root)
+        let store = try WorkspaceStore.shared(root: root)
+
+        #expect(store.takeOpenProblems() == [reported])
+    }
+
+    @Test func aReportReachesTheStoreForAnySpellingOfTheFolder() throws {
+        let root = try scratch.makeRoot()
+        let reported = configProblem(root: root)
+
+        WorkspaceStore.report(reported, root: URL(filePath: root.path + "/./"))
+        let store = try WorkspaceStore.shared(root: root)
+
+        #expect(store.takeOpenProblems() == [reported])
+    }
+
+    @Test func bothFilesAreSaid() throws {
+        let root = try scratch.makeRoot()
+        try writeUnreadableState(root: root)
+        let reported = configProblem(root: root)
+
+        WorkspaceStore.report(reported, root: root)
+        let store = try WorkspaceStore.shared(root: root)
+
+        let problems = store.takeOpenProblems()
+        #expect(Set(problems.map(\.kind)) == [.config, .state])
+        #expect(problems.first { $0.kind == .config } == reported)
+    }
+
+    /// The same file reported and then found again (the save after the report
+    /// failed): the report came first and saw the original.
+    @Test(.tags(.workspaceStoreEdgeCase))
+    func aFileReportedAndFoundAgainIsSaidOnceAsReported() throws {
+        let root = try scratch.makeRoot()
+        try writeUnreadableState(root: root)
+        let reported = UnreadableWorkspaceFile(kind: .state, file: WorkspaceState.stateURL(root: root),
+                                               keptAs: nil, reason: "reported first")
+
+        WorkspaceStore.report(reported, root: root)
+        let store = try WorkspaceStore.shared(root: root)
+
+        #expect(store.takeOpenProblems() == [reported])
+    }
+
+    /// An open store's copy is what every window on the folder uses, and its
+    /// next write puts the file back: nothing to tell, now or at a later open.
+    @Test(.tags(.workspaceStoreEdgeCase))
+    func aReportWhileTheFolderIsOpenIsDropped() throws {
+        let root = try scratch.makeRoot()
+        var store: WorkspaceStore? = try WorkspaceStore.shared(root: root)
+        weak let released = store
+        #expect(store?.takeOpenProblems().isEmpty == true)
+
+        WorkspaceStore.report(configProblem(root: root), root: root)
+
+        #expect(store?.takeOpenProblems().isEmpty == true)
+        store = nil
+        try #require(released == nil)
+        #expect(try WorkspaceStore.shared(root: root).takeOpenProblems().isEmpty)
+    }
+
+    @Test(.tags(.workspaceStoreEdgeCase))
+    func reportingNothingLeavesNothingToSay() throws {
+        let root = try scratch.makeRoot()
+
+        WorkspaceStore.report(nil, root: root)
+
+        #expect(try WorkspaceStore.shared(root: root).takeOpenProblems().isEmpty)
+    }
+
+    @Test(.tags(.workspaceStoreEdgeCase))
+    func aReportForOneFolderStaysWithIt() throws {
+        let one = try scratch.makeRoot("one")
+        let two = try scratch.makeRoot("two")
+
+        WorkspaceStore.report(configProblem(root: one), root: one)
+
+        #expect(try WorkspaceStore.shared(root: two).takeOpenProblems().isEmpty)
+        #expect(try WorkspaceStore.shared(root: one).takeOpenProblems().map(\.kind) == [.config])
     }
 }
 

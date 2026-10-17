@@ -740,6 +740,88 @@ struct WorkspaceStateUnreadableCopyTests {
     }
 }
 
+// MARK: - Saying what couldn't be read
+
+/// `UnreadableWorkspaceFile.warning(for:)`: the one alert a window opening on
+/// a folder shows for an unreadable config.json and/or state.json.
+struct UnreadableWorkspaceFileWarningTests {
+    private static let control = URL(filePath: "/Volumes/Work/proj/.sandshell", directoryHint: .isDirectory)
+
+    private static func problem(_ kind: UnreadableWorkspaceFile.Kind, kept: Bool = true,
+                                reason: String = "The data couldn’t be read because it isn’t in the correct format.")
+        -> UnreadableWorkspaceFile {
+        let name = kind == .config ? "config" : "state"
+        return UnreadableWorkspaceFile(
+            kind: kind, file: control.appending(path: "\(name).json"),
+            keptAs: kept ? control.appending(path: "\(name).unreadable-1700000000.json") : nil,
+            reason: reason)
+    }
+
+    @Test func nothingUnreadableIsNoWarning() {
+        #expect(UnreadableWorkspaceFile.warning(for: []) == nil)
+    }
+
+    @Test func anUnreadableConfigSaysItRunsOnDefaultsAndWhereTheOriginalIs() throws {
+        let warning = try #require(UnreadableWorkspaceFile.warning(for: [Self.problem(.config, reason: "bad comma")]))
+
+        #expect(warning.title == "This workspace’s settings couldn’t be read")
+        #expect(warning.message.hasPrefix("/Volumes/Work/proj/.sandshell/config.json: bad comma\n\n"))
+        #expect(warning.message.contains("default settings"))
+        #expect(warning.message.contains("config.unreadable-1700000000.json"))
+    }
+
+    @Test func anUnreadableSessionListSaysTheSidebarStartedOverAndWhereTheOriginalIs() throws {
+        let warning = try #require(UnreadableWorkspaceFile.warning(for: [Self.problem(.state, reason: "truncated")]))
+
+        #expect(warning.title == "This workspace’s session list couldn’t be read")
+        #expect(warning.message.hasPrefix("/Volumes/Work/proj/.sandshell/state.json: truncated\n\n"))
+        #expect(warning.message.contains("folders and sessions"), "Says what's gone from the sidebar")
+        #expect(warning.message.contains("state.unreadable-1700000000.json"))
+    }
+
+    @Test(.tags(.workspaceStateEdgeCase), arguments: [UnreadableWorkspaceFile.Kind.config, .state])
+    func aCopyThatFailedIsSaid(kind: UnreadableWorkspaceFile.Kind) throws {
+        let warning = try #require(UnreadableWorkspaceFile.warning(for: [Self.problem(kind, kept: false)]))
+
+        #expect(warning.message.contains("couldn’t keep a copy of the original"))
+        #expect(!warning.message.contains("unreadable-"))
+    }
+
+    @Test(arguments: [
+        [UnreadableWorkspaceFile.Kind.config, .state],
+        [.state, .config],
+    ])
+    func bothFilesAreOneWarningSettingsFirst(order: [UnreadableWorkspaceFile.Kind]) throws {
+        let warning = try #require(UnreadableWorkspaceFile.warning(for: order.map { Self.problem($0) }))
+
+        #expect(warning.title == "This workspace’s settings and session list couldn’t be read")
+        let config = try #require(warning.message.range(of: "config.json:"))
+        let state = try #require(warning.message.range(of: "state.json:"))
+        #expect(config.lowerBound < state.lowerBound)
+    }
+
+    /// Two reports of one file (the CLI's open found it, then the window's store
+    /// after that save failed): the first saw the original.
+    @Test(.tags(.workspaceStateEdgeCase))
+    func onlyTheFirstProblemWithAFileIsSaid() throws {
+        let later = UnreadableWorkspaceFile(kind: .config, file: Self.control.appending(path: "config.json"),
+                                            keptAs: nil, reason: "later")
+        let warning = try #require(UnreadableWorkspaceFile.warning(for: [Self.problem(.config, reason: "first"), later]))
+
+        #expect(warning.message.contains("first"))
+        #expect(!warning.message.contains("later"))
+    }
+
+    @Test func aFileInTheHomeFolderIsShownWithATilde() throws {
+        let file = URL.homeDirectory.appending(path: "Sandshell/.sandshell/state.json")
+        let problem = UnreadableWorkspaceFile(kind: .state, file: file, keptAs: nil, reason: "why")
+
+        let warning = try #require(UnreadableWorkspaceFile.warning(for: [problem]))
+
+        #expect(warning.message.hasPrefix("~/Sandshell/.sandshell/state.json: why"))
+    }
+}
+
 // MARK: - Persistence (save / load)
 
 @Suite(.tags(.workspaceStateFileSystem))
@@ -840,7 +922,7 @@ struct WorkspaceBootstrapTests {
     private let scratch = WorkspaceStateScratchDirectory()
     private var root: URL { scratch.root }
     private var gitignoreURL: URL { WorkspaceState.controlDir(root: root).appendingPathComponent(".gitignore") }
-    private static let defaultGitignore = "state.json\nstatus/\nstatusline.sh\n"
+    private static let defaultGitignore = "state.json\nstatus/\nstatusline.sh\nstate.unreadable-*.json\n"
 
     private func writeGitignore(_ contents: String) throws {
         try FileManager.default.createDirectory(at: WorkspaceState.controlDir(root: root),
@@ -894,12 +976,14 @@ struct WorkspaceBootstrapTests {
     }
 
     @Test(arguments: [
-        ("", "state.json\nstatus/\nstatusline.sh\n"),
-        ("node_modules", "node_modules\nstate.json\nstatus/\nstatusline.sh\n"),
-        ("node_modules\n", "node_modules\nstate.json\nstatus/\nstatusline.sh\n"),
-        ("state.json\n", "state.json\nstatus/\nstatusline.sh\n"),
-        ("status/\n", "status/\nstate.json\nstatusline.sh\n"),
-        ("status\n", "status\nstate.json\nstatus/\nstatusline.sh\n"),
+        ("", "state.json\nstatus/\nstatusline.sh\nstate.unreadable-*.json\n"),
+        ("node_modules", "node_modules\nstate.json\nstatus/\nstatusline.sh\nstate.unreadable-*.json\n"),
+        ("node_modules\n", "node_modules\nstate.json\nstatus/\nstatusline.sh\nstate.unreadable-*.json\n"),
+        ("state.json\n", "state.json\nstatus/\nstatusline.sh\nstate.unreadable-*.json\n"),
+        ("status/\n", "status/\nstate.json\nstatusline.sh\nstate.unreadable-*.json\n"),
+        ("status\n", "status\nstate.json\nstatus/\nstatusline.sh\nstate.unreadable-*.json\n"),
+        // What earlier builds wrote: an existing workspace picks up the copies' line.
+        ("state.json\nstatus/\nstatusline.sh\n", "state.json\nstatus/\nstatusline.sh\nstate.unreadable-*.json\n"),
     ])
     func existingGitignoreGainsOnlyMissingEntries(existing: String, expected: String) throws {
         try writeGitignore(existing)
@@ -908,9 +992,9 @@ struct WorkspaceBootstrapTests {
     }
 
     @Test(arguments: [
-        "state.json\nstatus/\nstatusline.sh\n",
-        "statusline.sh\nstatus/\nstate.json",
-        "# Sandshell\n  state.json\t\nstatus/ \nstatusline.sh\n*.log\n",
+        "state.json\nstatus/\nstatusline.sh\nstate.unreadable-*.json\n",
+        "state.unreadable-*.json\nstatusline.sh\nstatus/\nstate.json",
+        "# Sandshell\n  state.json\t\nstatus/ \nstatusline.sh\n\tstate.unreadable-*.json\n*.log\n",
     ])
     func gitignoreListingEveryEntryIsLeftUntouched(existing: String) throws {
         try writeGitignore(existing)
@@ -920,15 +1004,15 @@ struct WorkspaceBootstrapTests {
 
     @Test(.tags(.workspaceStateEdgeCase))
     func crlfGitignoreListingEveryEntryIsLeftUntouched() throws {
-        let existing = "state.json\r\nstatus/\r\nstatusline.sh\r\n"
+        let existing = "state.json\r\nstatus/\r\nstatusline.sh\r\nstate.unreadable-*.json\r\n"
         try writeGitignore(existing)
         try WorkspaceBootstrap.openOrCreate(root: root)
         #expect(try readGitignore() == existing, "\"\\r\\n\" is one Character: CRLF lines must still match")
     }
 
     @Test(.tags(.workspaceStateEdgeCase), arguments: [
-        ("state.json\r\nstatus/\r\n", "state.json\r\nstatus/\r\nstatusline.sh\n"),
-        ("node_modules\r\n", "node_modules\r\nstate.json\nstatus/\nstatusline.sh\n"),
+        ("state.json\r\nstatus/\r\n", "state.json\r\nstatus/\r\nstatusline.sh\nstate.unreadable-*.json\n"),
+        ("node_modules\r\n", "node_modules\r\nstate.json\nstatus/\nstatusline.sh\nstate.unreadable-*.json\n"),
     ])
     func crlfGitignoreGainsOnlyMissingEntries(existing: String, expected: String) throws {
         try writeGitignore(existing)
@@ -940,7 +1024,8 @@ struct WorkspaceBootstrapTests {
     func loneCarriageReturnIsNotALineEnd() throws {
         try writeGitignore("state.json\rstatus/\rstatusline.sh")
         try WorkspaceBootstrap.openOrCreate(root: root)
-        #expect(try readGitignore() == "state.json\rstatus/\rstatusline.sh\nstate.json\nstatus/\nstatusline.sh\n",
+        #expect(try readGitignore()
+                == "state.json\rstatus/\rstatusline.sh\nstate.json\nstatus/\nstatusline.sh\nstate.unreadable-*.json\n",
                 "git splits lines only at \"\\n\", so a lone \"\\r\" line lists none of the entries")
     }
 
@@ -1102,7 +1187,7 @@ struct WorkspaceBootstrapTests {
     func undecodableStateFileIsKeptAsideAndReplacedWithAFreshState(contents: String) throws {
         try WorkspaceStateFixture.writeStateFile(contents, root: root)
 
-        let state = try WorkspaceBootstrap.openOrCreate(root: root)
+        let (state, unreadable) = try WorkspaceBootstrap.openReportingProblems(root: root)
 
         #expect(state.folders.count == 1)
         #expect(state.folders.first?.isRoot == true)
@@ -1116,15 +1201,40 @@ struct WorkspaceBootstrapTests {
         #expect(copies.count == 1)
         #expect(try String(contentsOf: control.appendingPathComponent(copy), encoding: .utf8) == contents,
                 "The copy holds the folders and sessions as they were")
+        // …and the window is told: which file, where the copy went, why.
+        let problem = try #require(unreadable, "An unreadable state.json is reported for the window to say")
+        #expect(problem.kind == .state)
+        #expect(problem.file == WorkspaceState.stateURL(root: root))
+        #expect(problem.keptAs?.lastPathComponent == copy)
+        #expect(!problem.reason.isEmpty)
     }
 
     @Test func aReadableStateFileIsNotCopiedAside() throws {
         try WorkspaceStateFixture.populatedState().save(root: root)
 
-        try WorkspaceBootstrap.openOrCreate(root: root)
+        let (_, unreadable) = try WorkspaceBootstrap.openReportingProblems(root: root)
 
         let files = try FileManager.default.contentsOfDirectory(atPath: WorkspaceState.controlDir(root: root).path)
         #expect(Set(files) == [".gitignore", "state.json"])
+        #expect(unreadable == nil)
+    }
+
+    @Test func aFreshRootReportsNoProblem() throws {
+        let (_, unreadable) = try WorkspaceBootstrap.openReportingProblems(root: root)
+        #expect(unreadable == nil, "No state.json yet is a new workspace, not an unreadable one")
+    }
+
+    /// state.json is gitignored as per-user data; so is the copy kept of an
+    /// unreadable one, or it would wait in git status to be committed.
+    @Test(.tags(.workspaceStateEdgeCase))
+    func theCopyOfAnUnreadableStateFileIsGitignored() throws {
+        try WorkspaceStateFixture.writeStateFile("{ not json", root: root)
+
+        let (_, unreadable) = try WorkspaceBootstrap.openReportingProblems(root: root)
+
+        let copy = try #require(unreadable?.keptAs?.lastPathComponent)
+        let patterns = try readGitignore().split(separator: "\n").map(String.init)
+        #expect(patterns.contains { fnmatch($0, copy, 0) == 0 }, "\(copy) matches a line of .sandshell/.gitignore")
     }
 
     @Test(.tags(.workspaceStateEdgeCase))

@@ -117,22 +117,11 @@ struct WorkspaceConfig: Codable {
         return try JSONDecoder().decode(WorkspaceConfig.self, from: Data(contentsOf: url))
     }
 
-    /// config.json was there but couldn't be decoded: what the window says.
-    struct Unreadable: Equatable, Sendable {
-        let file: URL
-        /// The copy kept of it; nil when that failed too.
-        let keptAs: URL?
-        let reason: String
-    }
-
     /// Load the config or build a default one seeded from `home` — and, for a
-    /// root that has never been configured, with the registry's default kits.
-    static func loadOrDefault(root: URL, home: URL) -> WorkspaceConfig {
-        loadReportingProblems(root: root, home: home).config
-    }
-
-    /// `loadOrDefault`, also saying when config.json was there but couldn't be read.
-    static func loadReportingProblems(root: URL, home: URL) -> (config: WorkspaceConfig, unreadable: Unreadable?) {
+    /// root that has never been configured, with the registry's default kits —
+    /// also saying when config.json was there but couldn't be read. Pass that
+    /// on (`WorkspaceStore.report`) for the window to say.
+    static func loadReportingProblems(root: URL, home: URL) -> (config: WorkspaceConfig, unreadable: UnreadableWorkspaceFile?) {
         do {
             return (try load(root: root) ?? makeDefault(home: home), nil)
         } catch {
@@ -142,12 +131,8 @@ struct WorkspaceConfig: Codable {
 
     /// config.json couldn't be read (a merge conflict, a typo): keep a copy
     /// before anything can save defaults over it, and say so.
-    static func setAside(root: URL, _ error: any Error) -> Unreadable {
-        let url = url(root: root)
-        let copy = WorkspaceState.keepUnreadableCopy(of: url)
-        Log.error(.workspace, "\(url.path(percentEncoded: false)) couldn't be read (\(error.localizedDescription)); "
-                  + "using defaults" + (copy.map { ", the original is kept as \($0.lastPathComponent)" } ?? ""))
-        return Unreadable(file: url, keptAs: copy, reason: error.localizedDescription)
+    static func setAside(root: URL, _ error: any Error) -> UnreadableWorkspaceFile {
+        .setAside(.config, file: url(root: root), error)
     }
 
     private static func makeDefault(home: URL) -> WorkspaceConfig {
