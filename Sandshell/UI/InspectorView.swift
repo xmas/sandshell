@@ -1,4 +1,3 @@
-import AppKit
 import SwiftUI
 
 /// A folder's settings, in its Settings window (`SettingsWindowController`).
@@ -8,7 +7,7 @@ import SwiftUI
 struct InspectorView: View {
     @ObservedObject var controller: WorkspaceController
     /// The pane shown, which the Settings window can change too.
-    @ObservedObject var selection: InspectorSelection
+    let selection: InspectorSelection
     let onClose: () -> Void
     var onPaneChange: (InspectorPane) -> Void = { _ in }
 
@@ -27,10 +26,12 @@ struct InspectorView: View {
                 .clipped()
         }
         .frame(width: InspectorMetrics.paneWidth + 20)
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background(.windowBackground)
         // Esc closes (no Done button: it's a window, with a close button).
-        .background(Button("", action: onClose).keyboardShortcut(.cancelAction)
-            .opacity(0).frame(width: 0, height: 0).accessibilityHidden(true))
+        .background {
+            Button("Close", action: onClose).keyboardShortcut(.cancelAction)
+                .opacity(0).frame(width: 0, height: 0).accessibilityHidden(true)
+        }
         .onChange(of: pane) { _, p in onPaneChange(p) }
     }
 
@@ -75,8 +76,9 @@ struct InspectorView: View {
 /// The Settings window's selected pane, kept by its window controller so the
 /// window can switch panes without rebuilding the view (and the panes' edits).
 @MainActor
-final class InspectorSelection: ObservableObject {
-    @Published private(set) var pane: InspectorPane
+@Observable
+final class InspectorSelection {
+    private(set) var pane: InspectorPane
 
     init(_ pane: InspectorPane) { self.pane = Self.tab(for: pane) }
 
@@ -100,22 +102,21 @@ private struct TabButton: View {
         Button(action: action) {
             VStack(spacing: 4) {
                 RoundedRectangle(cornerRadius: 7)
-                    .fill(Color(pane.color))
+                    .fill(pane.color)
                     .frame(width: 26, height: 26)
-                    .overlay(
+                    .overlay {
                         Image(systemName: pane.symbol)
                             .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(.white))
+                            .foregroundStyle(.white)
+                    }
                 Text(pane.title).font(.system(size: 11))
                     .foregroundStyle(.primary).lineLimit(1)
             }
             .frame(width: 70)
             .padding(.vertical, 5)
-            .background(
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(isSelected ? Color(nsColor: .unemphasizedSelectedContentBackgroundColor)
-                                     : Color.clear))
-            .contentShape(Rectangle())
+            .background(isSelected ? Color(nsColor: .unemphasizedSelectedContentBackgroundColor) : .clear,
+                        in: .rect(cornerRadius: 6))
+            .contentShape(.rect)
         }
         .buttonStyle(.plain)
         .accessibilityLabel(pane.title)
@@ -131,36 +132,37 @@ enum InspectorPane: String, CaseIterable, Identifiable {
     var id: String { rawValue }
     var title: String {
         switch self {
-        case .mcp: return "MCP"
-        default: return rawValue.capitalized
+        case .mcp: "MCP"
+        default: rawValue.capitalized
         }
     }
 
     var symbol: String {
         switch self {
-        case .general: return "gearshape.fill"
-        case .sandboxes: return "shippingbox.fill"
-        case .folders: return "folder.fill"
-        case .mounts: return "externaldrive.fill"
-        case .kits: return "cube.fill"
-        case .agents: return "person.crop.square.fill"
-        case .mcp: return "point.3.connected.trianglepath.dotted"
-        case .git: return "arrow.triangle.branch"
-        case .terminal: return "terminal.fill"
+        case .general: "gearshape.fill"
+        case .sandboxes: "shippingbox.fill"
+        case .folders: "folder.fill"
+        case .mounts: "externaldrive.fill"
+        case .kits: "cube.fill"
+        case .agents: "person.crop.square.fill"
+        case .mcp: "point.3.connected.trianglepath.dotted"
+        case .git: "arrow.triangle.branch"
+        case .terminal: "terminal.fill"
         }
     }
 
-    var color: NSColor {
+    /// The tab's tint.
+    var color: Color {
         switch self {
-        case .general: return .systemGray
-        case .sandboxes: return .systemBrown
-        case .folders: return .systemIndigo
-        case .mounts: return .systemBlue
-        case .kits: return .systemGreen
-        case .agents: return .systemPink
-        case .mcp: return .systemPurple
-        case .git: return .systemOrange
-        case .terminal: return .systemTeal
+        case .general: .gray
+        case .sandboxes: .brown
+        case .folders: .indigo
+        case .mounts: .blue
+        case .kits: .green
+        case .agents: .pink
+        case .mcp: .purple
+        case .git: .orange
+        case .terminal: .teal
         }
     }
 }
@@ -200,20 +202,12 @@ private struct KitsInspectorPane: View {
             },
             onRebuild: { pending = .rebuild },
             drift: controller.kitDrift[agent],
-            onAdoptDrift: {
-                let refs = controller.kitDrift[agent]?.extra ?? []
-                controller.adoptKitDrift(for: agent)
-                model.adopt(refs)
-            },
+            onAdoptDrift: { adoptDrift(for: agent) },
             onIgnoreDrift: { controller.ignoreKitDrift(for: agent) })
         .onAppear { controller.refreshKitDrift(for: agent) }
         .confirmationDialog(pending == .add ? "Add kits to the sandbox?" : "Apply kit changes and rebuild?",
-                            isPresented: Binding(get: { pending != nil }, set: { if !$0 { pending = nil } }),
-                            presenting: pending) { action in
-            Button(action == .add ? "Add to Sandbox" : "Apply & Rebuild") {
-                controller.applyKits(model.enabledRefs, rebuild: action == .rebuild)
-                model.commitBaseline()
-            }
+                            item: $pending) { action in
+            Button(action == .add ? "Add to Sandbox" : "Apply & Rebuild") { applyKits(action) }
             Button("Cancel", role: .cancel) {}
         } message: { action in
             if action == .add {
@@ -225,6 +219,20 @@ private struct KitsInspectorPane: View {
                      + "ending any running sessions. Workspace files are preserved.")
             }
         }
+    }
+
+    /// Add the kits the sandbox has that the workspace didn't list, here too.
+    private func adoptDrift(for agent: AgentKind) {
+        let refs = controller.kitDrift[agent]?.extra ?? []
+        controller.adoptKitDrift(for: agent)
+        model.adopt(refs)
+    }
+
+    /// Apply the edited kit set (added in place, or rebuilt) and make it the
+    /// one edits are measured from.
+    private func applyKits(_ action: Pending) {
+        controller.applyKits(model.enabledRefs, rebuild: action == .rebuild)
+        model.commitBaseline()
     }
 }
 
@@ -266,15 +274,18 @@ private struct MountsInspectorPane: View {
             onConfirm: { _ in confirming = true },
             onCancel: { model.revert() })
         .confirmationDialog("Apply mount changes and rebuild?", isPresented: $confirming) {
-            Button("Apply & Rebuild") {
-                controller.applyConfiguration(policy: model.policy())
-                model.commitBaseline()
-            }
+            Button("Apply & Rebuild", action: applyMounts)
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("The workspace’s container(s) will be stopped and recreated with the new mounts, "
                  + "ending any running sessions. Workspace files are preserved.")
         }
+    }
+
+    /// Save the edited mounts and rebuild, then make them the baseline.
+    private func applyMounts() {
+        controller.applyConfiguration(policy: model.policy())
+        model.commitBaseline()
     }
 }
 
