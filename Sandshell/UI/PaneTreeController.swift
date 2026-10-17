@@ -31,7 +31,6 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
     }
 
     // Window API (same as the old single detail pane).
-    var onToggleSidebar: (() -> Void)?
     var onChromeChange: ((TerminalStackController.Chrome?) -> Void)?
     var onStatusChange: ((String, Bool) -> Void)?
 
@@ -42,7 +41,6 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
     /// The session pane focused most recently (sidebar picks land there while
     /// a Files pane has focus).
     private weak var lastSessionPane: TerminalStackController?
-    private var sidebarCollapsed = false
     private var cancellables: Set<AnyCancellable> = []
     private var clickMonitor: Any?
     private let container = PaneDropContainer()
@@ -132,7 +130,6 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
 
     private func makePane() -> TerminalStackController {
         let pane = TerminalStackController(controller: controller, surfaces: surfaces)
-        pane.onToggleSidebar = { [weak self] in self?.onToggleSidebar?() }
         pane.onChromeChange = { [weak self, weak pane] chrome in
             if let self, pane === self.toolbarPane { self.onChromeChange?(chrome) }
         }
@@ -384,7 +381,6 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
         for p in panes {
             p.showsFocusRing = many
             p.isFocused = p === focused
-            p.setSidebarCollapsed(sidebarCollapsed)
         }
         // Divider positions need the splits' real sizes: apply them after
         // this layout pass (positions computed from zero would clamp to the minimum).
@@ -588,11 +584,6 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
     }
 
     // MARK: Window API (forwarded to the focused pane)
-
-    func setSidebarCollapsed(_ collapsed: Bool) {
-        sidebarCollapsed = collapsed
-        panes.forEach { $0.setSidebarCollapsed(collapsed) }
-    }
 
     func teardown() {
         if let m = clickMonitor { NSEvent.removeMonitor(m); clickMonitor = nil }

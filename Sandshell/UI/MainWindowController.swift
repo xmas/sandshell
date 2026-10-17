@@ -19,7 +19,6 @@ final class MainWindowController: NSWindowController {
     private var detail: PaneTreeController?
     /// This workspace's Search window (⇧⌘F), created on first use.
     private var searchWindow: SearchWindowController?
-    private var collapseObservation: NSKeyValueObservation?
     // Native-toolbar identity + live status, updated from the detail controller.
     private let toolbarBadge = AgentBadgeView(side: 26, fontSize: 11, radius: 8)
     private let toolbarName = NSTextField(labelWithString: "")
@@ -170,7 +169,6 @@ final class MainWindowController: NSWindowController {
         let detail = PaneTreeController(controller: controller, instanceIndex: instanceIndex,
                                         restoresLayout: restoresLayout)
         self.detail = detail
-        detail.onToggleSidebar = { [weak self] in self?.toggleSidebar() }
         detail.newSessionMenu = { [weak self] in self?.sidebar?.newSessionMenu() }
         // Drive the toolbar identity (badge + name/subtitle) from the active
         // session; fall back to the folder name when nothing is selected.
@@ -226,13 +224,6 @@ final class MainWindowController: NSWindowController {
         // Follow the active session's folder (the workspace root otherwise).
         selectionObserver = controller.$selection.sink { [weak self] _ in
             DispatchQueue.main.async { self?.syncFilesRoot() }
-        }
-
-        // Keep the detail header's toggle (icon + leading inset for the traffic
-        // lights) in sync however the sidebar collapses — button, ⌥1/⌥2, or drag.
-        collapseObservation = sidebarItem.observe(\.isCollapsed, options: [.initial, .new]) { [weak detail] item, _ in
-            let collapsed = item.isCollapsed
-            Task { @MainActor in detail?.setSidebarCollapsed(collapsed) }
         }
 
         window.contentViewController = split

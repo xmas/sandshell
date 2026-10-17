@@ -48,6 +48,14 @@ final class PasteboardURLWatcher {
         timer = nil
     }
 
+    /// The clipboard was borrowed and put back (a terminal's selection read
+    /// through its Copy): its count moved, its contents didn't, so it's no copy
+    /// to act on — unless one was already waiting for the next poll.
+    func ignoreRestore(since changeCount: Int) {
+        guard lastChangeCount == changeCount else { return }
+        lastChangeCount = NSPasteboard.general.changeCount
+    }
+
     private func poll() {
         let pb = NSPasteboard.general
         guard pb.changeCount != lastChangeCount else { return }
