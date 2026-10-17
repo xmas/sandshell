@@ -106,7 +106,7 @@ struct Session: Identifiable, Codable, Hashable {
          order: Int,
          workdir: String,
          transcriptID: String? = nil,
-         createdAt: Date = Date(),
+         createdAt: Date = .now,
          containerAgent: AgentKind? = nil,
          isChat: Bool = false) {
         self.id = id
@@ -277,8 +277,8 @@ struct WorkspaceState: Codable {
         for i in folders.indices where moving.contains(folders[i].id) {
             folders[i].relativePath = newRelative + folders[i].relativePath.dropFirst(old.count)
         }
-        let from = root.appendingPathComponent(old, isDirectory: true).path
-        let to = root.appendingPathComponent(newRelative, isDirectory: true).path
+        let from = root.appending(path: old, directoryHint: .isDirectory).path
+        let to = root.appending(path: newRelative, directoryHint: .isDirectory).path
         for i in sessions.indices {
             guard let moved = Session.workdir(sessions[i].workdir, movedFrom: from, to: to) else { continue }
             if running.contains(sessions[i].id), sessions[i].transcriptWorkdir == nil {
@@ -293,21 +293,37 @@ struct WorkspaceState: Codable {
 
     /// Control directory holding Sandshell's per-workspace files.
     static func controlDir(root: URL) -> URL {
-        root.appendingPathComponent(".sandshell", isDirectory: true)
+        root.appending(path: ".sandshell", directoryHint: .isDirectory)
     }
 
     static func stateURL(root: URL) -> URL {
-        controlDir(root: root).appendingPathComponent("state.json")
+        controlDir(root: root).appending(path: "state.json")
     }
 
     /// Load persisted state, or `nil` if no state file exists yet.
     static func load(root: URL) throws -> WorkspaceState? {
         let url = stateURL(root: root)
-        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        guard FileManager.default.fileExists(atPath: url.path(percentEncoded: false)) else { return nil }
         let data = try Data(contentsOf: url)
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         return try decoder.decode(WorkspaceState.self, from: data)
+    }
+
+    /// Copy a control file that couldn't be read (a merge conflict, a typo, a
+    /// newer build's format) aside as `<name>.unreadable-<time>.<ext>`, before
+    /// anything saves a fresh one over it. The copy, or nil when that failed too.
+    static func keepUnreadableCopy(of url: URL) -> URL? {
+        let name = url.deletingPathExtension().lastPathComponent
+        let copy = url.deletingLastPathComponent()
+            .appending(path: "\(name).unreadable-\(Int(Date.now.timeIntervalSince1970)).\(url.pathExtension)")
+        do {
+            try FileManager.default.copyItem(at: url, to: copy)
+            return copy
+        } catch {
+            Log.error(.workspace, "couldn't keep a copy of \(url.path(percentEncoded: false)): \(error.localizedDescription)")
+            return nil
+        }
     }
 
     /// Atomically write state to `<root>/.sandshell/state.json`.
@@ -327,8 +343,7 @@ struct WorkspaceState: Codable {
 enum WorkspaceBootstrap {
     /// Default workspace root: `~/Sandshell`.
     static var defaultRoot: URL {
-        FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Sandshell", isDirectory: true)
+        URL.homeDirectory.appending(path: "Sandshell", directoryHint: .isDirectory)
     }
 
     /// Files under `.sandshell/` that are volatile and must not be committed.
@@ -345,7 +360,7 @@ enum WorkspaceBootstrap {
         try fm.createDirectory(at: control, withIntermediateDirectories: true)
 
         // 2. `.sandshell/.gitignore` — keep volatile state out of git.
-        let gitignore = control.appendingPathComponent(".gitignore")
+        let gitignore = control.appending(path: ".gitignore")
         let existing = (try? String(contentsOf: gitignore, encoding: .utf8)) ?? ""
         // Lines end in "\n" or "\r\n", as git reads them ("\r\n" is one
         // Character, never equal to "\n").
@@ -360,7 +375,17 @@ enum WorkspaceBootstrap {
         }
 
         // 3. Load existing state or start fresh (legacy projects migrate here).
-        var state = (try? WorkspaceState.load(root: root)) ?? WorkspaceState()
+        //    One that can't be read is kept beside it: step 6 saves over it.
+        var state: WorkspaceState
+        do {
+            state = try WorkspaceState.load(root: root) ?? WorkspaceState()
+        } catch {
+            let url = WorkspaceState.stateURL(root: root)
+            let copy = WorkspaceState.keepUnreadableCopy(of: url)
+            Log.error(.workspace, "\(url.path(percentEncoded: false)) couldn't be read (\(error.localizedDescription)); "
+                      + "starting a fresh one" + (copy.map { ", the original is kept as \($0.lastPathComponent)" } ?? ""))
+            state = WorkspaceState()
+        }
 
         // 4. Always ensure the root folder exists as the first row. Migrated
         //    workspaces keep their existing (former project) folders below it.
@@ -373,7 +398,7 @@ enum WorkspaceBootstrap {
 
         // 5. Ensure each non-root folder's directory exists on disk.
         for folder in state.folders where !folder.isRoot {
-            let dir = root.appendingPathComponent(folder.relativePath, isDirectory: true)
+            let dir = root.appending(path: folder.relativePath, directoryHint: .isDirectory)
             try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
         }
 
@@ -389,7 +414,7 @@ enum WorkspaceBootstrap {
             let oldOrder = orderedFolders.flatMap { folder in
                 state.sessions.filter { $0.folderID == folder.id }.sorted { $0.order < $1.order }
             }
-            let base = Date()
+            let base = Date.now
             for (index, session) in oldOrder.enumerated() {
                 guard let idx = state.sessions.firstIndex(where: { $0.id == session.id }) else { continue }
                 state.sessions[idx].createdAt = base.addingTimeInterval(-Double(index))
@@ -412,12 +437,12 @@ enum RecentRoots {
     static var all: [URL] {
         let paths = UserDefaults.standard.stringArray(forKey: key) ?? []
         return paths.filter { FileManager.default.fileExists(atPath: $0) }
-            .map { URL(fileURLWithPath: $0) }
+            .map { URL(filePath: $0, directoryHint: .checkFileSystem) }
     }
 
     /// Record `root` as the most recently opened workspace.
     static func record(_ root: URL) {
-        let path = root.standardizedFileURL.path
+        let path = root.standardizedPath
         var paths = UserDefaults.standard.stringArray(forKey: key) ?? []
         paths.removeAll { $0 == path }
         paths.insert(path, at: 0)
@@ -462,17 +487,27 @@ enum OpenWindows {
         }
         return zip(paths, indexes)
             .filter { FileManager.default.fileExists(atPath: $0.0) }
-            .map { Window(root: URL(fileURLWithPath: $0.0), instanceIndex: $0.1) }
+            .map { Window(root: URL(filePath: $0.0, directoryHint: .checkFileSystem), instanceIndex: $0.1) }
     }
 
     /// Replace the persisted set with the given windows (call whenever windows change).
     static func replace(with windows: [Window]) {
-        let paths = windows.map { $0.root.standardizedFileURL.path }
+        let paths = windows.map(\.root.standardizedPath)
         defaults.set(paths, forKey: key)
         if windows.allSatisfy({ $0.instanceIndex != nil }) {
             defaults.set(["roots": paths, "indexes": windows.compactMap(\.instanceIndex)], forKey: indexesKey)
         } else {
             defaults.removeObject(forKey: indexesKey)
         }
+    }
+}
+
+extension URL {
+    /// The standardized path with no trailing slash, as `URL.path` spelled it:
+    /// one folder's every spelling is one string (how workspace roots are
+    /// stored and matched — "/x/proj/" and "/x/proj" are the same folder).
+    var standardizedPath: String {
+        let path = standardizedFileURL.path(percentEncoded: false)
+        return path.count > 1 && path.hasSuffix("/") ? String(path.dropLast()) : path
     }
 }

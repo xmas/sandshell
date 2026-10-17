@@ -584,6 +584,45 @@ extension WorkspaceConfigTests {
             #expect(files == ["config.json"], "A readable config must not be copied aside")
         }
 
+        @Test func aReadableConfigReportsNoProblem() throws {
+            let saved = makeCustomizedWorkspaceConfig()
+            try saved.save(root: root)
+            let home = root.appendingPathComponent("home", isDirectory: true)
+
+            let (config, unreadable) = WorkspaceConfig.loadReportingProblems(root: root, home: home)
+
+            expectSameWorkspaceConfig(config, saved)
+            #expect(unreadable == nil)
+        }
+
+        /// What the window reports when config.json can't be read: the file, the
+        /// copy kept of it before defaults can be saved over it, and why.
+        @Test(.tags(.workspaceConfigEdgeCase), arguments: Persistence.unreadableContents)
+        func anUnreadableConfigIsCopiedAsideAndReported(contents: String) throws {
+            try writeConfigFile(contents)
+            let error = try #require(throws: DecodingError.self) { try WorkspaceConfig.load(root: root) }
+
+            let problem = WorkspaceConfig.setAside(root: root, error)
+
+            #expect(problem.file == configURL)
+            #expect(problem.reason == error.localizedDescription)
+            let copy = try #require(problem.keptAs, "A copy of the unreadable file is kept")
+            #expect(copy.deletingLastPathComponent().path == controlDirPath)
+            #expect(copy.lastPathComponent.hasPrefix("config.unreadable-"))
+            #expect(copy.pathExtension == "json")
+            #expect(try String(contentsOf: copy, encoding: .utf8) == contents)
+            #expect(try String(contentsOf: configURL, encoding: .utf8) == contents, "The original stays put")
+        }
+
+        @Test(.tags(.workspaceConfigEdgeCase))
+        func aCopyThatFailsIsReportedAsNotKept() throws {
+            // Nothing at config.json: nothing to copy.
+            let problem = WorkspaceConfig.setAside(root: root, CocoaError(.fileReadCorruptFile))
+
+            #expect(problem.keptAs == nil)
+            #expect(problem.file == configURL)
+        }
+
         @Test(.tags(.workspaceConfigEdgeCase))
         func saveFailsWhenControlDirectoryIsAFile() throws {
             let blocker = root.appendingPathComponent(".sandshell", isDirectory: false)

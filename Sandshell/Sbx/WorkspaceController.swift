@@ -114,6 +114,10 @@ final class WorkspaceController: ObservableObject {
     /// (true until the user confirms mounts for this workspace).
     var needsConfiguration: Bool { !config.configured }
 
+    /// Why the folder's config.json couldn't be read when it opened (it runs
+    /// on defaults), for the first window on it to say; nil after that.
+    func takeConfigProblem() -> WorkspaceConfig.Unreadable? { store.takeConfigProblem() }
+
     /// Current mount policy (for the mount-config UI to edit).
     var policy: MountPolicy { workspace.policy }
 

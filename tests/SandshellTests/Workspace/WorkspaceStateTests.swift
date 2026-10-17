@@ -687,6 +687,56 @@ struct WorkspaceStatePathTests {
         // Only computes the URL; nothing under the home directory is touched.
         let expected = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Sandshell").path
         #expect(WorkspaceBootstrap.defaultRoot.path == expected)
+        #expect(WorkspaceBootstrap.defaultRoot.hasDirectoryPath)
+    }
+
+    @Test func controlDirIsADirectoryURL() {
+        #expect(WorkspaceState.controlDir(root: root).hasDirectoryPath)
+        #expect(WorkspaceState.stateURL(root: root).hasDirectoryPath == false)
+    }
+
+    /// How roots are keyed and saved: as `URL.path` spelled them, so every
+    /// spelling of one folder is one string.
+    @Test(arguments: [
+        ("/Volumes/Work/my app", "/Volumes/Work/my app"),
+        ("/Volumes/Work/my app/", "/Volumes/Work/my app"),
+        ("/Volumes/Work/my app/.", "/Volumes/Work/my app"),
+        ("/Volumes/Work/my app/./", "/Volumes/Work/my app"),
+        ("/Volumes/Work/other/../my app", "/Volumes/Work/my app"),
+        ("/Volumes/Work/café 100%#1", "/Volumes/Work/café 100%#1"),
+        ("/", "/"),
+    ])
+    func standardizedPathHasNoTrailingSlash(path: String, expected: String) {
+        let url = URL(filePath: path)
+        #expect(url.standardizedPath == expected)
+        #expect(url.standardizedPath == url.standardizedFileURL.path, "The same string URL.path gave")
+    }
+}
+
+// MARK: - Keeping an unreadable file
+
+@Suite(.tags(.workspaceStateFileSystem))
+struct WorkspaceStateUnreadableCopyTests {
+    private let scratch = WorkspaceStateScratchDirectory()
+
+    @Test func theCopySitsBesideItWithTheSameContents() throws {
+        try WorkspaceStateFixture.writeStateFile("{ half a state", root: scratch.root)
+        let url = WorkspaceState.stateURL(root: scratch.root)
+
+        let copy = try #require(WorkspaceState.keepUnreadableCopy(of: url))
+
+        #expect(copy.deletingLastPathComponent().path == url.deletingLastPathComponent().path)
+        #expect(copy.lastPathComponent.hasPrefix("state.unreadable-"))
+        #expect(copy.pathExtension == "json")
+        #expect(try String(contentsOf: copy, encoding: .utf8) == "{ half a state")
+        #expect(try String(contentsOf: url, encoding: .utf8) == "{ half a state", "The original stays put")
+    }
+
+    @Test(.tags(.workspaceStateEdgeCase))
+    func nothingToCopyGivesNoCopy() {
+        let missing = WorkspaceState.stateURL(root: scratch.root)
+
+        #expect(WorkspaceState.keepUnreadableCopy(of: missing) == nil)
     }
 }
 
@@ -1049,8 +1099,7 @@ struct WorkspaceBootstrapTests {
         "{ not json",
         #"{"sessions":[{"name":"no agent"}]}"#,
     ])
-    func undecodableStateFileIsReplacedWithAFreshState(contents: String) throws {
-        // Documents current behavior: `try?` swallows the decode error and the file is overwritten.
+    func undecodableStateFileIsKeptAsideAndReplacedWithAFreshState(contents: String) throws {
         try WorkspaceStateFixture.writeStateFile(contents, root: root)
 
         let state = try WorkspaceBootstrap.openOrCreate(root: root)
@@ -1060,6 +1109,22 @@ struct WorkspaceBootstrapTests {
         #expect(state.sessions.isEmpty)
         let reloaded = try WorkspaceState.load(root: root)
         #expect(reloaded?.folders == state.folders, "The unreadable file was overwritten with the fresh state")
+        let control = WorkspaceState.controlDir(root: root)
+        let copies = try FileManager.default.contentsOfDirectory(atPath: control.path)
+            .filter { $0.hasPrefix("state.unreadable-") && $0.hasSuffix(".json") }
+        let copy = try #require(copies.first, "A copy of the unreadable file is kept before it's saved over")
+        #expect(copies.count == 1)
+        #expect(try String(contentsOf: control.appendingPathComponent(copy), encoding: .utf8) == contents,
+                "The copy holds the folders and sessions as they were")
+    }
+
+    @Test func aReadableStateFileIsNotCopiedAside() throws {
+        try WorkspaceStateFixture.populatedState().save(root: root)
+
+        try WorkspaceBootstrap.openOrCreate(root: root)
+
+        let files = try FileManager.default.contentsOfDirectory(atPath: WorkspaceState.controlDir(root: root).path)
+        #expect(Set(files) == [".gitignore", "state.json"])
     }
 
     @Test(.tags(.workspaceStateEdgeCase))

@@ -107,32 +107,51 @@ struct WorkspaceConfig: Codable {
     // MARK: - Persistence
 
     static func url(root: URL) -> URL {
-        WorkspaceState.controlDir(root: root).appendingPathComponent("config.json")
+        WorkspaceState.controlDir(root: root).appending(path: "config.json")
     }
 
     /// Load persisted config, or `nil` if none exists yet.
     static func load(root: URL) throws -> WorkspaceConfig? {
         let url = url(root: root)
-        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        guard FileManager.default.fileExists(atPath: url.path(percentEncoded: false)) else { return nil }
         return try JSONDecoder().decode(WorkspaceConfig.self, from: Data(contentsOf: url))
+    }
+
+    /// config.json was there but couldn't be decoded: what the window says.
+    struct Unreadable: Equatable, Sendable {
+        let file: URL
+        /// The copy kept of it; nil when that failed too.
+        let keptAs: URL?
+        let reason: String
     }
 
     /// Load the config or build a default one seeded from `home` — and, for a
     /// root that has never been configured, with the registry's default kits.
     static func loadOrDefault(root: URL, home: URL) -> WorkspaceConfig {
+        loadReportingProblems(root: root, home: home).config
+    }
+
+    /// `loadOrDefault`, also saying when config.json was there but couldn't be read.
+    static func loadReportingProblems(root: URL, home: URL) -> (config: WorkspaceConfig, unreadable: Unreadable?) {
         do {
-            if let config = try load(root: root) { return config }
+            return (try load(root: root) ?? makeDefault(home: home), nil)
         } catch {
-            // Unreadable (a merge conflict, a typo): keep a copy before anything
-            // can save defaults over it, and say so.
-            let url = url(root: root)
-            let copy = url.deletingLastPathComponent()
-                .appendingPathComponent("config.unreadable-\(Int(Date().timeIntervalSince1970)).json")
-            try? FileManager.default.copyItem(at: url, to: copy)
-            Log.error(.workspace, "\(url.path) couldn't be read (\(error.localizedDescription)); "
-                      + "using defaults, the original is kept as \(copy.lastPathComponent)")
+            return (makeDefault(home: home), setAside(root: root, error))
         }
-        return WorkspaceConfig(policy: .makeDefault(home: home), kits: KitStore.defaultRefs.filter { !KitStore.isSandshellKit($0) })
+    }
+
+    /// config.json couldn't be read (a merge conflict, a typo): keep a copy
+    /// before anything can save defaults over it, and say so.
+    static func setAside(root: URL, _ error: any Error) -> Unreadable {
+        let url = url(root: root)
+        let copy = WorkspaceState.keepUnreadableCopy(of: url)
+        Log.error(.workspace, "\(url.path(percentEncoded: false)) couldn't be read (\(error.localizedDescription)); "
+                  + "using defaults" + (copy.map { ", the original is kept as \($0.lastPathComponent)" } ?? ""))
+        return Unreadable(file: url, keptAs: copy, reason: error.localizedDescription)
+    }
+
+    private static func makeDefault(home: URL) -> WorkspaceConfig {
+        WorkspaceConfig(policy: .makeDefault(home: home), kits: KitStore.defaultRefs.filter { !KitStore.isSandshellKit($0) })
     }
 
     /// Atomically write to `<root>/.sandshell/config.json`.

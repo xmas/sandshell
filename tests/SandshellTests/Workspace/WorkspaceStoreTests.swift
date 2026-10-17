@@ -35,9 +35,9 @@ fileprivate enum WorkspaceStoreFixture {
     }
 
     /// Waits until the main queue has run everything already on it — including
-    /// the store's coalesced notification, which a write queues with
-    /// `DispatchQueue.main.async`. The main queue is serial, so a block queued
-    /// after that flush runs after it.
+    /// the store's coalesced notification, which a write queues as a main-actor
+    /// `Task` (a job on the main queue). The main queue is serial, so a block
+    /// queued after that flush runs after it.
     @MainActor
     static func nextMainLoopTurn() async {
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
@@ -191,7 +191,7 @@ struct WorkspaceStoreSharingTests {
     func theSharingTableDoesNotKeepAStoreAlive() throws {
         let root = try scratch.makeRoot()
         var store: WorkspaceStore? = try WorkspaceStore.shared(root: root)
-        weak var released = store
+        weak let released = store
 
         store = nil
 
@@ -203,7 +203,7 @@ struct WorkspaceStoreSharingTests {
         let root = try scratch.makeRoot()
         let writer = WorkspaceStoreTestWindow()
         var store: WorkspaceStore? = try WorkspaceStore.shared(root: root)
-        weak var released = store
+        weak let released = store
         var unsaved = try #require(store).state
         let rootFolder = try #require(unsaved.folders.first)
         unsaved.sessions.append(WorkspaceStoreFixture.session(in: rootFolder))
@@ -431,7 +431,7 @@ struct WorkspaceStoreNotificationTests {
     func aClosedWindowIsForgottenBeforeTheWrite() async throws {
         let logA = watch(as: windowA)
         var closing: WorkspaceStoreTestWindow? = WorkspaceStoreTestWindow()
-        weak var closed = closing
+        weak let closed = closing
         let logClosed = watch(as: try #require(closing))
         closing = nil
         try #require(closed == nil)
@@ -447,7 +447,7 @@ struct WorkspaceStoreNotificationTests {
     func aWindowClosedBeforeTheNotificationIsSkipped() async throws {
         let logA = watch(as: windowA)
         var closing: WorkspaceStoreTestWindow? = WorkspaceStoreTestWindow()
-        weak var closed = closing
+        weak let closed = closing
         let logClosed = watch(as: try #require(closing))
         let logC = watch(as: windowC)
 
@@ -465,7 +465,7 @@ struct WorkspaceStoreNotificationTests {
     func aStoreReleasedBeforeTheNotificationTellsNobody() async throws {
         let root = try scratch.makeRoot("released")
         var transient: WorkspaceStore? = try WorkspaceStore.shared(root: root)
-        weak var released = transient
+        weak let released = transient
         let logA = watch(try #require(transient), as: windowA)
         let logB = watch(try #require(transient), as: windowB)
 
@@ -518,7 +518,7 @@ struct WorkspaceStoreWindowsTests {
         let store = try WorkspaceStore.shared(root: try scratch.makeRoot())
         store.observe(windowA) { _ in }
         var closing: WorkspaceStoreTestWindow? = WorkspaceStoreTestWindow()
-        weak var closed = closing
+        weak let closed = closing
         store.observe(try #require(closing)) { _ in }
 
         closing = nil

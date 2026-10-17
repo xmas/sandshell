@@ -14,6 +14,18 @@ final class WorkspaceStore {
     /// window knows only its own runtimes; "+ New …" mustn't hand out another
     /// window's session as an unused one).
     private(set) var launched: Set<UUID> = []
+    /// A failed write of the folder's files was already reported (by any window
+    /// on it); cleared by the next one that works.
+    var saveFailureReported = false
+    /// config.json was there but couldn't be read when the folder opened.
+    private var configProblem: WorkspaceConfig.Unreadable?
+
+    /// Why the folder's config couldn't be read, once: the first window on
+    /// it says so.
+    func takeConfigProblem() -> WorkspaceConfig.Unreadable? {
+        defer { configProblem = nil }
+        return configProblem
+    }
 
     private init(root: URL, state: WorkspaceState, config: WorkspaceConfig) {
         self.root = root
@@ -29,11 +41,12 @@ final class WorkspaceStore {
     /// The store for `root`: the one a window already has open, else loaded
     /// (bootstrapping the folder's control files).
     static func shared(root: URL) throws -> WorkspaceStore {
-        let key = root.standardizedFileURL.path
+        let key = root.standardizedPath
         if let store = open[key]?.store { return store }
         let state = try WorkspaceBootstrap.openOrCreate(root: root)
-        let config = WorkspaceConfig.loadOrDefault(root: root, home: FileManager.default.homeDirectoryForCurrentUser)
+        let (config, configProblem) = WorkspaceConfig.loadReportingProblems(root: root, home: URL.homeDirectory)
         let store = WorkspaceStore(root: root, state: state, config: config)
+        store.configProblem = configProblem
         open = open.filter { $0.value.store != nil }
         open[key] = Weak(store)
         return store
@@ -86,9 +99,7 @@ final class WorkspaceStore {
         let first = pending.isEmpty
         pending[part, default: []].insert(ObjectIdentifier(writer))
         guard first else { return }
-        DispatchQueue.main.async { [weak self] in
-            MainActor.assumeIsolated { self?.flush() }
-        }
+        Task { [weak self] in self?.flush() }
     }
 
     private func flush() {

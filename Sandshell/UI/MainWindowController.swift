@@ -265,6 +265,14 @@ final class MainWindowController: NSWindowController {
         // Container phases, subagents and the work timers stay current in
         // every window, a folder still being set up included.
         controller.startMonitoring()
+        // Its config.json couldn't be read: it runs on defaults, so say so first.
+        if let problem = controller.takeConfigProblem() {
+            let kept = problem.keptAs.map { "Sandshell is using default settings. The original is kept as \($0.lastPathComponent)." }
+                ?? "Sandshell is using default settings and couldn’t keep a copy of the original: fix or move it before changing settings."
+            Alerts.inform("This workspace’s settings couldn’t be read",
+                          "\(problem.file.path(percentEncoded: false).tildeAbbreviated): \(problem.reason)\n\n\(kept)",
+                          style: .warning, in: window)
+        }
         // First open: configure mounts before bringing the container up
         // (scripted runs take the defaults: nobody's there to answer).
         if controller.needsConfiguration, AutomatedRun.isActive {
