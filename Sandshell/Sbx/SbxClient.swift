@@ -212,19 +212,23 @@ actor SbxClient {
     /// rm → recreate with the same agent + mounts (the specs from `sbx ls`).
     @discardableResult
     func rebuildSandbox(_ sandbox: Sandbox) async throws -> Sandbox {
-        // A kit agent is recreated from its kit, when it's a registered one;
-        // sbx can't create one from its bare name, so don't take it down first.
         let kind = AgentKind(rawValue: sandbox.agent)
-        if !kind.isBuiltin, AgentProfileStore.profile(for: kind)?.kitRef == nil {
-            throw SbxError.command("“\(sandbox.name)” runs the custom agent “\(sandbox.agent)”, whose kit isn’t "
-                + "registered here, so it can’t be recreated. Add the agent’s kit under Settings ▸ Agents, then rebuild.")
-        }
+        if let error = Self.cannotRecreate(kind, sandbox: sandbox.name) { throw error }
         Log.info(.sbx, "rebuilding sandbox “\(sandbox.name)” (\(sandbox.agent))")
         _ = try? await stop(sandbox.name)
         _ = try? await remove(sandbox.name)
         let agent = kind.createReference
         let args = ["create", "--no-progress", "--name", sandbox.name, agent] + sandbox.workspaces
         return try await createAndPoll(args, cwd: sandbox.primaryWorkdir, env: nil, name: sandbox.name)
+    }
+
+    /// Why `agent`'s sandbox `name` can't be recreated, if it can't. A kit
+    /// agent is recreated from its kit, when it's a registered one; sbx can't
+    /// create one from its bare name, so its sandbox mustn't be taken down first.
+    nonisolated static func cannotRecreate(_ agent: AgentKind, sandbox name: String) -> SbxError? {
+        guard !agent.isBuiltin, AgentProfileStore.profile(for: agent)?.kitRef == nil else { return nil }
+        return SbxError.command("“\(name)” runs the custom agent “\(agent.rawValue)”, whose kit isn’t "
+            + "registered here, so it can’t be recreated. Add the agent’s kit under Settings ▸ Agents, then rebuild.")
     }
 
     // MARK: - Create
@@ -527,6 +531,7 @@ actor SbxClient {
     @discardableResult
     func rebuild(workspace: Workspace, agent: AgentKind, name: String,
                  mounts: [MountSpec], kits: [String] = []) async throws -> Sandbox {
+        if let error = Self.cannotRecreate(agent, sandbox: name) { throw error }
         _ = try? await stop(name)
         _ = try? await remove(name)
         return try await create(workspace: workspace, agent: agent, name: name, mounts: mounts, kits: kits)
@@ -822,15 +827,13 @@ actor SbxClient {
         // exit: commands like `sbx mcp add` (re)start the long-lived daemon, which
         // inherits these pipe fds and never closes them — so a read-to-EOF would
         // block forever even after `sbx` itself exits. We resolve on termination
-        // with whatever was streamed by then.
+        // with whatever was streamed by then, plus what the pipes still hold.
         let outBox = DataBox(), errBox = DataBox()
         outPipe.fileHandleForReading.readabilityHandler = { h in
-            let d = h.availableData
-            d.isEmpty ? (h.readabilityHandler = nil) : outBox.append(d)
+            if !outBox.drain(h) { h.readabilityHandler = nil }
         }
         errPipe.fileHandleForReading.readabilityHandler = { h in
-            let d = h.availableData
-            d.isEmpty ? (h.readabilityHandler = nil) : errBox.append(d)
+            if !errBox.drain(h) { h.readabilityHandler = nil }
         }
 
         let once = ResumeOnce()
@@ -841,6 +844,10 @@ actor SbxClient {
                 errPipe.fileHandleForReading.readabilityHandler = nil
                 guard once.claim() else { return }
                 timeoutHolder.task?.cancel()
+                // Exit and readability arrive on separate queues in no fixed
+                // order: the last chunk may still be in the pipe.
+                outBox.drain(outPipe.fileHandleForReading)
+                errBox.drain(errPipe.fileHandleForReading)
                 let out = Self.clean(String(data: outBox.data, encoding: .utf8) ?? "")
                 let err = Self.clean(String(data: errBox.data, encoding: .utf8) ?? "")
                 let ms = Int(Date().timeIntervalSince(started) * 1000)
@@ -890,11 +897,29 @@ actor SbxClient {
 
     /// Thread-safe byte accumulator for async pipe reads (readability handlers
     /// fire on background queues).
-    private final class DataBox: @unchecked Sendable {
+    final class DataBox: @unchecked Sendable {
         private var buffer = Data()
         private let lock = NSLock()
-        func append(_ d: Data) { lock.lock(); buffer.append(d); lock.unlock() }
         var data: Data { lock.lock(); defer { lock.unlock() }; return buffer }
+
+        /// Reads what `handle`'s pipe holds right now without waiting for more
+        /// (the fd is made non-blocking, as a daemon may keep the write end
+        /// open); false once the pipe is at end of file. One lock covers the
+        /// readability handler's reads and the final one after exit, so they
+        /// never interleave.
+        @discardableResult
+        func drain(_ handle: FileHandle) -> Bool {
+            let fd = handle.fileDescriptor
+            lock.lock(); defer { lock.unlock() }
+            _ = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK)
+            var chunk = [UInt8](repeating: 0, count: 65_536)
+            while true {
+                let n = Darwin.read(fd, &chunk, chunk.count)
+                if n > 0 { buffer.append(chunk, count: n); continue }
+                if n < 0, errno == EINTR { continue }
+                return n != 0   // 0: end of file; -1 (EAGAIN): nothing more for now
+            }
+        }
     }
 
     /// Thread-safe exit-status holder for a detached process the poller watches.
