@@ -14,7 +14,8 @@ import Testing
 //   calls it for a running pid on this Mac that recorded a start time, so every
 //   on-Mac entry here either has a pid no process can have or no `procStart`.
 // - `sandboxedProcessIsAlive` asks `sbx` once its guards pass, so only the
-//   guard paths (which answer nil before touching `sbx`) are tested.
+//   guard paths (which answer nil before touching `sbx`) are tested, and
+//   `verdict`, which reads the sandboxes' answers.
 
 extension Tag {
     @Tag static var claudeRegistryEdgeCase: Self
@@ -343,10 +344,34 @@ struct ClaudeSessionRegistryIsAliveTests {
     @Test("A malformed entry with pid 0 or a negative pid isn't a live process", .tags(.claudeRegistryEdgeCase),
           arguments: [0, -getpgrp()] as [Int32])
     func nonPositivePidIsNotAlive(pid: Int32) {
-        withKnownIssue("kill(pid, 0) with pid 0 or a negative pid probes a process group, not a process, and succeeds for the caller's own group, so isAlive treats such an entry as a live writer on this Mac") {
-            let entry = RegistryEntry(pid: pid, sessionId: "s", pidDomain: "darwin")
-            #expect(ClaudeSessionRegistry.isAlive(entry) == false)
-        }
+        let entry = RegistryEntry(pid: pid, sessionId: "s", pidDomain: "darwin")
+        #expect(ClaudeSessionRegistry.isAlive(entry) == false)
+    }
+}
+
+// MARK: - verdict(_:)
+
+struct ClaudeSessionRegistryProbeVerdictTests {
+    @Test("Any sandbox holding the process makes it alive, whatever the others said", arguments: [
+        ["alive"], ["gone", "alive"], [nil, "alive"], ["alive", "gone", nil, "error"],
+    ] as [[String?]])
+    func aliveAnywhere(answers: [String?]) {
+        #expect(ClaudeSessionRegistry.verdict(answers) == true)
+    }
+
+    @Test("It's gone only when every running sandbox said so", arguments: [
+        ["gone"], ["gone", "gone", "gone"],
+    ] as [[String?]])
+    func goneEverywhere(answers: [String?]) {
+        #expect(ClaudeSessionRegistry.verdict(answers) == false)
+    }
+
+    @Test("A sandbox that didn't answer (busy, timed out) or answered nonsense could hold it: can't tell",
+          .tags(.claudeRegistryEdgeCase), arguments: [
+        [nil], ["gone", nil], [nil, "gone", "gone"], ["gone", ""], ["gone", "sh: sed: not found"],
+    ] as [[String?]])
+    func someSandboxUnheard(answers: [String?]) {
+        #expect(ClaudeSessionRegistry.verdict(answers) == nil)
     }
 }
 

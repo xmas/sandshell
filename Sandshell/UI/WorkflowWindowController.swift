@@ -84,8 +84,7 @@ final class WorkflowWindowModel {
         guard let workspace else { return }
         let info = SubagentInfo(id: agent.id, sessionID: sessionID, title: agent.label, agentType: agent.phase,
                                 transcript: run.transcript(of: agent), startedAt: agent.startedAt ?? .now,
-                                lastWrite: agent.lastWrite ?? .now,
-                                state: agent.state == .running ? .running : agent.state == .failed ? .failed : .done)
+                                lastWrite: agent.lastWrite ?? .now, state: SubagentInfo.State(agent.state))
         SubagentWindowController.show(info, workspace: workspace)
     }
 }

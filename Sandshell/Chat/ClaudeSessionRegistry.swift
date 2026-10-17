@@ -44,7 +44,8 @@ enum ClaudeSessionRegistry {
     /// recently, or busy without having gone quiet for long.
     nonisolated static func isAlive(_ e: Entry, now: Date = Date()) -> Bool {
         if e.isOnThisMac {
-            guard kill(e.pid, 0) == 0 || errno == EPERM else { return false }
+            // (kill with 0 or a negative pid probes a process group, not a process.)
+            guard e.pid > 0, kill(e.pid, 0) == 0 || errno == EPERM else { return false }
             guard let started = e.procStart, !started.isEmpty else { return true }
             return processStart(e.pid) == started
         }
@@ -70,10 +71,18 @@ enum ClaudeSessionRegistry {
             + "if [ \"$s\" = \(start) ]; then echo alive; else echo gone; fi"
         let answers = await withTaskGroup(of: String?.self) { group in
             for name in running { group.addTask { await SbxClient.shared.exec(inSandbox: name, script: script) } }
-            return await group.reduce(into: [String]()) { if let a = $1 { $0.append(a.trimmingCharacters(in: .whitespacesAndNewlines)) } }
+            return await group.reduce(into: [String?]()) { $0.append($1?.trimmingCharacters(in: .whitespacesAndNewlines)) }
         }
+        return verdict(answers)
+    }
+
+    /// What the running sandboxes said of a process (one answer each, nil: it
+    /// couldn't be asked): alive if any holds it; gone only when every one said
+    /// so — one that didn't answer (busy, timed out) could be the one holding
+    /// it; else nil (couldn't tell).
+    nonisolated static func verdict(_ answers: [String?]) -> Bool? {
         if answers.contains("alive") { return true }
-        return answers.isEmpty ? nil : false
+        return answers.allSatisfy { $0 == "gone" } ? false : nil
     }
 
     /// The live writer of `sessionID` that isn't our own chat agent (the one
