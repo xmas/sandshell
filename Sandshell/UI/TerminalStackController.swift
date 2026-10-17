@@ -1525,7 +1525,7 @@ final class TerminalStackController: NSViewController {
             guard !surfaces.isTornDown, controller.session(id: id) != nil, terminals[id] == nil else { return }
             let terminal = TerminalSession(
                 sessionID: id, containerName: containerName, agent: session.agent,
-                workdir: session.workdir,
+                workdir: controller.sandboxWorkdir(session.workdir, agent: session.containerAgentKind),
                 mcpURL: controller.workspace.mcpURL,
                 theme: controller.theme,
                 resumeID: resumeID,
@@ -1670,7 +1670,8 @@ final class TerminalStackController: NSViewController {
             guard !surfaces.isTornDown, controller.session(id: id)?.isChat == true, chats[id] == nil else { return }
             let chat = ChatSession(title: current.agent.displayName, agent: current.agent,
                                    containerName: containerName,
-                                   workdir: current.workdir, home: controller.home.path,
+                                   workdir: controller.sandboxWorkdir(current.workdir, agent: current.containerAgentKind),
+                                   home: controller.home.path,
                                    mcpURL: controller.mcpURL, resumeID: resumeID, sbxProxyAuth: proxyAuth,
                                    sessionID: id, unavailable: unavailable,
                                    model: current.agent == .claude ? controller.claudeModel : nil,
@@ -2316,6 +2317,12 @@ private final class PassThroughView: NSView {
 
 #if DEBUG
 extension TerminalStackController {
+    /// Self-test: whether the runtime saw `id`'s terminal exit.
+    func debugIsExited(_ id: UUID) -> Bool { runtime.isExited(id) }
+
+    /// Self-test: the status the pane shows instead of a session, if any.
+    var debugStatusText: String? { statusStack.isHidden ? nil : statusLabel.stringValue }
+
     /// Self-test: show the Claude readout with `status`, whatever the session is.
     func debugShowClaudeReadout(_ status: ClaudeSessionStatus?) {
         claudeStats.isHidden = false

@@ -196,6 +196,10 @@ enum SelfTest {
         ws.selection = .session(b)
         check(await until(90) { live(b) }, "selecting B launches it in the focused pane")
         check(shown() == [a, b], "panes show [A, B]")
+        // A shell's launch runs in its folder as the sandbox mounted it (the
+        // fixture saves /private/tmp/…, the sandbox mounts /tmp/…).
+        await wait(4)
+        check(!tree.focused.debugIsExited(a) && !tree.focused.debugIsExited(b), "both shells keep running once started")
 
         ws.selection = .session(a)
         await wait()
@@ -240,6 +244,7 @@ enum SelfTest {
         check(focusedIndex() == 1 && !keysIn(a), "Next Pane moves focus, and the keys leave A")
         window.focusPreviousPane()
         await wait()
+        log("after Previous Pane: keys in \(window.window?.firstResponder.map { String(describing: type(of: $0)) } ?? "nil"), A's pane: \(tree.focused.debugStatusText ?? "its session")")
         check(focusedIndex() == 0 && keysIn(a), "Previous Pane brings focus and the keys back to A")
 
         // Layout persists (saved asynchronously).

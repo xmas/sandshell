@@ -319,6 +319,7 @@ final class TerminalSession {
 
 extension TerminalSession: TerminalSurfaceCloseDelegate {
     func terminalDidClose(processAlive: Bool) {
+        Log.info(.workspace, "session \(sessionID) terminal closed (process alive: \(processAlive))")
         onProcessExit?()
     }
 }

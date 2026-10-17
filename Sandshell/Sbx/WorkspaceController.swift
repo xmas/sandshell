@@ -1563,18 +1563,26 @@ extension WorkspaceController {
     /// exists, else what the workspace's mount policy will give it.
     func sandboxAccess(for folder: URL, agent: AgentKind) -> SandboxAccess {
         let name = containerName(for: agent)
-        let mounts: [SandboxAccess.Mount]
+        if containers[agent]?.isRunning == true { probeSandboxSystem(name) }
+        return SandboxAccess(folder: folder, sandbox: name, mounts: sandboxMounts(agent), created: containers[agent] != nil,
+                             system: sandboxSystems[name])
+    }
+
+    /// Where a session's folder is inside its sandbox: what its launch runs in.
+    /// (A folder saved as /private/tmp/x is at /tmp/x in a sandbox that mounted that.)
+    func sandboxWorkdir(_ workdir: String, agent: AgentKind) -> String {
+        workdir.isEmpty ? workdir : SandboxAccess.sandboxPath(for: workdir, mounts: sandboxMounts(agent))
+    }
+
+    /// The agent's sandbox's mounts: its real ones once it exists, else the planned ones.
+    private func sandboxMounts(_ agent: AgentKind) -> [SandboxAccess.Mount] {
         if let sandbox = containers[agent], !sandbox.workspaces.isEmpty {
-            mounts = sandbox.workspaces.map {
+            return sandbox.workspaces.map {
                 let spec = MountSpec(spec: $0)
                 return .init(path: spec.path.standardizedFileURL.path, readOnly: spec.readonly)
             }
-        } else {
-            mounts = resolvedMounts().map { .init(path: $0.path.standardizedFileURL.path, readOnly: $0.readonly) }
         }
-        if containers[agent]?.isRunning == true { probeSandboxSystem(name) }
-        return SandboxAccess(folder: folder, sandbox: name, mounts: mounts, created: containers[agent] != nil,
-                             system: sandboxSystems[name])
+        return resolvedMounts().map { .init(path: $0.path.standardizedFileURL.path, readOnly: $0.readonly) }
     }
 
     /// The tail of a background command's output file, read inside its sandbox.
