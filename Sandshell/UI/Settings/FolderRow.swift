@@ -38,8 +38,10 @@ struct FolderRow: View {
                         if !parentPrefix.isEmpty { Text(parentPrefix).foregroundStyle(.secondary) }
                         TextField("Folder name", text: $name)
                             .textFieldStyle(.plain)
-                            .onSubmit(commitRename)
-                            .onDisappear(perform: commitRename)
+                            .onSubmit { commitRename(reportingFailure: true) }
+                            // Leaving the pane (another tab, Settings closing)
+                            // keeps a typed name too, but quietly.
+                            .onDisappear { commitRename(reportingFailure: false) }
                             .accessibilityIdentifier("folder-name-\(folder.relativePath)")
                     }
                 }
@@ -68,13 +70,20 @@ struct FolderRow: View {
         .onChange(of: folder.relativePath) { _, _ in name = Self.leaf(folder) }
     }
 
-    private func commitRename() {
+    /// Apply the typed name. When the move fails (e.g. a folder by that name
+    /// is already there) the old name comes back; on Return a sheet on the
+    /// Settings window also says why. Not when the field is going away: that
+    /// alert would be about a field no longer shown, and would come up while
+    /// SwiftUI is still switching panes (`renameFolder` has logged it).
+    private func commitRename(reportingFailure: Bool) {
         do {
             try controller.renameFolder(folder.id, to: name)
         } catch {
-            // The move failed (e.g. a folder by that name is already there).
             name = Self.leaf(folder)
-            Alerts.inform("Couldn’t rename “\(Self.leaf(folder))”", error.localizedDescription, style: .warning)
+            if reportingFailure {
+                Alerts.inform("Couldn’t rename “\(Self.leaf(folder))”", error.localizedDescription,
+                              style: .warning, in: SettingsWindowController.window(for: controller))
+            }
             return
         }
         // Reset if rejected without an error (empty, or unchanged once sanitized);
