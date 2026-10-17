@@ -283,6 +283,18 @@ struct FormatTests {
                 #expect(missing.realPath == expected, "A deleted file still reads with its folder resolved, as git reports it")
             }
         }
+
+        /// alias -> a/b, so alias/.. is a, not the root a lexical standardize gives.
+        @Test(.tags(.formatEdgeCase), arguments: [
+            ("alias/../gone", "/a/gone"), ("rel/../gone", "/a/gone"), ("alias/../b/gone", "/a/b/gone"),
+            ("alias/../gone/../missing", "/a/missing"), ("a/file/../gone", "/a/gone"),
+        ])
+        func missingFileAppliesDotDotAfterASymlinkPhysically(relative: String, expectedSuffix: String) throws {
+            try withSymlinkFixture { root in
+                #expect(fileURL(in: root, relative).realPath == root.realPath + expectedSuffix,
+                        "Like realpath, .. after a symlink leaves the folder the link points at")
+            }
+        }
     }
 
     // MARK: - NSAttributedString.diffCounts

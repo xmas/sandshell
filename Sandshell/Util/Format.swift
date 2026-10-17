@@ -68,17 +68,34 @@ extension String {
 extension URL {
     /// The path with every symlink resolved, the way git and `realpath` report
     /// it: /tmp/x is /private/tmp/x (`resolvingSymlinksInPath` strips /private).
-    /// A path that doesn't exist (a deleted file) resolves its nearest existing
-    /// folder and keeps the rest as is, so it still matches git's path.
+    /// A path that doesn't exist (a deleted file) resolves its longest leading
+    /// part that does, as written (so a `..` after a symlink steps out of the
+    /// folder it points at, as realpath does), and adds the missing rest with
+    /// `.` and `..` applied, so it still matches git's path.
     var realPath: String {
-        if let resolved = Darwin.realpath(path, nil) {
-            defer { free(resolved) }
-            return String(cString: resolved)
+        if let resolved = Self.realpath(path) { return resolved }
+        guard path.hasPrefix("/") else { return standardizedFileURL.path }
+        let components = path.split(separator: "/")
+        // The whole path failed; "/" (no components) always resolves.
+        for existing in stride(from: components.count - 1, through: 0, by: -1) {
+            guard let resolved = Self.realpath("/" + components[..<existing].joined(separator: "/")) else { continue }
+            var parts = resolved.split(separator: "/")
+            for component in components[existing...] {
+                switch component {
+                case ".": continue
+                case "..": _ = parts.popLast()
+                default: parts.append(component)
+                }
+            }
+            return "/" + parts.joined(separator: "/")
         }
-        let standardized = standardizedFileURL
-        let parent = standardized.deletingLastPathComponent()
-        guard parent.path.count < standardized.path.count else { return standardized.path }
-        return (parent.realPath as NSString).appendingPathComponent(standardized.lastPathComponent)
+        return standardizedFileURL.path
+    }
+
+    private static func realpath(_ path: String) -> String? {
+        guard let resolved = Darwin.realpath(path, nil) else { return nil }
+        defer { free(resolved) }
+        return String(cString: resolved)
     }
 }
 
