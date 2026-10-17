@@ -40,3 +40,6 @@ __pycache__/
 build-dev2/
 build-tests/
 build-tests.log
+
+# Local dev-bridge token (never commit)
+.hatch/token
