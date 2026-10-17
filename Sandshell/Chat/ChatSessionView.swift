@@ -52,7 +52,10 @@ final class ChatSessionView: NSView {
 
     required init?(coder: NSCoder) { fatalError() }
 
-    func focusComposer() { composer.focus() }
+    /// The keyboard to the chat: to the agent's open question, else the composer.
+    func focusComposer() {
+        if let questionHost { window?.makeFirstResponder(questionHost) } else { composer.focus() }
+    }
 
     #if DEBUG
     var debugTranscript: ChatTranscriptView { transcript }
@@ -431,11 +434,12 @@ final class ChatSessionView: NSView {
     /// The agent's question, above the composer, with the keyboard while it's up.
     private func showQuestion(_ q: AgentQuestion?) {
         if let host = questionHost, host.form.question == q { return }
-        let hadFocus = questionHost.map { window?.firstResponder === $0 } ?? false
+        let hadFocus = questionHost.map { keyboardIsIn($0) } ?? false
         questionHost?.removeFromSuperview()
         questionHost = nil
+        focusQuestionOnKey = nil
         guard let q else {
-            if hadFocus { composer.focus() }
+            if hadFocus, !isHiddenOrHasHiddenAncestor { composer.focus() }
             return
         }
         let host = AgentQuestionHost(AgentQuestionForm(q) { [weak self] answer in
@@ -444,10 +448,35 @@ final class ChatSessionView: NSView {
         bottomStack?.insertArrangedSubview(host, at: 0)
         if let stack = bottomStack { host.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true }
         questionHost = host
-        if window?.isKeyWindow == true { window?.makeFirstResponder(host) }
+        if let window, !window.isKeyWindow {
+            // Asked while you were elsewhere: the keyboard goes to it when you're back.
+            focusQuestionOnKey = NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification, object: window)
+                .first()
+                .sink { [weak self] _ in self?.focusQuestionIfHere() }
+        } else {
+            focusQuestionIfHere()
+        }
+    }
+
+    /// Give the open question the keyboard, but only from this chat: a hidden
+    /// chat's card (or one in a pane you're not in) would take every key. A
+    /// chat shown later hands it over in `focusComposer`.
+    private func focusQuestionIfHere() {
+        guard let host = questionHost, let window, window.isKeyWindow, !isHiddenOrHasHiddenAncestor,
+              !keyboardIsIn(host), window.firstResponder === window || keyboardIsIn(self) else { return }
+        window.makeFirstResponder(host)
+    }
+
+    /// Whether the keyboard is in `view`: it or a view inside it, or a text
+    /// field in it being edited (its field editor has the keys).
+    private func keyboardIsIn(_ view: NSView) -> Bool {
+        guard let responder = window?.firstResponder as? NSView else { return false }
+        return responder.isDescendant(of: view)
+            || ((responder as? NSTextView)?.delegate as? NSView)?.isDescendant(of: view) == true
     }
 
     private var questionHost: AgentQuestionHost?
+    private var focusQuestionOnKey: AnyCancellable?
     private weak var bottomStack: NSStackView?
 
     #if DEBUG
