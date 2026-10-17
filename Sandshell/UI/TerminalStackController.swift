@@ -6,7 +6,7 @@ import SwiftUI
 @MainActor
 private final class TerminalRuntimeController {
     private struct AgentActivityWatch {
-        var startedAt = Date()
+        var startedAt = Date.now
         var containerName: String?
         var baselineExecIDs: Set<String>?
         /// Finds the terminal's own exec among the sandbox's (nil: they
@@ -76,7 +76,7 @@ private final class TerminalRuntimeController {
     func terminalDidExit(_ id: UUID) {
         guard !exited.contains(id) else { return }
         exited.insert(id)
-        controller.reportActivity(id, working: false, at: Date())
+        controller.reportActivity(id, working: false, at: .now)
         onTerminalDidExit(id)
     }
 
@@ -107,13 +107,13 @@ private final class TerminalRuntimeController {
     private func watchAgentActivity(_ session: Session) {
         let id = session.id
         watchTasks[id]?.cancel()
-        let start = Date()
+        let start = Date.now
         updateActivityWatch(id) { $0.startedAt = start }
         // Released (or the window closed) during an await: stop there, before
         // touching the watch or the window's surfaces again.
         watchTasks[id] = Task { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                try? await Task.sleep(for: .seconds(1))
                 guard !Task.isCancelled, let self, self.isTerminalAlive(id),
                       let s = self.controller.session(id: id) else { return }
                 let home = self.controller.home
@@ -155,10 +155,10 @@ private final class TerminalRuntimeController {
                     // File unchanged. For Codex while working: re-evaluate the time-based window
                     // using the cached last role — no file read needed.
                     if recheckQuietState, let lastRole = watch.cachedLastRole {
-                        let recentlyWritten = Date().timeIntervalSince(mtime) < 10
+                        let recentlyWritten = Date.now.timeIntervalSince(mtime) < 10
                         let working = lastRole == "user" || (lastRole != "assistant" && recentlyWritten)
                         let transition = self.controller.reportActivity(id, working: working,
-                                                                        lastWrite: mtime, at: Date())
+                                                                        lastWrite: mtime, at: .now)
                         if transition.finishedWork,
                            let s = self.controller.session(id: id),
                            !self.isSessionVisible(id) {
@@ -189,7 +189,7 @@ private final class TerminalRuntimeController {
                 }
                 let state = result.liveState
                 let transition = self.controller.reportActivity(id, working: state.working,
-                                                                lastWrite: mtime, at: Date())
+                                                                lastWrite: mtime, at: .now)
                 if let prompt = state.latestPrompt {
                     self.controller.autoName(id, from: prompt)
                     self.updateActivityWatch(id) { $0.latestPrompt = prompt }
@@ -238,7 +238,7 @@ private final class TerminalRuntimeController {
         }
         guard let claim else {
             // Its exit then shows only when its PTY closes: say why, once.
-            if !watch.loggedExecNotFound, Date().timeIntervalSince(watch.startedAt) > 15 {
+            if !watch.loggedExecNotFound, Date.now.timeIntervalSince(watch.startedAt) > 15 {
                 updateActivityWatch(id) { $0.loggedExecNotFound = true }
                 let left = finder.candidates(active: active, others: others).count
                 let why = finder.sawCommands ? "none of the sandbox's new execs carries its launch tag"
@@ -270,23 +270,47 @@ private final class TerminalRuntimeController {
     }
 }
 
-/// Hosts the live terminals for the workspace's sessions in the detail pane.
-///
-/// One `TerminalSession` per live session; its view is added to a stable host
-/// **once** and shown/hidden by toggling `isHidden` + surface visibility — never
-/// re-parented (re-adding blanked surfaces in the prior in-window attempt).
-/// Selecting a session lazily brings its agent's container up, then creates and
-/// shows the terminal; other sessions persist hidden in the background. While a
-/// container builds/rebuilds, a centered spinner + status is shown instead.
-
-/// Something to put into a session's chat once it's open: text and files for
-/// the composer, or (send) a message to send — with any attachments, pasted
-/// images included, that a message queued in an earlier chat carried.
+/// What's waiting for a session's chat to open, in two parts that never mix:
+/// a message to send, and text and files for the composer, where they wait
+/// for the person to look them over (nothing there goes on its own).
 struct ChatDraft {
-    var text: String
-    var urls: [URL]
-    var attachments: [ChatAttachment] = []
-    var send: Bool
+    /// Text and files gathered from every draft that came in.
+    struct Part: Equatable {
+        var text = ""
+        var urls: [URL] = []
+        /// Pasted images and the like, which a message queued in an earlier
+        /// chat can carry.
+        var attachments: [ChatAttachment] = []
+
+        var isEmpty: Bool { text.isEmpty && urls.isEmpty && attachments.isEmpty }
+
+        /// The texts are joined, a paragraph apart; the files are added.
+        mutating func add(text more: String, urls moreURLs: [URL] = [], attachments moreAttachments: [ChatAttachment] = []) {
+            text = [text, more].filter { !$0.isEmpty }.joined(separator: "\n\n")
+            urls += moreURLs
+            attachments += moreAttachments
+        }
+    }
+
+    /// Sent as one message as soon as the chat is up: asks, "send now"
+    /// requests, a message queued in the session's last chat.
+    var message = Part()
+    /// Put in the composer: files dropped on the session, text to edit first.
+    var composer = Part()
+
+    /// Another draft while the chat starts: a message joins the message, the
+    /// rest the composer.
+    mutating func add(text: String, urls: [URL], send: Bool) {
+        if send { message.add(text: text, urls: urls) } else { composer.add(text: text, urls: urls) }
+    }
+
+    /// The message a closing chat had queued behind its turn: it goes first,
+    /// ahead of anything asked since.
+    mutating func putFirst(text: String, attachments: [ChatAttachment]) {
+        var first = Part(text: text, attachments: attachments)
+        first.add(text: message.text, urls: message.urls, attachments: message.attachments)
+        message = first
+    }
 }
 
 /// A window's live session surfaces (terminals, chats, launches, drafts and
@@ -368,16 +392,12 @@ final class SessionSurfaces {
         // A message queued behind its turn is kept for the session's next chat
         // (a reconnect sends it) instead of vanishing.
         if let waiting = chat.session.takeQueued() {
-            var draft = drafts[id] ?? ChatDraft(text: "", urls: [], send: true)
-            draft.text = [waiting.text, draft.text].filter { !$0.isEmpty }.joined(separator: "\n\n")
-            draft.attachments = waiting.attachments + draft.attachments
-            draft.send = true
-            drafts[id] = draft
+            drafts[id, default: ChatDraft()].putFirst(text: waiting.text, attachments: waiting.attachments)
         }
         let wasWorking = chat.session.phase == .running
         chat.session.close()
         // It won't say it stopped (closed sessions don't report): say so here.
-        if wasWorking { _ = controller.reportActivity(id, working: false, at: Date()) }
+        if wasWorking { _ = controller.reportActivity(id, working: false, at: .now) }
         // Its processes may not carry this session's tag (a warm spare's):
         // the next launch for this session reaps them by theirs too.
         leftoverProcesses[id] = chat.session.processMatch
@@ -508,12 +528,6 @@ final class TerminalStackController: NSViewController {
     private lazy var claudeStatsCollapsed = claudeStats.widthAnchor.constraint(equalToConstant: 0)
 
     private let host = NSView()
-    // Session header bar
-    private let headerBar = NSView()
-    private let sidebarToggle = NSButton()
-    private var headerLeadingConstraint: NSLayoutConstraint!
-    /// Called when the sidebar-toggle button is clicked (wired by the window).
-    var onToggleSidebar: (() -> Void)?
     /// The active session's identity, published to the window's native toolbar
     /// (agent badge + title/subtitle). `nil` when no session is shown.
     /// `agent` is nil for a Files pane that isn't any session's (no badge).
@@ -522,13 +536,6 @@ final class TerminalStackController: NSViewController {
     /// Live status for the toolbar: text ("Working  ◷ 39m 16s" / "Ready") and
     /// whether the agent is currently working (drives the green tint).
     var onStatusChange: ((String, Bool) -> Void)?
-    private let headerBadge = AgentBadgeView(side: 30, fontSize: 12, radius: 9)
-    private let headerName = NSTextField(labelWithString: "")
-    private let headerSub = NSTextField(labelWithString: "")
-    private let headerStatus = NSTextField(labelWithString: "")
-    // Session action icons (right of the header): reveal in Finder, stop, restart.
-    private let headerActions = NSStackView()
-    private let headerLine = NSView()
     private var activeSessionID: UUID?
     // Framed terminal
     private let frameView = NSView()
@@ -775,50 +782,10 @@ final class TerminalStackController: NSViewController {
         }
         container.registerForDraggedTypes(Self.terminalPasteboardTypes)
         container.wantsLayer = true   // so the panel background actually paints
-        for v in [headerBar, headerLine, frameView, titleStrip, titleLine, host] {
+        for v in [frameView, titleStrip, titleLine, host] {
             v.translatesAutoresizingMaskIntoConstraints = false
             v.wantsLayer = true
         }
-
-        // Header bar: agent badge + identity, with a hairline at the bottom.
-        headerName.translatesAutoresizingMaskIntoConstraints = false
-        headerName.font = .systemFont(ofSize: 14.5, weight: .semibold)
-        headerName.lineBreakMode = .byTruncatingTail
-        headerName.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        headerSub.translatesAutoresizingMaskIntoConstraints = false
-        headerSub.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
-        headerSub.textColor = .secondaryLabelColor
-        headerSub.lineBreakMode = .byTruncatingMiddle
-        headerSub.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        let headerText = NSStackView(views: [headerName, headerSub])
-        headerText.orientation = .vertical
-        headerText.alignment = .leading
-        headerText.spacing = 1
-        headerText.translatesAutoresizingMaskIntoConstraints = false
-        headerStatus.translatesAutoresizingMaskIntoConstraints = false
-        headerStatus.font = .systemFont(ofSize: 12, weight: .medium)
-        headerStatus.textColor = .secondaryLabelColor
-        sidebarToggle.translatesAutoresizingMaskIntoConstraints = false
-        sidebarToggle.isBordered = false
-        sidebarToggle.image = NSImage(systemSymbolName: "sidebar.left", accessibilityDescription: "Toggle Sidebar")
-        sidebarToggle.imagePosition = .imageOnly
-        sidebarToggle.target = self
-        sidebarToggle.action = #selector(toggleSidebarClicked)
-
-        headerActions.orientation = .horizontal
-        headerActions.spacing = 10
-        headerActions.translatesAutoresizingMaskIntoConstraints = false
-        // The reveal/stop/restart actions now live in the window NSToolbar (see
-        // MainWindowController). headerActions is kept as an empty trailing spacer
-        // so the header-status layout constraints are unaffected.
-        headerActions.setViews([], in: .leading)
-
-        headerBar.addSubview(sidebarToggle)
-        headerBar.addSubview(headerBadge)
-        headerBar.addSubview(headerText)
-        headerBar.addSubview(headerStatus)
-        headerBar.addSubview(headerActions)
-        headerBar.addSubview(headerLine)
 
         // Framed terminal: rounded border + title strip + the libghostty surface.
         frameView.layer?.cornerRadius = 12
@@ -841,7 +808,7 @@ final class TerminalStackController: NSViewController {
         contextBar.onShowChanges = { [weak self] in self?.onOpenFiles?(true) }
         contextBar.onWidthChange = { [weak self] in self?.shareTitleStrip() }
         // Not from inside layout(): the readout's new constraints would wait a pass.
-        titleStrip.onLayout = { [weak self] in DispatchQueue.main.async { self?.shareTitleStrip() } }
+        titleStrip.onLayout = { [weak self] in Task { self?.shareTitleStrip() } }
         titleStrip.addSubview(contextBar)
         backgroundPill.translatesAutoresizingMaskIntoConstraints = false
         backgroundPill.bezelStyle = .inline
@@ -1015,17 +982,6 @@ final class TerminalStackController: NSViewController {
         applyTheme()
     }
 
-    /// Adjust the header for the sidebar's collapsed state (inset past the traffic
-    /// lights) and reflect it in the toggle glyph.
-    func setSidebarCollapsed(_ collapsed: Bool) {
-        headerLeadingConstraint?.constant = collapsed ? 76 : 14
-        sidebarToggle.image = NSImage(
-            systemSymbolName: collapsed ? "sidebar.left" : "sidebar.left",
-            accessibilityDescription: "Toggle Sidebar")
-    }
-
-    @objc private func toggleSidebarClicked() { onToggleSidebar?() }
-
     override func viewDidLoad() {
         super.viewDidLoad()
         NotificationCenter.default.addObserver(self, selector: #selector(systemDidWake),
@@ -1069,24 +1025,25 @@ final class TerminalStackController: NSViewController {
         NotificationCenter.default.publisher(for: NotificationManager.showBackgroundTasks)
             .sink { [weak self] note in
                 guard let self, let id = note.object as? UUID, id == self.activeSessionID else { return }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { self.showBackgroundTasks() }
+                Task {
+                    try? await Task.sleep(for: .milliseconds(300))
+                    self.showBackgroundTasks()
+                }
             }
             .store(in: &cancellables)
         controller.$kitDrift.dropFirst().sink { [weak self] _ in self?.updateKitBanner() }
             .store(in: &cancellables)
-        // Live-update the header when runtime state changes (status, name, etc.).
+        // Live-update the toolbar status when runtime state changes (status, name, etc.).
         controller.$runtimes.dropFirst().sink { [weak self] _ in
             guard let self, let id = self.activeSessionID else { return }
             self.updateClaudeStats(id)
-            guard !self.headerBar.isHidden else { return }
             self.updateHeaderStatus(id)
         }.store(in: &cancellables)
         // Tick the work timer every second via the shared workspace clock.
         controller.$clockTick.dropFirst()
             .sink { [weak self] _ in
                 guard let self, let id = self.activeSessionID,
-                      self.controller.runtime(id)?.status == .working,
-                      !self.headerBar.isHidden else { return }
+                      self.controller.runtime(id)?.status == .working else { return }
                 self.updateHeaderStatus(id)
             }
             .store(in: &cancellables)
@@ -1095,8 +1052,6 @@ final class TerminalStackController: NSViewController {
     private func applyTheme(_ c: ThemeColors? = nil) {
         let c = c ?? controller.theme.colors
         view.layer?.backgroundColor = c.panel.cgColor
-        headerBar.layer?.backgroundColor = c.panel.cgColor
-        headerLine.layer?.backgroundColor = c.border.cgColor
         titleLine.layer?.backgroundColor = c.border.cgColor
         titleStrip.layer?.backgroundColor = c.termBg.cgColor
         frameView.layer?.backgroundColor = c.termBg.cgColor
@@ -1110,15 +1065,11 @@ final class TerminalStackController: NSViewController {
         }
         contextBar.applyTheme(c)
         updateFocusRing()
-        headerName.textColor = c.text
-        sidebarToggle.contentTintColor = c.text2
     }
 
     // MARK: Display
 
     /// Single source of truth for what the detail pane shows.
-    /// `selection` may be passed by the `$selection` sink; other callers pass nil
-    /// to use the current one.
     func refresh() {
         // Files don't wait on the container.
         if let files = shownFiles { return presentFiles(files) }
@@ -1170,7 +1121,6 @@ final class TerminalStackController: NSViewController {
         // this pane no longer shows.
         activeSessionID = nil
         hideHostContents()
-        headerBar.isHidden = true
         frameView.isHidden = true
         restartButton.isHidden = true
         emptyActions.isHidden = true
@@ -1237,13 +1187,15 @@ final class TerminalStackController: NSViewController {
     private func showExited(_ session: Session) {
         activeSessionID = session.id
         hideHostContents()
-        headerBar.isHidden = false
         configureHeader(session)
         updateHeaderStatus(session.id)
         frameView.isHidden = true
         spinner.stopAnimation(nil)
         statusLabel.stringValue = "\(session.agent.displayName) exited."
         restartButton.isHidden = false
+        // Whatever the stack last offered (an empty pane's, a failed launch's) isn't for this.
+        emptyActions.isHidden = true
+        failureActions.isHidden = true
         statusStack.isHidden = false
         kitBannerContextActive = true
         updateKitBanner()
@@ -1278,7 +1230,7 @@ final class TerminalStackController: NSViewController {
             return
         }
         guard let id = activeSessionID, let s = controller.session(id: id) else { return }
-        NSWorkspace.shared.open(URL(fileURLWithPath: s.workdir))
+        NSWorkspace.shared.open(URL(filePath: s.workdir, directoryHint: .isDirectory))
     }
 
     /// Stop the active session's agent (terminate the terminal) → restart prompt.
@@ -1298,8 +1250,9 @@ final class TerminalStackController: NSViewController {
     /// Restart the active session from the header/toolbar.
     @objc func headerRestartClicked() { restartClicked() }
 
-    /// Toolbar: show the active Claude session as a native chat, or back as a
-    /// terminal. Same conversation either way (resumed in the new surface).
+    /// Toolbar: show the active session as a native chat, or back as a
+    /// terminal, for agents that can chat (`SbxCommand.supportsACP`). Same
+    /// conversation either way (resumed in the new surface).
     @objc func toggleChatClicked() {
         guard let id = activeSessionID, let session = controller.session(id: id),
               SbxCommand.supportsACP(session.agent) else { return }
@@ -1317,7 +1270,6 @@ final class TerminalStackController: NSViewController {
         activeSessionID = id
         configureHeader(session)
         updateHeaderStatus(id)
-        headerBar.isHidden = false
         frameView.isHidden = false
         spinner.stopAnimation(nil)
         statusStack.isHidden = true
@@ -1329,13 +1281,10 @@ final class TerminalStackController: NSViewController {
 
     private func configureHeader(_ session: Session) {
         let container = controller.containerName(for: session.containerAgentKind)
-        headerBadge.configure(session.agent)
-        headerName.stringValue = session.name
-        headerSub.stringValue = "\(container) · \(session.workdir.tildeAbbreviated)"
         let program = session.agent == .shell ? "bash" : session.agent.rawValue
         titleLabel.stringValue = "\(program) — \(container)" + (session.isChat ? " · chat (ACP)" : "")
         // The strip shows where the session runs: sandbox, folder, branch.
-        let folder = URL(fileURLWithPath: session.workdir)
+        let folder = URL(filePath: session.workdir, directoryHint: .checkFileSystem)
         contextBar.update(folder: folder,
                           access: controller.sandboxAccess(for: folder, agent: session.containerAgentKind))
         contextBar.toolTip = titleLabel.stringValue
@@ -1407,10 +1356,10 @@ final class TerminalStackController: NSViewController {
     private func updateBackgroundPill() {
         guard let id = activeSessionID else { backgroundPill.isHidden = true; return }
         let tasks = controller.backgroundTasks(id)
-        let running = tasks.filter(\.isRunning).count
-        let recent = tasks.filter {
-            !$0.isRunning && !$0.orphaned && Date().timeIntervalSince($0.finishedAt ?? $0.startedAt) < 1800
-        }.count
+        let running = tasks.count(where: \.isRunning)
+        let recent = tasks.count(where: {
+            !$0.isRunning && !$0.orphaned && Date.now.timeIntervalSince($0.finishedAt ?? $0.startedAt) < 1800
+        })
         backgroundPill.isHidden = running == 0 && recent == 0
         defer { shareTitleStrip() }
         let color: NSColor = running > 0 ? .sessionWorking : .secondaryLabelColor
@@ -1489,15 +1438,12 @@ final class TerminalStackController: NSViewController {
 
     private func updateHeaderStatus(_ id: UUID) {
         guard let rt = controller.runtime(id) else {
-            headerStatus.stringValue = ""
             onStatusChange?("", false)
             return
         }
         let label = rt.stoppedReason != nil ? "Stopped" : rt.status == .working ? "Working" : "Ready"
         let live = rt.liveWorkSeconds()
         let time = live > 0 ? "  ◷ \(formatWorkTime(live))" : ""
-        headerStatus.stringValue = label + time
-        headerStatus.textColor = rt.status == .working ? .sessionWorking : .secondaryLabelColor
         onStatusChange?(label + time, rt.status == .working)
     }
 
@@ -1559,7 +1505,7 @@ final class TerminalStackController: NSViewController {
             // Leftovers from a crash/kill would share this conversation.
             await reapLeftovers(id, in: containerName)
 
-            Log.info(.workspace, "launching \(session.agent.rawValue) terminal in “\(containerName)” at \(session.workdir)\(resumeID == nil ? "" : " (resume \(resumeID!))")")
+            Log.info(.workspace, "launching \(session.agent.rawValue) terminal in “\(containerName)” at \(session.workdir)\(resumeID.map { " (resume \($0))" } ?? "")")
             // Claude: model/effort choice + the status feed (model/context/cost readout).
             var claudeOptions: SbxCommand.ClaudeOptions? = nil
             if session.agent == .claude {
@@ -1568,7 +1514,7 @@ final class TerminalStackController: NSViewController {
                 claudeOptions = SbxCommand.ClaudeOptions(
                     model: controller.claudeModel,
                     effort: controller.claudeEffort,
-                    statusScriptPath: script?.path,
+                    statusScriptPath: script?.path(percentEncoded: false),
                     statusDir: script == nil ? nil : ClaudeStatusFeed.statusDir(root: root).path,
                     sessionID: id.uuidString,
                     sbxProxyAuth: await SbxClient.shared.hasAnthropicSecret(sandbox: containerName))
@@ -1657,9 +1603,9 @@ final class TerminalStackController: NSViewController {
     /// a resume id can be checked before it's tried.
     private static func transcriptsOnHost(_ agent: AgentKind, home: URL) -> Bool {
         switch agent {
-        case .claude: return true
-        case .codex: return FileManager.default.fileExists(atPath: home.appendingPathComponent(".codex").path)
-        default: return false
+        case .claude: true
+        case .codex: FileManager.default.fileExists(atPath: home.appending(path: ".codex").path(percentEncoded: false))
+        default: false
         }
     }
 
@@ -1671,7 +1617,9 @@ final class TerminalStackController: NSViewController {
         if await SbxClient.shared.hasServiceSecret(service, sandbox: container) { return nil }
         // Codex also signs in from a host ~/.codex/auth.json (mounted when present).
         if agent == .codex,
-           FileManager.default.fileExists(atPath: home.appendingPathComponent(".codex/auth.json").path) { return nil }
+           FileManager.default.fileExists(atPath: home.appending(path: ".codex/auth.json").path(percentEncoded: false)) {
+            return nil
+        }
         return ChatSession.credentialHelp(for: agent)
     }
 
@@ -1748,7 +1696,7 @@ final class TerminalStackController: NSViewController {
                 controller.autoName(id, from: prompt)
             }
             chat.onWorkingChange = { [controller, surfaces] working in
-                let now = Date()
+                let now = Date.now
                 let transition = controller.reportActivity(id, working: working, lastWrite: now, at: now)
                 // Same "finished" notification terminals send, when you're elsewhere.
                 if transition.finishedWork, let s = controller.session(id: id), !surfaces.isVisible(id) {
@@ -1768,16 +1716,26 @@ final class TerminalStackController: NSViewController {
                 if controller.forkChat(id, upTo: reply) == nil { NSSound.beep() }
             }
             view.sessionName = { [controller] in controller.session(id: id)?.name }
-            view.resolveFileURLs = { urls in
-                Self.materializeDroppedURLs(urls, workdir: current.workdir).map { URL(fileURLWithPath: $0) }
+            view.resolveFileURLs = { [weak view] urls in
+                Self.materializeDroppedURLs(urls, workdir: current.workdir) { error in
+                    Self.reportDropFailure(error, in: view?.window)
+                }.map { URL(filePath: $0, directoryHint: .checkFileSystem) }
             }
             addTerminalView(view)
             chats[id] = view
             controller.setLive(id, true)
             chat.start()
             surfaces.onLaunched(id)
+            // The message goes when the agent is ready; the composer's part
+            // stays there to be looked over.
             if let draft = drafts.removeValue(forKey: id) {
-                view.applyDraft(text: draft.text, urls: draft.urls, attachments: draft.attachments, send: draft.send)
+                if !draft.message.isEmpty {
+                    view.applyDraft(text: draft.message.text, urls: draft.message.urls,
+                                    attachments: draft.message.attachments, send: true)
+                }
+                if !draft.composer.isEmpty {
+                    view.applyDraft(text: draft.composer.text, urls: draft.composer.urls, send: false)
+                }
             }
         }
     }
@@ -1804,10 +1762,11 @@ final class TerminalStackController: NSViewController {
         }
     }
 
-    /// Put a draft into the session's chat — now if it's open, else when it starts.
+    /// Put a draft into the session's chat — now if it's open, else when it
+    /// starts (with whatever was already waiting for it).
     func queueDraft(_ text: String, urls: [URL], send: Bool, for id: UUID) {
-        if let chat = chats[id] { chat.applyDraft(text: text, urls: urls, send: send) }
-        else { drafts[id] = ChatDraft(text: text, urls: urls, send: send) }
+        if let chat = chats[id] { return chat.applyDraft(text: text, urls: urls, send: send) }
+        drafts[id, default: ChatDraft()].add(text: text, urls: urls, send: send)
     }
 
     private func showChat(_ id: UUID, _ chat: ChatSessionView) {
@@ -1822,7 +1781,6 @@ final class TerminalStackController: NSViewController {
         activeSessionID = id
         configureHeader(session)
         updateHeaderStatus(id)
-        headerBar.isHidden = false
         frameView.isHidden = false
         restartButton.isHidden = true
         spinner.stopAnimation(nil)
@@ -1851,8 +1809,8 @@ final class TerminalStackController: NSViewController {
     /// Reconnect without being asked, at most once a minute per chat (a chat
     /// whose agent keeps dying waits for the Reconnect button instead).
     private func autoReconnect(_ id: UUID) -> Bool {
-        if let last = surfaces.lastAutoReconnect[id], Date().timeIntervalSince(last) < 60 { return false }
-        surfaces.lastAutoReconnect[id] = Date()
+        if let last = surfaces.lastAutoReconnect[id], Date.now.timeIntervalSince(last) < 60 { return false }
+        surfaces.lastAutoReconnect[id] = .now
         reconnectChat(id)
         return true
     }
@@ -1942,19 +1900,32 @@ final class TerminalStackController: NSViewController {
 // MARK: - Terminal Key Equivalents
 
 extension TerminalStackController {
+    /// What the pane takes from a focused terminal before it sees the key.
+    enum TerminalKeyIntercept: Equatable { case paste, search }
+
+    /// Plain ⌘V (files and images) and ⌘F (search) only: ⌥⌘F (Filter
+    /// Sessions), ⌃⌘F (Full Screen) and the like belong to the menu, though
+    /// `charactersIgnoringModifiers` reads "f" for them too.
+    static func terminalKeyIntercept(for event: NSEvent) -> TerminalKeyIntercept? {
+        guard event.modifierFlags.intersection([.command, .option, .control, .shift]) == .command else { return nil }
+        switch event.charactersIgnoringModifiers {
+        case "v": return .paste
+        case "f": return .search
+        default: return nil
+        }
+    }
+
     /// Central dispatch for Cmd+key intercepts. Returns nil to consume the event,
     /// or the original event to pass it through to the focused terminal view.
     private func handleTerminalKeyEquivalent(_ event: NSEvent) -> NSEvent? {
-        guard event.modifierFlags.contains(.command),
-              let key = event.charactersIgnoringModifiers,
+        guard let intercept = Self.terminalKeyIntercept(for: event),
               let id = activeSessionID,
               let tv = terminals[id]?.view,
               tv.window?.isKeyWindow == true,
               tv.window?.firstResponder === tv else { return event }
-        switch key {
-        case "v": return handlePaste(event, id: id, tv: tv)
-        case "f": openSearch(for: id, tv: tv); return nil
-        default:  return event
+        switch intercept {
+        case .paste: return handlePaste(event, id: id, tv: tv)
+        case .search: openSearch(for: id, tv: tv); return nil
         }
     }
 
@@ -2002,8 +1973,7 @@ extension TerminalStackController {
     }
 
     private func shouldInterceptPasteboard(_ pasteboard: NSPasteboard) -> Bool {
-        if pasteboard.availableType(from: [.fileURL, .URL, .tiff, .png]) != nil { return true }
-        return false
+        pasteboard.availableType(from: [.fileURL, .URL, .tiff, .png]) != nil
     }
 
     private func terminalInput(from pasteboard: NSPasteboard, workdir: String) -> String? {
@@ -2036,7 +2006,9 @@ extension TerminalStackController {
     }
 
     private func terminalInput(for urls: [URL], workdir: String) -> String? {
-        let paths = Self.materializeDroppedURLs(urls, workdir: workdir)
+        let paths = Self.materializeDroppedURLs(urls, workdir: workdir) { [weak self] error in
+            Self.reportDropFailure(error, in: self?.view.window)
+        }
         guard !paths.isEmpty else { return nil }
         return paths.map(SbxCommand.shellQuote).joined(separator: " ")
     }
@@ -2056,7 +2028,7 @@ extension TerminalStackController {
         Task { [weak self, weak tv] in
             var paths: [String] = []
             for (i, png) in pngs.enumerated() {
-                let name = "paste-\(Int(Date().timeIntervalSince1970))-\(i).png"
+                let name = "paste-\(Int(Date.now.timeIntervalSince1970))-\(i).png"
                 if await SbxClient.writePaste(png, named: name, container: container) {
                     paths.append(SbxClient.pasteDirectory + "/" + name)
                 } else if let path = self?.saveClipboardImage(png, workdir: workdir) {
@@ -2064,7 +2036,11 @@ extension TerminalStackController {
                     paths.append(path)
                 }
             }
-            guard !paths.isEmpty else { return }
+            guard !paths.isEmpty else {
+                // Neither the sandbox nor the project took it: the ⌘V did nothing.
+                if tv != nil { NSSound.beep() }
+                return
+            }
             tv?.insertText(paths.map(SbxCommand.shellQuote).joined(separator: " "),
                            replacementRange: NSRange(location: NSNotFound, length: 0))
         }
@@ -2078,7 +2054,7 @@ extension TerminalStackController {
 
     /// The fallback: `.sbx/` in the session's folder (shared with the sandbox).
     private func saveClipboardImage(_ png: Data, workdir: String) -> String? {
-        let sbxDir = URL(fileURLWithPath: workdir, isDirectory: true).appendingPathComponent(".sbx")
+        let sbxDir = URL(filePath: workdir, directoryHint: .isDirectory).appending(path: ".sbx")
         do {
             try FileManager.default.createDirectory(at: sbxDir, withIntermediateDirectories: true)
         } catch {
@@ -2086,27 +2062,34 @@ extension TerminalStackController {
             return nil
         }
         pruneStalePastes(in: sbxDir)
-        let name = "paste-\(Int(Date().timeIntervalSince1970)).png"
-        let url = sbxDir.appendingPathComponent(name)
+        let name = "paste-\(Int(Date.now.timeIntervalSince1970)).png"
+        let url = sbxDir.appending(path: name)
         do {
             try png.write(to: url)
-            return url.path
+            return url.path(percentEncoded: false)
         } catch {
-            Log.error(.app, "image paste: failed to write \(url.path): \(error)")
+            Log.error(.app, "image paste: failed to write \(url.path(percentEncoded: false)): \(error)")
             return nil
         }
     }
 
-    private static func materializeDroppedURLs(_ urls: [URL], workdir: String) -> [String] {
-        let dropDir = URL(fileURLWithPath: workdir, isDirectory: true)
-            .appendingPathComponent(".sbx/drops", isDirectory: true)
+    /// Files dropped or pasted into a session, copied into its folder's
+    /// `.sbx/drops` (which the sandbox sees). One that can't be copied — or
+    /// every one, when `.sbx/drops` can't be made — keeps its host path, and
+    /// `onFailure` hears why (once a call).
+    static func materializeDroppedURLs(_ urls: [URL], workdir: String,
+                                       onFailure: (any Error) -> Void) -> [String] {
+        let dropDir = URL(filePath: workdir, directoryHint: .isDirectory)
+            .appending(path: ".sbx/drops", directoryHint: .isDirectory)
         do {
             try FileManager.default.createDirectory(at: dropDir, withIntermediateDirectories: true)
         } catch {
             Log.error(.app, "drop: failed to create \(dropDir.path): \(error)")
-            return []
+            onFailure(error)
+            return urls.map(\.path)
         }
-        return urls.compactMap { url in
+        var failure: (any Error)?
+        let paths = urls.compactMap { url in
             guard FileManager.default.fileExists(atPath: url.path) else {
                 return url.path
             }
@@ -2116,19 +2099,33 @@ extension TerminalStackController {
                     try FileManager.default.copyItem(at: url, to: destination)
                     recordProvenance(source: url, destination: destination, in: dropDir)
                 }
-                return destination.path
+                return destination.path(percentEncoded: false)
             } catch {
-                Log.error(.app, "drop: failed to copy \(url.path) to \(destination.path): \(error)")
+                Log.error(.app, "drop: failed to copy \(url.path) to \(destination.path(percentEncoded: false)): \(error)")
+                failure = failure ?? error
                 return url.path
             }
         }
+        if let failure { onFailure(failure) }
+        return paths
+    }
+
+    /// Dropped or pasted files couldn't be copied where the sandbox sees them:
+    /// say so, as one sheet. A chat resolves its attachments a file at a time
+    /// (and again on send), so a sheet already up has said it.
+    private static func reportDropFailure(_ error: any Error, in window: NSWindow?) {
+        guard let window else { return NSSound.beep() }
+        guard window.attachedSheet == nil else { return }
+        Alerts.inform("Couldn’t copy the files into the session’s folder",
+                      error.localizedDescription + " The agent may not be able to read them.",
+                      style: .warning, in: window)
     }
 
     // Append an entry to .sbx/drops/.provenance so tools can trace each file back
     // to the path it was dragged from. The file is a JSON object keyed by the
     // destination filename; existing entries are preserved across drops.
     private static func recordProvenance(source: URL, destination: URL, in dropDir: URL) {
-        let provenanceURL = dropDir.appendingPathComponent(".provenance")
+        let provenanceURL = dropDir.appending(path: ".provenance")
         var entries: [String: [String: String]] = [:]
         if let data = try? Data(contentsOf: provenanceURL),
            let existing = try? JSONSerialization.jsonObject(with: data) as? [String: [String: String]] {
@@ -2136,7 +2133,7 @@ extension TerminalStackController {
         }
         entries[destination.lastPathComponent] = [
             "source": source.path,
-            "droppedAt": ISO8601DateFormatter().string(from: Date()),
+            "droppedAt": Date.now.ISO8601Format(),
         ]
         guard let data = try? JSONSerialization.data(
             withJSONObject: entries, options: [.prettyPrinted, .sortedKeys]) else { return }
@@ -2145,22 +2142,22 @@ extension TerminalStackController {
 
     private static func uniqueDestination(for filename: String, in directory: URL) -> URL {
         let base = filename.isEmpty ? "item" : filename
-        let original = directory.appendingPathComponent(base)
-        if !FileManager.default.fileExists(atPath: original.path) { return original }
+        let original = directory.appending(path: base)
+        if !FileManager.default.fileExists(atPath: original.path(percentEncoded: false)) { return original }
         let ext = original.pathExtension
         let stem = original.deletingPathExtension().lastPathComponent
         for index in 1..<10_000 {
             let name = ext.isEmpty ? "\(stem)-\(index)" : "\(stem)-\(index).\(ext)"
-            let candidate = directory.appendingPathComponent(name)
-            if !FileManager.default.fileExists(atPath: candidate.path) { return candidate }
+            let candidate = directory.appending(path: name)
+            if !FileManager.default.fileExists(atPath: candidate.path(percentEncoded: false)) { return candidate }
         }
-        return directory.appendingPathComponent("\(UUID().uuidString)-\(base)")
+        return directory.appending(path: "\(UUID().uuidString)-\(base)")
     }
 
     /// Delete paste-*.png files in `.sbx/` that are older than 7 days so the
     /// folder doesn't grow unbounded across sessions.
     private func pruneStalePastes(in dir: URL) {
-        let cutoff = Date().addingTimeInterval(-7 * 24 * 3600)
+        let cutoff = Date.now.addingTimeInterval(-7 * 24 * 3600)
         guard let entries = try? FileManager.default.contentsOfDirectory(
             at: dir, includingPropertiesForKeys: [.creationDateKey]) else { return }
         for entry in entries where entry.lastPathComponent.hasPrefix("paste-")
@@ -2182,7 +2179,7 @@ extension TerminalStackController {
         // select_all is synchronous through the ghostty C library; give the run
         // loop one tick before reading back the selection via copy.
         tv.selectAll(nil)
-        DispatchQueue.main.async { [weak self] in
+        Task { [weak self] in
             guard let self else { return }
             let text = self.extractAndRestoreClipboard(from: tv)
 
@@ -2205,9 +2202,11 @@ extension TerminalStackController {
     /// nil if the terminal has no selection or the copy fails.
     private func extractAndRestoreClipboard(from tv: AppTerminalView) -> String? {
         let pb = NSPasteboard.general
+        let changeCount = pb.changeCount
         let saved = pb.snapshotItems()   // before we clobber it
         let text = tv.copySelectedTextToPasteboard() ? pb.string(forType: .string) : nil
         pb.restore(saved)
+        PasteboardURLWatcher.shared.ignoreRestore(since: changeCount)
         return text
     }
 }
@@ -2240,8 +2239,8 @@ private final class AppearanceReactiveView: NSView {
 
 extension TerminalStackController: NSToolbarItemValidation {
     /// Reveal/stop/restart are actionable only when a session is active; the
-    /// Chat/Terminal toggle only for Claude sessions, and it shows the mode you'd
-    /// switch *to*.
+    /// Chat/Terminal toggle only for agents that can chat (`SbxCommand.supportsACP`),
+    /// and it shows the mode you'd switch *to*.
     func validateToolbarItem(_ item: NSToolbarItem) -> Bool {
         guard let action = item.action else { return false }
         guard action == #selector(toggleChatClicked) else { return canPerformSessionAction(action) }
@@ -2289,7 +2288,6 @@ private final class FilesSurfaceView: NSView {
     override func updateLayer() { layer?.backgroundColor = NSColor.textBackgroundColor.cgColor }
 }
 
-/// Draws but never takes clicks (the pane's dimming wash).
 /// Takes no width while hidden, so a hidden pill doesn't hold space in the strip.
 private final class CollapsingButton: NSButton {
     override var isHidden: Bool { didSet { if isHidden != oldValue { invalidateIntrinsicContentSize() } } }
@@ -2311,6 +2309,7 @@ private final class LayoutReportingView: NSView {
     }
 }
 
+/// Draws but never takes clicks (the pane's dimming wash).
 private final class PassThroughView: NSView {
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
