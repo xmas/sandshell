@@ -282,11 +282,11 @@ private struct MountsInspectorPane: View {
 /// applies them (rebuilding the container) on confirmation.
 private struct MCPInspectorPane: View {
     @ObservedObject var controller: WorkspaceController
-    @StateObject private var model: MCPConfigModel
+    @State private var model: MCPConfigModel
 
     init(controller: WorkspaceController) {
         self.controller = controller
-        _model = StateObject(wrappedValue: MCPConfigModel(
+        _model = State(initialValue: MCPConfigModel(
             url: controller.mcpURL, servers: controller.mcpServers))
     }
 
