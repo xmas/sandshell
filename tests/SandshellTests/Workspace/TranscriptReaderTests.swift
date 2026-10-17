@@ -1360,6 +1360,22 @@ extension TranscriptReaderTests {
             let url = home.root.appendingPathComponent("missing.jsonl")
             #expect(TranscriptReader.messages(at: url, agent: AgentKind(rawValue: agent)).isEmpty)
         }
+
+        /// The Search preview cancels its load when the selection moves on; the
+        /// parse stops instead of reading the rest of the transcript.
+        @Test(arguments: ["claude", "codex"])
+        func aCancelledTaskStopsReading(agent: String) async throws {
+            let url = agent == "claude"
+                ? try home.writeClaudeTranscript(id: "history", lines: [TRFixture.claudeUser(), TRFixture.claudeAssistant()])
+                : try home.writeCodexRollout("rollout-1", lines: [TRFixture.codexMeta(), TRFixture.codexMessage("user", "Add a test")])
+            let kind = AgentKind(rawValue: agent)
+            #expect(TranscriptReader.messages(at: url, agent: kind).isEmpty == false)
+            let cancelled = await Task {
+                withUnsafeCurrentTask { $0?.cancel() }
+                return TranscriptReader.messages(at: url, agent: kind)
+            }.value
+            #expect(cancelled.isEmpty)
+        }
     }
 }
 

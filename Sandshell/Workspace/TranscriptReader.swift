@@ -357,6 +357,7 @@ enum TranscriptReader {
         guard let data = try? String(contentsOf: url, encoding: .utf8) else { return [] }
         var out: [(String, String)] = []
         for line in data.split(separator: "\n", omittingEmptySubsequences: true) {
+            if Task.isCancelled { return [] }   // the preview moved on to another result
             guard let obj = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
                   let type = obj["type"] as? String, type == "user" || type == "assistant",
                   let msg = obj["message"] as? [String: Any],
@@ -444,6 +445,7 @@ enum TranscriptReader {
         guard let data = try? String(contentsOf: url, encoding: .utf8) else { return [] }
         var out: [(String, String)] = []
         for line in data.split(separator: "\n", omittingEmptySubsequences: true) {
+            if Task.isCancelled { return [] }   // the preview moved on to another result
             guard let obj = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
                   obj["type"] as? String == "response_item",
                   let payload = obj["payload"] as? [String: Any],
