@@ -159,7 +159,7 @@ struct AgentQuestion: Equatable, Identifiable {
                 switch content[q.id] {
                 case .string(let s)?: parts.append(s)
                 case .array(let a)?: parts.append(contentsOf: a.compactMap(\.string))
-                case .number(let n)?: parts.append(n == n.rounded() ? String(Int(n)) : String(n))
+                case .number(let n)?: parts.append(Self.numberText(n))
                 case .bool(let b)?: parts.append(b ? "Yes" : "No")
                 default: break
                 }
@@ -173,5 +173,12 @@ struct AgentQuestion: Equatable, Identifiable {
                 ? "\(message) — \(lines[0].split(separator: ":", maxSplits: 1).last.map { $0.trimmingCharacters(in: .whitespaces) } ?? "")"
                 : "\(message)\n" + lines.map { "• " + $0 }.joined(separator: "\n"))
         }
+    }
+
+    /// A number as a person reads it: a whole one without a decimal point
+    /// ("3", not "3.0"). One past Int's range (1e300 from a schema) keeps
+    /// Double's own spelling rather than trap in Int(_:).
+    static func numberText(_ n: Double) -> String {
+        Int(exactly: n).map(String.init) ?? String(n)
     }
 }

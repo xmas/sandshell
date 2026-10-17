@@ -43,7 +43,7 @@ final class AgentQuestionForm: ObservableObject {
             case (.choice, .string(let s)?): picks[field.id] = s
             case (.multiChoice, .array(let a)?): multiPicks[field.id] = Set(a.compactMap(\.string))
             case (.text, .string(let s)?): texts[field.id] = s
-            case (.number, .number(let n)?): texts[field.id] = n == n.rounded() ? String(Int(n)) : String(n)
+            case (.number, .number(let n)?): texts[field.id] = AgentQuestion.numberText(n)
             case (.toggle, .bool(let b)?): toggles[field.id] = b
             default: break
             }
