@@ -10,8 +10,7 @@ final class LinkOpeningTerminalView: AppTerminalView {
     var onOpenURL: (@MainActor (String) -> Void)?
 
     private var hoveredLink: String?
-    // nonisolated(unsafe): read in deinit (last reference, main-thread dealloc).
-    nonisolated(unsafe) private var pushedLinkCursor = false
+    private var pushedLinkCursor = false
 
     func updateHoveredLink(_ url: String?) {
         hoveredLink = url
@@ -82,9 +81,11 @@ final class LinkOpeningTerminalView: AppTerminalView {
     /// snapshot the general pasteboard, use ghostty's copy, then restore.
     private func readSelectedText() -> String? {
         let pb = NSPasteboard.general
+        let changeCount = pb.changeCount
         let saved = pb.snapshotItems()
         let text = copySelectedTextToPasteboard() ? pb.string(forType: .string) : nil
         pb.restore(saved)
+        PasteboardURLWatcher.shared.ignoreRestore(since: changeCount)
         return text
     }
 
@@ -98,7 +99,7 @@ final class LinkOpeningTerminalView: AppTerminalView {
         while let last = s.last, ".,:;".contains(last) { s.removeLast() }
         guard !s.isEmpty else { return nil }
 
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let home = NSHomeDirectory()
         let path: String
         if s == "~" { path = home }
         else if s.hasPrefix("~/") { path = home + "/" + String(s.dropFirst(2)) }
@@ -106,7 +107,7 @@ final class LinkOpeningTerminalView: AppTerminalView {
         else { return nil }
 
         guard FileManager.default.fileExists(atPath: path) else { return nil }
-        return URL(fileURLWithPath: path)
+        return URL(filePath: path, directoryHint: .checkFileSystem)
     }
 
     @objc private func revealInFinder(_ sender: NSMenuItem) {
@@ -122,7 +123,7 @@ final class LinkOpeningTerminalView: AppTerminalView {
     @objc private func openWithChooser(_ sender: NSMenuItem) {
         guard let url = sender.representedObject as? URL else { return }
         let panel = NSOpenPanel()
-        panel.directoryURL = URL(fileURLWithPath: "/Applications")
+        panel.directoryURL = URL(filePath: "/Applications", directoryHint: .isDirectory)
         panel.allowedContentTypes = [.application]
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
@@ -133,13 +134,9 @@ final class LinkOpeningTerminalView: AppTerminalView {
                                 configuration: NSWorkspace.OpenConfiguration())
     }
 
-    deinit {
-        // AppKit deallocates NSViews on the main thread. Read pushedLinkCursor
-        // directly (nonisolated(unsafe)) and pop without capturing self — avoids
-        // the Swift 6 "sending self" error while keeping the cursor stack balanced.
-        if pushedLinkCursor {
-            MainActor.assumeIsolated { NSCursor.pop() }
-        }
+    /// Keeps the cursor stack balanced if it goes while a link is hovered.
+    isolated deinit {
+        if pushedLinkCursor { NSCursor.pop() }
     }
 }
 
@@ -177,7 +174,7 @@ final class TerminalSession {
         let tag = SbxCommand.ProcessTag(session: sessionID)
         self.tag = tag
 
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let home = NSHomeDirectory()
         let sbxPath = PathFixer.sbxPath()
         let body = SbxCommand.sessionScript(
             containerName: containerName, workdir: workdir, agent: agent,
@@ -209,33 +206,39 @@ final class TerminalSession {
     /// prefs change (cursor style/blink) can re-apply it via `setTerminalConfiguration`.
     private static func configuration(scriptURL: URL, prefs: ThemePreferences) -> TerminalConfiguration {
         TerminalConfiguration { c in
-            c.withCustom("command", scriptURL.path)
-            c.withFontFamily("SF Mono")
-            c.withFontSize(13)
-            c.withFontThicken(true)
-            Self.applyCursor(prefs, to: &c)
+            c.withCustom("command", scriptURL.path(percentEncoded: false))
+            Self.applyBase(prefs, to: &c)
             // Exit immediately when the agent process ends so we can detect it
             // (terminalDidClose) and present our own restart prompt, rather than
             // ghostty's "Press any key to close the terminal" dead-end.
             c.withCustom("wait-after-command", "false")
-            // Release the shortcuts our app menu owns — otherwise Ghostty's
-            // default keybinds (e.g. super+comma → open config) swallow them
-            // before the macOS menu sees them when a terminal has focus.
-            c.withCustom("keybind", "super+c=unbind")
-            c.withCustom("keybind", "super+comma=unbind")
-            c.withCustom("keybind", "super+shift+comma=unbind")
-            c.withCustom("keybind", "super+w=unbind")
-            c.withCustom("keybind", "super+f=unbind")
-            c.withCustom("keybind", "super+shift+left_bracket=unbind")
-            c.withCustom("keybind", "super+shift+right_bracket=unbind")
         }
+    }
+
+    /// ⌘ shortcuts our app menu owns. Ghostty's default keybinds (e.g.
+    /// super+comma → open config, super+z → its own undo) would otherwise
+    /// swallow them before the macOS menu sees them while a terminal has focus.
+    static let releasedMenuKeys = [
+        "super+c", "super+comma", "super+shift+comma", "super+w", "super+f",
+        "super+z", "super+shift+z",
+        "super+shift+left_bracket", "super+shift+right_bracket",
+    ]
+
+    /// Font, cursor and the released menu shortcuts: what every Sandshell
+    /// terminal shares (sessions and `HostTerminalWindowController`'s).
+    static func applyBase(_ prefs: ThemePreferences, to c: inout TerminalConfiguration.Builder) {
+        c.withFontFamily("SF Mono")
+        c.withFontSize(13)
+        c.withFontThicken(true)
+        applyCursor(prefs, to: &c)
+        for key in releasedMenuKeys { c.withCustom("keybind", "\(key)=unbind") }
     }
 
     /// Apply the workspace's cursor preferences to a config builder. `theme`
     /// leaves the engine/theme default in place; otherwise we set shape/blink.
     /// (Cursor settings are config-time, so they take effect for newly-opened
-    /// terminals.) Shared with `HostTerminalWindowController`.
-    static func applyCursor(_ prefs: ThemePreferences, to c: inout TerminalConfiguration.Builder) {
+    /// terminals.)
+    private static func applyCursor(_ prefs: ThemePreferences, to c: inout TerminalConfiguration.Builder) {
         switch prefs.terminalCursorStyle {
         case .theme: break
         case .block: c.withCursorStyle(.block)
@@ -280,11 +283,10 @@ final class TerminalSession {
     }
 
     private static func writeScript(_ body: String) -> URL {
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("sandshell-\(UUID().uuidString).sh")
+        let url = URL.temporaryDirectory.appending(path: "sandshell-\(UUID().uuidString).sh")
         try? body.write(to: url, atomically: true, encoding: .utf8)
         try? FileManager.default.setAttributes(
-            [.posixPermissions: 0o755], ofItemAtPath: url.path)
+            [.posixPermissions: 0o755], ofItemAtPath: url.path(percentEncoded: false))
         return url
     }
 
@@ -318,10 +320,8 @@ extension TerminalSession: TerminalSurfaceOpenURLDelegate {
         }
         // Bare file path: /absolute or ~/home-relative
         guard url.hasPrefix("/") || url.hasPrefix("~/") else { return }
-        let path = url.hasPrefix("~/")
-            ? FileManager.default.homeDirectoryForCurrentUser.path + "/" + String(url.dropFirst(2))
-            : url
-        NSWorkspace.shared.open(URL(fileURLWithPath: path))
+        let path = url.hasPrefix("~/") ? NSHomeDirectory() + "/" + String(url.dropFirst(2)) : url
+        NSWorkspace.shared.open(URL(filePath: path, directoryHint: .checkFileSystem))
     }
 }
 

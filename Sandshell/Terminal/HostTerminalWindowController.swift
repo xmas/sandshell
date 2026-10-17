@@ -17,13 +17,14 @@ final class HostTerminalWindowController: NSWindowController, NSWindowDelegate {
 
     /// Host login shell in the workspace root — the footer "Terminal" button.
     convenience init(root: URL, theme: ThemeController) {
+        let path = root.path(percentEncoded: false)
         let body = """
         #!/bin/bash
-        cd '\(root.path.replacingOccurrences(of: "'", with: "'\\''"))' 2>/dev/null || true
+        cd \(SbxCommand.shellQuote(path)) 2>/dev/null || true
         exec "${SHELL:-/bin/zsh}" -l
         """
         self.init(title: "Terminal — \(root.lastPathComponent)",
-                  scriptBody: body, workingDirectory: root.path, theme: theme)
+                  scriptBody: body, workingDirectory: path, theme: theme)
     }
 
     /// Run an arbitrary bash `scriptBody` in a native libghostty window. Used both
@@ -79,25 +80,15 @@ final class HostTerminalWindowController: NSWindowController, NSWindowDelegate {
     func focus() {
         showWindow(nil)
         window?.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        NSApp.activate()
     }
 
     /// The full ghostty configuration, shared by init and live cursor-pref updates.
     private static func configuration(scriptURL: URL, prefs: ThemePreferences) -> TerminalConfiguration {
         TerminalConfiguration { c in
-            c.withCustom("command", scriptURL.path)
-            c.withFontFamily("SF Mono")
-            c.withFontSize(13)
-            c.withFontThicken(true)
-            TerminalSession.applyCursor(prefs, to: &c)
-            // Match the in-app terminals: release the ⌘ shortcuts our menu owns.
-            c.withCustom("keybind", "super+c=unbind")
-            c.withCustom("keybind", "super+comma=unbind")
-            c.withCustom("keybind", "super+shift+comma=unbind")
-            c.withCustom("keybind", "super+w=unbind")
-            c.withCustom("keybind", "super+f=unbind")
-            c.withCustom("keybind", "super+shift+left_bracket=unbind")
-            c.withCustom("keybind", "super+shift+right_bracket=unbind")
+            c.withCustom("command", scriptURL.path(percentEncoded: false))
+            // Match the in-app terminals (font, cursor, the ⌘ shortcuts our menu owns).
+            TerminalSession.applyBase(prefs, to: &c)
         }
     }
 
@@ -107,10 +98,10 @@ final class HostTerminalWindowController: NSWindowController, NSWindowDelegate {
     }
 
     private static func writeScript(_ body: String) -> URL {
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("sandshell-host-\(UUID().uuidString).sh")
+        let url = URL.temporaryDirectory.appending(path: "sandshell-host-\(UUID().uuidString).sh")
         try? body.write(to: url, atomically: true, encoding: .utf8)
-        try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o755],
+                                               ofItemAtPath: url.path(percentEncoded: false))
         return url
     }
 
