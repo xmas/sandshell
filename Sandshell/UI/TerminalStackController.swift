@@ -256,7 +256,11 @@ final class SessionSurfaces {
     var terminals: [UUID: TerminalSession] = [:]
     var chats: [UUID: ChatSessionView] = [:]
     var drafts: [UUID: ChatDraft] = [:]
-    var pending: Set<UUID> = []
+    /// Sessions starting. That's using them, for every window on the folder:
+    /// "+ New …" there mustn't hand one out as unused.
+    var pending: Set<UUID> = [] {
+        didSet { for id in pending.subtracting(oldValue) { controller.markLaunched(id) } }
+    }
     /// A closed chat's process tag, when it isn't the session's own (a warm
     /// spare's): reaped before the session launches again.
     var leftoverProcesses: [UUID: String] = [:]

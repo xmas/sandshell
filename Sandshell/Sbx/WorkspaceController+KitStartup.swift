@@ -45,6 +45,8 @@ extension WorkspaceController {
                 }
                 try? await Task.sleep(nanoseconds: Self.kitStartupPollInterval)
             }
+            // Cancelled: a newer follower (or none) holds the slot now.
+            if Task.isCancelled { return }
             self?.kitStartupTasks[agent] = nil
         }
     }

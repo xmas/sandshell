@@ -134,7 +134,7 @@ final class SearchStore: ObservableObject {
     private func refresh(keepSelection: Bool) {
         let sessions = workspace.orderedSessions
         var activity: [UUID: Date] = [:]
-        for s in sessions { activity[s.id] = workspace.runtime(s.id)?.lastActivityAt }
+        for s in sessions { activity[s.id] = workspace.runtime(s.id)?.lastActivityAt ?? s.lastActiveAt }
         results = Self.rank(sessions: sessions, activity: activity, records: history.records,
                             matches: pastMatches, query: matchedQuery)
         if !keepSelection || !results.contains(where: { $0.id == selectedID }) {

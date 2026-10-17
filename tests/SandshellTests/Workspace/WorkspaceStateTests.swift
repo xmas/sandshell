@@ -53,6 +53,7 @@ fileprivate enum WorkspaceStateFixture {
                            workdir: "/workspace/apps/web", transcriptID: "transcript-1",
                            createdAt: referenceDate, isChat: true)
         chat.isNamedByUser = true
+        chat.lastActiveAt = referenceDate.addingTimeInterval(3_600)
         let shell = Session(folderID: rootFolder.id, agent: .shell, name: "Shell", order: 1,
                             workdir: "/workspace", createdAt: referenceDate.addingTimeInterval(60),
                             containerAgent: .claude)
@@ -63,7 +64,8 @@ fileprivate enum WorkspaceStateFixture {
             expandedFolderIDs: [rootFolder.id, app.id],
             archiveWatermarks: [chat.id.uuidString: referenceDate],
             appliedMountSignatures: ["sandshell-claude": "sig-1"],
-            ignoredKitDrift: ["sandshell-claude": ["docker.io/kits/extra"]])
+            ignoredKitDrift: ["sandshell-claude": ["docker.io/kits/extra"]],
+            slugAgent: .claude)
     }
 
     /// `WorkspaceState` isn't Equatable, so compare it field by field.
@@ -77,6 +79,7 @@ fileprivate enum WorkspaceStateFixture {
         #expect(actual.appliedMountSignatures == expected.appliedMountSignatures, "appliedMountSignatures",
                 sourceLocation: sourceLocation)
         #expect(actual.ignoredKitDrift == expected.ignoredKitDrift, "ignoredKitDrift", sourceLocation: sourceLocation)
+        #expect(actual.slugAgent == expected.slugAgent, "slugAgent", sourceLocation: sourceLocation)
     }
 
     static func directoryExists(at url: URL) -> Bool {
@@ -208,6 +211,7 @@ struct WorkspaceStateSessionTests {
         #expect(session.containerAgent == nil)
         #expect(session.isChat == false)
         #expect(session.isNamedByUser == false)
+        #expect(session.lastActiveAt == nil)
         #expect(session.createdAt >= before, "createdAt defaults to the creation time")
         #expect(session.createdAt <= after, "createdAt defaults to the creation time")
     }
@@ -234,6 +238,7 @@ struct WorkspaceStateSessionTests {
         #expect(session.transcriptID == nil)
         #expect(session.containerAgent == nil)
         #expect(session.createdAt == .distantPast, "Files predating createdAt decode as distantPast")
+        #expect(session.lastActiveAt == nil, "Files predating lastActiveAt decode without one")
         #expect(session.isChat == false)
         #expect(session.isNamedByUser == false)
     }
@@ -337,6 +342,19 @@ struct WorkspaceStateSessionTests {
         #expect(object["createdAt"] as? String == WorkspaceStateFixture.referenceDateISO)
     }
 
+    /// The sidebar's order and "Xm ago" survive a relaunch (xmas-sandshell-e7q.81).
+    @Test func lastActiveAtPersistsAsAnISO8601Date() throws {
+        var session = Session(folderID: UUID(), agent: .claude, name: "A", order: 0, workdir: "/w",
+                              createdAt: WorkspaceStateFixture.referenceDate)
+        session.lastActiveAt = WorkspaceStateFixture.referenceDate
+        let object = try WorkspaceStateJSON.object(WorkspaceStateJSON.encode(session))
+        #expect(object["lastActiveAt"] as? String == WorkspaceStateFixture.referenceDateISO)
+
+        let json = #"{"agent":"claude","lastActiveAt":"\#(WorkspaceStateFixture.referenceDateISO)"}"#
+        let decoded = try WorkspaceStateJSON.decode(Session.self, from: json)
+        #expect(decoded.lastActiveAt == WorkspaceStateFixture.referenceDate)
+    }
+
     @Test(arguments: [false, true])
     func roundTripsThroughJSON(withOptionalFields: Bool) throws {
         var session = Session(folderID: UUID(), agent: AgentKind(rawValue: "my-kit-agent"), name: "Named",
@@ -346,6 +364,7 @@ struct WorkspaceStateSessionTests {
                               containerAgent: withOptionalFields ? .codex : nil,
                               isChat: withOptionalFields)
         session.isNamedByUser = withOptionalFields
+        session.lastActiveAt = withOptionalFields ? WorkspaceStateFixture.referenceDate.addingTimeInterval(60) : nil
         let decoded = try WorkspaceStateJSON.roundTrip(session)
         #expect(decoded == session)
     }
@@ -363,6 +382,7 @@ struct WorkspaceStateCodingTests {
         #expect(state.archiveWatermarks.isEmpty)
         #expect(state.appliedMountSignatures.isEmpty)
         #expect(state.ignoredKitDrift.isEmpty)
+        #expect(state.slugAgent == nil)
     }
 
     @Test(.tags(.workspaceStateLegacyFormat))
@@ -410,6 +430,15 @@ struct WorkspaceStateCodingTests {
         #expect(object["schemaVersion"] as? Int == 2)
     }
 
+    /// Sandboxes keep their names when the primary agent changes (xmas-sandshell-e7q.44).
+    @Test(arguments: ["claude", "my-kit-agent"])
+    func slugAgentPersistsWhenSet(agent: String) throws {
+        let state = WorkspaceState(slugAgent: AgentKind(rawValue: agent))
+        let object = try WorkspaceStateJSON.object(WorkspaceStateJSON.encode(state))
+        #expect(object["slugAgent"] as? String == agent)
+        #expect(try WorkspaceStateJSON.roundTrip(state).slugAgent == AgentKind(rawValue: agent))
+    }
+
     @Test func encodingWritesIgnoredKitDriftWhenPresent() throws {
         let drift = ["sandshell-claude": ["kit-a", "kit-b"]]
         let object = try WorkspaceStateJSON.object(WorkspaceStateJSON.encode(WorkspaceState(ignoredKitDrift: drift)))
@@ -448,6 +477,93 @@ struct WorkspaceStateCodingTests {
         #expect(throws: DecodingError.self) {
             try WorkspaceStateJSON.decode(WorkspaceState.self, from: json)
         }
+    }
+}
+
+// MARK: - Folder moves
+
+/// Renaming a folder moves the rows nested in it and the sessions working in it
+/// (xmas-sandshell-e7q.78); trashing one takes the nested rows too.
+struct WorkspaceStateFolderMoveTests {
+    private let root = URL(fileURLWithPath: "/ws", isDirectory: true)
+    private let rootFolder = Folder(relativePath: "", order: -1)
+    private let proj = Folder(relativePath: "proj", order: 0)
+    private let web = Folder(relativePath: "proj/web", order: 1)
+    private let deep = Folder(relativePath: "proj/web/deep", order: 2)
+    private let sibling = Folder(relativePath: "proj-old", order: 3)
+    private let other = Folder(relativePath: "other/proj", order: 4)
+
+    private func session(_ name: String, in folder: Folder, workdir: String) -> Session {
+        Session(folderID: folder.id, agent: .claude, name: name, order: 0, workdir: workdir,
+                createdAt: WorkspaceStateFixture.referenceDate)
+    }
+
+    private func state(sessions: [Session] = []) -> WorkspaceState {
+        WorkspaceState(folders: [rootFolder, proj, web, deep, sibling, other], sessions: sessions)
+    }
+
+    @Test(arguments: [
+        ("/ws/api", "/ws/server"),                      // the folder itself
+        ("/ws/api/src", "/ws/server/src"),              // inside it
+        ("/ws/api/src/lib", "/ws/server/src/lib"),
+    ])
+    func aWorkdirInTheMovedFolderFollowsIt(workdir: String, expected: String) {
+        #expect(Session.workdir(workdir, movedFrom: "/ws/api", to: "/ws/server") == expected)
+    }
+
+    @Test(.tags(.workspaceStateEdgeCase), arguments: ["/ws/api-v2", "/ws/apis", "/ws", "/elsewhere/api", ""])
+    func aWorkdirOutsideItStays(workdir: String) {
+        #expect(Session.workdir(workdir, movedFrom: "/ws/api", to: "/ws/server") == nil)
+    }
+
+    @Test func theRowsNestedInAFolderAreThoseUnderItsPath() {
+        let nested = state().folders(nestedIn: proj.id)
+        #expect(nested.map(\.id) == [web.id, deep.id], "Not proj-old, whose name only starts the same")
+    }
+
+    @Test(.tags(.workspaceStateEdgeCase))
+    func theRootAndUnknownFoldersHaveNoNestedRows() {
+        #expect(state().folders(nestedIn: rootFolder.id).isEmpty, "Every folder is under the root: it isn't a nest")
+        #expect(state().folders(nestedIn: UUID()).isEmpty)
+    }
+
+    @Test func movingAFolderMovesTheRowsNestedInIt() {
+        var moved = state()
+        moved.moveFolder(proj.id, to: "app", root: root)
+        let paths = Dictionary(uniqueKeysWithValues: moved.folders.map { ($0.id, $0.relativePath) })
+        #expect(paths[proj.id] == "app")
+        #expect(paths[web.id] == "app/web")
+        #expect(paths[deep.id] == "app/web/deep")
+        #expect(paths[sibling.id] == "proj-old")
+        #expect(paths[other.id] == "other/proj")
+        #expect(paths[rootFolder.id] == "")
+    }
+
+    @Test func movingAFolderMovesTheSessionsWorkingInIt() {
+        let inProj = session("proj", in: proj, workdir: "/ws/proj")
+        let inWeb = session("web", in: web, workdir: "/ws/proj/web")
+        let restored = session("restored", in: web, workdir: "/ws/proj/web/src")
+        let inSibling = session("sibling", in: sibling, workdir: "/ws/proj-old")
+        let elsewhere = session("elsewhere", in: proj, workdir: "/Users/test/other")
+        var moved = state(sessions: [inProj, inWeb, restored, inSibling, elsewhere])
+
+        moved.moveFolder(proj.id, to: "app", root: root)
+
+        let workdirs = Dictionary(uniqueKeysWithValues: moved.sessions.map { ($0.name, $0.workdir) })
+        #expect(workdirs["proj"] == "/ws/app")
+        #expect(workdirs["web"] == "/ws/app/web", "A nested folder's sessions follow too")
+        #expect(workdirs["restored"] == "/ws/app/web/src", "A session in a subdirectory keeps it")
+        #expect(workdirs["sibling"] == "/ws/proj-old")
+        #expect(workdirs["elsewhere"] == "/Users/test/other", "A cwd outside the folder didn't move")
+    }
+
+    @Test(.tags(.workspaceStateEdgeCase), arguments: [true, false])
+    func movingTheRootOrAnUnknownFolderChangesNothing(theRoot: Bool) {
+        let inRoot = session("root", in: rootFolder, workdir: "/ws")
+        var moved = state(sessions: [inRoot])
+        moved.moveFolder(theRoot ? rootFolder.id : UUID(), to: "elsewhere", root: root)
+        #expect(moved.folders == state().folders)
+        #expect(moved.sessions == [inRoot])
     }
 }
 

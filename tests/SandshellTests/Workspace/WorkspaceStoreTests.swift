@@ -478,3 +478,73 @@ struct WorkspaceStoreNotificationTests {
         #expect(logB.batches.isEmpty, "A released store's queued notification goes nowhere")
     }
 }
+
+// MARK: - The other windows
+
+/// What the windows on one folder share besides its files: who the others are
+/// (a bring-up tells them, xmas-sandshell-e7q.41) and which sessions any of
+/// them has started (xmas-sandshell-e7q.51).
+@MainActor
+@Suite(.tags(.workspaceStoreFileSystem))
+struct WorkspaceStoreWindowsTests {
+    private let scratch = WorkspaceStoreScratch()
+    private let windowA = WorkspaceStoreTestWindow()
+    private let windowB = WorkspaceStoreTestWindow()
+    private let windowC = WorkspaceStoreTestWindow()
+
+    @Test func theOthersAreEveryOtherObservingWindow() throws {
+        let store = try WorkspaceStore.shared(root: try scratch.makeRoot())
+        for window in [windowA, windowB, windowC] { store.observe(window) { _ in } }
+
+        let others = store.others(than: windowA)
+
+        #expect(others.count == 2)
+        #expect(others.contains { $0 === windowB } && others.contains { $0 === windowC })
+        #expect(others.contains { $0 === windowA } == false, "Not the asking window itself")
+    }
+
+    @Test func onlyObserversOfTheAskedTypeCount() throws {
+        let store = try WorkspaceStore.shared(root: try scratch.makeRoot())
+        let notAWindow = NSObject()
+        store.observe(windowA) { _ in }
+        store.observe(notAWindow) { _ in }
+
+        #expect(store.others(than: windowB).map { ObjectIdentifier($0) } == [ObjectIdentifier(windowA)],
+                "A window asking finds the windows, not every observer")
+    }
+
+    @Test(.tags(.workspaceStoreEdgeCase))
+    func aClosedWindowIsNoLongerAnOther() throws {
+        let store = try WorkspaceStore.shared(root: try scratch.makeRoot())
+        store.observe(windowA) { _ in }
+        var closing: WorkspaceStoreTestWindow? = WorkspaceStoreTestWindow()
+        weak var closed = closing
+        store.observe(try #require(closing)) { _ in }
+
+        closing = nil
+        try #require(closed == nil)
+
+        #expect(store.others(than: windowA).isEmpty)
+    }
+
+    @Test func aSessionStartedInOneWindowIsStartedForEveryWindowOnTheFolder() throws {
+        let root = try scratch.makeRoot()
+        let first = try WorkspaceStore.shared(root: root)
+        let id = UUID()
+        #expect(first.launched.isEmpty, "Nothing has started in a folder just opened")
+
+        first.markLaunched(id)
+
+        let second = try WorkspaceStore.shared(root: root)
+        #expect(second.launched == [id], "Another window on the folder sees it")
+    }
+
+    @Test func anotherFoldersSessionsAreItsOwn() throws {
+        let one = try WorkspaceStore.shared(root: try scratch.makeRoot("one"))
+        let two = try WorkspaceStore.shared(root: try scratch.makeRoot("two"))
+
+        one.markLaunched(UUID())
+
+        #expect(two.launched.isEmpty)
+    }
+}

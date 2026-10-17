@@ -495,9 +495,10 @@ final class MainWindowController: NSWindowController {
         sidebar?.presentInspector()
     }
 
-    /// Cycle the selected session (`+1` next / `-1` previous).
+    /// Cycle the selected session (`+1` next / `-1` previous) through the ones
+    /// the sidebar lists: filtered, and in the order it shows them.
     func cycleSession(_ delta: Int) {
-        workspace?.selectAdjacentSession(delta)
+        workspace?.selectAdjacentSession(delta, in: sidebar?.displayedSessionIDs ?? [])
     }
 
     /// Navigate to a session by ID. Returns true if this window owns the session.
@@ -634,6 +635,7 @@ extension MainWindowController: NSWindowDelegate {
     /// Tear down this window's terminals (kills their `sbx exec` + removes temp
     /// scripts), close its Settings window, and let `AppDelegate` forget it.
     func windowWillClose(_ notification: Notification) {
+        workspace?.windowClosed()
         detail?.teardown()
         searchWindow?.close()
         if let window { SettingsWindowController.close(for: window) }

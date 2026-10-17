@@ -1352,6 +1352,85 @@ extension TranscriptReaderTests {
     }
 }
 
+// MARK: - moveClaudeProjects(_:home:)
+
+extension TranscriptReaderTests {
+    /// A folder rename takes its sessions' Claude conversations along, so they resume (xmas-sandshell-e7q.84).
+    struct MoveClaudeProjects {
+        private let home: TranscriptReaderHome
+
+        init() throws {
+            home = try TranscriptReaderHome()
+        }
+
+        private func projectsFolder(_ encoded: String) -> URL {
+            home.root.appendingPathComponent(".claude/projects/\(encoded)", isDirectory: true)
+        }
+
+        private func contents(_ encoded: String) throws -> Set<String> {
+            Set(try FileManager.default.contentsOfDirectory(atPath: projectsFolder(encoded).path))
+        }
+
+        @Test func movesTheFolderOfTheOldCwdToTheNewOne() throws {
+            try home.writeClaudeTranscript(id: "session")
+            try home.write(".claude/projects/\(TRFixture.encodedWorkdir)/session/subagents/agent-1.jsonl", contents: "{}\n")
+
+            TranscriptReader.moveClaudeProjects([(TRFixture.workdir, TRFixture.otherWorkdir)], home: home.root)
+
+            #expect(FileManager.default.fileExists(atPath: projectsFolder(TRFixture.encodedWorkdir).path) == false)
+            #expect(try contents(TRFixture.encodedOtherWorkdir) == ["session.jsonl", "session"])
+            #expect(TranscriptReader.transcriptExists(agent: .claude, workdir: TRFixture.otherWorkdir,
+                                                      home: home.root, id: "session"),
+                    "Resuming in the new cwd finds the conversation")
+        }
+
+        @Test func mergesIntoAFolderTheNewCwdAlreadyHas() throws {
+            try home.writeClaudeTranscript(id: "moved")
+            try home.writeClaudeTranscript(id: "already-there", folder: TRFixture.encodedOtherWorkdir)
+
+            TranscriptReader.moveClaudeProjects([(TRFixture.workdir, TRFixture.otherWorkdir)], home: home.root)
+
+            #expect(try contents(TRFixture.encodedOtherWorkdir) == ["moved.jsonl", "already-there.jsonl"])
+            #expect(FileManager.default.fileExists(atPath: projectsFolder(TRFixture.encodedWorkdir).path) == false,
+                    "The emptied old folder goes")
+        }
+
+        @Test(.tags(.transcriptReaderEdgeCase))
+        func neverReplacesAFileTheNewFolderHas() throws {
+            try home.writeClaudeTranscript(id: "same", lines: [TRFixture.claudeUser("old cwd")])
+            try home.writeClaudeTranscript(id: "same", folder: TRFixture.encodedOtherWorkdir,
+                                           lines: [TRFixture.claudeUser("new cwd")])
+
+            TranscriptReader.moveClaudeProjects([(TRFixture.workdir, TRFixture.otherWorkdir)], home: home.root)
+
+            let kept = projectsFolder(TRFixture.encodedOtherWorkdir).appendingPathComponent("same.jsonl")
+            #expect(try String(contentsOf: kept, encoding: .utf8).contains("new cwd"))
+            #expect(try contents(TRFixture.encodedWorkdir) == ["same.jsonl"],
+                    "The clashing file stays where it was, and so does its folder")
+        }
+
+        @Test(.tags(.transcriptReaderEdgeCase))
+        func aCwdWithNoConversationsIsSkipped() throws {
+            try home.writeClaudeTranscript(id: "other", folder: TRFixture.encodedOtherWorkdir)
+
+            TranscriptReader.moveClaudeProjects([("/Users/test/Code/none", TRFixture.otherWorkdir),
+                                                 (TRFixture.workdir, "/Users/test/Code/new")], home: home.root)
+
+            #expect(try contents(TRFixture.encodedOtherWorkdir) == ["other.jsonl"])
+            #expect(FileManager.default.fileExists(atPath: projectsFolder("-Users-test-Code-new").path) == false)
+        }
+
+        @Test(.tags(.transcriptReaderEdgeCase))
+        func aRenameClaudeEncodesTheSameWayLeavesTheFolderAlone() throws {
+            try home.writeClaudeTranscript(id: "session", folder: "-Users-test-a-b")
+
+            TranscriptReader.moveClaudeProjects([("/Users/test/a b", "/Users/test/a-b")], home: home.root)
+
+            #expect(try contents("-Users-test-a-b") == ["session.jsonl"])
+        }
+    }
+}
+
 // MARK: - Fixtures
 
 fileprivate enum TRFixture {

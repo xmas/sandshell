@@ -522,6 +522,33 @@ enum TranscriptReader {
         }, as: UTF16.self)
     }
 
+    /// Claude files each conversation under its cwd (`~/.claude/projects/<encoded
+    /// cwd>/`): after folders move, take the conversations of each moved cwd
+    /// (old → new) along, so resuming in the new one finds them. Merges into a
+    /// folder the new cwd already has, never replacing a file there.
+    static func moveClaudeProjects(_ moves: [(from: String, to: String)], home: URL) {
+        let fm = FileManager.default
+        let projects = home.appendingPathComponent(".claude/projects", isDirectory: true)
+        for (from, to) in moves {
+            let src = projects.appendingPathComponent(claudeEncodedDir(for: from), isDirectory: true)
+            let dst = projects.appendingPathComponent(claudeEncodedDir(for: to), isDirectory: true)
+            guard src.path != dst.path, fm.fileExists(atPath: src.path) else { continue }
+            do {
+                guard fm.fileExists(atPath: dst.path) else {
+                    try fm.moveItem(at: src, to: dst)
+                    continue
+                }
+                for name in try fm.contentsOfDirectory(atPath: src.path)
+                where !fm.fileExists(atPath: dst.appendingPathComponent(name).path) {
+                    try fm.moveItem(at: src.appendingPathComponent(name), to: dst.appendingPathComponent(name))
+                }
+                if try fm.contentsOfDirectory(atPath: src.path).isEmpty { try fm.removeItem(at: src) }
+            } catch {
+                Log.error(.workspace, "moving Claude conversations from \(from) to \(to) failed: \(error.localizedDescription)")
+            }
+        }
+    }
+
     private static func extractText(_ content: Any?) -> String? {
         if let s = content as? String { return clean(s) }
         if let blocks = content as? [[String: Any]] {
