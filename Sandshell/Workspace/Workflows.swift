@@ -116,80 +116,22 @@ enum WorkflowScanner {
     }
 
     /// `export const meta = { name: '…', description: '…', phases: [{ title: '…', detail: '…' }] }`
-    /// — a JS object literal (unquoted keys, ' or " strings), read without a JS engine.
+    /// — a JS object literal (bare or quoted keys, ' " or ` strings, comments),
+    /// read with a small literal parser rather than a JS engine.
     nonisolated static func parseMeta(_ script: String) -> Meta {
         guard let start = script.range(of: "export const meta") else { return Meta() }
-        // The literal: from its first { to the matching }, skipping strings.
-        let tail = script[start.upperBound...]
-        guard let open = tail.firstIndex(of: "{") else { return Meta() }
-        var depth = 0, quote: Character?, escaped = false, end = open
-        for i in tail[open...].indices {
-            let c = tail[i]
-            if let q = quote {
-                if escaped { escaped = false } else if c == "\\" { escaped = true } else if c == q { quote = nil }
-                continue
+        var parser = JSLiteralParser(script[start.upperBound...])
+        parser.skip(past: "=")
+        guard case .object(let meta) = parser.value() else { return Meta() }
+        var out = Meta()
+        out.name = meta["name"]?.string
+        out.description = meta["description"]?.string
+        if case .array(let phases)? = meta["phases"] {
+            for case .object(let phase) in phases {
+                if let title = phase["title"]?.string { out.phases.append(.init(title: title, detail: phase["detail"]?.string)) }
             }
-            if c == "'" || c == "\"" || c == "`" { quote = c; continue }
-            if c == "{" { depth += 1 }
-            if c == "}" { depth -= 1; if depth == 0 { end = i; break } }
-        }
-        let literal = String(tail[open...end])
-        var meta = Meta()
-        meta.name = field("name", in: topLevel(literal))
-        meta.description = field("description", in: topLevel(literal))
-        if let phasesStart = literal.range(of: #"phases\s*:\s*\["#, options: .regularExpression) {
-            let rest = literal[phasesStart.upperBound...]
-            for object in objects(in: rest) {
-                if let title = field("title", in: object) {
-                    meta.phases.append(.init(title: title, detail: field("detail", in: object)))
-                }
-            }
-        }
-        return meta
-    }
-
-    /// The literal without its nested objects/arrays (so `name:` inside a phase isn't the workflow's).
-    private static func topLevel(_ literal: String) -> String {
-        var out = "", depth = 0, quote: Character?, escaped = false
-        for c in literal {
-            if let q = quote {
-                if depth <= 1 { out.append(c) }
-                if escaped { escaped = false } else if c == "\\" { escaped = true } else if c == q { quote = nil }
-                continue
-            }
-            if c == "'" || c == "\"" || c == "`" { quote = c; if depth <= 1 { out.append(c) }; continue }
-            if c == "{" || c == "[" { depth += 1; if depth == 1 { out.append(c) }; continue }
-            if c == "}" || c == "]" { depth -= 1; if depth == 0 { out.append(c) }; continue }
-            if depth <= 1 { out.append(c) }
         }
         return out
-    }
-
-    /// The `{…}` objects of an array literal, until its closing `]`.
-    private static func objects(in text: Substring) -> [String] {
-        var out: [String] = [], depth = 0, quote: Character?, escaped = false, current = ""
-        for c in text {
-            if let q = quote {
-                current.append(c)
-                if escaped { escaped = false } else if c == "\\" { escaped = true } else if c == q { quote = nil }
-                continue
-            }
-            if c == "'" || c == "\"" || c == "`" { quote = c; current.append(c); continue }
-            if c == "{" { depth += 1 }
-            if depth > 0 { current.append(c) }
-            if c == "}" { depth -= 1; if depth == 0 { out.append(current); current = "" } }
-            if c == "]", depth == 0 { break }
-        }
-        return out
-    }
-
-    /// `key: 'value'` (or "value") in an object literal, unescaped.
-    private static func field(_ key: String, in literal: String) -> String? {
-        let pattern = #"(?:^|[{,\s])"# + key + #"\s*:\s*(['"`])((?:\\.|(?!\1).)*)\1"#
-        guard let re = try? NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators]),
-              let m = re.firstMatch(in: literal, range: NSRange(literal.startIndex..., in: literal)),
-              let r = Range(m.range(at: 2), in: literal) else { return nil }
-        return literal[r].replacingOccurrences(of: #"\\(.)"#, with: "$1", options: .regularExpression)
     }
 
     // MARK: An agent's transcript
@@ -227,3 +169,129 @@ enum WorkflowScanner {
             ?? (try? Date(s, strategy: .iso8601))
     }
 }
+
+/// A JavaScript literal, as far as a workflow's `meta` needs: strings,
+/// arrays, objects; anything else is `.other`.
+enum JSLiteral: Equatable {
+    case string(String)
+    case array([JSLiteral])
+    case object([String: JSLiteral])
+    case other
+
+    var string: String? { if case .string(let s) = self { s } else { nil } }
+}
+
+/// Reads one JS literal value: objects with bare or quoted keys, arrays,
+/// strings in ' " or ` with backslash escapes, comments, trailing commas;
+/// numbers, booleans and expressions are skipped as `.other`.
+struct JSLiteralParser {
+    private let chars: [Character]
+    private var i = 0
+
+    init(_ text: Substring) { chars = Array(text) }
+
+    mutating func skip(past c: Character) {
+        while i < chars.count, chars[i] != c { i += 1 }
+        if i < chars.count { i += 1 }
+    }
+
+    mutating func value() -> JSLiteral {
+        skipSpace()
+        guard i < chars.count else { return .other }
+        switch chars[i] {
+        case "{": return object()
+        case "[": return array()
+        case "'", "\"", "`": return .string(quoted())
+        default:
+            // A number, true/false/null, an identifier or expression: skip to the next , } or ].
+            var depth = 0
+            while i < chars.count {
+                let c = chars[i]
+                if c == "(" || c == "[" || c == "{" { depth += 1 }
+                if c == ")" || c == "]" || c == "}" { if depth == 0 { break }; depth -= 1 }
+                if c == ",", depth == 0 { break }
+                i += 1
+            }
+            return .other
+        }
+    }
+
+    private mutating func object() -> JSLiteral {
+        i += 1   // {
+        var out: [String: JSLiteral] = [:]
+        while true {
+            skipSpace()
+            guard i < chars.count else { break }
+            if chars[i] == "}" { i += 1; break }
+            if chars[i] == "," { i += 1; continue }
+            let key: String
+            if chars[i] == "'" || chars[i] == "\"" || chars[i] == "`" {
+                key = quoted()
+            } else {
+                var k = ""
+                while i < chars.count, chars[i].isLetter || chars[i].isNumber || chars[i] == "_" || chars[i] == "$" { k.append(chars[i]); i += 1 }
+                if k.isEmpty { i += 1; continue }   // not a key: step over it
+                key = k
+            }
+            skipSpace()
+            guard i < chars.count, chars[i] == ":" else { continue }   // shorthand property: no value
+            i += 1
+            out[key] = value()
+        }
+        return .object(out)
+    }
+
+    private mutating func array() -> JSLiteral {
+        i += 1   // [
+        var out: [JSLiteral] = []
+        while true {
+            skipSpace()
+            guard i < chars.count else { break }
+            if chars[i] == "]" { i += 1; break }
+            if chars[i] == "," { i += 1; continue }
+            let before = i
+            out.append(value())
+            if i == before { i += 1 }   // never stall on an unexpected character
+        }
+        return .array(out)
+    }
+
+    private mutating func quoted() -> String {
+        let quote = chars[i]
+        i += 1
+        var s = ""
+        while i < chars.count, chars[i] != quote {
+            if chars[i] == "\\", i + 1 < chars.count {
+                i += 1
+                switch chars[i] {
+                case "n": s.append("\n")
+                case "t": s.append("\t")
+                default: s.append(chars[i])
+                }
+            } else {
+                s.append(chars[i])
+            }
+            i += 1
+        }
+        i += 1   // closing quote
+        return s
+    }
+
+    private mutating func skipSpace() {
+        while i < chars.count {
+            if chars[i].isWhitespace { i += 1; continue }
+            if chars[i] == "/", i + 1 < chars.count, chars[i + 1] == "/" {
+                while i < chars.count, chars[i] != "\n" { i += 1 }
+                continue
+            }
+            if chars[i] == "/", i + 1 < chars.count, chars[i + 1] == "*" {
+                i += 2
+                while i + 1 < chars.count, !(chars[i] == "*" && chars[i + 1] == "/") { i += 1 }
+                i += 2
+                continue
+            }
+            break
+        }
+    }
+}
+
