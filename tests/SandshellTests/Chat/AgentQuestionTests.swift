@@ -675,6 +675,52 @@ struct AgentQuestionFormTests {
         #expect(form.previewed.isEmpty)
     }
 
+    @Test func clickingAChoicePicksItAndClickingAgainClearsIt() {
+        let field = AQFixture.field("color", kind: .choice(AQFixture.colors))
+        let (form, _) = AQFixture.makeForm(AQFixture.form([field]))
+        form.toggle(AQFixture.colors[0], in: field)
+        #expect(form.picks["color"] == "Red")
+        form.toggle(AQFixture.colors[1], in: field)
+        #expect(form.picks["color"] == "Blue", "Another option replaces the pick")
+        form.toggle(AQFixture.colors[1], in: field)
+        #expect(form.picks["color"] == nil, "Clicking the picked option clears it")
+        #expect(form.previewed["color"] == AQFixture.colors[1], "The option clicked last is previewed")
+    }
+
+    @Test func clickingAMultiChoiceAddsAndRemovesOptions() {
+        let field = AQFixture.field("sizes", kind: .multiChoice(AQFixture.sizes))
+        let (form, _) = AQFixture.makeForm(AQFixture.form([field]))
+        form.toggle(AQFixture.sizes[0], in: field)
+        form.toggle(AQFixture.sizes[2], in: field)
+        #expect(form.multiPicks["sizes"] == ["S", "L"])
+        form.toggle(AQFixture.sizes[0], in: field)
+        #expect(form.multiPicks["sizes"] == ["L"])
+        #expect(form.previewed["sizes"] == AQFixture.sizes[0])
+    }
+
+    @Test(.tags(.agentQuestionEdgeCase),
+          arguments: [AgentQuestion.Field.Kind.text(secret: false), .number(integer: true), .toggle])
+    func clickingAnOptionOfAFieldWithoutOptionsChangesNothing(kind: AgentQuestion.Field.Kind) {
+        let field = AQFixture.field("q", kind: kind)
+        let (form, _) = AQFixture.makeForm(AQFixture.form([field]))
+        form.toggle(AQFixture.colors[0], in: field)
+        #expect(form.picks.isEmpty)
+        #expect(form.multiPicks.isEmpty)
+        #expect(form.previewed.isEmpty)
+    }
+
+    /// What `$form[text:]` and `$form[isOn:]` bind a text box and a toggle to.
+    @Test func bindingSubscriptsReadAndWriteTheAnswers() {
+        let (form, _) = AQFixture.makeForm(AQFixture.form([AQFixture.field("name"),
+                                                            AQFixture.field("agree", kind: .toggle)]))
+        #expect(form[text: "name"] == "", "An untouched box is empty")
+        #expect(form[isOn: "agree"] == false, "An untouched toggle is off")
+        form[text: "name"] = "Ada"
+        form[isOn: "agree"] = true
+        #expect(form.texts == ["name": "Ada"])
+        #expect(form.toggles == ["agree": true])
+    }
+
     @Test func choiceValueIsThePick() {
         let field = AQFixture.field("color", kind: .choice(AQFixture.colors))
         let (form, _) = AQFixture.makeForm(AQFixture.form([field]))

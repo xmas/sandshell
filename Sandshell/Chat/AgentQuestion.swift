@@ -140,9 +140,9 @@ struct AgentQuestion: Equatable, Identifiable {
 
         var result: JSONValue {
             switch self {
-            case .accept(let content): return ["action": "accept", "content": .object(content)]
-            case .decline: return ["action": "decline"]
-            case .cancel: return ["action": "cancel"]
+            case .accept(let content): ["action": "accept", "content": .object(content)]
+            case .decline: ["action": "decline"]
+            case .cancel: ["action": "cancel"]
             }
         }
     }
@@ -166,7 +166,8 @@ struct AgentQuestion: Equatable, Identifiable {
                 if case .text(secret: true) = q.kind, !parts.isEmpty { parts = ["••••"] }
                 if let other = companion(of: q), case .string(let s)? = content[other.id], !s.isEmpty { parts.append(s) }
                 guard !parts.isEmpty else { return nil }
-                return (q.title ?? q.detail ?? q.id, parts.joined(separator: ", "))
+                // The locale's narrow list: "S, L, XL" in English.
+                return (q.title ?? q.detail ?? q.id, parts.formatted(.list(type: .and, width: .narrow)))
             }
             if answers.isEmpty { return "Answered: \(message)" }
             // One untitled question: the message says what was asked.
