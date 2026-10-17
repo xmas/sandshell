@@ -9,7 +9,7 @@ extension Tag {
 }
 
 /// Tests for the value types in `Files/GitHistory.swift`: `ChangeScope`,
-/// `GitCommit` and `ScopedFile`.
+/// `GitCommit` and `ScopedFile`; and `GitHistory.lineCount`.
 ///
 /// Not covered: `GitHistory.commits`, `.files` and `.diff` — each one runs the
 /// host's git before doing anything else.
@@ -108,6 +108,27 @@ struct GitHistoryTests {
             let binary = ScopedFile(path: "/srv/repo/icon.png", change: .added, added: nil, removed: nil)
             let empty = ScopedFile(path: "/srv/repo/icon.png", change: .added, added: 0, removed: 0)
             #expect(binary != empty, "nil counts mean binary, not zero lines")
+        }
+    }
+
+    // MARK: - GitHistory.lineCount (an untracked file's added lines)
+
+    struct LineCounts {
+        @Test(arguments: [
+            ("one", 1), ("one\n", 1), ("one\ntwo", 2), ("one\ntwo\n", 2), ("\n", 1), ("\n\n\n", 3), ("Ünïcode ✓\n", 1),
+        ])
+        func linesAreCountedLikeGit(text: String, lines: Int) {
+            #expect(GitHistory.lineCount(text) == lines)
+        }
+
+        @Test(.tags(.gitHistoryEdgeCase))
+        func emptyFileHasNoLines() {
+            #expect(GitHistory.lineCount("") == 0, "git's numstat says 0 added for an empty new file")
+        }
+
+        @Test(.tags(.gitHistoryEdgeCase), arguments: [("one\r\ntwo\r\n", 2), ("one\r\ntwo", 2), ("\r\n", 1)])
+        func windowsLineEndingsCountOncePerLine(text: String, lines: Int) {
+            #expect(GitHistory.lineCount(text) == lines, "\"\\r\\n\" is one Character in Swift, but git counts the \"\\n\"")
         }
     }
 }

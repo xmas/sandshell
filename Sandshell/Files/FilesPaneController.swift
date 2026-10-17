@@ -48,9 +48,14 @@ final class FilesPaneController: NSViewController, NSSplitViewDelegate {
     private static let treeMax: CGFloat = 420
     /// The last tree width the user dragged to: where new Files panes start.
     private var widthKey: String { compact ? "filesPaneTreeWidth" : "filesTreeWidth" }
+    /// Where the editor's open tabs are remembered. The window's inspector has
+    /// its own (its tabs stay as it follows the selected session from folder
+    /// to folder); a split pane's is the first folder it shows.
+    private let tabsKey: String?
 
-    init(compact: Bool = false) {
+    init(compact: Bool = false, tabsKey: String? = nil) {
         self.compact = compact
+        self.tabsKey = tabsKey
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -121,11 +126,22 @@ final class FilesPaneController: NSViewController, NSSplitViewDelegate {
         _ = view   // make sure children are loaded
         tree.setRoot(folder)
         tree.sandboxAccess = access
-        // The first folder names where this surface's tabs are kept.
-        if editor.tabsKey == nil, let folder {
-            editor.tabsKey = "filesTabs:" + folder.standardizedFileURL.path
+        if editor.tabsKey == nil, let key = tabsKey ?? folder.map(Self.folderTabsKey) {
+            if tabsKey != nil, let folder { Self.adoptTabs(from: Self.folderTabsKey(folder), into: key) }
+            editor.tabsKey = key
             editor.restoreTabs()
         }
+    }
+
+    /// A split Files pane's tabs: under the first folder it shows.
+    static func folderTabsKey(_ folder: URL) -> String { "filesTabs:" + folder.standardizedFileURL.path }
+
+    /// The inspector's tabs used to be kept under the first folder it showed:
+    /// the first time it has its own key, it starts from that list. Copied, not
+    /// moved — a split Files pane on that folder may be using it too.
+    static func adoptTabs(from old: String, into key: String, defaults: UserDefaults = .standard) {
+        guard defaults.object(forKey: key) == nil else { return }
+        defaults.set(defaults.stringArray(forKey: old) ?? [], forKey: key)
     }
 
     func open(_ url: URL) {

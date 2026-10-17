@@ -29,6 +29,13 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
     private var gitWatcher: FileWatcher?
     private var gitWatcherPath: String?
     private var refreshPending = false
+    /// A row's name is being edited in place: refreshes wait (a reload recycles
+    /// its cell and ends the edit) and run once it's done.
+    private var renaming = false
+    private var refreshAfterRename = false
+    /// Renames and moves made here since the outline last reloaded: the
+    /// selection follows them (the outline still holds the old paths' nodes).
+    private var movesSinceReload: [(from: URL, to: URL)] = []
     private var filterResults: [FileNode]?
     /// "?query" content-search results, grouped by file.
     private var searchGroups: [SearchGroup]?
@@ -194,6 +201,7 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
     /// Show `url`'s tree (the active session's working directory).
     func setRoot(_ url: URL?) {
         guard url?.standardizedFileURL != root?.standardizedFileURL else { return }
+        endRenaming()
         root = url
         watcher?.stop()
         watcher = nil
@@ -208,6 +216,7 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
         scope = .uncommitted
         scoped = [:]
         wantsChanges = nil
+        movesSinceReload = []
         commits.select(nil)
         // The last root's status and scope mean nothing here (and the editor
         // mustn't keep diffing the old repo's commit).
@@ -253,10 +262,48 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
             guard let self else { return }
             self.refreshPending = false
             self.onFilesChanged?()
+            if self.renaming { self.refreshAfterRename = true; return }
             self.rootNode?.reloadLoaded()
-            if !self.filter.stringValue.isEmpty { self.applyFilter() } else { self.outline.reloadData() }
+            if !self.filter.stringValue.isEmpty { self.applyFilter(keepingSelection: true) } else { self.reloadOutline() }
             self.refreshGit()
         }
+    }
+
+    /// Reload the outline with the same files selected: reloadData keeps the
+    /// selected rows, not items, so a file created above would take the
+    /// selection (and ⌘⌫ would trash it). A renamed or moved file stays
+    /// selected under its new path. `update` changes what's listed first.
+    private func reloadOutline(_ update: () -> Void = {}) {
+        let items = outline.selectedRowIndexes.compactMap { outline.item(atRow: $0).map { $0 as AnyObject } }
+        let paths = Set(items.compactMap { ($0 as? FileNode)?.url }.map { Self.following($0, through: movesSinceReload).path })
+        let others = items.filter { !($0 is FileNode) }
+        movesSinceReload = []
+        let wasList = filterResults != nil || searchGroups != nil
+        update()
+        outline.reloadData()
+        // Back to the tree from a list: the outline forgot which folders were
+        // open (their nodes weren't in it), so reopen the remembered ones.
+        if wasList, filterResults == nil, searchGroups == nil { restoreExpansion() }
+        // Files by path (the tree makes new nodes for what changed); a search
+        // match or file group only if it's still listed. Nothing left: nothing
+        // selected, not whatever moved into the old rows.
+        let rows = (0..<outline.numberOfRows).filter { row in
+            guard let item = outline.item(atRow: row) else { return false }
+            if let node = item as? FileNode { return paths.contains(node.url.path) }
+            return others.contains { $0 === item as AnyObject }
+        }
+        outline.selectRowIndexes(IndexSet(rows), byExtendingSelection: false)
+    }
+
+    /// Where `url` is after `moves` (in order): moved itself, or inside a
+    /// folder that moved; as it was otherwise.
+    static func following(_ url: URL, through moves: [(from: URL, to: URL)]) -> URL {
+        var path = url.path
+        for (from, to) in moves {
+            if path == from.path { path = to.path }
+            else if path.hasPrefix(from.path + "/") { path = to.path + path.dropFirst(from.path.count) }
+        }
+        return path == url.path ? url : URL(fileURLWithPath: path)
     }
 
     private func refreshGit() {
@@ -271,22 +318,30 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
             }
             if status != self.git {
                 self.git = status
-                if self.changedOnly && self.filter.stringValue.isEmpty { self.showChangedList() }
-                self.outline.reloadData()
+                if self.renaming { self.refreshAfterRename = true } else {
+                    self.reloadOutline { if self.changedOnly && self.filter.stringValue.isEmpty { self.showChangedList() } }
+                }
                 self.onGitStatus?(status)
             }
-            let changed = status.changes.count
             self.updateChangedTitle()
             self.changedButton.imagePosition = .imageLeading
             self.changedButton.isEnabled = status.repoRoot != nil
             self.changedButton.toolTip = status.repoRoot == nil ? "Not a git repository"
-                : "Show only changed files (\(changed))"
-            self.branchLabel.stringValue = status.repoRoot == nil ? "Not a git repository"
-                : "\(status.branch ?? "detached")" + (changed > 0 ? " · \(changed) changed" : " · clean")
+                : "Show only changed files (\(status.changes.count))"
+            self.updateBranchLabel()
             self.refreshHistory()
             if let wanted = self.wantsChanges, status.repoRoot != nil { self.showChanges(true, scope: wanted) }
             else if self.changedOnly { self.loadScope() }
         }
+    }
+
+    /// "main · 3 changed" under the tree — while content-search results show,
+    /// their match count is there instead.
+    private func updateBranchLabel() {
+        guard searchGroups == nil else { return }
+        let changed = git.changes.count
+        branchLabel.stringValue = git.repoRoot == nil ? "Not a git repository"
+            : "\(git.branch ?? "detached")" + (changed > 0 ? " · \(changed) changed" : " · clean")
     }
 
     // MARK: Commits
@@ -336,8 +391,7 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
             let changedSet = Set(new.keys) != Set(self.scoped.keys)
             self.scoped = new
             self.updateChangedTitle()
-            if self.filter.stringValue.isEmpty { self.showChangedList() }
-            self.outline.reloadData()
+            self.reloadOutline { if self.filter.stringValue.isEmpty { self.showChangedList() } }
             if changedSet, self.outline.selectedRow < 0, self.outline.numberOfRows > 0 {
                 self.outline.selectRowIndexes([0], byExtendingSelection: false)
             }
@@ -354,23 +408,26 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
         _ = view
         // Asked for before the status has loaded (a new Files pane): do it then.
         if on, git.repoRoot == nil, root != nil { wantsChanges = scope; return }
+        endRenaming()
         wantsChanges = nil
         changedOnly = on && git.repoRoot != nil
         changedButton.state = changedOnly ? .on : .off
         self.scope = changedOnly ? scope : .uncommitted
         commits.select(changedOnly ? self.scope : nil)
-        if changedOnly {
-            filter.stringValue = ""
-            searchGroups = nil
-            showChangedList()
-            loadScope()
-        } else {
-            filterResults = nil
-            scoped = [:]
-            updateChangedTitle()
-            onScope?(.uncommitted, [])
+        reloadOutline {
+            if changedOnly {
+                filter.stringValue = ""
+                searchGroups = nil
+                showChangedList()
+                loadScope()
+            } else {
+                filterResults = nil
+                scoped = [:]
+                updateChangedTitle()
+                onScope?(.uncommitted, [])
+            }
         }
-        outline.reloadData()
+        updateBranchLabel()
         if changedOnly, outline.numberOfRows > 0 { outline.selectRowIndexes([0], byExtendingSelection: false) }
     }
 
@@ -396,28 +453,38 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
 
     func controlTextDidChange(_ obj: Notification) { applyFilter() }
 
-    private func applyFilter() {
+    /// `keepingSelection`: a refresh, not typing — the same files stay
+    /// selected rather than the best match.
+    private func applyFilter(keepingSelection: Bool = false) {
         guard let root else { return }
         let query = filter.stringValue.trimmingCharacters(in: .whitespaces)
         guard !query.isEmpty else {
-            searchGroups = nil
-            if changedOnly { showChangedList() } else { filterResults = nil }
-            outline.reloadData()
+            reloadOutline {
+                searchGroups = nil
+                if changedOnly { showChangedList() } else { filterResults = nil }
+            }
+            updateBranchLabel()
             return
         }
         if query.hasPrefix("?") {
             searchContents(String(query.dropFirst()).trimmingCharacters(in: .whitespaces), in: root)
             return
         }
-        searchGroups = nil
+        if searchGroups != nil {
+            searchGroups = nil
+            updateBranchLabel()
+        }
         let base = root.path
         Task { [weak self] in
             let files = await WorkspaceFileIndex.shared.files(under: base)
             let matches = WorkspaceFileIndex.match(files, query: query, limit: 200)
             guard let self, self.filter.stringValue.trimmingCharacters(in: .whitespaces) == query else { return }
-            self.filterResults = matches.map { FileNode(url: URL(fileURLWithPath: base).appendingPathComponent($0), isDirectory: false) }
-            self.outline.reloadData()
-            if !matches.isEmpty { self.outline.selectRowIndexes([0], byExtendingSelection: false) }
+            self.reloadOutline {
+                self.filterResults = matches.map { FileNode(url: URL(fileURLWithPath: base).appendingPathComponent($0), isDirectory: false) }
+            }
+            if !matches.isEmpty, !keepingSelection || self.outline.selectedRow < 0 {
+                self.outline.selectRowIndexes([0], byExtendingSelection: false)
+            }
         }
     }
 
@@ -426,6 +493,7 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
     private func searchContents(_ query: String, in root: URL) {
         filterResults = nil
         searchQuery = query
+        movesSinceReload = []   // no files listed to follow
         guard !query.isEmpty else {
             searchGroups = []
             outline.reloadData()
@@ -564,6 +632,9 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
     }
 
     @objc private func clicked() {
+        // ⌘- and ⇧-clicks add to (or take from) the selection: only a plain
+        // click opens, since opening moves the keyboard to the editor.
+        guard NSApp.currentEvent?.modifierFlags.intersection([.command, .shift]).isEmpty ?? true else { return }
         let item = outline.item(atRow: outline.clickedRow)
         if let match = item as? MatchNode { onOpenAtLine?(match.url, match.line, searchQuery); return }
         if let group = item as? SearchGroup { onOpen?(group.url); return }
@@ -612,22 +683,40 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
         UserDefaults.standard.set(expanded, forKey: key)
     }
 
-    func outlineViewItemDidExpand(_ notification: Notification) { saveExpansion() }
-    func outlineViewItemDidCollapse(_ notification: Notification) { saveExpansion() }
+    /// Save once on the next turn: ⌥-clicking a disclosure triangle expands
+    /// every folder below it, one notification each.
+    private func scheduleSaveExpansion() {
+        guard !restoringExpansion, !expansionSavePending else { return }
+        expansionSavePending = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.expansionSavePending = false
+            self.saveExpansion()
+        }
+    }
+    private var expansionSavePending = false
+
+    func outlineViewItemDidExpand(_ notification: Notification) { scheduleSaveExpansion() }
+    func outlineViewItemDidCollapse(_ notification: Notification) { scheduleSaveExpansion() }
 
     // MARK: Selection, Return, ⌘C
 
     var selectedURLs: [URL] { outline.selectedRowIndexes.compactMap { (outline.item(atRow: $0) as? FileNode)?.url } }
 
-    /// Return: open the selected file(s); a folder opens or closes.
+    /// Return: open the selected file(s); a folder opens or closes; a content
+    /// search's match (or a file's first) opens at its line, the query picked out.
     private func openSelection() {
+        let item = outline.item(atRow: outline.selectedRow)
+        if let match = item as? MatchNode ?? (item as? SearchGroup)?.matches.first {
+            onOpenAtLine?(match.url, match.line, searchQuery)
+            return
+        }
         let nodes = outline.selectedRowIndexes.compactMap { outline.item(atRow: $0) as? FileNode }
         if nodes.count == 1, let folder = nodes.first, folder.isDirectory {
             outline.isItemExpanded(folder) ? outline.collapseItem(folder) : outline.expandItem(folder)
             return
         }
         for node in nodes where !node.isDirectory { onOpen?(node.url) }
-        if let match = outline.item(atRow: outline.selectedRow) as? MatchNode { onOpenAtLine?(match.url, match.line, match.text) }
     }
 
     /// ⌘C: the selected files (for Finder) and their paths (for text).
@@ -649,14 +738,27 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
         outline.selectRowIndexes(IndexSet(rows), byExtendingSelection: false)
     }
     func debugRefresh() { refreshNow() }
-    func debugExpand(_ url: URL) { if let n = node(for: url) { outline.expandItem(n) } }
+    /// Saved at once (not on the next turn), so the self-test can read it back.
+    func debugExpand(_ url: URL) { if let n = node(for: url) { outline.expandItem(n); saveExpansion() } }
     func debugCollapseAll() { outline.collapseItem(nil, collapseChildren: true) }
     func debugIsExpanded(_ url: URL) -> Bool { node(for: url).map { outline.isItemExpanded($0) } ?? false }
     #endif
 
     // MARK: File operations (undoable)
 
+    /// The window's undo manager (the sidebar, the editor and other panes share it).
     private var undo: UndoManager? { view.window?.undoManager }
+
+    /// Register `name`'s undo on `undo`, with the manager itself as the target:
+    /// NSUndoManager doesn't retain targets, and a split Files pane's tree goes
+    /// away with the pane while its actions stay on the window's stack.
+    /// `handler` gets the manager (for the redo) and the tree, if it's still here.
+    private static func registerUndo(_ name: String, on undo: UndoManager?, tree: FileTreeController?,
+                                     _ handler: @escaping @MainActor (UndoManager, FileTreeController?) -> Void) {
+        guard let undo else { return }
+        undo.registerUndo(withTarget: undo) { [weak tree] undo in handler(undo, tree) }
+        undo.setActionName(name)
+    }
 
     /// Where something new goes: the clicked/selected folder, or a file's folder, or the root.
     private var targetFolder: URL? {
@@ -677,13 +779,33 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
         return make(n)
     }
 
+    /// Where `url` lands when dropped into `dir`: under its own name, or
+    /// "name 2" when that's taken — "name copy" when copied into its own folder.
+    static func dropTarget(for url: URL, in dir: URL) -> URL {
+        let ownFolder = url.deletingLastPathComponent().standardizedFileURL.path == dir.standardizedFileURL.path
+        return unique(url.lastPathComponent, in: dir, copy: ownFolder)
+    }
+
+    /// `urls` without those inside another of them: a folder moved or trashed
+    /// with some of its own files selected takes them along (moving them after
+    /// it would fail).
+    static func outermost(_ urls: [URL]) -> [URL] {
+        let folders = urls.map { $0.standardizedFileURL.path + "/" }
+        return urls.filter { url in
+            let path = url.standardizedFileURL.path
+            return !folders.contains { path.hasPrefix($0) }
+        }
+    }
+
     private func refreshNow() {
+        if renaming { refreshAfterRename = true; return }
         rootNode?.reloadLoaded()
-        if !filter.stringValue.isEmpty { applyFilter() } else { outline.reloadData() }
+        if !filter.stringValue.isEmpty { applyFilter(keepingSelection: true) } else { reloadOutline() }
     }
 
     /// Select `url` in the tree (refreshing first), and start renaming it.
     private func selectAndRename(_ url: URL) {
+        endRenaming()
         refreshNow()
         guard let node = node(for: url) else { return }
         var parent = node.url.deletingLastPathComponent()
@@ -707,35 +829,53 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
             if directory { try FileManager.default.createDirectory(at: url, withIntermediateDirectories: false) }
             else { try Data().write(to: url, options: .withoutOverwriting) }
         } catch { return Alerts.inform("Couldn’t create “\(url.lastPathComponent)”.", error.localizedDescription) }
-        undo?.registerUndo(withTarget: self) { tree in MainActor.assumeIsolated { tree.trash([url], undoable: false) } }
-        undo?.setActionName(directory ? "New Folder" : "New File")
+        Self.registerUndo(directory ? "New Folder" : "New File", on: undo, tree: self) { _, tree in
+            Self.trash([url], undo: nil, tree: tree)
+        }
         selectAndRename(url)
     }
 
     private func beginRename(row: Int) {
         guard let node = outline.item(atRow: row) as? FileNode,
               let cell = outline.view(atColumn: 0, row: row, makeIfNecessary: true) as? FileCell else { return }
+        renaming = true
         cell.beginRenaming { [weak self] name in
-            guard let self, let name, !name.isEmpty, name != node.name, !name.contains("/") else {
-                self?.view.window?.makeFirstResponder(self?.outline)
-                return
+            guard let self else { return }
+            self.renaming = false
+            if let name, !name.isEmpty, name != node.name, !name.contains("/") {
+                self.move(node.url, to: node.url.deletingLastPathComponent().appendingPathComponent(name), action: "Rename")
             }
-            self.move(node.url, to: node.url.deletingLastPathComponent().appendingPathComponent(name), action: "Rename")
             self.view.window?.makeFirstResponder(self.outline)
+            if self.refreshAfterRename {
+                self.refreshAfterRename = false
+                self.scheduleRefresh()
+            }
         }
+    }
+
+    /// Commit an in-place rename before what the tree lists changes under it.
+    private func endRenaming() {
+        guard renaming else { return }
+        view.window?.makeFirstResponder(outline)   // ends the edit: the cell reports the name
+        renaming = false
     }
 
     /// Move or rename, undoably; open tabs follow.
     @discardableResult
-    func move(_ from: URL, to: URL, action: String) -> Bool {
+    func move(_ from: URL, to: URL, action: String) -> Bool { Self.move(from, to: to, action: action, undo: undo, tree: self) }
+
+    /// Move, and register the move back on `undo` (the redo, while undoing).
+    private static func move(_ from: URL, to: URL, action: String, undo: UndoManager?, tree: FileTreeController?) -> Bool {
         do { try FileManager.default.moveItem(at: from, to: to) } catch {
             Alerts.inform("Couldn’t \(action.lowercased()) “\(from.lastPathComponent)”.", error.localizedDescription)
             return false
         }
-        onFileMoved?(from, to)
-        undo?.registerUndo(withTarget: self) { tree in MainActor.assumeIsolated { _ = tree.move(to, to: from, action: action) } }
-        undo?.setActionName(action)
-        refreshNow()
+        tree?.onFileMoved?(from, to)
+        Self.registerUndo(action, on: undo, tree: tree) { undo, tree in
+            _ = Self.move(to, to: from, action: action, undo: undo, tree: tree)
+        }
+        tree?.movesSinceReload.append((from, to))   // selected, it stays selected
+        tree?.refreshNow()
         return true
     }
 
@@ -746,28 +886,32 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
             if (try? FileManager.default.copyItem(at: url, to: copy)) != nil { made.append(copy) }
         }
         guard !made.isEmpty else { return NSSound.beep() }
-        undo?.registerUndo(withTarget: self) { tree in MainActor.assumeIsolated { tree.trash(made, undoable: false) } }
-        undo?.setActionName("Duplicate")
+        Self.registerUndo("Duplicate", on: undo, tree: self) { _, tree in Self.trash(made, undo: nil, tree: tree) }
         refreshNow()
     }
 
     /// Move to Trash (⌘⌫); Undo puts them back.
-    func trash(_ urls: [URL], undoable: Bool = true) {
+    func trash(_ urls: [URL], undoable: Bool = true) { Self.trash(urls, undo: undoable ? undo : nil, tree: self) }
+
+    /// Recycle, and register putting back what reached the Trash on `undo` (nil: not undoable).
+    private static func trash(_ urls: [URL], undo: UndoManager?, tree: FileTreeController?) {
+        let urls = outermost(urls)
         guard !urls.isEmpty else { return }
-        NSWorkspace.shared.recycle(urls) { [weak self] moved, error in
+        NSWorkspace.shared.recycle(urls) { [weak tree] moved, error in
             MainActor.assumeIsolated {
-                guard let self else { return }
-                if let error { return Alerts.inform("Couldn’t move to the Trash.", error.localizedDescription) }
-                if undoable {
-                    self.undo?.registerUndo(withTarget: self) { tree in
-                        MainActor.assumeIsolated {
-                            for (original, inTrash) in moved { try? FileManager.default.moveItem(at: inTrash, to: original) }
-                            tree.refreshNow()
-                        }
+                // What did go can come back, even when something else couldn't.
+                if !moved.isEmpty {
+                    Self.registerUndo("Move to Trash", on: undo, tree: tree) { _, tree in
+                        for (original, inTrash) in moved { try? FileManager.default.moveItem(at: inTrash, to: original) }
+                        tree?.refreshNow()
                     }
-                    self.undo?.setActionName("Move to Trash")
                 }
-                self.refreshNow()
+                tree?.refreshNow()
+                if let error {
+                    let trashed = Set(moved.keys.map(\.path))
+                    let failed = urls.filter { !trashed.contains($0.path) }.map { " “\($0.lastPathComponent)”" }
+                    Alerts.inform("Couldn’t move\(failed.joined(separator: ",")) to the Trash.", error.localizedDescription)
+                }
             }
         }
     }
@@ -779,9 +923,9 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
         guard root != nil, filterResults == nil, searchGroups == nil, !changedOnly,
               info.draggingPasteboard.canReadObject(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true])
         else { return [] }
-        // Onto a folder (a file's own folder when dropped on a file).
+        // Onto a folder (a file's own folder when dropped on a file; nil is the root).
         var folder = item as? FileNode
-        if let f = folder, !f.isDirectory { folder = nil }
+        if let f = folder, !f.isDirectory { folder = outlineView.parent(forItem: f) as? FileNode }
         outlineView.setDropItem(folder, dropChildIndex: NSOutlineViewDropOnItemIndex)
         let isInternal = info.draggingSource as? NSOutlineView === outlineView
         return isInternal && !NSEvent.modifierFlags.contains(.option) ? .move : .copy
@@ -794,14 +938,14 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
         let isInternal = info.draggingSource as? NSOutlineView === outlineView && !NSEvent.modifierFlags.contains(.option)
         var done = false
         undo?.beginUndoGrouping()
-        for url in urls where url.deletingLastPathComponent().standardizedFileURL != dest.standardizedFileURL || !isInternal {
+        for url in Self.outermost(urls)
+        where url.deletingLastPathComponent().standardizedFileURL != dest.standardizedFileURL || !isInternal {
             guard !dest.path.hasPrefix(url.path + "/"), dest != url else { continue }   // not into itself
-            let target = Self.unique(url.lastPathComponent, in: dest, copy: !isInternal)
+            let target = Self.dropTarget(for: url, in: dest)
             if isInternal {
                 done = move(url, to: target, action: "Move") || done
             } else if (try? FileManager.default.copyItem(at: url, to: target)) != nil {
-                undo?.registerUndo(withTarget: self) { tree in MainActor.assumeIsolated { tree.trash([target], undoable: false) } }
-                undo?.setActionName("Copy")
+                Self.registerUndo("Copy", on: undo, tree: self) { _, tree in Self.trash([target], undo: nil, tree: tree) }
                 done = true
             }
         }
@@ -860,10 +1004,15 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
             NSSharingServicePicker(items: urls as [NSURL]).show(relativeTo: rect, of: self.outline, preferredEdge: .maxY)
         }
         menu.addItem(.separator())
-        add("New File") { [weak self] in self?.newFile() }
-        add("New Folder") { [weak self] in self?.newFolder() }
-        if urls.count == 1 {
+        // New and Rename… edit a name in the tree; the filter's and the changed
+        // list's rows are other nodes (and show paths).
+        if filterResults == nil {
+            add("New File") { [weak self] in self?.newFile() }
+            add("New Folder") { [weak self] in self?.newFolder() }
+        }
+        if urls.count == 1, filterResults == nil {
             add("Rename…") { [weak self] in
+                self?.endRenaming()   // another row's, still open (a right-click doesn't end it)
                 guard let self, let node = self.node(for: urls[0]) else { return }
                 let row = self.outline.row(forItem: node)
                 if row >= 0 { self.beginRename(row: row) }
@@ -947,14 +1096,16 @@ final class FileCell: NSTableCellView {
     required init?(coder: NSCoder) { fatalError() }
 
     private var renameDone: ((String?) -> Void)?
+    private var nameBeforeRename = ""
 
     /// Edit the name in place (Return keeps it, Esc cancels).
     func beginRenaming(_ done: @escaping (String?) -> Void) {
         renameDone = done
+        nameBeforeRename = name.stringValue
         name.isEditable = true
         name.isSelectable = true
         name.delegate = self
-        window?.makeFirstResponder(name)
+        guard window?.makeFirstResponder(name) == true else { return finishRenaming(nil) }
         // The name without its extension selected, like Finder.
         let stem = (name.stringValue as NSString).deletingPathExtension
         name.currentEditor()?.selectedRange = NSRange(location: 0, length: (stem as NSString).length)
@@ -965,11 +1116,17 @@ final class FileCell: NSTableCellView {
         renameDone = nil
         name.isEditable = false
         name.isSelectable = false
+        // The row keeps the old name until the file is renamed (the tree's
+        // reload shows the new one): Esc, or a name that's refused, leaves
+        // nothing typed behind.
+        name.stringValue = nameBeforeRename
         done(value)
     }
 
     func configure(icon image: NSImage, title: String, change: GitStatus.Change?, dirtyFolder: Bool,
                    counts: (added: Int?, removed: Int?)? = nil) {
+        // Reused mid-rename (scrolled away): that edit was another row's.
+        if renameDone != nil { finishRenaming(nil) }
         icon.image = image
         name.stringValue = title
         name.textColor = change.map { $0 == .deleted ? NSColor.secondaryLabelColor : $0.color } ?? .labelColor
