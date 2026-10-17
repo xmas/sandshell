@@ -356,9 +356,12 @@ final class MainWindowController: NSWindowController {
         workspace?.newChatInCurrentContext(agent: agent)
     }
 
-    #if DEBUG
-    /// Self-test access (see SelfTest).
+    // The window's parts, for the app's menu commands (and the self-tests).
     var paneTree: PaneTreeController? { detail }
+    var inspectorFiles: FilesPaneController? { filesPane }
+    var workspaceController: WorkspaceController? { workspace }
+    var sidebarList: SidebarListController? { sidebar }
+    var searchWindowController: SearchWindowController? { searchWindow }
 
     #if DEBUG
     /// Self-test: the toolbar's identity and status views' widths.
@@ -380,11 +383,6 @@ final class MainWindowController: NSWindowController {
         let label = toolbarName.superview?.convert(text, to: identityItemView) ?? text
         return (label.maxX, identityItemView.bounds.width)
     }
-    #endif
-    var inspectorFiles: FilesPaneController? { filesPane }
-    var workspaceController: WorkspaceController? { workspace }
-    var sidebarList: SidebarListController? { sidebar }
-    var searchWindowController: SearchWindowController? { searchWindow }
     #endif
 
     // MARK: Panes (View ▸ Split Right / Split Down / Close Pane …)
