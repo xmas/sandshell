@@ -83,6 +83,28 @@ struct MountConfigModelTests {
         #expect(model.atLimit)
     }
 
+    /// `sandshell://open?ro=/srv/data&rw=/srv/data` stores the folder twice; the
+    /// list is keyed by path, so it must show one row.
+    @Test(.tags(.edgeCase)) func aFolderListedTwiceShowsOnceWithItsLastEntry() throws {
+        defer { try? FileManager.default.removeItem(at: home) }
+        try makeFolders("Documents")
+        let data = URL(filePath: "/srv/data"), logs = URL(filePath: "/srv/logs")
+        let model = makeModel([MountSpec(path: data, readonly: true),
+                               MountSpec(path: logs, readonly: true),
+                               MountSpec(path: URL(filePath: "/srv/data/"), readonly: false),
+                               MountSpec(path: home.appending(path: "Documents"), readonly: true)])
+
+        #expect(model.others.map(\.path.standardizedFileURL.path) == ["/srv/logs", "/srv/data"])
+        #expect(model.others.map(\.readonly) == [true, false], "the later read-write entry wins")
+        #expect(model.mountCount == 1 + 2 + 1 + 2)
+        #expect(!model.isDirty)
+
+        model.toggleReadonly(model.others[1])
+        #expect(model.others.map(\.readonly) == [true, true])
+        model.removeOther(model.others[1])
+        #expect(model.others.map(\.path) == [logs])
+    }
+
     @Test func flippingAFolderToReadWriteKeepsItAndMarksItChanged() {
         defer { try? FileManager.default.removeItem(at: home) }
         let data = URL(filePath: "/srv/data")

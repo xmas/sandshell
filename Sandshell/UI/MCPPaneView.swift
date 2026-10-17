@@ -25,19 +25,19 @@ struct MCPPaneView: View {
             MCPPaneActions(model: model, controller: controller, onConfirm: onConfirm, onCancel: onCancel)
         }
         .frame(width: InspectorMetrics.paneWidth, height: InspectorMetrics.paneHeight)
-        // After a server authenticates / is added, auto-enable it — including one
-        // that finished while this pane was closed or another pane was showing.
-        .onChange(of: controller.mcpJustAuthenticated, initial: true) { _, name in
-            adoptAuthenticated(name)
+        // After servers authenticate / are added, auto-enable them — including
+        // any that finished while this pane was closed or another pane was showing.
+        .onChange(of: controller.mcpPendingEnable, initial: true) { _, names in
+            adoptPending(names)
         }
     }
 
-    /// Enable a server the controller just authenticated or added, then clear
-    /// the controller's one-shot flag.
-    private func adoptAuthenticated(_ name: String?) {
-        guard let name else { return }
-        model.add(name)
-        controller.mcpJustAuthenticated = nil
+    /// Enable the servers the controller just authenticated or added, then
+    /// clear its list.
+    private func adoptPending(_ names: [String]) {
+        guard !names.isEmpty else { return }
+        for name in names { model.add(name) }
+        controller.mcpPendingEnable = []
     }
 }
 

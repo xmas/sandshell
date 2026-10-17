@@ -47,8 +47,13 @@ final class MountConfigModel {
         suggestions = suggestionURLs.map {
             Suggestion(url: $0, enabled: selectedPaths.contains($0.standardizedFileURL.path))
         }
-        let suggestionPaths = Set(suggestionURLs.map { $0.standardizedFileURL.path })
-        others = policy.selections.filter { !suggestionPaths.contains($0.path.standardizedFileURL.path) }
+        // Other folders are listed by path, so each appears once: a folder the
+        // policy holds twice (`sandshell://open?ro=/x&rw=/x` stores both) keeps
+        // its last entry, the one added last.
+        var listed = Set(suggestionURLs.map { $0.standardizedFileURL.path })
+        others = policy.selections.reversed()
+            .filter { listed.insert($0.path.standardizedFileURL.path).inserted }
+            .reversed()
     }
 
     // MARK: Dirty tracking / revert
@@ -120,7 +125,8 @@ final class MountConfigModel {
 
     /// Flip a user-added folder between read-only and read-write.
     func toggleReadonly(_ spec: MountSpec) {
-        guard let i = others.firstIndex(where: { $0.path == spec.path }) else { return }
+        let path = spec.path.standardizedFileURL.path
+        guard let i = others.firstIndex(where: { $0.path.standardizedFileURL.path == path }) else { return }
         others[i].readonly.toggle()
     }
 
