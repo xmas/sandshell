@@ -71,29 +71,13 @@ enum WorkflowScanner {
     }
 
     nonisolated static func run(_ runID: String, dir: URL, script: URL?) -> WorkflowRun? {
-        guard let journal = try? String(contentsOf: dir.appendingPathComponent("journal.jsonl"), encoding: .utf8) else { return nil }
-        var order: [String] = []
-        var started: [String: (label: String, phase: String?)] = [:]
-        var results: [String: Bool] = [:]   // agent id → answered with something
-        for line in journal.split(separator: "\n") {
-            guard let o = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
-                  let id = o["agentId"] as? String else { continue }
-            switch o["type"] as? String {
-            case "started":
-                if started[id] == nil { order.append(id) }
-                started[id] = (o["label"] as? String ?? id, o["phase"] as? String)
-            case "result":
-                results[id] = !(o["result"] is NSNull) && o["result"] != nil
-            default: continue
-            }
-        }
+        guard let journal = Journal(dir) else { return nil }
         let meta = script.flatMap { try? String(contentsOf: $0, encoding: .utf8) }.map(parseMeta) ?? Meta()
-        let agents = order.map { id -> WorkflowRun.Agent in
-            let info = started[id]!
+        let agents = journal.order.map { id -> WorkflowRun.Agent in
+            let info = journal.started[id]!
             let t = transcriptFacts(dir.appendingPathComponent("agent-\(id).jsonl"))
-            let state: WorkflowRun.Agent.State = results[id].map { $0 ? .done : .failed } ?? .running
             return .init(id: id, label: info.label, phase: info.phase, model: t.model, tokens: t.tokens,
-                         startedAt: t.first, lastWrite: t.last, state: state)
+                         startedAt: t.first, lastWrite: t.last, state: journal.state(of: id))
         }
         // The script's phases first, then any an agent names that it doesn't.
         var phases = meta.phases
@@ -105,6 +89,39 @@ enum WorkflowScanner {
         return WorkflowRun(id: runID, dir: dir, name: meta.name ?? runID, summary: meta.description, phases: phases, agents: agents,
                            startedAt: starts.min() ?? dirAttrs?[.creationDate] as? Date,
                            lastWrite: lasts.max() ?? dirAttrs?[.modificationDate] as? Date)
+    }
+
+    /// One agent's state from its run's journal alone (nil: no journal, or
+    /// the agent isn't in it), for following one agent without rereading
+    /// every agent's transcript the way `run` does.
+    nonisolated static func state(ofAgent id: String, inRun dir: URL) -> WorkflowRun.Agent.State? {
+        guard let journal = Journal(dir), journal.started[id] != nil else { return nil }
+        return journal.state(of: id)
+    }
+
+    /// A run's `journal.jsonl`: the agents it started, in order, and which answered.
+    private struct Journal {
+        var order: [String] = []
+        var started: [String: (label: String, phase: String?)] = [:]
+        var results: [String: Bool] = [:]   // agent id → answered with something
+
+        init?(_ dir: URL) {
+            guard let text = try? String(contentsOf: dir.appendingPathComponent("journal.jsonl"), encoding: .utf8) else { return nil }
+            for line in text.split(separator: "\n") {
+                guard let o = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
+                      let id = o["agentId"] as? String else { continue }
+                switch o["type"] as? String {
+                case "started":
+                    if started[id] == nil { order.append(id) }
+                    started[id] = (o["label"] as? String ?? id, o["phase"] as? String)
+                case "result":
+                    results[id] = !(o["result"] is NSNull) && o["result"] != nil
+                default: continue
+                }
+            }
+        }
+
+        func state(of id: String) -> WorkflowRun.Agent.State { results[id].map { $0 ? .done : .failed } ?? .running }
     }
 
     // MARK: The script's meta

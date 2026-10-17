@@ -83,7 +83,8 @@ final class SubagentWindowController: NSWindowController, NSWindowDelegate {
 
     /// Its state from the sidebar's poll (a workflow's agent: from its run's);
     /// once off those lists (its session closed, newer ones pushed it off, its
-    /// folder's window went away), from its transcript.
+    /// folder's window went away), from what they're made of: a workflow
+    /// agent's run journal, a background subagent's task, else its transcript.
     private func refreshState() async {
         if let latest = workspace?.subagents[info.sessionID]?.first(where: { $0.id == info.id }) {
             info = latest
@@ -94,14 +95,28 @@ final class SubagentWindowController: NSWindowController, NSWindowDelegate {
             info.state = SubagentInfo.State(agent.state)
             return
         }
-        let url = info.transcript
+        let url = info.transcript, id = info.id
         let lastWrite = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date ?? info.lastWrite
-        // Settled and not written since: it stays as it is.
-        guard info.isRunning || lastWrite != info.lastWrite else { return }
-        let since = workspace?.runtime(info.sessionID)?.workingSince
-        var state = await Task.detached(priority: .utility) {
-            SubagentScanner.state(url, lastWrite: lastWrite, parentWorkingSince: since)
-        }.value
+        var state: SubagentInfo.State
+        if let run = info.workflowRunDir {
+            // The journal's done / failed is final. (Its lastWrite came from
+            // the run as a line's timestamp, not the file's: no use comparing.)
+            guard info.isRunning else { return }
+            guard let agent = await Task.detached(priority: .utility, operation: {
+                WorkflowScanner.state(ofAgent: id, inRun: run)
+            }).value else { return }
+            state = SubagentInfo.State(agent)
+        } else if let task = workspace?.backgroundTasks(info.sessionID).first(where: { $0.kind == .agent && $0.id == id }) {
+            state = SubagentInfo.State(task.state)
+        } else {
+            // A subagent's lastWrite is its file's: settled and not written
+            // since (not resumed), it stays as it is.
+            guard info.isRunning || lastWrite != info.lastWrite else { return }
+            let since = workspace?.runtime(info.sessionID)?.workingSince
+            state = await Task.detached(priority: .utility) {
+                SubagentScanner.state(url, lastWrite: lastWrite, parentWorkingSince: since)
+            }.value
+        }
         // Its session closed: its agent, and the subagent with it, was stopped.
         if state == .running, let workspace, workspace.session(id: info.sessionID) == nil { state = .stopped }
         info.lastWrite = lastWrite

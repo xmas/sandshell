@@ -18,6 +18,17 @@ struct SubagentInfo: Identifiable, Equatable, Sendable {
     var isRunning: Bool { state == .running }
 }
 
+extension SubagentInfo {
+    /// A workflow agent's run folder: its transcript is
+    /// `subagents/workflows/<run id>/agent-<id>.jsonl` (a subagent's sits in
+    /// `subagents/` itself). Its state is the run journal's, not the transcript's.
+    var workflowRunDir: URL? {
+        let dir = transcript.deletingLastPathComponent()
+        return dir.lastPathComponent.hasPrefix("wf_") && dir.deletingLastPathComponent().lastPathComponent == "workflows"
+            ? dir : nil
+    }
+}
+
 extension SubagentInfo.State {
     /// A workflow agent's, for its transcript window.
     init(_ state: WorkflowRun.Agent.State) {
@@ -25,6 +36,16 @@ extension SubagentInfo.State {
         case .running: self = .running
         case .done: self = .done
         case .failed: self = .failed
+        }
+    }
+
+    /// A background subagent's, from the task the background-task monitor tracks.
+    init(_ state: BackgroundTask.State) {
+        switch state {
+        case .running: self = .running
+        case .completed: self = .done
+        case .failed: self = .failed
+        case .stopped: self = .stopped
         }
     }
 }
@@ -50,14 +71,8 @@ enum SubagentScanner {
                 (meta[key] as? String).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.flatMap { $0.isEmpty ? nil : $0 }
             }
             let description = text("description"), type = text("agentType")
-            let state: SubagentInfo.State
-            switch known[id] {
-            case .running?: state = .running
-            case .failed?: state = .failed
-            case .stopped?: state = .stopped
-            case .completed?: state = .done
-            case nil: state = Self.state(url, lastWrite: modified, parentWorkingSince: parentWorkingSince, now: now)
-            }
+            let state = known[id].map { SubagentInfo.State($0) }
+                ?? Self.state(url, lastWrite: modified, parentWorkingSince: parentWorkingSince, now: now)
             return SubagentInfo(id: id, sessionID: sessionID, title: description ?? type ?? "Subagent",
                                 agentType: type, transcript: url, startedAt: created, lastWrite: modified, state: state)
         }
@@ -76,9 +91,13 @@ enum SubagentScanner {
         return now.timeIntervalSince(lastWrite) > 90 ? .stopped : .running
     }
 
-    /// Its last assistant message ended its turn (the subagent is done). Reads
-    /// the file's tail, widened while it holds no whole assistant line (a long
-    /// final report runs well past 16 KB).
+    /// Its turn ended (the subagent is done): its last assistant message
+    /// stopped for good, or a tool that ends the turn answered after it
+    /// (`"toolEndsTurn": true` — Claude Code 2.1.286+ hands a subagent's report
+    /// back with SubagentHandback, and a workflow agent's with StructuredOutput,
+    /// and writes no end_turn after). Other user lines (tool results, a message
+    /// that resumes it) are passed over. Reads the file's tail, widened while
+    /// it holds no whole line that says (a long final report runs well past 16 KB).
     nonisolated static func finished(_ url: URL) -> Bool {
         guard let fh = try? FileHandle(forReadingFrom: url) else { return false }
         defer { try? fh.close() }
@@ -91,8 +110,9 @@ enum SubagentScanner {
             // Past the file's start, the window's first line is cut: skip it.
             if start > 0 { data = data.firstIndex(of: 0x0A).map { data[data.index(after: $0)...] } ?? Data() }
             for line in String(decoding: data, as: UTF8.self).split(separator: "\n").reversed() {
-                guard let o = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
-                      o["type"] as? String == "assistant", let m = o["message"] as? [String: Any] else { continue }
+                guard let o = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any] else { continue }
+                if o["type"] as? String == "user", o["toolEndsTurn"] as? Bool == true { return true }
+                guard o["type"] as? String == "assistant", let m = o["message"] as? [String: Any] else { continue }
                 return (m["stop_reason"] as? String).map { ["end_turn", "stop_sequence", "max_tokens"].contains($0) } ?? false
             }
             guard start > 0, window < 4 << 20 else { return false }

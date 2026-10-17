@@ -96,6 +96,31 @@ struct WorkflowScannerTests {
         #expect(run.agentsSettled)
     }
 
+    @Test(arguments: [("a1", WorkflowRun.Agent.State.done), ("a2", .running), ("a3", .failed), ("nobody", nil)]
+          as [(String, WorkflowRun.Agent.State?)])
+    func oneAgentsStateComesFromTheJournal(agent: String, expected: WorkflowRun.Agent.State?) throws {
+        let fixture = try WorkflowFixture(script: nil, journal: [
+            #"{"type":"started","agentId":"a1","label":"review:ui","phase":"Review"}"#,
+            #"{"type":"started","agentId":"a2","label":"review:core","phase":"Review"}"#,
+            #"{"type":"started","agentId":"a3","label":"verify:1","phase":"Verify"}"#,
+            #"{"type":"result","agentId":"a1","result":"ok"}"#,
+            #"{"type":"result","agentId":"a3","result":null}"#,
+        ], agents: [:])
+        defer { fixture.remove() }
+
+        #expect(WorkflowScanner.state(ofAgent: agent, inRun: fixture.runDir) == expected,
+                "The same answer the whole run gives, read from the journal alone")
+        let run = try #require(WorkflowScanner.run("wf_abc-123", dir: fixture.runDir, script: nil))
+        #expect(run.agents.first { $0.id == agent }?.state == expected)
+    }
+
+    @Test(.tags(.edgeCase)) func runWithoutAJournalHasNoAgentState() throws {
+        let fixture = try WorkflowFixture(script: nil, journal: [], agents: [:])
+        defer { fixture.remove() }
+        try FileManager.default.removeItem(at: fixture.runDir.appendingPathComponent("journal.jsonl"))
+        #expect(WorkflowScanner.state(ofAgent: "a1", inRun: fixture.runDir) == nil)
+    }
+
     @Test(.tags(.edgeCase)) func noWorkflowsFolderMeansNoRuns() throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("wf-none-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)

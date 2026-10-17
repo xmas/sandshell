@@ -35,6 +35,31 @@ extension SubagentsTests {
         func workflowAgentStateCarriesOver(agent: WorkflowRun.Agent.State, expected: SubagentInfo.State) {
             #expect(SubagentInfo.State(agent) == expected)
         }
+
+        @Test(arguments: [
+            (BackgroundTask.State.running, SubagentInfo.State.running),
+            (BackgroundTask.State.completed, SubagentInfo.State.done),
+            (BackgroundTask.State.failed, SubagentInfo.State.failed),
+            (BackgroundTask.State.stopped, SubagentInfo.State.stopped),
+        ])
+        func backgroundTaskStateCarriesOver(task: BackgroundTask.State, expected: SubagentInfo.State) {
+            #expect(SubagentInfo.State(task) == expected)
+        }
+
+        @Test(arguments: [
+            ("/s/session/subagents/workflows/wf_abc-123/agent-a1.jsonl", "/s/session/subagents/workflows/wf_abc-123"),
+            ("/s/session/subagents/agent-a1.jsonl", nil),
+            ("/s/session/subagents/workflows/agent-a1.jsonl", nil),
+            ("/s/session/subagents/workflows/scripts/agent-a1.jsonl", nil),
+            ("/s/session/subagents/wf_abc-123/agent-a1.jsonl", nil),
+        ] as [(String, String?)])
+        func onlyAWorkflowAgentHasARunFolder(transcript: String, runDir: String?) {
+            let info = SubagentInfo(id: "a1", sessionID: UUID(), title: "scan:a", agentType: "Scan",
+                                    transcript: URL(filePath: transcript), startedAt: SubagentsFixture.epoch,
+                                    lastWrite: SubagentsFixture.epoch, state: .running)
+            #expect(info.workflowRunDir?.path == runDir,
+                    "A workflow agent's transcript sits in subagents/workflows/<run id>/; its state is that run's")
+        }
     }
 }
 
@@ -268,6 +293,16 @@ extension SubagentsTests {
             #expect(info.state == expected, "A background subagent's state comes from its task, not its session's turn")
         }
 
+        @Test(arguments: [(true, 0.0), (true, 91.0), (true, 3_600.0), (false, 0.0), (false, 91.0), (false, 3_600.0)])
+        func subagentThatHandedItsReportBackIsDone(sessionWorking: Bool, age: TimeInterval) throws {
+            let modified = SubagentsFixture.epoch
+            try workspace.addSubagent("a1", lines: HandbackLines.transcript, created: modified, modified: modified)
+            let info = try #require(scan(parentWorkingSince: sessionWorking ? modified.addingTimeInterval(-30) : nil,
+                                         now: modified.addingTimeInterval(age)).first)
+            #expect(info.state == .done,
+                    "Handed back \(age)s ago (its session \(sessionWorking ? "still working" : "idle")): neither running nor cut off")
+        }
+
         @Test func justStartedSubagentWithAnEmptyTranscriptIsRunning() throws {
             let modified = SubagentsFixture.epoch
             try workspace.addSubagent("a1", lines: [], created: modified, modified: modified)
@@ -383,6 +418,47 @@ extension SubagentsTests {
         func longLinesAfterTheLastAssistantMessageAreReadPast() throws {
             let result = #"{"type":"user","message":{"role":"user","content":"\#(String(repeating: "r", count: 50_000))"}}"#
             let url = try transcript([SubagentsFixture.userLine, SubagentsFixture.finishedLine, result])
+            #expect(SubagentScanner.finished(url))
+        }
+
+        @Test func handingTheReportBackEndsTheTurn() throws {
+            let url = try transcript(HandbackLines.transcript)
+            #expect(SubagentScanner.finished(url),
+                    "SubagentHandback (stop_reason null) answered with toolEndsTurn, and no end_turn after: done")
+        }
+
+        @Test func structuredOutputThatEndsTheTurnFinishesAWorkflowAgent() throws {
+            let url = try transcript([SubagentsFixture.userLine, HandbackLines.structuredOutput, HandbackLines.structuredOutputResult])
+            #expect(SubagentScanner.finished(url), "A workflow agent's StructuredOutput call (stop_reason tool_use) ends its turn")
+        }
+
+        @Test func handbackStillWaitingForItsResultIsNotFinished() throws {
+            let url = try transcript(Array(HandbackLines.transcript.dropLast()))
+            #expect(SubagentScanner.finished(url) == false)
+        }
+
+        @Test(arguments: ["", #""toolEndsTurn":false,"#, #""toolEndsTurn":"true","#, #""toolEndsTurn":null,"#])
+        func toolResultThatDoesNotEndTheTurnIsStillWorking(flag: String) throws {
+            let result = #"{"type":"user",\#(flag)"message":{"role":"user","content":[{"tool_use_id":"toolu_1","type":"tool_result","content":"ok"}]}}"#
+            let url = try transcript([SubagentsFixture.userLine, SubagentsFixture.unfinishedLine, result])
+            #expect(SubagentScanner.finished(url) == false, "The agent's next reply is on its way")
+        }
+
+        @Test func workAfterAHandbackIsNotFinished() throws {
+            let url = try transcript(HandbackLines.transcript + [HandbackLines.resumed, HandbackLines.thought])
+            #expect(SubagentScanner.finished(url) == false, "A message resumed it after it handed back, and it's working again")
+        }
+
+        @Test(.tags(.subagentsEdgeCase))
+        func linesAfterTheHandbackResultArePassedOver() throws {
+            let url = try transcript(HandbackLines.transcript + [HandbackLines.attachment, #"{"type":"system","subtype":"informational"}"#])
+            #expect(SubagentScanner.finished(url))
+        }
+
+        @Test(.tags(.subagentsEdgeCase))
+        func longHandbackReportStillEndsTheTurn() throws {
+            let report = String(repeating: "a", count: 100_000)
+            let url = try transcript([SubagentsFixture.userLine, HandbackLines.handback(report: report), HandbackLines.handedBack])
             #expect(SubagentScanner.finished(url))
         }
     }
@@ -618,6 +694,37 @@ extension SubagentsTests {
 }
 
 // MARK: - Fixtures
+
+/// How Claude Code 2.1.286+ ends a subagent (the shape of 57 of 72 local
+/// subagent transcripts): a thought, a SubagentHandback call with
+/// stop_reason null, then its result marked `"toolEndsTurn": true` — and no
+/// end_turn after. Workflow agents end the same way with StructuredOutput.
+fileprivate enum HandbackLines {
+    static let toolResult =
+        #"{"type":"user","isSidechain":true,"agentId":"a1","message":{"role":"user","content":[{"tool_use_id":"toolu_1","type":"tool_result","content":"a.swift"}]}}"#
+    static let attachment =
+        #"{"type":"attachment","isSidechain":true,"agentId":"a1","attachment":{"type":"total_tokens_reminder","text":"<total_tokens>1000 tokens left</total_tokens>"}}"#
+    static let thought =
+        #"{"type":"assistant","isSidechain":true,"agentId":"a1","message":{"id":"msg_9","role":"assistant","content":[{"type":"thinking","thinking":"","signature":"c2ln"}],"stop_reason":null,"stop_sequence":null}}"#
+    static let handedBack =
+        #"{"type":"user","isSidechain":true,"agentId":"a1","toolEndsTurn":true,"sourceToolAssistantUUID":"u9","message":{"role":"user","content":[{"tool_use_id":"toolu_9","type":"tool_result","content":[{"type":"text","text":"{\"success\":true,\"message\":\"Report delivered to your caller.\"}"}]}]}}"#
+    static let resumed =
+        #"{"type":"user","isSidechain":true,"agentId":"a1","message":{"role":"user","content":"The coordinator sent a message while you were working: also check b.swift"}}"#
+    static let structuredOutput =
+        #"{"type":"assistant","isSidechain":true,"agentId":"a1","message":{"id":"msg_5","role":"assistant","content":[{"type":"tool_use","id":"toolu_5","name":"StructuredOutput","input":{"ok":true}}],"stop_reason":"tool_use"}}"#
+    static let structuredOutputResult =
+        #"{"type":"user","isSidechain":true,"agentId":"a1","toolEndsTurn":true,"message":{"role":"user","content":[{"tool_use_id":"toolu_5","type":"tool_result","content":"Structured output provided successfully"}]}}"#
+
+    /// The SubagentHandback call; `report` is JSON string text (escapes and all).
+    static func handback(report: String = "## Report\\n\\nOne TODO, in a.swift.") -> String {
+        #"{"type":"assistant","isSidechain":true,"agentId":"a1","message":{"id":"msg_9","role":"assistant","content":[{"type":"tool_use","id":"toolu_9","name":"SubagentHandback","input":{"message":"\#(report)"},"caller":{"type":"direct"}}],"stop_reason":null,"stop_sequence":null}}"#
+    }
+
+    /// A whole transcript ending that way.
+    static let transcript = [
+        SubagentsFixture.userLine, SubagentsFixture.unfinishedLine, toolResult, attachment, thought, handback(), handedBack,
+    ]
+}
 
 fileprivate enum SubagentsFixture {
     /// A whole-second date, so it survives the round trip through file timestamps exactly.
