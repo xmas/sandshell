@@ -207,10 +207,11 @@ actor SbxClient {
     /// `sbx create --no-progress --name <name> <agent> <mounts…>`
     ///
     /// Builds the container for one agent of a `Workspace` from its
-    /// policy-resolved `mounts` (first entry = the rw workspace root). Injects
-    /// `SBX_MCP_URL` and loads all registered MCP servers via `sbx mcp load`
-    /// after the container is running. Run from the root so `sbx` derives a
-    /// sensible workdir.
+    /// policy-resolved `mounts` (first entry = the rw workspace root), with
+    /// `SBX_MCP_URL` set to the workspace's gateway. It doesn't load MCP
+    /// servers: the caller (`WorkspaceController`) does that with `loadMCP`
+    /// once this returns. Run from the root so `sbx` derives a sensible
+    /// workdir.
     ///
     /// `onExists`: called as soon as the sandbox shows up (before any kit
     /// setup finishes), so a quit meanwhile doesn't leave it unrecorded.
