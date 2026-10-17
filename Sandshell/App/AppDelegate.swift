@@ -111,18 +111,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 #if DEBUG
         let base = NSImage(named: NSImage.applicationIconName) ?? NSApp.applicationIconImage
         guard let base else { return }
-        let size = NSSize(width: 512, height: 512)
-        let rect = NSRect(origin: .zero, size: size)
-        let tinted = NSImage(size: size)
-        tinted.lockFocus()
-        base.draw(in: rect, from: NSRect(origin: .zero, size: base.size),
-                  operation: .copy, fraction: 1.0)
-        // .sourceAtop paints only over the icon's opaque pixels, so transparent
-        // corners stay clear — a wash over the artwork, not a red square.
-        NSGraphicsContext.current?.compositingOperation = .sourceAtop
-        NSColor.systemRed.withAlphaComponent(0.45).set()
-        NSBezierPath(rect: rect).fill()
-        tinted.unlockFocus()
+        // AppKit calls the handler on whatever thread draws the image, so keep it
+        // off the main actor: a main-actor closure would trap there in Swift 6.
+        let tinted = NSImage(size: NSSize(width: 512, height: 512), flipped: false) { @Sendable rect in
+            base.draw(in: rect, from: .zero, operation: .copy, fraction: 1)
+            // .sourceAtop paints only over the icon's opaque pixels, so transparent
+            // corners stay clear — a wash over the artwork, not a red square.
+            NSColor.systemRed.withAlphaComponent(0.45).set()
+            rect.fill(using: .sourceAtop)
+            return true
+        }
         NSApp.applicationIconImage = tinted
 #endif
     }
@@ -215,7 +213,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         #endif
-        NSApp.activate(ignoringOtherApps: true)
+        NSApp.activate()
         installShortcutMonitor()
         Updater.shared.checkInBackground()
 
@@ -304,13 +302,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         for item in queryItems {
             switch item.name {
             case "workspace": workspacePath = item.value
-            case "ro": if let v = item.value { roMounts.append(URL(fileURLWithPath: v)) }
-            case "rw": if let v = item.value { rwMounts.append(URL(fileURLWithPath: v)) }
+            case "ro": if let v = item.value { roMounts.append(URL(filePath: v, directoryHint: .checkFileSystem)) }
+            case "rw": if let v = item.value { rwMounts.append(URL(filePath: v, directoryHint: .checkFileSystem)) }
             default: break
             }
         }
         guard let path = workspacePath else { return }
-        let workspaceURL = URL(fileURLWithPath: path)
+        let workspaceURL = URL(filePath: path, directoryHint: .checkFileSystem)
         let key = RootFolderStore.standardize(workspaceURL.path)
 
         // Assign a random icon + color to workspaces opened for the first time via CLI.
@@ -323,8 +321,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             RootFolderStore.adoptDefault(key)
         }
 
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        var config = WorkspaceConfig.loadOrDefault(root: workspaceURL, home: home)
+        var config = WorkspaceConfig.loadOrDefault(root: workspaceURL, home: URL.homeDirectory)
 
         // Merge CLI-specified mounts (ro/rw) into the workspace policy, replacing
         // any existing entry for the same path so re-invocations with changed
@@ -347,7 +344,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let controller = open.first {
             controller.adoptPolicy(config.policy)
         } else {
-            try? config.save(root: workspaceURL)
+            do {
+                try config.save(root: workspaceURL)
+            } catch {
+                Log.error(.app, "couldn't save the config for \(workspaceURL.path): \(error)")
+                Alerts.inform("Couldn’t set up “\(workspaceURL.lastPathComponent)”", error.localizedDescription)
+                return
+            }
         }
 
         openWorkspace(workspaceURL)
@@ -364,7 +367,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// table, and offers the exact fix/update/debug commands for this install
     /// (stable vs nightly). Drops into a login shell so it stays interactive.
     @MainActor @objc func checkDaemonHealth(_ sender: Any?) {
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        // One window at a time (its controller is the one kept here).
+        if let open = daemonHealthTerminal { return open.focus() }
+        let home = URL.homeDirectory.path
         let body = """
         #!/bin/bash
         SEP="============================================================"
@@ -463,7 +468,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let theme = activeController?.theme ?? ThemeController(prefs: ThemeDefaults.prefs)
         let wc = HostTerminalWindowController(
             title: "sbx Daemon Health", scriptBody: body, workingDirectory: home, theme: theme)
-        wc.onClose = { [weak self] in self?.daemonHealthTerminal = nil }
+        wc.onClose = { [weak self, weak wc] in
+            if self?.daemonHealthTerminal === wc { self?.daemonHealthTerminal = nil }
+        }
         daemonHealthTerminal = wc
         wc.focus()
     }
@@ -477,7 +484,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let existing = windows.first(where: { $0.root.standardizedFileURL.path == key }) {
             existing.showWindow(nil)
             existing.window?.makeKeyAndOrderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
+            NSApp.activate()
             return existing
         }
         return createWindow(root: root)
@@ -494,6 +501,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             try WorkspaceBootstrap.openOrCreate(root: root)
         } catch {
             Log.error(.app, "workspace bootstrap failed: \(error)")
+            Alerts.inform("Couldn’t open “\(root.lastPathComponent)”", error.localizedDescription)
             return nil
         }
         RecentRoots.record(root)
@@ -523,7 +531,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // (Scripted runs never take focus from the person using the Mac.)
         guard !AutomatedRun.isActive else { return controller }
         controller.window?.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        NSApp.activate()
         return controller
     }
 
@@ -537,7 +545,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// ⌘O / File ▸ Open… — open the recent workspaces browser.
     @MainActor @objc func openWorkspaceBrowser(_ sender: Any?) {
-        if let open = openWindow, open.window?.isVisible == true { return open.present() }
+        if let open = openWindow, isUp(open) { return open.present() }
         let wc = OpenWindowController(
             onOpen: { [weak self] url in self?.openWorkspace(url) },
             onOpenNew: { [weak self] in self?.openFolder(nil) })
@@ -546,8 +554,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     private var openWindow: OpenWindowController?
 
+    /// Whether `controller`'s window is up, on screen or minimized. Another
+    /// Open or setup window comes forward instead of a new one: replacing the
+    /// controller kept here would leave the old window's buttons dead.
+    @MainActor private func isUp(_ controller: NSWindowController?) -> Bool {
+        guard let window = controller?.window else { return false }
+        return window.isVisible || window.isMiniaturized
+    }
+
     /// ⌘⌥N / File ▸ Open Folder… — the setup wizard (folder, look, mounts, kits).
     @MainActor @objc func openFolder(_ sender: Any?) {
+        if let setup = setupWindow, isUp(setup) { return setup.present() }
         let wc = SetupWindowController(welcome: false, onCreate: { [weak self] url, profile, policy, kits in
             self?.createWorkspace(url, profile: profile, policy: policy, kits: kits, makeDefault: false)
         })
@@ -561,6 +578,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// First-launch Welcome (Default = today's ~/Sandshell; Advanced = wizard).
     @MainActor private func showWelcome() {
+        if let setup = setupWindow, isUp(setup) { return setup.present() }
         let wc = SetupWindowController(
             welcome: true,
             onCreate: { [weak self] url, profile, policy, kits in
@@ -581,14 +599,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             RootFolderStore.adoptDefault(url.path)
         }
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        var config = WorkspaceConfig.loadOrDefault(root: url, home: home)
+        var config = WorkspaceConfig.loadOrDefault(root: url, home: URL.homeDirectory)
         config.policy = policy
         // Sandshell's own kits go in their own field (what's unchecked stays off).
         config.kits = kits.filter { !KitStore.isSandshellKit($0) }
         config.sandshellKits = kits.filter(KitStore.isSandshellKit)
         config.configured = true   // wizard collected mounts → skip first-run sheet
-        try? config.save(root: url)
+        do {
+            try config.save(root: url)
+        } catch {
+            Log.error(.app, "couldn't save the config for \(url.path): \(error)")
+            Alerts.inform("Couldn’t set up “\(url.lastPathComponent)”", error.localizedDescription)
+            return
+        }
         openWorkspace(url)
     }
 
@@ -616,18 +639,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let handled = MainActor.assumeIsolated { () -> Bool in
                 guard let app = NSApp.delegate as? AppDelegate else { return false }
                 // Only for a focused terminal, which takes every key itself; anywhere
-                // else (text, lists, sheets, other windows, alerts) the menu bar's own
-                // key equivalents apply, and ⌘D in a Save sheet is Desktop again.
+                // else (text, lists, sheets, alerts) the menu bar's own key
+                // equivalents apply, and ⌘D in a Save sheet is Desktop again.
                 guard NSApp.modalWindow == nil, let key = NSApp.keyWindow, key.attachedSheet == nil,
-                      key.windowController is MainWindowController,
                       key.firstResponder is AppTerminalView else { return false }
                 if cmd {
-                    // Shift turns "[" / "]" into "{" / "}" in charactersIgnoringModifiers,
-                    // so match both forms for ⌘⇧[ / ⌘⇧].
+                    // The app's own commands, in any window's terminal (a host
+                    // terminal, Daemon Health and kit logs too).
                     switch chars {
                     case "q": NSApp.terminate(nil); return true
                     case ",": app.openSettings(nil); return true
                     case "n" where opt: app.openFolder(nil); return true
+                    case "n" where ctrl: app.newChat(nil); return true
+                    case "n" where shift: app.duplicateWindow(nil); return true
+                    case "n": app.newSession(nil); return true
+                    case "W" where !opt, "w" where shift && !opt: app.closeWindow(nil); return true
+                    default: break
+                    }
+                }
+                // The rest act on a workspace window's panes and sessions.
+                guard key.windowController is MainWindowController else { return false }
+                if cmd {
+                    // Shift turns "[" / "]" into "{" / "}" in charactersIgnoringModifiers,
+                    // so match both forms for ⌘⇧[ / ⌘⇧].
+                    switch chars {
                     case "D": app.splitDown(nil); return true
                     case "d" where shift: app.splitDown(nil); return true
                     case "d": app.splitRight(nil); return true
@@ -642,9 +677,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     case "b" where opt: app.showBackgroundTasks(nil); return true
                     case "O": app.openQuickly(nil); return true
                     case "o" where shift: app.openQuickly(nil); return true
-                    case "n" where ctrl: app.newChat(nil); return true
-                    case "n" where shift: app.duplicateWindow(nil); return true
-                    case "n": app.newSession(nil); return true
                     // ⇧⌘F (⌘F stays Find).
                     case "F": app.showSearch(nil); return true
                     case "f" where shift: app.showSearch(nil); return true
@@ -811,17 +843,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         for controller in windows { controller.applyTheme(prefs) }
     }
 
-    /// Bring a workspace window back (Window ▸ Sandshell, and dock reopen).
+    /// Bring a workspace window back (Window ▸ Sandshell, and dock reopen): with
+    /// none open, the Welcome, Open Folder or Open window while one is up (no
+    /// folder is set up behind it), else the most recent folder's.
     @MainActor @objc func showMainWindow(_ sender: Any?) {
         if let controller = activeController {
             controller.showWindow(nil)
             controller.window?.makeKeyAndOrderFront(nil)
-        } else if let root = primaryRoot {
-            openWorkspace(root)
+        } else if let setup = setupWindow, isUp(setup) {
+            setup.present()
+        } else if let open = openWindow, isUp(open) {
+            open.present()
+        } else if RootFolderStore.all.isEmpty {
+            showWelcome()   // no folder has had a sandbox yet
+        } else if let recent = RootFolderStore.byRecency().first {
+            openWorkspace(URL(filePath: recent.path, directoryHint: .checkFileSystem))
         } else {
-            openWorkspaceBrowser(nil)   // the launch folder is gone
+            openWorkspaceBrowser(nil)   // the folders it knows are gone
         }
-        NSApp.activate(ignoringOtherApps: true)
+        NSApp.activate()
     }
 
     /// Handle files/folders passed via `open -a Sandshell /path …` or drag-onto-dock.
@@ -874,7 +914,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         // Reopen a workspace window if none is currently on screen (e.g. all were
-        // closed while the Settings window stayed open).
+        // closed while a host terminal stayed open) — or bring the Welcome or
+        // Open window forward while one stands in for it.
         if !windows.contains(where: { $0.window?.isVisible == true }) {
             showMainWindow(nil)
         }

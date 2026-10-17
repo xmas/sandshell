@@ -11,11 +11,11 @@ struct ShowSandshellIntent: AppIntent {
 
     /// Launch the app (if needed) and run `perform` in-process so we can touch
     /// AppKit on the main actor.
-    static let openAppWhenRun = true
+    static let supportedModes: IntentModes = .foreground
 
     @MainActor
     func perform() async throws -> some IntentResult {
-        NSApp.activate(ignoringOtherApps: true)
+        NSApp.activate()
         // Reopen the main window the same way clicking the Dock icon does.
         _ = (NSApp.delegate as? AppDelegate)?
             .applicationShouldHandleReopen(NSApp, hasVisibleWindows: NSApp.keyWindow != nil)
@@ -29,7 +29,7 @@ struct NewClaudeChatIntent: AppIntent {
     static let title: LocalizedStringResource = "New Claude Chat"
     static let description = IntentDescription(
         "Start a Claude chat in Sandshell's front workspace, optionally with a prompt.")
-    static let openAppWhenRun = true
+    static let supportedModes: IntentModes = .foreground
 
     @Parameter(title: "Prompt") var prompt: String?
     @Parameter(title: "Send Immediately", default: true) var sendNow: Bool

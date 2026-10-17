@@ -19,7 +19,10 @@ enum SystemSleep {
             MainActor.assumeIsolated {
                 isAsleep = false
                 Log.info(.app, "the Mac woke")
-                DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                Task { @MainActor in
+                    // Suspending clock: like uptime, it doesn't count time the Mac
+                    // spends asleep again before the 2 s are up.
+                    try? await Task.sleep(for: .seconds(2), clock: .suspending)
                     NotificationCenter.default.post(name: didWake, object: nil)
                 }
             }
