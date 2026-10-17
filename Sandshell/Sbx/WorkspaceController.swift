@@ -26,8 +26,9 @@ final class WorkspaceController: ObservableObject {
     /// The sidebar's current selection (drives the Phase 3 terminal host).
     @Committed var selection: SidebarSelection? {
         didSet {
-            if case let .session(id) = selection, runtimes[id] != nil {
-                runtimes[id]!.isUnread = false
+            if case let .session(id) = selection, var rt = runtimes[id] {
+                rt.isUnread = false
+                runtimes[id] = rt
             }
         }
     }
@@ -66,7 +67,7 @@ final class WorkspaceController: ObservableObject {
     /// Absent = in sync, not checked yet, or a rebuild is already pending.
     @Committed private(set) var kitDrift: [AgentKind: KitDrift] = [:]
 
-    let home = FileManager.default.homeDirectoryForCurrentUser
+    let home = URL.homeDirectory
     /// The folder's persisted state and config, shared with any other window
     /// open on it (see `WorkspaceStore`).
     private let store: WorkspaceStore
@@ -218,7 +219,7 @@ final class WorkspaceController: ObservableObject {
         let decoder = JSONDecoder()
         for name in names where name.hasSuffix(".json") {
             guard let id = UUID(uuidString: String(name.dropLast(5))), session(id: id) != nil,
-                  let data = try? Data(contentsOf: dir.appendingPathComponent(name)),
+                  let data = try? Data(contentsOf: dir.appending(path: name)),
                   let status = try? decoder.decode(ClaudeSessionStatus.self, from: data) else { continue }
             var rt = runtimes[id] ?? SessionRuntime()
             if rt.claudeStatus != status {
@@ -620,7 +621,7 @@ final class WorkspaceController: ObservableObject {
             workdir: sandbox.primaryWorkdir ?? "",
             agent: agent,
             sbxPath: PathFixer.sbxPath(),
-            home: FileManager.default.homeDirectoryForCurrentUser.path,
+            home: home.path,
             mcpURL: usesMCP ? workspace.mcpURL : nil)
     }
 
@@ -764,7 +765,7 @@ final class WorkspaceController: ObservableObject {
 
     /// Whether the workspace folder is a git repository (clone mode needs one).
     var isGitRepository: Bool {
-        FileManager.default.fileExists(atPath: workspace.rootURL.appendingPathComponent(".git").path)
+        FileManager.default.fileExists(atPath: workspace.rootURL.appending(path: ".git").path)
     }
 
     /// Base-image part of the signature. Empty whenever sbx's default image is
@@ -981,7 +982,7 @@ final class WorkspaceController: ObservableObject {
         guard containerPollTask == nil else { return }
         containerPollTask = Task { @MainActor [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                try? await Task.sleep(for: .seconds(5))
                 guard let self else { return }   // the window closed
                 self.syncContainers()
             }
@@ -1203,6 +1204,8 @@ final class WorkspaceController: ObservableObject {
         await loadMCPServers(await effectiveMCPServers(), into: name)
     }
 
+    /// Shared create/attach/rebuild core for an agent's container. `force`
+    /// rebuilds even when the mounts are unchanged.
     private func performBringUp(for agent: AgentKind, onMismatch: MismatchAction,
                                 force: Bool) async throws {
         // Mirror host MCP configs and OAuth tokens into the bind-mounted claude
@@ -1403,8 +1406,8 @@ struct SessionRuntime: Equatable {
     var claudeStatus: ClaudeSessionStatus?
 
     /// Real-time work total: completed bursts + elapsed in the current burst.
-    /// Pass `at:` from a `TimelineView` context for SwiftUI; defaults to `Date()`.
-    func liveWorkSeconds(at now: Date = Date()) -> TimeInterval {
+    /// Pass `at:` from a `TimelineView` context for SwiftUI; defaults to `Date.now`.
+    func liveWorkSeconds(at now: Date = .now) -> TimeInterval {
         if status == .working, let since = workingSince {
             return workSecondsCompleted + now.timeIntervalSince(since)
         }
@@ -1426,12 +1429,12 @@ enum ContainerPhase: Equatable {
 
     var displayLabel: String {
         switch self {
-        case .absent:           return "absent"
-        case .creating:         return "creating"
-        case .rebuilding:       return "rebuilding"
-        case .running:          return "running"
-        case .stopped:          return "stopped"
-        case .failed(let msg):  return "failed: \(msg.prefix(60))"
+        case .absent:           "absent"
+        case .creating:         "creating"
+        case .rebuilding:       "rebuilding"
+        case .running:          "running"
+        case .stopped:          "stopped"
+        case .failed(let msg):  "failed: \(msg.prefix(60))"
         }
     }
 }
@@ -1466,7 +1469,7 @@ extension WorkspaceController {
     func runtime(_ id: UUID) -> SessionRuntime? { runtimes[id] }
 
     func backgroundTasks(_ id: UUID) -> [BackgroundTask] { backgroundTasks[id] ?? [] }
-    func runningBackgroundTasks(_ id: UUID) -> Int { backgroundTasks[id]?.filter(\.isRunning).count ?? 0 }
+    func runningBackgroundTasks(_ id: UUID) -> Int { backgroundTasks[id]?.count(where: \.isRunning) ?? 0 }
 
     /// Ask a running sandbox what it is (cached; one probe at a time).
     func probeSandboxSystem(_ name: String) {
@@ -1648,7 +1651,7 @@ extension WorkspaceController {
     /// Host URL for a folder (the workspace root itself for the root folder).
     func folderURL(for folder: Folder) -> URL {
         folder.isRoot ? workspace.rootURL
-            : workspace.rootURL.appendingPathComponent(folder.relativePath, isDirectory: true)
+            : workspace.rootURL.appending(path: folder.relativePath, directoryHint: .isDirectory)
     }
 
     /// Container-side workdir for a folder (mounts land at the host path).
@@ -1663,13 +1666,13 @@ extension WorkspaceController {
     /// flattened to `-`. Use `addExistingFolder` to register nested folders.
     private func uniqueRelativePath(from name: String) -> String {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        var base = trimmed.replacingOccurrences(of: "/", with: "-")
+        var base = trimmed.replacing("/", with: "-")
         while base.hasPrefix(".") { base.removeFirst() }
         if base.isEmpty { base = "New Folder" }
         let existing = Set(state.folders.map { $0.relativePath })
         let fm = FileManager.default
         func taken(_ n: String) -> Bool {
-            existing.contains(n) || fm.fileExists(atPath: workspace.rootURL.appendingPathComponent(n).path)
+            existing.contains(n) || fm.fileExists(atPath: workspace.rootURL.appending(path: n).path)
         }
         guard taken(base) else { return base }
         var i = 2
@@ -1683,7 +1686,7 @@ extension WorkspaceController {
     @discardableResult
     func addFolder(name: String) -> Folder? {
         let relativePath = uniqueRelativePath(from: name)
-        let dir = workspace.rootURL.appendingPathComponent(relativePath, isDirectory: true)
+        let dir = workspace.rootURL.appending(path: relativePath, directoryHint: .isDirectory)
         do {
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         } catch {
@@ -1746,12 +1749,12 @@ extension WorkspaceController {
         guard !trimmed.isEmpty, trimmed != old.relativePath else { return }
         // Rename within the same parent directory (single-segment rename).
         let parent = (old.relativePath as NSString).deletingLastPathComponent
-        var leaf = trimmed.replacingOccurrences(of: "/", with: "-")
+        var leaf = trimmed.replacing("/", with: "-")
         while leaf.hasPrefix(".") { leaf.removeFirst() }
         let newRelative = parent.isEmpty ? leaf : "\(parent)/\(leaf)"
         guard newRelative != old.relativePath else { return }
-        let src = workspace.rootURL.appendingPathComponent(old.relativePath, isDirectory: true)
-        let dst = workspace.rootURL.appendingPathComponent(newRelative, isDirectory: true)
+        let src = workspace.rootURL.appending(path: old.relativePath, directoryHint: .isDirectory)
+        let dst = workspace.rootURL.appending(path: newRelative, directoryHint: .isDirectory)
         do {
             try FileManager.default.createDirectory(
                 at: dst.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -1956,7 +1959,7 @@ extension WorkspaceController {
         // one that ran on while its folder moved).
         guard let folder = folder(id: source.folderID) else { return nil }
         let forkFolder = TranscriptReader.claudeProjectFolder(for: workdir(for: folder), home: home)
-        let forkURL = forkFolder.appendingPathComponent("\(newID).jsonl")
+        let forkURL = forkFolder.appending(path: "\(newID).jsonl")
         guard (try? FileManager.default.createDirectory(at: forkFolder, withIntermediateDirectories: true)) != nil,
               (try? out.write(to: forkURL, atomically: true, encoding: .utf8)) != nil,
               let fork = addSession(folderID: source.folderID, agent: source.agent,

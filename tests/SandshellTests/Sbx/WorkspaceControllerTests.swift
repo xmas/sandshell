@@ -63,3 +63,25 @@ struct WorkspaceControllerContainerNameTests {
         #expect(WorkspaceController.containerName(for: .codex, slug: "proj", slugAgent: owner) == "proj-codex")
     }
 }
+
+/// `ContainerPhase.displayLabel`: the status window's phase column.
+struct ContainerPhaseLabelTests {
+    @Test(arguments: [
+        (ContainerPhase.absent, "absent"),
+        (.creating, "creating"),
+        (.rebuilding, "rebuilding"),
+        (.running, "running"),
+        (.stopped, "stopped"),
+        (.failed("no space left"), "failed: no space left"),
+    ])
+    func eachPhaseHasItsLabel(phase: ContainerPhase, label: String) {
+        #expect(phase.displayLabel == label)
+    }
+
+    @Test(.tags(.edgeCase))
+    func aFailureShowsTheFirstSixtyCharactersOfWhy() {
+        let why = String(repeating: "a", count: 60) + String(repeating: "b", count: 40)
+
+        #expect(ContainerPhase.failed(why).displayLabel == "failed: " + String(repeating: "a", count: 60))
+    }
+}

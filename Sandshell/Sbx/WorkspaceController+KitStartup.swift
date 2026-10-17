@@ -9,7 +9,7 @@ extension WorkspaceController {
     /// How long to keep following an in-progress dispatcher before giving up
     /// (a kit can legitimately wait a minute on a host service).
     private static let kitStartupFollowLimit: TimeInterval = 5 * 60
-    private static let kitStartupPollInterval: UInt64 = 3_000_000_000   // 3 s
+    private static let kitStartupPollInterval: Duration = .seconds(3)
 
     /// Kit entries for the container an agent's sessions run in, or nil when
     /// nothing has been read yet.
@@ -25,7 +25,7 @@ extension WorkspaceController {
         let name = containerName(for: agent)
         let kitRefs = kits(for: agent, from: resolvedKits())
         kitStartupTasks[agent] = Task { @MainActor [weak self] in
-            let deadline = Date().addingTimeInterval(Self.kitStartupFollowLimit)
+            let deadline = Date.now.addingTimeInterval(Self.kitStartupFollowLimit)
             var lastSignature: String?
             while !Task.isCancelled {
                 guard let self else { return }
@@ -39,11 +39,11 @@ extension WorkspaceController {
                 // Done: dispatcher finished or aborted, or the log isn't readable
                 // (stopped container, no dispatcher) — nothing more will arrive.
                 if status.fetchError != nil || !status.isInProgress { break }
-                if Date() > deadline {
+                if Date.now > deadline {
                     Log.error(.workspace, "kit startup in “\(name)” still in progress after \(Int(Self.kitStartupFollowLimit))s; stopped following")
                     break
                 }
-                try? await Task.sleep(nanoseconds: Self.kitStartupPollInterval)
+                try? await Task.sleep(for: Self.kitStartupPollInterval)
             }
             // Cancelled: a newer follower (or none) holds the slot now.
             if Task.isCancelled { return }
