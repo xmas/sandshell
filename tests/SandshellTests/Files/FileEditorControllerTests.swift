@@ -4,11 +4,12 @@ import Testing
 @testable import Sandshell
 
 /// Tests for `Files/FileEditorController.swift`: an `OpenFile`'s view of the
-/// disk (the version it last read or saved, writes, moves) and the editor's
-/// tabs following moves and trashing, and what Print prints.
+/// disk (the version it last read or saved, writes, moves), the editor's
+/// tabs following moves, trashing and its undo (and the banner saying the
+/// disk differs), and what Print prints.
 ///
-/// Not covered: saving through the editor (`save(_:)` asks with an alert when
-/// the disk changed) and the print operation itself.
+/// Not covered: saving when the disk changed (`save(_:)` asks with an alert)
+/// and the print operation itself.
 struct FileEditorControllerTests {
 
     // MARK: - OpenFile and the disk
@@ -160,6 +161,98 @@ struct FileEditorControllerTests {
             #expect(editor.currentURL?.path == edited.path)
             #expect(editor.debugIsDirty, "Unsaved edits stay open")
             #expect(editor.debugDiskChange == .gone, "Saving must ask before putting it back")
+            #expect(editor.debugBanner == "notes.md was moved or deleted.")
+        }
+
+        /// ⌘⌫ then ⌘Z leaves the editor as it was: the closed tabs come back
+        /// in their places, modes and selections, the shown one shown again.
+        @Test(.tags(.fileSystem), .bug(id: "xmas-sandshell-e7q.32"))
+        func undoingTheTrashReopensTheTabsItClosed() throws {
+            let guide = try scratch.file("docs/guide.md", "# Guide\n")
+            let other = try scratch.file("b.txt", "two\n")
+            let current = try scratch.file("docs/a.txt", "one\ntwo\n")
+            editor.open(guide)
+            editor.setMode(.source)   // not what a fresh tab on it would show
+            editor.open(other)
+            editor.open(current)
+            editor.goToLineForTesting(2)
+            let docs = scratch.url.appending(path: "docs")
+            let inTrash = try scratch.folder("Trash").appending(path: "docs")
+            try FileManager.default.moveItem(at: docs, to: inTrash)
+            let reopen = editor.filesTrashed([docs])
+            #expect(editor.openURLs.map(\.path) == [other.path])
+
+            try FileManager.default.moveItem(at: inTrash, to: docs)
+            reopen()
+            #expect(editor.openURLs.map(\.path) == [guide.path, other.path, current.path])
+            #expect(editor.currentURL?.path == current.path)
+            #expect(editor.debugCaret == 4, "The caret is where it was, on line 2")
+            editor.open(guide)
+            #expect(editor.debugMode == .source)
+        }
+
+        /// What Undo can't put back stays closed; a tab opened again in the
+        /// meantime isn't doubled.
+        @Test(.tags(.fileSystem, .edgeCase), .bug(id: "xmas-sandshell-e7q.32"))
+        func reopeningSkipsFilesNotBackAndTabsAlreadyOpen() throws {
+            let gone = try scratch.file("gone.txt", "one\n")
+            let back = try scratch.file("back.txt", "two\n")
+            editor.open(gone)
+            editor.open(back)
+            let trash = try scratch.folder("Trash")
+            for url in [gone, back] { try FileManager.default.moveItem(at: url, to: trash.appending(path: url.lastPathComponent)) }
+            let reopen = editor.filesTrashed([gone, back])
+            #expect(editor.openURLs.isEmpty)
+
+            try FileManager.default.moveItem(at: trash.appending(path: "back.txt"), to: back)
+            editor.open(back)
+            reopen()
+            #expect(editor.openURLs.map(\.path) == [back.path])
+        }
+
+        enum Return: CaseIterable { case undo, refresh }
+
+        /// The file comes back as the tab opened it (Undo Move to Trash keeps
+        /// its date): the "moved or deleted" banner comes down, whether the
+        /// undo's reopen or the next FSEvents refresh notices first.
+        @Test(.tags(.fileSystem), .bug(id: "xmas-sandshell-e7q.32"), arguments: Return.allCases)
+        func theGoneBannerComesDownWhenTheFileIsBack(by way: Return) throws {
+            let notes = try scratch.file("notes.md", "# Notes\n")
+            editor.open(notes)
+            editor.setMode(.source)
+            editor.debugType("more ", at: 0)
+            let inTrash = try scratch.folder("Trash").appending(path: "notes.md")
+            try FileManager.default.moveItem(at: notes, to: inTrash)
+            let reopen = editor.filesTrashed([notes])
+            #expect(editor.debugBanner == "notes.md was moved or deleted.")
+
+            try FileManager.default.moveItem(at: inTrash, to: notes)
+            switch way {
+            case .undo: reopen()
+            case .refresh: editor.filesChangedOnDisk()
+            }
+            #expect(editor.debugBanner == nil)
+            #expect(editor.debugIsDirty, "The edits are still there to save")
+        }
+
+        /// Saving makes the disk this tab's version: no banner left saying
+        /// otherwise, even before the refresh that follows the write.
+        @Test(.tags(.fileSystem), .bug(id: "xmas-sandshell-e7q.32"))
+        func savingTakesTheBannerDown() throws {
+            let notes = try scratch.file("notes.md", "# Notes\n")
+            editor.open(notes)
+            editor.setMode(.source)
+            editor.debugType("more ", at: 0)
+            let inTrash = try scratch.folder("Trash").appending(path: "notes.md")
+            try FileManager.default.moveItem(at: notes, to: inTrash)
+            editor.filesTrashed([notes])
+            #expect(editor.debugBanner != nil)
+            // Back before any refresh, so saving doesn't need to ask.
+            try FileManager.default.moveItem(at: inTrash, to: notes)
+            editor.saveDocument(nil)
+            #expect(editor.debugIsDirty == false)
+            #expect(editor.debugBanner == nil)
+            #expect(try String(contentsOf: notes, encoding: .utf8) == "more # Notes\n")
         }
 
         // MARK: Print

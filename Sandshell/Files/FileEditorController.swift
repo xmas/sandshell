@@ -161,12 +161,33 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
 
     /// Files (or folders holding them) were moved to the Trash here: their
     /// tabs close, except ones with unsaved edits — those stay, marked, and
-    /// saving one asks before putting it back.
-    func filesTrashed(_ urls: [URL]) {
+    /// saving one asks before putting it back. Returns what reopens the
+    /// closed tabs as they were (Undo Move to Trash, once the files are back).
+    @discardableResult
+    func filesTrashed(_ urls: [URL]) -> @MainActor () -> Void {
         commitEditorText()
         let paths = urls.map(\.path)
         let trashed = { (file: OpenFile) in paths.contains { file.url.path == $0 || file.url.path.hasPrefix($0 + "/") } }
-        for (i, file) in files.enumerated().reversed() where trashed(file) && !file.isDirty { close(i) }
+        let closed = files.enumerated().filter { trashed($0.element) && !$0.element.isDirty }
+            .map { (index: $0.offset, file: $0.element) }
+        let shown = closed.contains { $0.file === current } ? current : nil
+        for tab in closed.reversed() { close(tab.index) }
+        filesChangedOnDisk()
+        return { [weak self] in self?.reopen(closed, showing: shown) }
+    }
+
+    /// Tabs that closed when their files went to the Trash, back where they
+    /// were (same place in the tab bar, mode and selection) now that the
+    /// files are. One whose file didn't come back, or that's open again, is left.
+    private func reopen(_ closed: [(index: Int, file: OpenFile)], showing shown: OpenFile?) {
+        commitEditorText()
+        for (index, file) in closed where FileManager.default.fileExists(atPath: file.url.path)
+            && !files.contains(where: { $0.url.standardizedFileURL == file.url.standardizedFileURL }) {
+            files.insert(file, at: min(index, files.count))
+        }
+        if let shown, files.contains(where: { $0 === shown }) { show(shown) } else { rebuildTabs() }
+        // Back as they were opened (or rewritten since: reload); a kept tab
+        // with edits loses its "moved or deleted" banner.
         filesChangedOnDisk()
     }
 
@@ -405,6 +426,9 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
     var openURLs: [URL] { files.map(\.url) }
     var debugIsDirty: Bool { current?.isDirty ?? false }
     var debugDiskChange: OpenFile.DiskChange? { current?.diskChange }
+    /// The "changed on disk" / "moved or deleted" banner's text; nil when hidden.
+    var debugBanner: String? { banner.isHidden ? nil : bannerLabel.stringValue }
+    var debugMode: OpenFile.Mode? { current?.mode }
     /// Type at the caret, as a person would.
     func debugType(_ text: String, at location: Int) {
         view.window?.makeFirstResponder(editor)
@@ -467,11 +491,16 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
     }
 
     /// Files changed on disk (FSEvents via the tree): reload clean files,
-    /// flag ones with unsaved edits (rewritten, or moved or deleted).
+    /// flag ones with unsaved edits (rewritten, or moved or deleted), and
+    /// take the flag down once the disk has the version the tab was opened
+    /// from again (Undo Move to Trash put it back, a save wrote it).
     func filesChangedOnDisk() {
         commitEditorText()
         for file in files {
-            guard let change = file.diskChange else { continue }
+            guard let change = file.diskChange else {
+                if file === current { banner.isHidden = true }
+                continue
+            }
             if file.isDirty {
                 if file === current { showDiskBanner(change, for: file) }
             } else if change == .rewritten {
@@ -1047,6 +1076,9 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
         }
         do {
             try file.write()
+            // What's on disk is this tab's version now: no "changed on disk"
+            // or "moved or deleted" any more.
+            if file === current { banner.isHidden = true }
             rebuildTabs()
             refreshChanges(for: file)
         } catch {

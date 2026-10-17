@@ -19,8 +19,10 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
     var onFilesChanged: (() -> Void)?
     /// A file or folder was renamed or moved here (open tabs follow it).
     var onFileMoved: ((URL, URL) -> Void)?
-    /// Files or folders were moved to the Trash here (their tabs close).
-    var onFilesTrashed: (([URL]) -> Void)?
+    /// Files or folders were moved to the Trash here (their tabs close). What
+    /// it returns reopens those tabs; Undo Move to Trash calls it once the
+    /// files are back.
+    var onFilesTrashed: (([URL]) -> (@MainActor () -> Void)?)?
 
     private(set) var root: URL?
     private(set) var git = GitStatus.empty
@@ -759,7 +761,7 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
         NSWorkspace.shared.recycle(urls) { [weak self] moved, error in
             MainActor.assumeIsolated {
                 guard let self else { return }
-                if !moved.isEmpty { self.onFilesTrashed?(Array(moved.keys)) }
+                let reopenTabs = moved.isEmpty ? nil : self.onFilesTrashed?(Array(moved.keys))
                 if let error { return Alerts.inform("Couldn’t move to the Trash.", error.localizedDescription) }
                 if undoable {
                     self.undo?.registerUndo(withTarget: self) { tree in
@@ -773,6 +775,8 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
                                 catch { failures.append(error.localizedDescription) }
                             }
                             tree.refreshNow()
+                            // The tabs the trashing closed, back as they were.
+                            reopenTabs?()
                             if !failures.isEmpty {
                                 Alerts.inform("Couldn’t put back what was moved to the Trash.", failures.joined(separator: "\n"))
                             }
