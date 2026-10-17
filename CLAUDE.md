@@ -147,7 +147,7 @@ AppDelegate (@main)
 | A borderless SF Symbol button | `NSButton.symbol(…)` / `configureSymbol(…)` (`UI/SymbolButton.swift`) |
 | A menu item (action, symbol, object, key, submenu; or a closure) | `NSMenuItem("Title", action:, target:, symbol:, object:, submenu:)` / `NSMenuItem("Title") { … }` (`UI/MenuItems.swift`); a recent folder: `RootProfile.menuItem(action:target:)` |
 | A spinner | `NSProgressIndicator.spinner(.small)` (`UI/SymbolButton.swift`) |
-| Agent / folder / profile badges | `BadgeMark` (SwiftUI) and `AgentBadgeView` (AppKit), both via `AgentKind.badgeContent` (`Theme/AgentStyle.swift`) |
+| Agent / folder / profile badges | `BadgeMark` (SwiftUI) and `AgentBadgeView` (AppKit), both via `AgentKind.badgeContent` (`Theme/BadgeMark.swift`, `Theme/AgentBadgeView.swift`) |
 | "+12 −3" line counts | `NSAttributedString.diffCounts` |
 | A session's working color | `NSColor.sessionWorking` |
 | Kit reference entry / kit folder picker | `KitRefAddRow`, `NSOpenPanel.chooseKit` (`UI/KitRefField.swift`) |

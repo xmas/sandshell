@@ -7,9 +7,9 @@ enum AppearanceMode: String, Codable, CaseIterable, Identifiable {
     var id: String { rawValue }
     var label: String {
         switch self {
-        case .light: return "Light"
-        case .dark: return "Dark"
-        case .system: return "System"
+        case .light: "Light"
+        case .dark: "Dark"
+        case .system: "System"
         }
     }
 }
@@ -20,10 +20,10 @@ enum CursorStyleSetting: String, Codable, CaseIterable, Identifiable {
     var id: String { rawValue }
     var label: String {
         switch self {
-        case .theme: return "Theme"
-        case .block: return "Block"
-        case .bar: return "Bar"
-        case .underline: return "Underline"
+        case .theme: "Theme"
+        case .block: "Block"
+        case .bar: "Bar"
+        case .underline: "Underline"
         }
     }
 }
@@ -34,9 +34,9 @@ enum CursorBlinkSetting: String, Codable, CaseIterable, Identifiable {
     var id: String { rawValue }
     var label: String {
         switch self {
-        case .theme: return "Theme"
-        case .on: return "On"
-        case .off: return "Off"
+        case .theme: "Theme"
+        case .on: "On"
+        case .off: "Off"
         }
     }
 }
@@ -48,9 +48,9 @@ enum TerminalAppearanceMode: String, Codable, CaseIterable, Identifiable {
     var id: String { rawValue }
     var label: String {
         switch self {
-        case .followApp: return "Follow System"
-        case .forceLight: return "Force Light"
-        case .forceDark: return "Force Dark"
+        case .followApp: "Follow System"
+        case .forceLight: "Force Light"
+        case .forceDark: "Force Dark"
         }
     }
 }
@@ -199,8 +199,7 @@ extension NSColor {
     static func hex(_ hex: String) -> NSColor {
         var s = hex
         if s.hasPrefix("#") { s.removeFirst() }
-        var v: UInt64 = 0
-        Scanner(string: s).scanHexInt64(&v)
+        let v = Scanner(string: s).scanUInt64(representation: .hexadecimal) ?? 0
         return NSColor(srgbRed: CGFloat((v >> 16) & 0xff) / 255,
                        green: CGFloat((v >> 8) & 0xff) / 255,
                        blue: CGFloat(v & 0xff) / 255, alpha: 1)
