@@ -1859,10 +1859,8 @@ extension WorkspaceController {
     func renameSession(_ id: UUID, to name: String) {
         guard let idx = state.sessions.firstIndex(where: { $0.id == id }) else { return }
         let old = state.sessions[idx]
-        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed != old.name || old.isNamedByUser == trimmed.isEmpty else { return }
-        state.sessions[idx].name = trimmed.isEmpty ? old.name : trimmed
-        state.sessions[idx].isNamedByUser = !trimmed.isEmpty
+        guard let renamed = old.renamed(to: name) else { return }
+        state.sessions[idx] = renamed
         saveState()
         undoManager?.registerUndo(withTarget: self) { controller in
             MainActor.assumeIsolated {

@@ -78,6 +78,16 @@ struct Session: Identifiable, Codable, Hashable {
     /// otherwise the session's own agent.
     var containerAgentKind: AgentKind { containerAgent ?? agent }
 
+    /// Renamed by the person: their name sticks (prompts no longer rename it);
+    /// empty puts automatic naming back. Nil when that changes nothing.
+    func renamed(to name: String) -> Session? {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        var renamed = self
+        renamed.name = trimmed.isEmpty ? self.name : trimmed
+        renamed.isNamedByUser = !trimmed.isEmpty
+        return renamed == self ? nil : renamed
+    }
+
     init(id: UUID = UUID(),
          folderID: UUID,
          agent: AgentKind,
