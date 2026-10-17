@@ -64,6 +64,16 @@ struct SbxCommandTests {
             #expect(Shell.words(SbxCommand.shellQuote(token)) == [token],
                     "the shell should see exactly the original token")
         }
+
+        /// A quote that a combining mark, variation selector or joiner makes
+        /// one Character with what follows is still a quote to the shell.
+        @Test(.tags(.sbxCommandEdgeCase), arguments: [
+            "'\u{301}x", "x'\u{301}; rm -rf ~; '", "a'\u{FE0F}b", "'\u{200D}x", "it'\u{301}s 'ok'",
+        ])
+        func quotesJoinedToTheNextCharacterAreEscaped(token: String) {
+            #expect(Shell.words(SbxCommand.shellQuote(token)) == [token],
+                    "an unescaped quote would end the quoting early")
+        }
     }
 
     // MARK: - ProcessTag

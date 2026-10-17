@@ -62,9 +62,6 @@ enum SbxCommand {
     /// opt-in inference gateway (which brings its own auth).
     private static func useProxyAuth(_ requested: Bool) -> Bool { requested && inferenceGatewayURL == nil }
 
-    /// Env pairs passed through `sbx exec ... env K=V ...`. Mirrors
-    /// `sbx.rs::sandbox_shell_env`, plus `SBX_MCP_URL` when the workspace has an
-    /// MCP gateway configured.
     /// Tags on every session's in-container process (inherited by its children):
     /// `SANDSHELL_SESSION` (the sidebar session) and `SANDSHELL_LAUNCH` (this
     /// launch). `reapScript` kills by them, since processes in the sandbox
@@ -81,11 +78,14 @@ enum SbxCommand {
     /// out (a chat reloading a conversation another app is writing to).
     static func reapScript(match: String, immediate: Bool = false) -> String {
         let scan = #"for d in /proc/[0-9]*; do { tr '\0' '\n' < "$d/environ"; } 2>/dev/null | grep -qxF "$M" && kill -SIG "${d#/proc/}" 2>/dev/null; done"#
-        if immediate { return "M=\(shellQuote(match)); " + scan.replacingOccurrences(of: "SIG", with: "KILL") + "; true" }
-        return "M=\(shellQuote(match)); " + scan.replacingOccurrences(of: "SIG", with: "TERM")
-            + "; sleep 1; " + scan.replacingOccurrences(of: "SIG", with: "KILL") + "; true"
+        if immediate { return "M=\(shellQuote(match)); " + scan.replacing("SIG", with: "KILL") + "; true" }
+        return "M=\(shellQuote(match)); " + scan.replacing("SIG", with: "TERM")
+            + "; sleep 1; " + scan.replacing("SIG", with: "KILL") + "; true"
     }
 
+    /// Env pairs passed through `sbx exec ... env K=V ...`. Mirrors
+    /// `sbx.rs::sandbox_shell_env`, plus `SBX_MCP_URL` when the workspace has an
+    /// MCP gateway configured.
     private static func envPairs(home: String, mcpURL: URL?, claude: ClaudeOptions?, tag: ProcessTag? = nil) -> [String] {
         // NOTE: we deliberately do NOT override HOME. The container's agents are
         // installed under its own home (/home/agent/.local/bin); forcing HOME to
@@ -234,8 +234,8 @@ enum SbxCommand {
     /// The bundled copy of Sandshell's kits (`kits/` in the repo).
     static var bundledKits: URL? { Bundle.main.url(forResource: "kits", withExtension: nil) }
 
-    /// The Claude ACP adapter's wrapper (rewind, MCP status) lives in the
-    /// sandshell-claude kit: `kits/sandshell-claude/files/home/.sandshell/sandshell-acp.mjs`.
+    // The Claude ACP adapter's wrapper (rewind, MCP status) lives in the
+    // sandshell-claude kit: `kits/sandshell-claude/files/home/.sandshell/sandshell-acp.mjs`.
 
     /// In-sandbox program (a `bash -c` body after PATH setup) that speaks ACP on
     /// stdio for `agent`, or nil when it has none.
@@ -300,6 +300,9 @@ enum SbxCommand {
             return c.isLetter || c.isNumber || "/._-:+@=,".contains(c)
         }
         if safe { return s }
-        return "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
+        // Every U+0027 scalar, even one a combining mark joins to the next
+        // (' + U+0301 is one Character): matching Characters, or Foundation's
+        // non-literal search, skips it and leaves a quote open.
+        return "'" + s.replacing(/'/.matchingSemantics(.unicodeScalar), with: "'\\''") + "'"
     }
 }
