@@ -1,10 +1,10 @@
 import Foundation
 import Darwin
 
-// Raw values from <sys/attr.h> — ATTR_CMNEXT_PRIVATESIZE accessed via forkattr
-// field with FSOPT_ATTR_CMN_EXTENDED. Same approach as the apfs-cow.sh C helper.
-private let kPrivateSizeAttr: UInt32 = 0x00000200  // ATTR_CMNEXT_PRIVATESIZE
-private let kExtendedFlags:   UInt32 = 0x00000020  // FSOPT_ATTR_CMN_EXTENDED
+// ATTR_CMNEXT_PRIVATESIZE accessed via the forkattr field with
+// FSOPT_ATTR_CMN_EXTENDED. Same approach as the apfs-cow.sh C helper.
+private let kPrivateSizeAttr = attrgroup_t(ATTR_CMNEXT_PRIVATESIZE)
+private let kExtendedFlags = UInt32(FSOPT_ATTR_CMN_EXTENDED)
 
 struct ChangedFile {
     let relativePath: String  // relative to dropDir, e.g. "MyFolder/notes.md"

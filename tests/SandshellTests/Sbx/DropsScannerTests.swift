@@ -23,11 +23,10 @@ fileprivate final class DropsScratch {
         try? FileManager.default.removeItem(at: base)
     }
 
-    /// A dropped file the agent then changed: an APFS clone of a file
-    /// outside the drops folder, written over at its start (not replaced), so
-    /// it owns a block of its own.
+    /// A dropped file left alone: an APFS clone of a file outside the drops
+    /// folder, sharing all its blocks.
     @discardableResult
-    func changedDrop(_ relative: String, _ text: String) throws -> URL {
+    func untouchedDrop(_ relative: String) throws -> URL {
         let original = base.appending(path: "originals/\(relative)", directoryHint: .notDirectory)
         let drop = dropDir.appending(path: relative, directoryHint: .notDirectory)
         for url in [original, drop] {
@@ -36,10 +35,25 @@ fileprivate final class DropsScratch {
         try Data(String(repeating: "-", count: 8192).utf8).write(to: original)
         try #require(clonefile(original.path(percentEncoded: false), drop.path(percentEncoded: false), 0) == 0,
                      "The temporary directory should be on APFS")
+        return drop
+    }
+
+    /// A dropped file the agent then changed: written over at its start (not
+    /// replaced), so it owns a block of its own.
+    @discardableResult
+    func changedDrop(_ relative: String, _ text: String) throws -> URL {
+        let drop = try untouchedDrop(relative)
         let handle = try FileHandle(forWritingTo: drop)
         defer { try? handle.close() }
         try handle.write(contentsOf: Data(text.utf8))
         return drop
+    }
+
+    /// A file the agent made in the drops folder: all its blocks are its own.
+    func newFile(_ relative: String, _ text: String) throws {
+        let url = dropDir.appending(path: relative, directoryHint: .notDirectory)
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(text.utf8).write(to: url)
     }
 }
 
@@ -61,6 +75,17 @@ struct DropsScannerTests {
 
         #expect(Set(changed.map(\.relativePath)) == ["My Folder/notes.md", "top level.txt"])
         #expect(changed.allSatisfy { $0.privateBytes > 0 })
+    }
+
+    @Test("Untouched clones aren't changed; edited clones and new files are", .tags(.fileSystem))
+    func onlyFilesWithBlocksOfTheirOwnAreChanged() throws {
+        try scratch.untouchedDrop("same/untouched.txt")
+        try scratch.changedDrop("same/edited.txt", "changed")
+        try scratch.newFile("same/new.txt", "made by the agent")
+
+        let changed = DropsScanner.scan(dropDir: scratch.dropDir)
+
+        #expect(Set(changed.map(\.relativePath)) == ["same/edited.txt", "same/new.txt"])
     }
 
     @Test("Export copies each changed file to the same path under the staging folder", .tags(.fileSystem))
