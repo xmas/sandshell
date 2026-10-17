@@ -7,7 +7,7 @@ import SwiftUI
 /// Usage:
 ///     MobyPerfectLoopSandSpinner(size: 30)
 public struct MobyPerfectLoopSandSpinner: View {
-    public var size: CGFloat
+    public var size: Double
     public var whaleBlue: Color
     public var whaleDeepBlue: Color
     public var bellyBlue: Color
@@ -17,7 +17,7 @@ public struct MobyPerfectLoopSandSpinner: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     public init(
-        size: CGFloat = 30,
+        size: Double = 30,
         whaleBlue: Color = Color(red: 0.00, green: 0.45, blue: 1.0),
         whaleDeepBlue: Color = Color(red: 0.00, green: 0.24, blue: 0.92),
         bellyBlue: Color = Color(red: 0.88, green: 0.97, blue: 1.0),
@@ -36,35 +36,42 @@ public struct MobyPerfectLoopSandSpinner: View {
         TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { timeline in
             let period: TimeInterval = 2.2
             let t = reduceMotion ? 0 : timeline.date.timeIntervalSinceReferenceDate
-            let phase = CGFloat((t.truncatingRemainder(dividingBy: period)) / period)
+            let phase = t.truncatingRemainder(dividingBy: period) / period
             let theta = phase * .pi * 2.0
             let roll = sin(theta)
             let bob = cos(theta)
             let tail = sin(theta + .pi / 3.0)
 
             ZStack {
-                sandWake(phase: phase)
+                SandWake(phase: phase, size: size, sandGold: sandGold, splashGold: splashGold)
                     .frame(width: size, height: size)
                     .offset(y: size * 0.29)
 
-                sandParticles(phase: phase)
+                SandParticles(phase: phase, size: size, color: splashGold)
                     .frame(width: size, height: size)
 
-                whale(roll: reduceMotion ? 0 : roll, tail: reduceMotion ? 0 : tail)
-                    .frame(width: size * 1.03, height: size * 0.76)
+                SpinnerWhale(roll: reduceMotion ? 0 : roll, tail: reduceMotion ? 0 : tail, size: size,
+                             whaleBlue: whaleBlue, whaleDeepBlue: whaleDeepBlue, bellyBlue: bellyBlue)
                     .offset(
                         x: reduceMotion ? 0 : roll * size * 0.025,
                         y: reduceMotion ? -size * 0.040 : -size * 0.065 + bob * size * 0.018
                     )
-                    .rotationEffect(.degrees(reduceMotion ? 0 : Double(roll) * 6.0), anchor: .center)
+                    .rotationEffect(.degrees(reduceMotion ? 0 : roll * 6.0), anchor: .center)
                     .animation(nil, value: phase)
             }
             .frame(width: size, height: size)
             .accessibilityLabel(Text("Loading"))
         }
     }
+}
 
-    private func sandWake(phase: CGFloat) -> some View {
+private struct SandWake: View {
+    let phase: Double
+    let size: Double
+    let sandGold: Color
+    let splashGold: Color
+
+    var body: some View {
         ZStack {
             Capsule()
                 .fill(
@@ -101,85 +108,110 @@ public struct MobyPerfectLoopSandSpinner: View {
         }
         .allowsHitTesting(false)
     }
+}
 
-    private func sandParticles(phase: CGFloat) -> some View {
+private struct SandParticles: View {
+    let phase: Double
+    let size: Double
+    let color: Color
+
+    var body: some View {
         ZStack {
-            particle(x: 0.18, y: 0.74, r: 0.030, delay: 0.00, phase: phase)
-            particle(x: 0.80, y: 0.75, r: 0.026, delay: 0.50, phase: phase)
+            SandParticle(x: 0.18, y: 0.74, r: 0.030, delay: 0.00, phase: phase, size: size, color: color)
+            SandParticle(x: 0.80, y: 0.75, r: 0.026, delay: 0.50, phase: phase, size: size, color: color)
         }
     }
+}
 
-    private func particle(x: CGFloat, y: CGFloat, r: CGFloat, delay: CGFloat, phase: CGFloat) -> some View {
+private struct SandParticle: View {
+    let x: Double
+    let y: Double
+    let r: Double
+    let delay: Double
+    let phase: Double
+    let size: Double
+    let color: Color
+
+    var body: some View {
         let local = (phase + delay).truncatingRemainder(dividingBy: 1)
         let theta = local * .pi * 2.0
         let lift = max(0, sin(theta)) * size * 0.050
-        let fade = Double(max(0.0, sin(theta))) * 0.62
+        let fade = max(0.0, sin(theta)) * 0.62
 
-        return Circle()
-            .fill(splashGold.opacity(fade))
+        Circle()
+            .fill(color.opacity(fade))
             .frame(width: size * r, height: size * r)
             .position(x: size * x, y: size * y - lift)
     }
+}
 
-    private func whale(roll: CGFloat, tail: CGFloat) -> some View {
-        GeometryReader { geo in
-            let w = geo.size.width
-            let h = geo.size.height
-            let line = max(1.0, w * 0.034)
+/// The whale, `size * 1.03` by `size * 0.76`.
+private struct SpinnerWhale: View {
+    let roll: Double
+    let tail: Double
+    let size: Double
+    let whaleBlue: Color
+    let whaleDeepBlue: Color
+    let bellyBlue: Color
 
-            ZStack {
-                // Soft contact shadow. It is behind the whale but above the fading sand.
-                Capsule()
-                    .fill(Color.black.opacity(0.13))
-                    .frame(width: w * 0.62, height: h * 0.14)
-                    .offset(x: -w * 0.04, y: h * 0.32)
-                    .blur(radius: w * 0.022)
+    var body: some View {
+        let w = size * 1.03
+        let h = size * 0.76
+        let line = max(1.0, w * 0.034)
 
-                HappyTail()
-                    .fill(whaleBlue)
-                    .overlay(HappyTail().stroke(Color.white.opacity(0.24), lineWidth: line))
-                    .frame(width: w * 0.35, height: h * 0.42)
-                    .offset(x: w * 0.35, y: -h * 0.02)
-                    .rotationEffect(.degrees(Double(-8 + tail * 5.0)), anchor: .leading)
+        ZStack {
+            // Soft contact shadow. It is behind the whale but above the fading sand.
+            Capsule()
+                .fill(Color.black.opacity(0.13))
+                .frame(width: w * 0.62, height: h * 0.14)
+                .offset(x: -w * 0.04, y: h * 0.32)
+                .blur(radius: w * 0.022)
 
-                HappyWhaleBody()
-                    .fill(whaleBlue)
-                    .overlay(HappyWhaleBody().stroke(Color.white.opacity(0.24), lineWidth: line))
-                    .shadow(color: Color.black.opacity(0.12), radius: w * 0.03, y: h * 0.025)
+            HappyTail()
+                .fill(whaleBlue)
+                .stroke(Color.white.opacity(0.24), lineWidth: line)
+                .frame(width: w * 0.35, height: h * 0.42)
+                .offset(x: w * 0.35, y: -h * 0.02)
+                .rotationEffect(.degrees(-8 + tail * 5.0), anchor: .leading)
 
-                HappyWhaleBelly()
-                    .fill(bellyBlue)
-                    .overlay(HappyWhaleBelly().stroke(Color.white.opacity(0.55), lineWidth: line * 0.65))
+            HappyWhaleBody()
+                .fill(whaleBlue)
+                .stroke(Color.white.opacity(0.24), lineWidth: line)
+                .shadow(color: Color.black.opacity(0.12), radius: w * 0.03, y: h * 0.025)
 
-                HappyFin()
-                    .fill(whaleDeepBlue.opacity(0.96))
-                    .overlay(HappyFin().stroke(Color.white.opacity(0.18), lineWidth: line * 0.6))
-                    .frame(width: w * 0.26, height: h * 0.38)
-                    .offset(x: w * 0.12, y: h * 0.18)
-                    .rotationEffect(.degrees(Double(6 + roll * 4.0)))
+            HappyWhaleBelly()
+                .fill(bellyBlue)
+                .stroke(Color.white.opacity(0.55), lineWidth: line * 0.65)
 
-                Circle()
-                    .fill(Color.black.opacity(0.90))
-                    .frame(width: w * 0.088, height: w * 0.088)
-                    .overlay(
-                        Circle()
-                            .fill(Color.white)
-                            .frame(width: w * 0.034, height: w * 0.034)
-                            .offset(x: -w * 0.014, y: -w * 0.014)
-                    )
-                    .offset(x: -w * 0.09, y: -h * 0.03)
+            HappyFin()
+                .fill(whaleDeepBlue.opacity(0.96))
+                .stroke(Color.white.opacity(0.18), lineWidth: line * 0.6)
+                .frame(width: w * 0.26, height: h * 0.38)
+                .offset(x: w * 0.12, y: h * 0.18)
+                .rotationEffect(.degrees(6 + roll * 4.0))
 
-                SmileShape()
-                    .stroke(Color.black.opacity(0.74), style: StrokeStyle(lineWidth: line * 1.25, lineCap: .round))
-                    .frame(width: w * 0.22, height: h * 0.18)
-                    .offset(x: -w * 0.06, y: h * 0.14)
+            Circle()
+                .fill(Color.black.opacity(0.90))
+                .frame(width: w * 0.088, height: w * 0.088)
+                .overlay {
+                    Circle()
+                        .fill(Color.white)
+                        .frame(width: w * 0.034, height: w * 0.034)
+                        .offset(x: -w * 0.014, y: -w * 0.014)
+                }
+                .offset(x: -w * 0.09, y: -h * 0.03)
 
-                Circle()
-                    .fill(Color(red: 1.0, green: 0.45, blue: 0.46).opacity(0.44))
-                    .frame(width: w * 0.07, height: w * 0.045)
-                    .offset(x: -w * 0.20, y: h * 0.13)
-            }
+            SmileShape()
+                .stroke(Color.black.opacity(0.74), style: StrokeStyle(lineWidth: line * 1.25, lineCap: .round))
+                .frame(width: w * 0.22, height: h * 0.18)
+                .offset(x: -w * 0.06, y: h * 0.14)
+
+            Circle()
+                .fill(Color(red: 1.0, green: 0.45, blue: 0.46).opacity(0.44))
+                .frame(width: w * 0.07, height: w * 0.045)
+                .offset(x: -w * 0.20, y: h * 0.13)
         }
+        .frame(width: w, height: h)
     }
 }
 
@@ -257,7 +289,7 @@ private struct SmileShape: Shape {
 }
 
 private struct SandRibbon: Shape {
-    let phase: CGFloat
+    let phase: Double
 
     func path(in r: CGRect) -> Path {
         var p = Path()
