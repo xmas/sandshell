@@ -9,7 +9,12 @@ private final class TerminalRuntimeController {
         var startedAt = Date()
         var containerName: String?
         var baselineExecIDs: Set<String>?
+        /// Finds the terminal's own exec among the sandbox's (nil: they
+        /// couldn't be listed before the launch).
+        var execFinder: LaunchExecFinder?
         var execID: String?
+        /// The log says the terminal's exec wasn't found (once).
+        var loggedExecNotFound = false
         var transcriptURL: URL?
         var transcriptMTime: Date?
         var transcriptReadOffset: Int = 0   // bytes consumed; avoids re-reading whole file each tick
@@ -43,6 +48,12 @@ private final class TerminalRuntimeController {
         exited.remove(id)
     }
 
+    /// Closed sessions' exits are forgotten: one reopened (undo) starts anew.
+    func forgetExits(except existing: Set<UUID>) {
+        exited.formIntersection(existing)
+    }
+
+    /// The sandbox's execs right before a launch: its own is among the new ones.
     func prepareLaunch(_ id: UUID, containerName: String) async {
         let baselineExecIDs = await SbxClient.shared.activeExecIDs(containerName: containerName)
         updateActivityWatch(id) {
@@ -69,8 +80,12 @@ private final class TerminalRuntimeController {
         onTerminalDidExit(id)
     }
 
-    func startTracking(_ session: Session, resumeID: String?) {
+    func startTracking(_ session: Session, resumeID: String?, launchTag: String) {
         let id = session.id
+        // Its own exec carries the launch's tag; any there before it isn't it.
+        updateActivityWatch(id) { watch in
+            watch.execFinder = watch.baselineExecIDs.map { LaunchExecFinder(tag: launchTag, baseline: $0) }
+        }
         if let rid = resumeID, activityWatches[id]?.transcriptURL == nil,
            let url = TranscriptReader.transcriptURL(
                 agent: session.agent, workdir: session.workdir,
@@ -94,13 +109,16 @@ private final class TerminalRuntimeController {
         watchTasks[id]?.cancel()
         let start = Date()
         updateActivityWatch(id) { $0.startedAt = start }
+        // Released (or the window closed) during an await: stop there, before
+        // touching the watch or the window's surfaces again.
         watchTasks[id] = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
-                guard let self, self.isTerminalAlive(id),
+                guard !Task.isCancelled, let self, self.isTerminalAlive(id),
                       let s = self.controller.session(id: id) else { return }
                 let home = self.controller.home
                 await self.pollExecLifecycle(id)
+                guard !Task.isCancelled else { return }
                 if self.exited.contains(id) { continue }
                 if self.activityWatches[id]?.transcriptURL == nil {
                     // (Its folder may have moved since it started: the agent files under the old cwd.)
@@ -112,6 +130,7 @@ private final class TerminalRuntimeController {
                             agent: agent, workdir: workdir, home: home,
                             since: startedAt, excluding: claimed)
                     }.value
+                    guard !Task.isCancelled else { return }
                     if let url {
                         self.updateActivityWatch(id) {
                             $0.transcriptURL = url
@@ -162,6 +181,7 @@ private final class TerminalRuntimeController {
                 let incResult = await Task.detached(priority: .utility) {
                     TranscriptReader.incrementalLiveState(in: urlCapture, fromOffset: readOffset)
                 }.value
+                guard !Task.isCancelled else { return }
                 guard let result = incResult else { continue }
                 self.updateActivityWatch(id) {
                     $0.transcriptReadOffset = result.newOffset
@@ -194,23 +214,44 @@ private final class TerminalRuntimeController {
               let containerName = watch.containerName,
               !exited.contains(id) else { return }
 
-        let execID: String?
-        if let known = watch.execID {
-            execID = known
-        } else {
-            guard let baseline = watch.baselineExecIDs,
-                  let active = await SbxClient.shared.activeExecIDs(containerName: containerName)
-            else { return }
-            let candidates = active.subtracting(baseline).sorted()
-            guard let claimed = candidates.first else { return }
-            updateActivityWatch(id) { $0.execID = claimed }
-            Log.info(.workspace, "session \(id) attached to sbx exec \(claimed)")
-            execID = claimed
+        if let execID = watch.execID {
+            guard let state = await SbxClient.shared.inspectExecLifecycle(id: execID),
+                  !state.running, !Task.isCancelled else { return }
+            return execExited(id, execID: execID, state: state)
         }
 
-        guard let execID,
-              let state = await SbxClient.shared.inspectExecLifecycle(id: execID),
-              !state.running else { return }
+        guard var finder = watch.execFinder,
+              let active = await SbxClient.shared.activeExecIDs(containerName: containerName),
+              !Task.isCancelled else { return }
+        // Not another terminal's: the sandbox's other sessions, reaps and log
+        // reads start execs too.
+        let others = Set(activityWatches.filter { $0.key != id }.compactMap(\.value.execID))
+        var inspections: [String: SbxClient.ExecLifecycleState] = [:]
+        for candidate in finder.toInspect(active: active, others: others) {
+            inspections[candidate] = await SbxClient.shared.inspectExecLifecycle(id: candidate)
+        }
+        guard !Task.isCancelled else { return }
+        let claim = finder.claim(active: active, others: others, inspections: inspections)
+        updateActivityWatch(id) {
+            $0.execFinder = finder
+            $0.execID = claim?.id
+        }
+        guard let claim else {
+            // Its exit then shows only when its PTY closes: say why, once.
+            if !watch.loggedExecNotFound, Date().timeIntervalSince(watch.startedAt) > 15 {
+                updateActivityWatch(id) { $0.loggedExecNotFound = true }
+                let left = finder.candidates(active: active, others: others).count
+                let why = finder.sawCommands ? "none of the sandbox's new execs carries its launch tag"
+                    : "sbx doesn't say what execs run, and \(left) new one(s) may be it"
+                Log.info(.workspace, "session \(id): its sbx exec isn't found after 15 s: \(why)")
+            }
+            return
+        }
+        Log.info(.workspace, "session \(id) attached to sbx exec \(claim.id)")
+        if !claim.state.running { execExited(id, execID: claim.id, state: claim.state) }
+    }
+
+    private func execExited(_ id: UUID, execID: String, state: SbxClient.ExecLifecycleState) {
         Log.info(.workspace, "session \(id) sbx exec \(execID) exited with \(state.exitCode ?? 0)")
         terminalDidExit(id)
     }
@@ -274,8 +315,19 @@ final class SessionSurfaces {
     /// The window closed: launches still waiting on a sandbox start nothing.
     var isTornDown = false
     var searchWindows: [UUID: TerminalSearchWindowController] = [:]
-    /// Whether some pane is showing the session (set by the pane tree).
-    var isShown: (UUID) -> Bool = { _ in false }
+    /// The pane showing the session, if any (set by the pane tree): a session's
+    /// own buttons and links act there, whichever pane launched it.
+    var paneShowing: (UUID) -> TerminalStackController? = { _ in nil }
+    /// Whether some pane is showing the session.
+    func isShown(_ id: UUID) -> Bool { paneShowing(id) != nil }
+    /// Whether the person can see the session now: the app is active, a pane
+    /// shows it, and its window is on screen — not minimized, on another Space
+    /// or covered by another window. Otherwise news of it is a notification.
+    func isVisible(_ id: UUID) -> Bool {
+        guard NSApp.isActive, let window = paneShowing(id)?.viewIfLoaded?.window else { return false }
+        return window.isKeyWindow
+            || (window.isVisible && !window.isMiniaturized && window.occlusionState.contains(.visible))
+    }
     /// A terminal's process exited (routed to the pane showing it).
     var onTerminalExit: (UUID) -> Void = { _ in }
     /// A chat's agent exited on its own (routed to the pane showing it).
@@ -288,24 +340,64 @@ final class SessionSurfaces {
     /// When each chat was last reconnected without being asked (at most once a minute).
     var lastAutoReconnect: [UUID: Date] = [:]
 
+    // Weak: a watch or monitor task still in an await can outlive the window.
     fileprivate lazy var runtime = TerminalRuntimeController(
         controller: controller,
-        isTerminalAlive: { [unowned self] id in self.terminals[id] != nil },
-        isSessionVisible: { [unowned self] id in NSApp.isActive && self.isShown(id) },
-        onTerminalDidExit: { [unowned self] id in self.onTerminalExit(id) })
+        isTerminalAlive: { [weak self] id in self?.terminals[id] != nil },
+        isSessionVisible: { [weak self] id in self?.isVisible(id) ?? false },
+        onTerminalDidExit: { [weak self] id in self?.onTerminalExit(id) })
 
     /// Background tasks of every running Claude session in this window.
     lazy var backgroundTasks = BackgroundTaskMonitor(
         controller: controller,
-        isAlive: { [unowned self] id in
-            self.chats[id] != nil || (self.terminals[id] != nil && !self.runtime.isExited(id))
+        isAlive: { [weak self] id in
+            guard let self else { return false }
+            return self.chats[id] != nil || (self.terminals[id] != nil && !self.runtime.isExited(id))
         },
-        isVisible: { [unowned self] id in NSApp.isActive && self.isShown(id) })
+        isVisible: { [weak self] id in self?.isVisible(id) ?? false })
 
     init(controller: WorkspaceController) {
         self.controller = controller
         backgroundTasks.start()
         Self.all.add(self)
+    }
+
+    /// End a session's chat, wherever it's shown (or with no pane showing it).
+    func closeChat(_ id: UUID) {
+        guard let chat = chats.removeValue(forKey: id) else { return }
+        // A message queued behind its turn is kept for the session's next chat
+        // (a reconnect sends it) instead of vanishing.
+        if let waiting = chat.session.takeQueued() {
+            var draft = drafts[id] ?? ChatDraft(text: "", urls: [], send: true)
+            draft.text = [waiting.text, draft.text].filter { !$0.isEmpty }.joined(separator: "\n\n")
+            draft.attachments = waiting.attachments + draft.attachments
+            draft.send = true
+            drafts[id] = draft
+        }
+        let wasWorking = chat.session.phase == .running
+        chat.session.close()
+        // It won't say it stopped (closed sessions don't report): say so here.
+        if wasWorking { _ = controller.reportActivity(id, working: false, at: Date()) }
+        // Its processes may not carry this session's tag (a warm spare's):
+        // the next launch for this session reaps them by theirs too.
+        leftoverProcesses[id] = chat.session.processMatch
+        chat.removeFromSuperview()
+        controller.setLive(id, false)
+        controller.setWaiting(id, false)   // its question went with it
+        NotificationManager.shared.withdrawNeedsInput(sessionID: id)
+        controller.setStopped(id, nil)   // a stopped chat's reason doesn't follow it to Terminal
+    }
+
+    /// Relaunch a chat, resuming its conversation (to take a new model): the
+    /// pane showing it does it now; one off screen is closed, and starts
+    /// again, taking the change, when a pane next shows it.
+    func reconnectChat(_ id: UUID) {
+        guard !isTornDown else { return }
+        if let pane = paneShowing(id) { return pane.reconnectChat(id) }
+        guard let session = controller.session(id: id), session.isChat, !pending.contains(id),
+              chats[id] != nil else { return }
+        Log.info(.workspace, "closing chat “\(session.name)” (off screen) to relaunch it when it's shown")
+        closeChat(id)
     }
 
     /// Every window's surfaces: a session runs in one window at a time.
@@ -317,6 +409,17 @@ final class SessionSurfaces {
         Self.all.allObjects.contains { other in
             other !== self && !other.isTornDown
                 && (other.terminals[id] != nil || other.chats[id] != nil || other.pending.contains(id))
+        }
+    }
+
+    /// This window closed and let go of `ids`: panes in the other windows that
+    /// showed them as open here start them now (after the close is done).
+    func releasedToOthers(_ ids: Set<UUID>) {
+        guard !ids.isEmpty else { return }
+        DispatchQueue.main.async { [weak self] in
+            for other in Self.all.allObjects where other !== self && !other.isTornDown {
+                for id in ids where other.isShown(id) { other.onLaunched(id) }
+            }
         }
     }
 }
@@ -1042,7 +1145,7 @@ final class TerminalStackController: NSViewController {
             return showLaunchFailure(failure)
         }
         if session.isChat {
-            if terminals[id] != nil { dropTerminal(id) }   // switched terminal → chat
+            dropTerminal(id)   // switched terminal → chat (a stopped one's exit goes too)
             if let chat = chats[id], chat.session.needsReconnect, !SystemSleep.isAsleep, autoReconnect(id) {
                 return   // its agent died off screen (e.g. while the Mac slept): bring it back
             }
@@ -1342,7 +1445,8 @@ final class TerminalStackController: NSViewController {
             defer { updateClaudeStats(id) }
             guard ClaudePriceBook.normalize(modelID ?? "") != ClaudePriceBook.normalize(chat.launchModel ?? "") else { return }
             if case .running = chat.phase {
-                chat.afterTurn = { [weak self] in self?.reconnectChat(id) }
+                // Whichever pane shows the chat then (if any), not this one.
+                chat.afterTurn = { [weak surfaces] in surfaces?.reconnectChat(id) }
             } else {
                 reconnectChat(id)
             }
@@ -1455,8 +1559,6 @@ final class TerminalStackController: NSViewController {
             // Leftovers from a crash/kill would share this conversation.
             await reapLeftovers(id, in: containerName)
 
-            await runtime.prepareLaunch(id, containerName: containerName)
-
             Log.info(.workspace, "launching \(session.agent.rawValue) terminal in “\(containerName)” at \(session.workdir)\(resumeID == nil ? "" : " (resume \(resumeID!))")")
             // Claude: model/effort choice + the status feed (model/context/cost readout).
             var claudeOptions: SbxCommand.ClaudeOptions? = nil
@@ -1471,6 +1573,8 @@ final class TerminalStackController: NSViewController {
                     sessionID: id.uuidString,
                     sbxProxyAuth: await SbxClient.shared.hasAnthropicSecret(sandbox: containerName))
             }
+            // Right before the terminal starts, so fewer other execs can show up beside its own.
+            await runtime.prepareLaunch(id, containerName: containerName)
             // Closed meanwhile (window, session), or started by another launch.
             guard !surfaces.isTornDown, controller.session(id: id) != nil, terminals[id] == nil else { return }
             let terminal = TerminalSession(
@@ -1480,11 +1584,12 @@ final class TerminalStackController: NSViewController {
                 theme: controller.theme,
                 resumeID: resumeID,
                 claude: claudeOptions)
-            terminal.onProcessExit = { [weak self] in self?.runtime.terminalDidExit(id) }
+            // Not this pane's: the terminal moves to whichever pane shows it.
+            terminal.onProcessExit = { [weak surfaces = self.surfaces] in surfaces?.runtime.terminalDidExit(id) }
             addTerminalView(terminal.view)
             terminals[id] = terminal
             runtime.terminalStarted(id)
-            runtime.startTracking(session, resumeID: resumeID)
+            runtime.startTracking(session, resumeID: resumeID, launchTag: terminal.tag.pairs[1])
 
             surfaces.onLaunched(id)
         }
@@ -1499,21 +1604,17 @@ final class TerminalStackController: NSViewController {
     private func attachInspector(to view: ChatSessionView, chat: ChatSession, sessionID id: UUID) {
         let model = SessionInspectorModel(sessionID: id, chat: chat, workspace: controller)
         model.stopTask = { [weak chat] task in await chat?.stopBackgroundTask(task.id) ?? false }
-        model.openWorkflow = { [weak self, weak chat] run in
-            guard let self else { return }
-            let taskID = self.controller.backgroundTasks[id]?.first { $0.runID == run.id }?.id
-            WorkflowWindowController.show(run, sessionID: id, workspace: self.controller,
+        // Like the chat's own callbacks, none of these is this pane's.
+        model.openWorkflow = { [controller, weak chat] run in
+            let taskID = controller.backgroundTasks[id]?.first { $0.runID == run.id }?.id
+            WorkflowWindowController.show(run, sessionID: id, workspace: controller,
                                           stop: taskID.map { tid in { await chat?.stopBackgroundTask(tid) ?? false } })
         }
-        model.openSubagent = { [weak self] info in
-            guard let self else { return }
-            SubagentWindowController.show(info, workspace: self.controller)
-        }
-        model.openTask = { [weak self] _ in self?.showBackgroundTasks() }
+        model.openSubagent = { [controller] info in SubagentWindowController.show(info, workspace: controller) }
+        model.openTask = { [weak surfaces] _ in surfaces?.paneShowing(id)?.showBackgroundTasks() }
         model.showMCP = { [weak view] in view?.showMCPDetails() }
-        model.openMCPSettings = { [weak self] in
-            guard let self else { return }
-            SettingsWindowController.show(for: self.controller, pane: .mcp, owner: self.view.window)
+        model.openMCPSettings = { [controller, weak view] in
+            SettingsWindowController.show(for: controller, pane: .mcp, owner: view?.window)
         }
         view.setInspector(NSHostingView(rootView: SessionInspectorView(model: model)))
     }
@@ -1589,6 +1690,9 @@ final class TerminalStackController: NSViewController {
             // one awaits would start another agent (and orphan one of them).
             defer { pending.remove(id) }
             let containerName = await controller.ensureContainerReady(for: session.containerAgentKind)
+            // The window closed while the sandbox came up: reap nothing (another
+            // window may have started this session since), start nothing.
+            guard !surfaces.isTornDown else { return }
             guard let containerName else {
                 let message = controller.lastError ?? "Failed to start the sandbox."
                 surfaces.launchFailures[id] = message
@@ -1627,9 +1731,13 @@ final class TerminalStackController: NSViewController {
             chat.onClosed = { [controller] why in controller.setStopped(id, why) }
             chat.onUnexpectedExit = { [surfaces] in surfaces.onChatAgentExit(id) }
             chat.onUsage = { [surfaces] in surfaces.onChatStatus(id) }
-            chat.onWaitingChange = { [controller] waiting in controller.setWaiting(id, waiting) }
+            chat.onWaitingChange = { [controller] waiting in
+                controller.setWaiting(id, waiting)
+                // Answered (or cancelled): "needs you" is old news.
+                if !waiting { NotificationManager.shared.withdrawNeedsInput(sessionID: id) }
+            }
             chat.onNeedsInput = { [controller, surfaces] text in
-                guard !(NSApp.isActive && surfaces.isShown(id)), let s = controller.session(id: id) else { return }
+                guard !surfaces.isVisible(id), let s = controller.session(id: id) else { return }
                 NotificationManager.shared.sendNeedsInput(sessionID: id, agentName: s.agent.displayName,
                                                           sessionName: s.name, text: text)
             }
@@ -1643,8 +1751,7 @@ final class TerminalStackController: NSViewController {
                 let now = Date()
                 let transition = controller.reportActivity(id, working: working, lastWrite: now, at: now)
                 // Same "finished" notification terminals send, when you're elsewhere.
-                if transition.finishedWork, let s = controller.session(id: id),
-                   !(NSApp.isActive && surfaces.isShown(id)) {
+                if transition.finishedWork, let s = controller.session(id: id), !surfaces.isVisible(id) {
                     NotificationManager.shared.sendWorkComplete(
                         sessionID: id, agentName: s.agent.displayName, sessionName: s.name,
                         lastPrompt: lastPrompt, workSeconds: transition.workSeconds, workdir: s.workdir)
@@ -1652,14 +1759,16 @@ final class TerminalStackController: NSViewController {
             }
             let view = ChatSessionView(session: chat)
             attachInspector(to: view, chat: chat, sessionID: id)
-            view.onReconnect = { [weak self] in self?.reconnectChat(id) }
-            view.onOpenFile = { [weak self] url, line in self?.onOpenFileInFiles?(url, line) }
-            view.onFork = { [weak self] reply in
-                guard let self else { return }
-                if self.controller.forkChat(id, upTo: reply) == nil { NSSound.beep() }
+            // None of these is this pane's: the chat moves to whichever pane shows it.
+            view.onReconnect = { [weak surfaces = self.surfaces] in surfaces?.paneShowing(id)?.reconnectChat(id) }
+            view.onOpenFile = { [weak surfaces = self.surfaces] url, line in
+                surfaces?.paneShowing(id)?.onOpenFileInFiles?(url, line)
             }
-            view.resolveFileURLs = { [weak self] urls in
-                self?.materializeDroppedURLs(urls, workdir: current.workdir).map { URL(fileURLWithPath: $0) } ?? urls
+            view.onFork = { [controller] reply in
+                if controller.forkChat(id, upTo: reply) == nil { NSSound.beep() }
+            }
+            view.resolveFileURLs = { urls in
+                Self.materializeDroppedURLs(urls, workdir: current.workdir).map { URL(fileURLWithPath: $0) }
             }
             addTerminalView(view)
             chats[id] = view
@@ -1763,32 +1872,12 @@ final class TerminalStackController: NSViewController {
         }
     }
 
-    private func closeChat(_ id: UUID) {
-        guard let chat = chats.removeValue(forKey: id) else { return }
-        // A message queued behind its turn is kept for the session's next chat
-        // (a reconnect sends it) instead of vanishing.
-        if let waiting = chat.session.takeQueued() {
-            var draft = surfaces.drafts[id] ?? ChatDraft(text: "", urls: [], send: true)
-            draft.text = [waiting.text, draft.text].filter { !$0.isEmpty }.joined(separator: "\n\n")
-            draft.attachments = waiting.attachments + draft.attachments
-            draft.send = true
-            surfaces.drafts[id] = draft
-        }
-        let wasWorking = chat.session.phase == .running
-        chat.session.close()
-        // It won't say it stopped (closed sessions don't report): say so here.
-        if wasWorking { _ = controller.reportActivity(id, working: false, at: Date()) }
-        // Its processes may not carry this session's tag (a warm spare's):
-        // the next launch for this session reaps them by theirs too.
-        surfaces.leftoverProcesses[id] = chat.session.processMatch
-        chat.removeFromSuperview()
-        controller.setLive(id, false)
-        controller.setWaiting(id, false)   // its question went with it
-        controller.setStopped(id, nil)   // a stopped chat's reason doesn't follow it to Terminal
-    }
+    private func closeChat(_ id: UUID) { surfaces.closeChat(id) }
 
-    /// Tear down a session's terminal (e.g. when it switches to chat).
+    /// Tear down a session's terminal (e.g. when it switches to chat). That it
+    /// exited (or was stopped) goes with it: the next terminal starts anew.
     private func dropTerminal(_ id: UUID) {
+        runtime.resetExit(id)
         guard let terminal = terminals.removeValue(forKey: id) else { return }
         terminal.view.removeFromSuperview()
         terminal.cleanup()
@@ -1802,11 +1891,17 @@ final class TerminalStackController: NSViewController {
     private func pruneClosed() {
         let existing = Set(controller.orderedSessions.map(\.id))
         for id in chats.keys where !existing.contains(id) { closeChat(id) }
-        for (id, terminal) in terminals where !existing.contains(id) {
-            terminal.view.removeFromSuperview()
-            terminal.cleanup()
-            terminals[id] = nil
-            runtime.terminalRemoved(id)
+        for id in terminals.keys where !existing.contains(id) { dropTerminal(id) }
+        runtime.forgetExits(except: existing)   // a stopped one's too (its terminal is gone)
+    }
+
+    /// The pane closed (its sessions live on in other panes): stop its timer,
+    /// event monitor and its session's search window, but leave the shared
+    /// terminals (and the other sessions' search windows) alone.
+    func paneClosed() {
+        contextBar.stop()
+        if let m = pasteEventMonitor { NSEvent.removeMonitor(m); pasteEventMonitor = nil }
+        if let id = shownSession {
             searchWindows[id]?.close()
             searchWindows[id] = nil
         }
@@ -1815,23 +1910,17 @@ final class TerminalStackController: NSViewController {
     /// Tear down every terminal when the window closes — kills each session's
     /// `sbx exec` (libghostty closes the PTY on surface teardown) and removes its
     /// temp launch script. Without this, closing a window leaks the scripts.
-    /// The pane closed (its sessions live on in other panes): stop its timer,
-    /// event monitor and windows, but leave the shared terminals alone.
-    func paneClosed() {
-        contextBar.stop()
-        if let m = pasteEventMonitor { NSEvent.removeMonitor(m); pasteEventMonitor = nil }
-        for wc in searchWindows.values { wc.close() }
-        searchWindows.removeAll()
-    }
-
     func teardown() {
         surfaces.isTornDown = true
         contextBar.stop()
         if let m = pasteEventMonitor { NSEvent.removeMonitor(m); pasteEventMonitor = nil }
         for wc in searchWindows.values { wc.close() }
         searchWindows.removeAll()
+        let ran = Set(chats.keys).union(terminals.keys).union(pending)
         for id in Array(chats.keys) { closeChat(id) }
         for id in Array(terminals.keys) { dropTerminal(id) }
+        runtime.stopAll()
+        surfaces.releasedToOthers(ran)
     }
 
     /// Sessions whose sandbox is being rebuilt (other sandboxes' keep running).
@@ -1942,7 +2031,7 @@ extension TerminalStackController {
     }
 
     private func terminalInput(for urls: [URL], workdir: String) -> String? {
-        let paths = materializeDroppedURLs(urls, workdir: workdir)
+        let paths = Self.materializeDroppedURLs(urls, workdir: workdir)
         guard !paths.isEmpty else { return nil }
         return paths.map(SbxCommand.shellQuote).joined(separator: " ")
     }
@@ -2003,7 +2092,7 @@ extension TerminalStackController {
         }
     }
 
-    private func materializeDroppedURLs(_ urls: [URL], workdir: String) -> [String] {
+    private static func materializeDroppedURLs(_ urls: [URL], workdir: String) -> [String] {
         let dropDir = URL(fileURLWithPath: workdir, isDirectory: true)
             .appendingPathComponent(".sbx/drops", isDirectory: true)
         do {
@@ -2033,7 +2122,7 @@ extension TerminalStackController {
     // Append an entry to .sbx/drops/.provenance so tools can trace each file back
     // to the path it was dragged from. The file is a JSON object keyed by the
     // destination filename; existing entries are preserved across drops.
-    private func recordProvenance(source: URL, destination: URL, in dropDir: URL) {
+    private static func recordProvenance(source: URL, destination: URL, in dropDir: URL) {
         let provenanceURL = dropDir.appendingPathComponent(".provenance")
         var entries: [String: [String: String]] = [:]
         if let data = try? Data(contentsOf: provenanceURL),
@@ -2049,7 +2138,7 @@ extension TerminalStackController {
         try? data.write(to: provenanceURL)
     }
 
-    private func uniqueDestination(for filename: String, in directory: URL) -> URL {
+    private static func uniqueDestination(for filename: String, in directory: URL) -> URL {
         let base = filename.isEmpty ? "item" : filename
         let original = directory.appendingPathComponent(base)
         if !FileManager.default.fileExists(atPath: original.path) { return original }
@@ -2098,7 +2187,8 @@ extension TerminalStackController {
                 return
             }
             let wc = TerminalSearchWindowController(sessionName: session.name)
-            wc.onClose = { [weak self] in self?.searchWindows[id] = nil }
+            // The session's, not this pane's (which may close first).
+            wc.onClose = { [weak surfaces = self.surfaces] in surfaces?.searchWindows[id] = nil }
             if let text { wc.loadText(text) }
             wc.showWindow(nil)
             self.searchWindows[id] = wc
@@ -2110,22 +2200,9 @@ extension TerminalStackController {
     /// nil if the terminal has no selection or the copy fails.
     private func extractAndRestoreClipboard(from tv: AppTerminalView) -> String? {
         let pb = NSPasteboard.general
-
-        // Capture all clipboard data before we clobber it.
-        let saved: [(NSPasteboard.PasteboardType, Data)] = (pb.pasteboardItems ?? [])
-            .flatMap { item in item.types.compactMap { t in item.data(forType: t).map { (t, $0) } } }
-
-        _ = tv.copySelectedTextToPasteboard()
-        let text = pb.string(forType: .string)
-
-        // Restore.
-        pb.clearContents()
-        if !saved.isEmpty {
-            let item = NSPasteboardItem()
-            for (type, data) in saved { item.setData(data, forType: type) }
-            pb.writeObjects([item])
-        }
-
+        let saved = pb.snapshotItems()   // before we clobber it
+        let text = tv.copySelectedTextToPasteboard() ? pb.string(forType: .string) : nil
+        pb.restore(saved)
         return text
     }
 }

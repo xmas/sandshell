@@ -9,6 +9,8 @@ actor SbxClient {
     private let sbx: String
     /// `hasServiceSecret` result per service + scope, briefly cached (checked per launch).
     private var secretCache: [String: (Bool, Date)] = [:]
+    /// Whether the log says yet if sbx's exec inspection includes what an exec runs.
+    private var loggedExecCommands = false
 
     init() {
         self.sbx = PathFixer.sbxPath()
@@ -123,6 +125,8 @@ actor SbxClient {
         var running: Bool
         var pid: Int
         var exitCode: Int?
+        /// What the exec runs (entrypoint, then arguments), when sbx says.
+        var command: [String]?
 
         enum CodingKeys: String, CodingKey {
             case id
@@ -133,6 +137,12 @@ actor SbxClient {
             case mobyRunning = "Running"
             case mobyPid = "Pid"
             case mobyExitCode = "ExitCode"
+            case mobyProcessConfig = "ProcessConfig"
+        }
+
+        private struct ProcessConfig: Decodable {
+            var entrypoint: String?
+            var arguments: [String]?
         }
 
         init(from decoder: Decoder) throws {
@@ -147,6 +157,9 @@ actor SbxClient {
                 ?? 0
             exitCode = try c.decodeIfPresent(Int.self, forKey: .exitCode)
                 ?? c.decodeIfPresent(Int.self, forKey: .mobyExitCode)
+            let config = try? c.decodeIfPresent(ProcessConfig.self, forKey: .mobyProcessConfig)
+            let command = [config?.entrypoint].compactMap { $0 } + (config?.arguments ?? [])
+            self.command = command.isEmpty ? nil : command
         }
     }
 
@@ -160,6 +173,14 @@ actor SbxClient {
               let data = json.data(using: .utf8),
               let state = try? JSONDecoder().decode(ExecLifecycleState.self, from: data)
         else { return nil }
+        if !loggedExecCommands {
+            // Whether a terminal's exec is told apart by its launch tag, or only
+            // by being the lone new one (`LaunchExecFinder`).
+            loggedExecCommands = true
+            Log.info(.sbx, state.command == nil
+                ? "sbx's exec inspection doesn't say what an exec runs (no ProcessConfig): terminals' execs are told apart by count only"
+                : "sbx's exec inspection says what an exec runs (ProcessConfig): terminals' execs are told apart by their launch tag")
+        }
         return state
     }
 

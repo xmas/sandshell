@@ -82,16 +82,9 @@ final class LinkOpeningTerminalView: AppTerminalView {
     /// snapshot the general pasteboard, use ghostty's copy, then restore.
     private func readSelectedText() -> String? {
         let pb = NSPasteboard.general
-        let saved: [NSPasteboardItem] = (pb.pasteboardItems ?? []).map { item in
-            let copy = NSPasteboardItem()
-            for type in item.types {
-                if let data = item.data(forType: type) { copy.setData(data, forType: type) }
-            }
-            return copy
-        }
+        let saved = pb.snapshotItems()
         let text = copySelectedTextToPasteboard() ? pb.string(forType: .string) : nil
-        pb.clearContents()
-        if !saved.isEmpty { pb.writeObjects(saved) }
+        pb.restore(saved)
         return text
     }
 
@@ -162,7 +155,8 @@ final class TerminalSession {
     private let controller: TerminalController
     private let scriptURL: URL
     private let containerName: String
-    private let tag: SbxCommand.ProcessTag
+    /// The env tags this launch's processes in the sandbox carry.
+    let tag: SbxCommand.ProcessTag
     private let theme: ThemeController
     private var themeObserver: AnyCancellable?
     private var cursorObserver: AnyCancellable?
