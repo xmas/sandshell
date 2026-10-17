@@ -46,7 +46,8 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
     private var cancellables: Set<AnyCancellable> = []
     private var clickMonitor: Any?
     private let container = PaneDropContainer()
-    private var saveScheduled = false
+    /// The layout save waiting out its debounce (`scheduleSave`).
+    private var saveTask: Task<Void, Never>?
     /// Where this window's layout is saved (see `layoutKey(root:instanceIndex:)`).
     let layoutKey: String
     /// Whether the window opens on its saved layout (a Duplicate Window starts
@@ -200,6 +201,47 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
         pane.reemitChrome()
     }
 
+    /// Focus `pane` from the keyboard (Next/Previous Pane, Close Pane, a split
+    /// showing a session): the keys go with the ring.
+    private func focusWithKeyboard(_ pane: TerminalStackController) {
+        focus(pane)
+        giveKeyboard(to: pane)
+    }
+
+    /// The keys to what `pane` shows: its chat (the composer, or the agent's
+    /// question), its terminal, or its Files (the file shown, else the list).
+    /// A pane with nothing to type into yet — empty, or its session still
+    /// starting, which takes them once it's up — takes them from the pane left.
+    private func giveKeyboard(to pane: TerminalStackController) {
+        guard let window = view.window else { return }
+        func isShown(_ v: NSView) -> Bool { v.isDescendant(of: pane.view) && !v.isHiddenOrHasHiddenAncestor }
+        if let id = pane.shownSession, let chat = surfaces.chats[id], isShown(chat) {
+            chat.focusComposer()
+        } else if let id = pane.shownSession, let terminal = surfaces.terminals[id]?.view, isShown(terminal) {
+            window.makeFirstResponder(terminal)
+        } else if let files = pane.filesPane, let target = Self.keyView(inFiles: files.view) {
+            window.makeFirstResponder(target)
+        } else if let responder = window.firstResponder as? NSView,
+                  panes.contains(where: { $0 !== pane && responder.isDescendant(of: $0.view) }) {
+            window.makeFirstResponder(nil)
+        }
+    }
+
+    /// A Files surface's place for the keys: the file it shows (editor,
+    /// preview or changes), else its list.
+    static func keyView(inFiles view: NSView) -> NSView? {
+        var text: NSTextView?
+        var list: NSOutlineView?
+        func walk(_ v: NSView) {
+            guard !v.isHidden else { return }
+            if text == nil, let t = v as? NSTextView, t.isSelectable { text = t }
+            if list == nil, let o = v as? NSOutlineView { list = o }
+            v.subviews.forEach(walk)
+        }
+        walk(view)
+        return text ?? list
+    }
+
     /// Sidebar selection → the focused pane, unless another pane already shows it.
     private func selectionChanged(_ selection: SidebarSelection?) {
         guard focused != nil else { return }
@@ -317,7 +359,7 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
         } else {
             newPane.show(nil)
         }
-        focus(newPane)
+        if session != nil, files == nil { focusWithKeyboard(newPane) } else { focus(newPane) }
         scheduleSave()
     }
 
@@ -339,17 +381,17 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
         pane.view.removeFromSuperview()
         pane.removeFromParent()
         rebuild()
-        if focused === pane, let next = panes.first { focus(next) }
+        if focused === pane, let next = panes.first { focusWithKeyboard(next) }
         scheduleSave()
     }
 
     func closeFocused() { if let focused { close(focused) } }
 
-    /// Move focus to the next/previous pane in reading order.
+    /// Move focus (and the keys) to the next/previous pane in reading order.
     func focusAdjacent(_ delta: Int) {
         let all = panes
         guard all.count > 1, let i = all.firstIndex(where: { $0 === focused }) else { return }
-        focus(all[(i + delta + all.count) % all.count])
+        focusWithKeyboard(all[(i + delta + all.count) % all.count])
     }
 
     /// Give every split's children equal sizes.
@@ -389,7 +431,7 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
         // Divider positions need the splits' real sizes: apply them after
         // this layout pass (positions computed from zero would clamp to the minimum).
         view.layoutSubtreeIfNeeded()
-        DispatchQueue.main.async { [weak self] in
+        Task { [weak self] in
             guard let self else { return }
             self.view.layoutSubtreeIfNeeded()
             self.applyFractions(self.root)
@@ -539,15 +581,15 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
     }
 
     private func scheduleSave() {
-        guard !saveScheduled else { return }
-        saveScheduled = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+        guard saveTask == nil else { return }
+        saveTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(500))
             guard let self, !self.layoutForgotten else { return }
-            self.saveScheduled = false
+            self.saveTask = nil
             @MainActor func encode(_ n: Node) -> Saved {
                 switch n.kind {
-                case .leaf(let p): return Saved(session: p.shownSession, files: p.shownFiles)
-                case .split(let a, let kids): return Saved(axis: a, children: kids.map(encode), fractions: n.fractions)
+                case .leaf(let p): Saved(session: p.shownSession, files: p.shownFiles)
+                case .split(let a, let kids): Saved(axis: a, children: kids.map(encode), fractions: n.fractions)
                 }
             }
             if let data = try? JSONEncoder().encode(encode(self.root)) {
@@ -573,7 +615,7 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
                 if kids.count == 1 { return kids[0] }
                 let n = Node(.split(axis, kids))
                 kids.forEach { $0.parent = n }
-                n.fractions = s.fractions?.count == kids.count ? s.fractions! : []
+                if let fractions = s.fractions, fractions.count == kids.count { n.fractions = fractions }
                 return n
             }
             let pane = makePane()
