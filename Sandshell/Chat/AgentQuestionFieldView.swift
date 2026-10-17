@@ -21,16 +21,18 @@ struct AgentQuestionFieldView: View {
                     }
                 }
             }
+            // Rows are keyed by position: the options are fixed for the form's
+            // life, and nothing makes their values unique ("1" and 1, a repeat).
             switch field.kind {
             case .choice(let options):
-                ForEach(options.enumerated(), id: \.element.value) { i, option in
+                ForEach(options.enumerated(), id: \.offset) { i, option in
                     AgentQuestionOptionRow(form: form, option: option, index: i, fieldID: field.id,
                                            selected: form.picks[field.id] == option.value, multi: false) {
                         form.toggle(option, in: field)
                     }
                 }
             case .multiChoice(let options):
-                ForEach(options.enumerated(), id: \.element.value) { i, option in
+                ForEach(options.enumerated(), id: \.offset) { i, option in
                     AgentQuestionOptionRow(form: form, option: option, index: i, fieldID: field.id,
                                            selected: form.multiPicks[field.id, default: []].contains(option.value),
                                            multi: true) {

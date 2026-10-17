@@ -12,9 +12,14 @@ final class AgentQuestionForm {
     var texts: [String: String] = [:]
     var toggles: [String: Bool] = [:]
     var previewed: [String: AgentQuestion.Option] = [:]
+    /// How the user writes numbers: a number box also reads "3,5" where a comma
+    /// is the decimal point.
+    let locale: Locale
 
-    init(_ question: AgentQuestion, onAnswer: @escaping (AgentQuestion.Answer) -> Void) {
+    init(_ question: AgentQuestion, locale: Locale = .autoupdatingCurrent,
+         onAnswer: @escaping (AgentQuestion.Answer) -> Void) {
         self.question = question
+        self.locale = locale
         self.onAnswer = onAnswer
         applyDefaults()
     }
@@ -87,10 +92,17 @@ final class AgentQuestionForm {
             return s.isEmpty ? nil : .string(s)
         case .number(let integer):
             let s = (texts[field.id] ?? "").trimmingCharacters(in: .whitespaces)
-            guard let n = Double(s), Self.isAnswer(n, integer: integer) else { return nil }
+            guard let n = Self.number(s, locale: locale), Self.isAnswer(n, integer: integer) else { return nil }
             return .number(n)
         case .toggle: return .bool(toggles[field.id] ?? false)
         }
+    }
+
+    /// A number box's text as a number: written as JSON writes it ("3.5", as a
+    /// default is filled in), or as `locale` writes it ("3,5" or "1.000,5" in
+    /// German). Only the whole text counts: "3abc" isn't 3.
+    nonisolated static func number(_ text: String, locale: Locale) -> Double? {
+        Double(text) ?? text.wholeMatch(of: .localizedDouble(locale: locale))?.output
     }
 
     /// Whether `n` can answer a number field: JSON can't carry inf or nan, and

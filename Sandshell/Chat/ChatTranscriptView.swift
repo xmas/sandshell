@@ -124,14 +124,15 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
     #endif
 
     /// Coalesce bursts of streaming updates into one pass per runloop turn.
+    /// The pass draws the latest items (`self.items`), not the first call's.
     func update(_ items: [ChatItem]) {
         self.items = items
         guard !pending else { return }
         pending = true
         Task { [weak self] in
             guard let self else { return }
-            pending = false
-            apply(items)
+            self.pending = false
+            self.apply(self.items)
         }
     }
 
