@@ -18,26 +18,25 @@ enum Log {
         case app, sbx, workspace
         var logger: Logger {
             switch self {
-            case .app: return Log.appLogger
-            case .sbx: return Log.sbxLogger
-            case .workspace: return Log.wsLogger
+            case .app: Log.appLogger
+            case .sbx: Log.sbxLogger
+            case .workspace: Log.wsLogger
             }
         }
         var tag: String {
             switch self {
-            case .app: return "app"
-            case .sbx: return "sbx"
-            case .workspace: return "workspace"
+            case .app: "app"
+            case .sbx: "sbx"
+            case .workspace: "workspace"
             }
         }
     }
 
     /// The on-disk mirror (created empty on first access so Console can open it).
     static let fileURL: URL = {
-        let dir = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("Logs/Sandshell", isDirectory: true)
+        let dir = URL.libraryDirectory.appending(path: "Logs/Sandshell", directoryHint: .isDirectory)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let url = dir.appendingPathComponent("Sandshell.log")
+        let url = dir.appending(path: "Sandshell.log")
         if !FileManager.default.fileExists(atPath: url.path) {
             FileManager.default.createFile(atPath: url.path, contents: nil)
         }
@@ -58,7 +57,20 @@ enum Log {
 
     // MARK: File mirror
 
-    private static let queue = DispatchQueue(label: "com.docker.sandshell.log")
+    /// Lines waiting to be appended, written in order by one task.
+    private static let pending: AsyncStream<String>.Continuation = {
+        let (lines, continuation) = AsyncStream.makeStream(of: String.self)
+        Task(priority: .utility) {
+            for await line in lines {
+                guard let handle = try? FileHandle(forWritingTo: fileURL) else { continue }
+                defer { try? handle.close() }
+                _ = try? handle.seekToEnd()
+                try? handle.write(contentsOf: Data(line.utf8))
+            }
+        }
+        return continuation
+    }()
+
     private static let stamp: DateFormatter = {
         let f = DateFormatter()
         f.dateFormat = "yyyy-MM-dd HH:mm:ss.SSS"
@@ -66,13 +78,6 @@ enum Log {
     }()
 
     private static func append(_ tag: String, _ level: String, _ message: String) {
-        let line = "\(stamp.string(from: Date())) [\(tag)] \(level): \(message)\n"
-        queue.async {
-            guard let data = line.data(using: .utf8),
-                  let handle = try? FileHandle(forWritingTo: fileURL) else { return }
-            defer { try? handle.close() }
-            handle.seekToEndOfFile()
-            handle.write(data)
-        }
+        pending.yield("\(stamp.string(from: Date())) [\(tag)] \(level): \(message)\n")
     }
 }
