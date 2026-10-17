@@ -32,7 +32,8 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
     /// checkouts happen there, outside the root's own watch).
     private var gitWatcher: FileWatcher?
     private var gitWatcherPath: String?
-    private var refreshPending = false
+    /// The coalesced refresh waiting to run (file-system bursts join it).
+    private var refreshTask: Task<Void, Never>?
     /// A row's name is being edited in place: refreshes wait (a reload recycles
     /// its cell and ends the edit) and run once it's done.
     private var renaming = false
@@ -260,11 +261,11 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
 
     /// Coalesce file-system bursts into one re-list + git status.
     private func scheduleRefresh() {
-        guard !refreshPending else { return }
-        refreshPending = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+        guard refreshTask == nil else { return }
+        refreshTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(250))
             guard let self else { return }
-            self.refreshPending = false
+            self.refreshTask = nil
             self.onFilesChanged?()
             if self.renaming { self.refreshAfterRename = true; return }
             self.rootNode?.reloadLoaded()
@@ -307,7 +308,7 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
             if path == from.path { path = to.path }
             else if path.hasPrefix(from.path + "/") { path = to.path + path.dropFirst(from.path.count) }
         }
-        return path == url.path ? url : URL(fileURLWithPath: path)
+        return path == url.path ? url : URL(filePath: path, directoryHint: .checkFileSystem)
     }
 
     private func refreshGit() {
@@ -342,7 +343,12 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
     /// "main · 3 changed" under the tree — while content-search results show,
     /// their match count is there instead.
     private func updateBranchLabel() {
-        guard searchGroups == nil else { return }
+        if let groups = searchGroups, !searchQuery.isEmpty {
+            let total = groups.reduce(0) { $0 + $1.matches.count }
+            branchLabel.stringValue = String(AttributedString(
+                localized: "^[\(total) match](inflect: true) in ^[\(groups.count) file](inflect: true)").characters)
+            return
+        }
         let changed = git.changes.count
         branchLabel.stringValue = git.repoRoot == nil ? "Not a git repository"
             : "\(git.branch ?? "detached")" + (changed > 0 ? " · \(changed) changed" : " · clean")
@@ -355,7 +361,8 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
     private func updateChangedTitle() {
         let changed = git.changes.count
         switch (changedOnly, scope) {
-        case (true, .commit(let c)): changedButton.title = "\(scoped.count) files in \(c.short)"
+        case (true, .commit(let c)):
+            changedButton.title = String(AttributedString(localized: "^[\(scoped.count) file](inflect: true) in \(c.short)").characters)
         case (true, .all): changedButton.title = "\(scoped.count) changed on branch"
         default:
             changedButton.title = git.repoRoot == nil ? "No git" : changed > 0 ? "\(changed) changed" : "No changes"
@@ -449,7 +456,8 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
             if path.hasPrefix(root.path + "/") { suffix = path.dropFirst(root.path.count) }
             else if path.hasPrefix(real + "/") { suffix = path.dropFirst(real.count) }
             else { return nil }
-            return FileNode(url: URL(fileURLWithPath: root.path + suffix), isDirectory: false)
+            // Checked on disk: Open and Open With skip a URL that names a folder.
+            return FileNode(url: URL(filePath: root.path + suffix, directoryHint: .checkFileSystem), isDirectory: false)
         }
     }
 
@@ -484,7 +492,9 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
             let matches = WorkspaceFileIndex.match(files, query: query, limit: 200)
             guard let self, self.filter.stringValue.trimmingCharacters(in: .whitespaces) == query else { return }
             self.reloadOutline {
-                self.filterResults = matches.map { FileNode(url: URL(fileURLWithPath: base).appendingPathComponent($0), isDirectory: false) }
+                self.filterResults = matches.map {
+                    FileNode(url: URL(filePath: base).appending(path: $0, directoryHint: .checkFileSystem), isDirectory: false)
+                }
             }
             if !matches.isEmpty, !keepingSelection || self.outline.selectedRow < 0 {
                 self.outline.selectRowIndexes([0], byExtendingSelection: false)
@@ -501,6 +511,7 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
         guard !query.isEmpty else {
             searchGroups = []
             outline.reloadData()
+            updateBranchLabel()
             return
         }
         let inRepo = git.repoRoot != nil
@@ -511,7 +522,7 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
                                           "--no-color", "-e", query, "--", "."]) ?? ""
                 }
                 let p = Process()
-                p.executableURL = URL(fileURLWithPath: "/usr/bin/grep")
+                p.executableURL = URL(filePath: "/usr/bin/grep")
                 p.currentDirectoryURL = root
                 p.arguments = ["-rnIiF", "--null", "--exclude-dir=.git", "--exclude-dir=node_modules", "--exclude-dir=build",
                                "--exclude-dir=.build", "--exclude-dir=DerivedData", "-e", query, "."]
@@ -519,7 +530,9 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
                 p.standardOutput = out
                 p.standardError = FileHandle.nullDevice
                 guard (try? p.run()) != nil else { return "" }
-                let data = out.fileHandleForReading.readDataToEndOfFile()
+                let data: Data
+                do { data = try out.fileHandleForReading.readToEnd() ?? Data() }   // nil: no matches
+                catch { p.terminate(); p.waitUntilExit(); return "" }   // unread, grep could block on a full pipe
                 p.waitUntilExit()
                 return String(decoding: data, as: UTF8.self)
             }.value
@@ -538,7 +551,7 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
                 let text = rest[rest.index(after: digits.endIndex)...]
                 var rel = String(line[..<nul])
                 if rel.hasPrefix("./") { rel.removeFirst(2) }
-                let url = root.appendingPathComponent(rel)
+                let url = root.appending(path: rel)
                 let group = groups[rel] ?? {
                     order.append(rel)
                     let g = SearchGroup(url: url, relative: rel)
@@ -551,7 +564,7 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
             self.searchGroups = order.compactMap { groups[$0] }
             self.outline.reloadData()
             self.outline.expandItem(nil, expandChildren: true)
-            self.branchLabel.stringValue = "\(total) match\(total == 1 ? "" : "es") in \(order.count) file\(order.count == 1 ? "" : "s")"
+            self.updateBranchLabel()
         }
     }
 
@@ -593,8 +606,10 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
             return groups[index]
         }
         if let results = filterResults { return results[index] }
-        let node = (item as? FileNode) ?? rootNode!
-        return node.children![index]
+        guard let node = (item as? FileNode) ?? rootNode, let children = node.children else {
+            fatalError("child(_:ofItem:) for an item numberOfChildren gave none")
+        }
+        return children[index]
     }
 
     func outlineView(_ outlineView: NSOutlineView, isItemExpandable item: Any) -> Bool {
@@ -627,8 +642,7 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
         let inScope = changedOnly ? scoped[path] ?? scoped[real] : nil
         let change = scope == .uncommitted || !changedOnly
             ? git.changes[path] ?? git.changes[real] : inScope?.change
-        let title = filterResults != nil && root != nil
-            ? String(path.dropFirst(root!.path.count + 1)) : node.name
+        let title = if filterResults != nil, let root { String(path.dropFirst(root.path.count + 1)) } else { node.name }
         cell.configure(icon: NSWorkspace.shared.icon(forFile: path), title: title, change: change,
                        dirtyFolder: node.isDirectory && (git.dirtyFolders.contains(path) || git.dirtyFolders.contains(real)),
                        counts: inScope.map { ($0.added, $0.removed) })
@@ -673,7 +687,7 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
         restoringExpansion = true
         defer { restoringExpansion = false }
         for rel in paths.sorted(by: { $0.split(separator: "/").count < $1.split(separator: "/").count }) {
-            if let node = node(for: root.appendingPathComponent(rel)), node.isDirectory { outline.expandItem(node) }
+            if let node = node(for: root.appending(path: rel)), node.isDirectory { outline.expandItem(node) }
         }
     }
 
@@ -776,7 +790,7 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
         let base = (name as NSString).deletingPathExtension, ext = (name as NSString).pathExtension
         func make(_ n: Int) -> URL {
             let stem = copy ? (n == 1 ? "\(base) copy" : "\(base) copy \(n)") : (n == 1 ? base : "\(base) \(n)")
-            return dir.appendingPathComponent(ext.isEmpty ? stem : "\(stem).\(ext)")
+            return dir.appending(path: ext.isEmpty ? stem : "\(stem).\(ext)")
         }
         var n = 1
         while FileManager.default.fileExists(atPath: make(n).path) { n += 1 }
@@ -847,7 +861,7 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
             guard let self else { return }
             self.renaming = false
             if let name, !name.isEmpty, name != node.name, !name.contains("/") {
-                self.move(node.url, to: node.url.deletingLastPathComponent().appendingPathComponent(name), action: "Rename")
+                self.move(node.url, to: node.url.deletingLastPathComponent().appending(path: name), action: "Rename")
             }
             self.view.window?.makeFirstResponder(self.outline)
             if self.refreshAfterRename {
@@ -885,13 +899,29 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
 
     func duplicate(_ urls: [URL]) {
         var made: [URL] = []
+        var failures: [CopyFailure] = []
         for url in urls {
             let copy = Self.unique(url.lastPathComponent, in: url.deletingLastPathComponent(), copy: true)
-            if (try? FileManager.default.copyItem(at: url, to: copy)) != nil { made.append(copy) }
+            do {
+                try FileManager.default.copyItem(at: url, to: copy)
+                made.append(copy)
+            } catch { failures.append((url, error.localizedDescription)) }
         }
-        guard !made.isEmpty else { return NSSound.beep() }
-        Self.registerUndo("Duplicate", on: undo, tree: self) { _, tree in Self.trash(made, undo: nil, tree: tree) }
-        refreshNow()
+        // What was copied can be undone, even when something else couldn't be.
+        if !made.isEmpty {
+            Self.registerUndo("Duplicate", on: undo, tree: self) { _, tree in Self.trash(made, undo: nil, tree: tree) }
+            refreshNow()
+        }
+        if !failures.isEmpty { Self.informCopyFailed("duplicate", failures) } else if made.isEmpty { NSSound.beep() }
+    }
+
+    /// A copy that didn't happen: what, and the file system's reason.
+    private typealias CopyFailure = (url: URL, reason: String)
+
+    /// Couldn't `verb` “a”, “b”: each one's reason — a sheet on `window`, app-modal without one.
+    private static func informCopyFailed(_ verb: String, _ failures: [CopyFailure], in window: NSWindow? = nil) {
+        let names = failures.map { " “\($0.url.lastPathComponent)”" }.joined(separator: ",")
+        Alerts.inform("Couldn’t \(verb)\(names).", failures.map(\.reason).joined(separator: "\n"), in: window)
     }
 
     /// Move to Trash (⌘⌫); Undo puts them back.
@@ -954,6 +984,7 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
                                                              options: [.urlReadingFileURLsOnly: true]) as? [URL] else { return false }
         let isInternal = info.draggingSource as? NSOutlineView === outlineView && !NSEvent.modifierFlags.contains(.option)
         var done = false
+        var failures: [CopyFailure] = []
         undo?.beginUndoGrouping()
         for url in Self.outermost(urls)
         where url.deletingLastPathComponent().standardizedFileURL != dest.standardizedFileURL || !isInternal {
@@ -961,13 +992,21 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
             let target = Self.dropTarget(for: url, in: dest)
             if isInternal {
                 done = move(url, to: target, action: "Move") || done
-            } else if (try? FileManager.default.copyItem(at: url, to: target)) != nil {
-                Self.registerUndo("Copy", on: undo, tree: self) { _, tree in Self.trash([target], undo: nil, tree: tree) }
-                done = true
+            } else {
+                do {
+                    try FileManager.default.copyItem(at: url, to: target)
+                    Self.registerUndo("Copy", on: undo, tree: self) { _, tree in Self.trash([target], undo: nil, tree: tree) }
+                    done = true
+                } catch { failures.append((url, error.localizedDescription)) }
             }
         }
         undo?.endUndoGrouping()
         refreshNow()
+        if !failures.isEmpty {
+            // Once the drop has returned, as a sheet: an app-modal alert here
+            // would hold the other app's drag session open until dismissed.
+            Task { [weak self, failures] in Self.informCopyFailed("copy", failures, in: self?.view.window) }
+        }
         return done
     }
 
@@ -1147,14 +1186,24 @@ final class FileCell: NSTableCellView {
         icon.image = image
         name.stringValue = title
         name.textColor = change.map { $0 == .deleted ? NSColor.secondaryLabelColor : $0.color } ?? .labelColor
+        // What VoiceOver says for the badge: the kind of change, not "M" or "●".
+        var spoken = change.map(\.name)
         if let counts {
-            // "+22 −1" in the changed list, in place of the status letter.
+            // "+22 −1 M" in the changed list: the counts, then the status
+            // letter where the tree shows it (so the kind isn't color alone).
             let out = NSMutableAttributedString()
             let font = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .medium)
             if let a = counts.added, let r = counts.removed {
                 out.append(.diffCounts(added: a, removed: r))
+                let lines = String(AttributedString(localized: "^[\(a) line](inflect: true) added, \(r) removed").characters)
+                spoken = [spoken, lines].compactMap { $0 }.joined(separator: ", ")
             } else {
                 out.append(NSAttributedString(string: "bin", attributes: [.font: font, .foregroundColor: NSColor.secondaryLabelColor]))
+                spoken = [spoken, "binary"].compactMap { $0 }.joined(separator: ", ")
+            }
+            if let change {
+                out.append(NSAttributedString(string: " " + change.badge, attributes: [
+                    .font: NSFont.monospacedSystemFont(ofSize: 10.5, weight: .semibold), .foregroundColor: change.color]))
             }
             badge.attributedStringValue = out
         } else if let change {
@@ -1163,7 +1212,9 @@ final class FileCell: NSTableCellView {
         } else {
             badge.stringValue = dirtyFolder ? "●" : ""
             badge.textColor = .systemOrange.withAlphaComponent(0.7)
+            spoken = dirtyFolder ? "contains changes" : nil
         }
+        badge.setAccessibilityLabel(spoken)
     }
 }
 

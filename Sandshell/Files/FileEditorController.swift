@@ -13,17 +13,26 @@ final class OpenFile {
     var modified: Date?
     var mode: Mode
     var isText: Bool
+    /// Why the file couldn't be read: said in place of an editor or Quick Look.
+    var readError: (any Error)?
     var selection = NSRange(location: 0, length: 0)
     var isDirty: Bool { text != savedText }
 
     init(url: URL) {
         self.url = url
         // Over 4 MB isn't read at all (a big log would block the app): it shows
-        // in Quick Look like any other non-text file.
+        // in Quick Look like any other non-text file. One that isn't there yet
+        // opens empty (saving makes it); one that's there but can't be read
+        // (permissions, a folder) is never an empty editable copy a save
+        // would write over it.
         let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
-        let data = size <= 4_000_000 ? ((try? Data(contentsOf: url)) ?? Data()) : Data()
-        let decoded = size <= 4_000_000 && data.count <= 4_000_000 && !data.prefix(8000).contains(0)
-            ? String(data: data, encoding: .utf8) : nil
+        var data: Data?
+        if size <= 4_000_000 {
+            do { data = try Data(contentsOf: url) }
+            catch CocoaError.fileReadNoSuchFile { data = Data() }
+            catch { readError = error }
+        }
+        let decoded = data.flatMap { $0.count <= 4_000_000 && !$0.prefix(8000).contains(0) ? String(data: $0, encoding: .utf8) : nil }
         isText = decoded != nil
         text = decoded ?? ""
         savedText = text
@@ -88,27 +97,34 @@ struct LineChanges: Equatable {
     /// Lines after which something was deleted (0 = before the first line).
     var deletedAfter: Set<Int> = []
 
-    static func load(file: URL, repoRoot: String?, untracked: Bool, lineCount: Int) async -> LineChanges {
+    /// Off the caller's actor (git runs to completion).
+    @concurrent static func load(file: URL, repoRoot: String?, untracked: Bool, lineCount: Int) async -> LineChanges {
         guard let repoRoot else { return LineChanges() }
         if untracked { return LineChanges(added: Set(1...max(lineCount, 1))) }
-        return await Task.detached(priority: .utility) {
-            guard let diff = GitStatus.git(["-C", repoRoot, "diff", "--no-color", "--no-ext-diff", "-U0", "HEAD", "--", file.path])
-            else { return LineChanges() }
-            var out = LineChanges()
-            let re = try! NSRegularExpression(pattern: #"^@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@"#, options: .anchorsMatchLines)
-            let ns = diff as NSString
-            for m in re.matches(in: diff, range: NSRange(location: 0, length: ns.length)) {
-                func num(_ i: Int, _ fallback: Int) -> Int {
-                    m.range(at: i).location == NSNotFound ? fallback : Int(ns.substring(with: m.range(at: i))) ?? fallback
-                }
-                let oldCount = num(1, 1), start = num(2, 0), newCount = num(3, 1)
-                if newCount == 0 { out.deletedAfter.insert(start); continue }
-                let lines = Set(start..<(start + newCount))
-                if oldCount == 0 { out.added.formUnion(lines) } else { out.modified.formUnion(lines) }
-            }
-            return out
-        }.value
+        guard let diff = GitStatus.git(["-C", repoRoot, "diff", "--no-color", "--no-ext-diff", "-U0", "HEAD", "--", file.plainPath])
+        else { return LineChanges() }
+        return LineChanges(unifiedDiff: diff)
     }
+}
+
+extension LineChanges {
+    /// What a `git diff -U0`'s `@@ -a,b +c,d @@` headers say changed.
+    init(unifiedDiff diff: String) {
+        for m in diff.matches(of: /^@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.anchorsMatchLineEndings()) {
+            let oldCount = m.1.flatMap { Int($0) } ?? 1, start = Int(m.2) ?? 0, newCount = m.3.flatMap { Int($0) } ?? 1
+            if newCount == 0 { deletedAfter.insert(start); continue }
+            let lines = Set(start..<(start + newCount))
+            if oldCount == 0 { added.formUnion(lines) } else { modified.formUnion(lines) }
+        }
+    }
+}
+
+private extension Character {
+    /// A line break as `NSString.lineRange` and the ruler count them: LF, CR,
+    /// CRLF, NEL, U+2028, U+2029 (`isNewline` also takes VT and FF).
+    var isLineBreak: Bool { isNewline && self != "\u{0B}" && self != "\u{0C}" }
+    /// Where git ends a diff line: LF ("\r\n" is one Character, a CRLF file's line end).
+    var isGitLineEnd: Bool { self == "\n" || self == "\r\n" }
 }
 
 /// The Files pane's editor: tabs over a TextKit 2 code editor (highlighting,
@@ -125,7 +141,7 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
 
     private func saveTabs() {
         guard let tabsKey, !restoringTabs else { return }
-        UserDefaults.standard.set(files.map(\.url.path), forKey: tabsKey)
+        UserDefaults.standard.set(files.map(\.url.plainPath), forKey: tabsKey)
     }
     private var restoringTabs = false
 
@@ -135,7 +151,7 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
               let paths = UserDefaults.standard.stringArray(forKey: tabsKey), !paths.isEmpty else { return }
         restoringTabs = true
         for path in paths where FileManager.default.fileExists(atPath: path) {
-            let f = OpenFile(url: URL(fileURLWithPath: path))
+            let f = OpenFile(url: URL(filePath: path))
             files.append(f)
         }
         restoringTabs = false
@@ -146,15 +162,17 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
     /// unsaved edits and all — still comparing the disk with the version it
     /// was opened from, so a save asks before replacing someone else's.
     func fileMoved(from old: URL, to new: URL) {
+        // Without a folder URL's trailing slash: "/repo/src", so "/repo/src/" prefixes what's in it.
+        let oldPath = old.plainPath, newPath = new.plainPath
         for file in files {
-            let path = file.url.path
-            guard path == old.path || path.hasPrefix(old.path + "/") else { continue }
-            file.move(to: URL(fileURLWithPath: new.path + path.dropFirst(old.path.count)))
+            let path = file.url.plainPath
+            guard path == oldPath || path.hasPrefix(oldPath + "/") else { continue }
+            file.move(to: URL(filePath: newPath + path.dropFirst(oldPath.count)))
         }
         saveTabs()
         if let current {
             pathLabel.stringValue = displayPath(current.url)
-            pathLabel.toolTip = current.url.path
+            pathLabel.toolTip = current.url.plainPath
         }
         rebuildTabs()
     }
@@ -166,8 +184,8 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
     @discardableResult
     func filesTrashed(_ urls: [URL]) -> @MainActor () -> Void {
         commitEditorText()
-        let paths = urls.map(\.path)
-        let trashed = { (file: OpenFile) in paths.contains { file.url.path == $0 || file.url.path.hasPrefix($0 + "/") } }
+        let paths = urls.map(\.plainPath)
+        let trashed = { (file: OpenFile) in paths.contains { file.url.plainPath == $0 || file.url.plainPath.hasPrefix($0 + "/") } }
         let closed = files.enumerated().filter { trashed($0.element) && !$0.element.isDirty }
             .map { (index: $0.offset, file: $0.element) }
         let shown = closed.contains { $0.file === current } ? current : nil
@@ -181,7 +199,7 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
     /// files are. One whose file didn't come back, or that's open again, is left.
     private func reopen(_ closed: [(index: Int, file: OpenFile)], showing shown: OpenFile?) {
         commitEditorText()
-        for (index, file) in closed where FileManager.default.fileExists(atPath: file.url.path)
+        for (index, file) in closed where FileManager.default.fileExists(atPath: file.url.plainPath)
             && !files.contains(where: { $0.url.standardizedFileURL == file.url.standardizedFileURL }) {
             files.insert(file, at: min(index, files.count))
         }
@@ -210,11 +228,11 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
     private let pathLabel = NSTextField(labelWithString: "")
     private let modeControl = NSSegmentedControl(labels: ["Preview", "Source", "Changes"], trackingMode: .selectOne,
                                                  target: nil, action: nil)
-    private let banner = NSStackView()
+    private let banner = BannerView()
     private let bannerLabel = NSTextField(labelWithString: "")
     private let reloadButton = NSButton(title: "Reload", target: nil, action: nil)
     private let container = NSView()
-    private let emptyLabel = NSTextField(labelWithString: "Select a file")
+    private let emptyLabel = NSTextField(wrappingLabelWithString: "Select a file")
     /// Path + mode row (popovers anchor here).
     let headerView = NSStackView()
     private var header: NSStackView { headerView }
@@ -260,13 +278,17 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
         banner.orientation = .horizontal
         banner.edgeInsets = NSEdgeInsets(top: 6, left: 12, bottom: 6, right: 10)
         banner.wantsLayer = true
-        banner.layer?.backgroundColor = NSColor.systemYellow.withAlphaComponent(0.15).cgColor
         banner.isHidden = true
 
         setUpEditor()
         setUpPreview()
         emptyLabel.textColor = .tertiaryLabelColor
         emptyLabel.font = .systemFont(ofSize: 13)
+        // A read error is a sentence with the reason in its middle: it wraps,
+        // centered, rather than truncate in a narrow pane.
+        emptyLabel.alignment = .center
+        emptyLabel.maximumNumberOfLines = 0
+        emptyLabel.isSelectable = false
 
         let stack = NSStackView(views: [tabScroll, header, banner, container])
         stack.orientation = .vertical
@@ -295,7 +317,8 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
             tabScroll.heightAnchor.constraint(equalToConstant: 30),
             tabBar.heightAnchor.constraint(equalTo: tabScroll.heightAnchor),
             header.heightAnchor.constraint(equalToConstant: 30),
-            emptyLabel.centerXAnchor.constraint(equalTo: container.centerXAnchor),
+            emptyLabel.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 16),
+            emptyLabel.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -16),
             emptyLabel.centerYAnchor.constraint(equalTo: container.centerYAnchor),
         ])
         view = root
@@ -379,8 +402,11 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
             start = NSMaxRange(ns.lineRange(for: NSRange(location: start, length: 0)))
             n += 1
         }
-        let lineRange = ns.lineRange(for: NSRange(location: min(start, ns.length), length: 0))
-        let content = lineRange.length - (ns.substring(with: lineRange).hasSuffix("\n") ? 1 : 0)
+        var lineStart = 0, lineEnd = 0, contentsEnd = 0
+        ns.getLineStart(&lineStart, end: &lineEnd, contentsEnd: &contentsEnd,
+                        for: NSRange(location: min(start, ns.length), length: 0))
+        let lineRange = NSRange(location: lineStart, length: lineEnd - lineStart)
+        let content = contentsEnd - lineStart   // without its break: LF, CRLF, a lone CR…
         var target = NSRange(location: lineRange.location, length: 0)
         if let column, column > 1 { target.location += min(column - 1, content) }
         if !highlight.isEmpty {
@@ -397,9 +423,12 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
     /// The caret's line (1-based).
     private var caretLine: Int {
         let ns = editor.string as NSString
-        let upTo = ns.substring(to: min(editor.selectedRange().location, ns.length))
-        return upTo.reduce(1) { $1 == "\n" ? $0 + 1 : $0 }
+        return Self.lineCount(of: ns.substring(to: min(editor.selectedRange().location, ns.length)))
     }
+
+    /// The lines in `text` as the editor and its ruler number them (a CRLF is
+    /// one break, a form feed none); a final line break starts an empty line.
+    nonisolated static func lineCount(of text: String) -> Int { text.count(where: \.isLineBreak) + 1 }
 
     /// Edit ▸ Find ▸ Go to Line… (⌘L).
     @objc func goToLine(_ sender: Any?) {
@@ -407,7 +436,7 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
         if let open = goToLinePopover, open.isShown { open.close(); goToLinePopover = nil; return }
         commitEditorText()
         if file.mode != .source { file.mode = .source; show(file, focus: true) }
-        let lines = editor.string.reduce(1) { $1 == "\n" ? $0 + 1 : $0 }
+        let lines = Self.lineCount(of: editor.string)
         let prompt = GoToLineController(lineCount: lines, currentLine: caretLine)
         prompt.onGo = { [weak self] line, column in
             self?.goToLinePopover?.close()
@@ -428,6 +457,8 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
     var debugDiskChange: OpenFile.DiskChange? { current?.diskChange }
     /// The "changed on disk" / "moved or deleted" banner's text; nil when hidden.
     var debugBanner: String? { banner.isHidden ? nil : bannerLabel.stringValue }
+    /// What shows in place of an editor ("Select a file", why a file couldn't be read); nil when hidden.
+    var debugEmptyMessage: String? { emptyLabel.isHidden ? nil : emptyLabel.stringValue }
     var debugMode: OpenFile.Mode? { current?.mode }
     /// Type at the caret, as a person would.
     func debugType(_ text: String, at location: Int) {
@@ -480,7 +511,7 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
 
     private func hasChanges(_ url: URL) -> Bool {
         if scope == .uncommitted { return git.change(for: url) != nil }
-        return scopeFiles.contains(url.path) || scopeFiles.contains(url.realPath)
+        return scopeFiles.contains(url.plainPath) || scopeFiles.contains(url.realPath)
     }
 
     func updateGit(_ status: GitStatus) {
@@ -520,8 +551,10 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
 
     private func reload(_ file: OpenFile) {
         let fresh = OpenFile(url: file.url)
-        // Now too big, or not UTF-8 text: Quick Look, never an empty editable copy.
+        // Now too big, or not UTF-8 text: Quick Look, never an empty editable
+        // copy; unreadable now: why, instead.
         file.isText = fresh.isText
+        file.readError = fresh.readError
         if !fresh.isText { file.mode = .source }
         file.text = fresh.text
         file.savedText = fresh.text
@@ -556,6 +589,7 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
         editorScroll.isHidden = true
         previewScroll.isHidden = true
         quickLook.isHidden = true
+        emptyLabel.stringValue = "Select a file"
         emptyLabel.isHidden = file != nil
         guard let file else {
             pathLabel.stringValue = ""
@@ -563,11 +597,17 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
             return
         }
         pathLabel.stringValue = displayPath(file.url)
-        pathLabel.toolTip = file.url.path
+        pathLabel.toolTip = file.url.plainPath
         guard file.isText else {
             modeControl.isHidden = true
-            quickLook.previewItem = file.url as NSURL
-            quickLook.isHidden = false
+            if let error = file.readError {
+                // It couldn't be read: say why (it names the file), rather than an empty preview.
+                emptyLabel.stringValue = error.localizedDescription
+                emptyLabel.isHidden = false
+            } else {
+                quickLook.previewItem = file.url as NSURL
+                quickLook.isHidden = false
+            }
             return
         }
         let changed = hasChanges(file.url)
@@ -608,9 +648,9 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
 
     private func displayPath(_ url: URL) -> String {
         if let repo = git.repoRoot {
-            for path in [url.path, url.realPath] where path.hasPrefix(repo + "/") { return String(path.dropFirst(repo.count + 1)) }
+            for path in [url.plainPath, url.realPath] where path.hasPrefix(repo + "/") { return String(path.dropFirst(repo.count + 1)) }
         }
-        return url.path.tildeAbbreviated
+        return url.plainPath.tildeAbbreviated
     }
 
     @objc private func modeChanged() {
@@ -628,17 +668,10 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
         if scope != .uncommitted { return showScopedDiff(file) }
         let untracked = git.change(for: file.url) == .untracked
         let repo = git.repoRoot
-        let path = file.url.path
+        let path = file.url.plainPath
         let text = file.text
         Task { [weak self] in
-            let (unstaged, staged): (String, String) = await Task.detached(priority: .utility) {
-                if untracked {
-                    return (text.split(separator: "\n", omittingEmptySubsequences: false).map { "+" + $0 }.joined(separator: "\n"), "")
-                }
-                guard let repo else { return ("", "") }
-                let base = ["-C", repo, "diff", "--no-color", "--no-ext-diff"]
-                return (GitStatus.git(base + ["--", path]) ?? "", GitStatus.git(base + ["--cached", "--", path]) ?? "")
-            }.value
+            let (unstaged, staged) = await Self.loadDiffs(repo: repo, path: path, text: text, untracked: untracked)
             guard let self, self.current === file, file.mode == .changes else { return }
             if untracked {
                 self.shownPatches = nil
@@ -652,14 +685,34 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
         }
     }
 
+    /// The file's diffs off the main actor: unstaged (working tree vs the
+    /// index) and staged (index vs HEAD); an untracked file's text, all added.
+    @concurrent nonisolated private static func loadDiffs(repo: String?, path: String, text: String,
+                                                          untracked: Bool) async -> (unstaged: String, staged: String) {
+        if untracked { return (untrackedDiff(text), "") }
+        guard let repo else { return ("", "") }
+        let base = ["-C", repo, "diff", "--no-color", "--no-ext-diff"]
+        return (GitStatus.git(base + ["--", path]) ?? "", GitStatus.git(base + ["--cached", "--", path]) ?? "")
+    }
+
+    /// An untracked file's text as a diff with every line added, one per
+    /// line the editor numbers.
+    nonisolated static func untrackedDiff(_ text: String) -> String {
+        text.split(omittingEmptySubsequences: false, whereSeparator: \.isLineBreak).map { "+" + $0 }.joined(separator: "\n")
+    }
+
+    @concurrent nonisolated private static func scopedDiff(repo: String, scope: ChangeScope, path: String) async -> String {
+        GitHistory.diff(repo: repo, scope: scope, path: path)
+    }
+
     /// A commit's (or the branch's) changes to the file: read-only.
     private func showScopedDiff(_ file: OpenFile) {
         guard let repo = git.repoRoot else { return }
         let scope = scope
-        let path = scopeFiles.contains(file.url.path) ? file.url.path : file.url.realPath
+        let path = scopeFiles.contains(file.url.plainPath) ? file.url.plainPath : file.url.realPath
         shownPatches = nil
         Task { [weak self] in
-            let diff = await Task.detached(priority: .utility) { GitHistory.diff(repo: repo, scope: scope, path: path) }.value
+            let diff = await Self.scopedDiff(repo: repo, scope: scope, path: path)
             guard let self, self.current === file, file.mode == .changes, self.scope == scope else { return }
             let out = NSMutableAttributedString()
             switch scope {
@@ -743,7 +796,7 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
         if untracked {
             out.append(sectionTitle("Untracked File", actions: editable ? [("Stage File", "add/0")] : []))
         }
-        var lines = diff.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        var lines = diff.split(omittingEmptySubsequences: false, whereSeparator: \.isGitLineEnd).map(String.init)
         if untracked {
             // All "+" lines with no header: number them from 1.
             if lines.last == "+" || lines.last == "" { lines.removeLast() }
@@ -871,7 +924,7 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
         let ns = preview.string as NSString
         var found: Int?
         preview.textStorage?.enumerateAttribute(.link, in: NSRange(location: 0, length: ns.length)) { value, range, stop in
-            if let url = value as? URL, url.scheme == Self.askScheme, url.host == "new", Int(url.lastPathComponent) == line {
+            if let url = value as? URL, url.scheme == Self.askScheme, url.host() == "new", Int(url.lastPathComponent) == line {
                 found = range.location; stop.pointee = true
             }
         }
@@ -887,11 +940,11 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
     func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
         if textView === preview, let url = link as? URL, url.scheme == Self.askScheme,
            let line = Int(url.lastPathComponent) {
-            askAboutLine(line, removed: url.host == "old", at: charIndex)
+            askAboutLine(line, removed: url.host() == "old", at: charIndex)
             return true
         }
         guard textView === preview, let url = link as? URL ?? (link as? String).flatMap(URL.init(string:)),
-              url.scheme == Self.hunkScheme, let host = url.host,
+              url.scheme == Self.hunkScheme, let host = url.host(),
               let index = Int(url.lastPathComponent) else { return false }
         Task { [weak self] in
             guard let self else { return }
@@ -929,10 +982,15 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
     /// Untracked file → `git add`.
     private func stageWholeFile() async -> String? {
         guard let file = current, let repo = git.repoRoot else { return nil }
-        let path = file.url.path
-        let error = await Task.detached(priority: .userInitiated) { GitStatus.change(["-C", repo, "add", "--", path]) }.value
+        let path = file.url.plainPath
+        let error = await Self.gitChange(["-C", repo, "add", "--", path])
         if error == nil { await afterRepoChange(file, reloadText: false) }
         return error
+    }
+
+    /// `GitStatus.change` off the main actor.
+    @concurrent nonisolated private static func gitChange(_ args: [String]) async -> String? {
+        GitStatus.change(args)
     }
 
     /// Refresh status, the Changes view (and the text, after a revert) right
@@ -940,7 +998,7 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
     private func afterRepoChange(_ file: OpenFile, reloadText: Bool) async {
         if reloadText { reload(file) }
         guard let root = git.repoRoot else { return }
-        let status = await GitStatus.load(for: URL(fileURLWithPath: root))
+        let status = await GitStatus.load(for: URL(filePath: root, directoryHint: .isDirectory))
         git = status
         rebuildTabs()
         if current === file { show(file) }
@@ -962,7 +1020,7 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
 
     private func refreshChanges(for file: OpenFile) {
         guard file.mode == .source else { return }
-        let lines = file.text.reduce(1) { $1 == "\n" ? $0 + 1 : $0 }
+        let lines = Self.lineCount(of: file.text)
         Task { [weak self] in
             let c = await LineChanges.load(file: file.url, repoRoot: self?.git.repoRoot,
                                            untracked: self?.git.change(for: file.url) == .untracked, lineCount: lines)
@@ -977,7 +1035,7 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
     private func rebuildTabs() {
         tabBar.arrangedSubviews.forEach { $0.removeFromSuperview() }
         for (i, file) in files.enumerated() {
-            let tab = EditorTab(title: file.url.lastPathComponent, icon: NSWorkspace.shared.icon(forFile: file.url.path),
+            let tab = EditorTab(title: file.url.lastPathComponent, icon: NSWorkspace.shared.icon(forFile: file.url.plainPath),
                                 selected: file === current, dirty: file.isDirty,
                                 change: git.change(for: file.url))
             tab.onSelect = { [weak self] in self?.select(i) }
@@ -1033,7 +1091,8 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
     private func scheduleHighlight() {
         guard !highlightPending else { return }
         highlightPending = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+        Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(150))
             self?.highlightPending = false
             self?.highlight()
         }
@@ -1133,13 +1192,15 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
 final class EditorTab: NSView {
     var onSelect: (() -> Void)?
     var onClose: (() -> Void)?
+    private let selected: Bool
 
     init(title: String, icon: NSImage, selected: Bool, dirty: Bool, change: GitStatus.Change?) {
+        self.selected = selected
         super.init(frame: .zero)
         wantsLayer = true
         layer?.cornerRadius = 6
-        layer?.backgroundColor = selected ? NSColor.labelColor.withAlphaComponent(0.09).cgColor : NSColor.clear.cgColor
         let image = NSImageView(image: icon)
+        image.setAccessibilityElement(false)   // the tab's label names the file
         let label = NSTextField(labelWithString: title)
         label.font = .systemFont(ofSize: 12, weight: selected ? .medium : .regular)
         label.textColor = change?.color ?? (selected ? .labelColor : .secondaryLabelColor)
@@ -1152,6 +1213,9 @@ final class EditorTab: NSView {
         close.target = self
         close.action = #selector(closeClicked)
         close.toolTip = dirty ? "Unsaved changes — click to close" : "Close"
+        // Named for what it does, not for the unsaved dot it shows.
+        close.setAccessibilityLabel("Close")
+        if dirty { close.setAccessibilityHelp("Unsaved changes") }
         let stack = NSStackView(views: [image, label, close])
         stack.spacing = 5
         stack.edgeInsets = NSEdgeInsets(top: 0, left: 8, bottom: 0, right: 6)
@@ -1173,6 +1237,12 @@ final class EditorTab: NSView {
 
     required init?(coder: NSCoder) { fatalError() }
 
+    // Layer colors don't follow light/dark on their own; resolve them here.
+    override var wantsUpdateLayer: Bool { true }
+    override func updateLayer() {
+        layer?.backgroundColor = selected ? NSColor.labelColor.withAlphaComponent(0.09).cgColor : NSColor.clear.cgColor
+    }
+
     override func mouseDown(with event: NSEvent) { onSelect?() }
 
     override func isAccessibilityElement() -> Bool { true }
@@ -1181,6 +1251,12 @@ final class EditorTab: NSView {
         [NSAccessibilityCustomAction(name: "Close Tab") { [weak self] in self?.onClose?(); return true }]
     }
     @objc private func closeClicked() { onClose?() }
+}
+
+/// The "changed on disk" banner: its tint follows light and dark.
+private final class BannerView: NSStackView {
+    override var wantsUpdateLayer: Bool { true }
+    override func updateLayer() { layer?.backgroundColor = NSColor.systemYellow.withAlphaComponent(0.15).cgColor }
 }
 
 /// Editor text view: Tab inserts spaces matching the line's indentation width
@@ -1210,7 +1286,13 @@ final class LineNumberRuler: NSRulerView {
         // Views don't clip by default (macOS 14+); the stock ruler's edge line
         // ran up through the tab bar and path row.
         clipsToBounds = true
-        NotificationCenter.default.addObserver(self, selector: #selector(redraw), name: NSView.boundsDidChangeNotification, object: nil)
+        // This editor scrolling or reflowing, not every view in the app.
+        let clip = textView.enclosingScrollView?.contentView
+        clip?.postsBoundsChangedNotifications = true
+        NotificationCenter.default.addObserver(self, selector: #selector(redraw), name: NSView.boundsDidChangeNotification,
+                                               object: clip)
+        NotificationCenter.default.addObserver(self, selector: #selector(redraw), name: NSView.frameDidChangeNotification,
+                                               object: textView)
     }
 
     required init(coder: NSCoder) { fatalError() }
@@ -1219,18 +1301,26 @@ final class LineNumberRuler: NSRulerView {
 
     func lineCountChanged() {
         guard let s = textView?.string as NSString? else { return }
-        var starts = [0]
-        var i = 0
-        while i < s.length {
-            let r = s.lineRange(for: NSRange(location: i, length: 0))
-            i = NSMaxRange(r)
-            if i < s.length || (i == s.length && s.length > 0 && s.character(at: s.length - 1) == 10) { starts.append(i) }
-            if r.length == 0 { break }
-        }
-        lineStarts = starts
-        let digits = max(3, String(starts.count).count)
+        lineStarts = Self.lineStarts(in: s)
+        let digits = max(3, String(lineStarts.count).count)
         ruleThickness = CGFloat(digits) * 7.5 + 22
         needsDisplay = true
+    }
+
+    /// Where each line starts (UTF-16 offsets): after every break NSString
+    /// finds (LF, CR, CRLF, NEL, U+2028, U+2029), so a final break of any kind
+    /// starts an empty last line — the lines `FileEditorController.lineCount(of:)` counts.
+    nonisolated static func lineStarts(in s: NSString) -> [Int] {
+        var starts = [0]
+        var location = 0
+        while location < s.length {
+            var end = 0, contentsEnd = 0
+            s.getLineStart(nil, end: &end, contentsEnd: &contentsEnd, for: NSRange(location: location, length: 0))
+            guard contentsEnd < end, end > location else { break }   // the last line, with no break
+            starts.append(end)
+            location = end
+        }
+        return starts
     }
 
     private func line(forOffset offset: Int) -> Int {
@@ -1259,7 +1349,12 @@ final class LineNumberRuler: NSRulerView {
         let visible = tv.visibleRect
         let origin = convert(NSPoint.zero, from: tv)
         let inset = tv.textContainerInset.height
-        tlm.enumerateTextLayoutFragments(from: tlm.documentRange.location, options: [.ensuresLayout]) { fragment in
+        // From the fragment at the cull line below (in layout coordinates),
+        // not laying out everything above it; from the top when nothing's
+        // laid out there yet.
+        let start = tlm.textLayoutFragment(for: CGPoint(x: 0, y: max(visible.minY - 50 - inset, 0)))?.rangeInElement.location
+            ?? tlm.documentRange.location
+        tlm.enumerateTextLayoutFragments(from: start, options: [.ensuresLayout]) { fragment in
             let frame = fragment.layoutFragmentFrame
             if frame.maxY < visible.minY - 50 { return true }
             if frame.minY > visible.maxY + 50 { return false }

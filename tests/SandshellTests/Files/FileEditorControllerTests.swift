@@ -4,9 +4,11 @@ import Testing
 @testable import Sandshell
 
 /// Tests for `Files/FileEditorController.swift`: an `OpenFile`'s view of the
-/// disk (the version it last read or saved, writes, moves), the editor's
-/// tabs following moves, trashing and its undo (and the banner saying the
-/// disk differs), and what Print prints.
+/// disk (the version it last read or saved, writes, moves, files it can't
+/// read), the editor's tabs following moves, trashing and its undo (and the
+/// banner saying the disk differs), what Print prints, how lines are counted,
+/// how diffs are numbered and rendered, and the gutter's change bars
+/// (`LineChanges(unifiedDiff:)`).
 ///
 /// Not covered: saving when the disk changed (`save(_:)` asks with an alert)
 /// and the print operation itself.
@@ -108,6 +110,169 @@ struct FileEditorControllerTests {
             file.move(to: moved)
             #expect(file.diskChange == nil)
         }
+
+        enum Unreadable: CaseIterable { case noPermission, folder }
+
+        /// A file that's there but can't be read isn't an empty editable copy
+        /// (a save would write over it): it says why instead.
+        @Test(.tags(.fileSystem, .edgeCase), arguments: Unreadable.allCases)
+        func aFileThatCantBeReadIsNotText(_ unreadable: Unreadable) throws {
+            let url: URL
+            switch unreadable {
+            case .noPermission:
+                url = try scratch.file("secret.txt", "keep out\n")
+                try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: url.path)
+            case .folder:
+                url = try scratch.folder("docs")
+            }
+            defer { try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: url.path) }
+            let file = OpenFile(url: url)
+            #expect(file.isText == false)
+            #expect(file.readError != nil)
+            #expect(file.text.isEmpty)
+            #expect(file.isDirty == false)
+        }
+
+        /// One that isn't there yet opens empty, to be saved into place.
+        @Test(.tags(.fileSystem, .edgeCase))
+        func aFileNotThereYetOpensAsEmptyText() {
+            let file = OpenFile(url: scratch.url.appending(path: "new.txt"))
+            #expect(file.isText)
+            #expect(file.readError == nil)
+            #expect(file.text.isEmpty)
+        }
+
+        @Test(.tags(.fileSystem))
+        func aReadableFileHasNoReadError() throws {
+            let file = OpenFile(url: try scratch.file("a.txt", "one\r\ntwo\r\n"))
+            #expect(file.isText)
+            #expect(file.readError == nil)
+            #expect(file.text == "one\r\ntwo\r\n", "Line endings are kept as they are on disk")
+        }
+    }
+
+    // MARK: - Lines, diffs and change bars
+
+    @MainActor
+    struct Lines {
+        /// The editor's count (Go to Line, the caret line) and the ruler's
+        /// lines agree, as NSString.lineRange breaks them: CRLF is one break,
+        /// a lone CR, NEL, U+2028 or U+2029 one too, a form feed or vertical
+        /// tab none — and a final break of any kind starts an empty last line.
+        @Test(arguments: [
+            ("", 1), ("one", 1), ("one\n", 2), ("one\ntwo", 2), ("one\ntwo\n", 3),
+            ("one\r\ntwo\r\nthree", 3), ("one\r\n", 2), ("one\rtwo", 2), ("one\u{2028}two", 2),
+            ("one\u{0C}two\u{0B}three", 1), ("\n\n", 3),
+            ("one\r", 2), ("a\rb\r", 3), ("one\u{85}", 2), ("one\u{2028}", 2), ("one\u{2029}", 2),
+        ])
+        func lineCountIsWhatTheRulerNumbers(text: String, lines: Int) {
+            #expect(FileEditorController.lineCount(of: text) == lines)
+            #expect(LineNumberRuler.lineStarts(in: text as NSString).count == lines)
+        }
+
+        /// Each line starts after the whole break before it (both halves of a
+        /// CRLF), in UTF-16 offsets.
+        @Test func rulerLinesStartAfterEachBreak() {
+            #expect(LineNumberRuler.lineStarts(in: "ab\r\ncd\re\n") == [0, 4, 7, 9])
+            #expect(LineNumberRuler.lineStarts(in: "😀\nx") == [0, 3])
+            #expect(LineNumberRuler.lineStarts(in: "") == [0])
+        }
+
+        @Test func untrackedFileIsAllAddedOneLineEach() {
+            #expect(FileEditorController.untrackedDiff("a\nb\n") == "+a\n+b\n+")
+            #expect(FileEditorController.untrackedDiff("a\r\nb\r\n") == "+a\n+b\n+", "A CRLF file isn't one long line")
+            #expect(FileEditorController.untrackedDiff("") == "+")
+        }
+
+        @Test func untrackedFileIsNumberedFromOne() {
+            let rendered = FileEditorController.renderDiff(FileEditorController.untrackedDiff("first\r\nsecond\r\n"), untracked: true)
+            #expect(rendered.string.contains("    1 +first\n"))
+            #expect(rendered.string.contains("    2 +second\n"))
+            #expect(rendered.string.contains("    3") == false, "No line after the last newline")
+        }
+
+        /// git ends a CRLF file's content lines with "\r\n" (one Character in Swift).
+        @Test func crlfDiffIsSplitIntoItsLines() {
+            let diff = "diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1,2 +1,2 @@\n-old\r\n+new\r\n same\r\n"
+            let rendered = FileEditorController.renderDiff(diff).string
+            #expect(rendered.contains("    1 -old\n"))
+            #expect(rendered.contains("    1 +new\n"))
+            #expect(rendered.contains("    2  same\n"))
+            #expect(rendered.contains("+++") == false, "File headers aren't shown")
+        }
+
+        /// git splits diff lines only at LF: a form feed or lone CR inside a line is content.
+        @Test(.tags(.edgeCase))
+        func formFeedInADiffLineIsContent() {
+            let diff = "@@ -1 +1,2 @@\n-a\u{0C}b\n+a\u{0C}c\n+d\re\n"
+            let numbers = FileEditorController.lineNumbers(diff.components(separatedBy: "\n"))
+            let rendered = FileEditorController.renderDiff(diff).string
+            #expect(rendered.contains("    1 -a\u{0C}b\n"))
+            #expect(rendered.contains("    2 +d\re\n"))
+            #expect(numbers.compactMap { $0?.line } == [1, 1, 2])
+        }
+
+        @Test func annotateNumbersNewLinesAndRemovedOnesByTheOldFile() {
+            let lines = ["diff --git a/x b/x", "index 1..2 100644", "--- a/x", "+++ b/x",
+                         "@@ -3,3 +3,3 @@ func", " keep", "-gone", "+came", " tail", ""]
+            let annotated = FileEditorController.annotate(lines)
+            #expect(annotated.map(\.header) == [true, true, true, true, false, false, false, false, false, true])
+            #expect(annotated.map { $0.number?.line } == [nil, nil, nil, nil, nil, 3, 4, 4, 5, nil])
+            #expect(annotated.map { $0.number?.old } == [nil, nil, nil, nil, nil, false, true, false, false, nil])
+        }
+
+        /// Inside a hunk, "--" and "++" lines are a removed "-" line and an added "+" one.
+        @Test(.tags(.edgeCase))
+        func headerLookalikesInsideAHunkAreContent() {
+            let annotated = FileEditorController.annotate(["@@ -1,2 +1,2 @@", "-- comment", "+++ counter", ""])
+            #expect(annotated.map(\.header) == [false, false, false, true])
+            #expect(annotated.map { $0.number?.line } == [nil, 1, 1, nil])
+        }
+
+        @Test func eachHunkRestartsTheNumbering() {
+            let numbers = FileEditorController.lineNumbers(["@@ -1 +1 @@", "-a", "+b", "@@ -40,0 +41 @@", "+z"])
+            #expect(numbers.map { $0?.line } == [nil, 1, 1, nil, 41])
+        }
+
+        @Test(.tags(.edgeCase))
+        func noNewlineMarkerHasNoNumber() {
+            let numbers = FileEditorController.lineNumbers(["@@ -1 +1 @@", "-a", "\\ No newline at end of file", "+b"])
+            #expect(numbers.map { $0?.line } == [nil, 1, nil, 1])
+        }
+    }
+
+    // MARK: - LineChanges(unifiedDiff:)
+
+    struct ChangeBars {
+        @Test func addedLinesHaveNoOldCount() {
+            #expect(LineChanges(unifiedDiff: "@@ -3,0 +4,2 @@\n+a\n+b\n") == LineChanges(added: [4, 5]))
+        }
+
+        @Test func countsDefaultToOne() {
+            #expect(LineChanges(unifiedDiff: "@@ -10 +12 @@ func f()\n-a\n+b\n") == LineChanges(modified: [12]))
+        }
+
+        @Test func aDeletionMarksTheLineBeforeIt() {
+            #expect(LineChanges(unifiedDiff: "@@ -7,2 +6,0 @@\n-a\n-b\n") == LineChanges(deletedAfter: [6]))
+            #expect(LineChanges(unifiedDiff: "@@ -1 +0,0 @@\n-a\n") == LineChanges(deletedAfter: [0]), "0: before the first line")
+        }
+
+        @Test func everyHunkCounts() {
+            let diff = "diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1,2 +1,3 @@\n-a\n+b\n+c\n+d\n@@ -9,0 +11 @@\n+e\n@@ -20 +21,0 @@\n-f\n"
+            #expect(LineChanges(unifiedDiff: diff) == LineChanges(added: [11], modified: [1, 2, 3], deletedAfter: [21]))
+        }
+
+        /// A content line that looks like a hunk header starts with "+", "-" or " ".
+        @Test(.tags(.edgeCase))
+        func headerLookalikeContentIsNotAHunk() {
+            #expect(LineChanges(unifiedDiff: "@@ -1 +1 @@\n-@@ -5 +5 @@\n+@@ -6,0 +7 @@\n") == LineChanges(modified: [1]))
+        }
+
+        @Test(.tags(.edgeCase))
+        func noHunksNoChanges() {
+            #expect(LineChanges(unifiedDiff: "") == LineChanges())
+            #expect(LineChanges(unifiedDiff: "Binary files a/x and b/x differ\n") == LineChanges())
+        }
     }
 
     // MARK: - The editor's tabs
@@ -139,6 +304,50 @@ struct FileEditorControllerTests {
             #expect(editor.debugIsDirty)
             #expect(editor.debugEditorText == "mine one\n")
             #expect(editor.debugDiskChange == .rewritten, "Saving must still ask before replacing the agent's version")
+        }
+
+        /// A folder's URL from the tree ends in "/" (`contentsOfDirectory`):
+        /// the tabs inside it still follow it, and back again on Undo.
+        @Test(.tags(.fileSystem, .edgeCase))
+        func tabsFollowAFolderWhoseURLEndsInASlash() throws {
+            let inside = try scratch.file("docs/a.txt", "one\n")
+            editor.open(inside)
+            let docs = scratch.url.appending(path: "docs", directoryHint: .isDirectory)
+            let notes = scratch.url.appending(path: "notes", directoryHint: .isDirectory)
+            try FileManager.default.moveItem(at: docs, to: notes)
+            editor.fileMoved(from: docs, to: notes)
+            #expect(editor.openURLs.map(\.path) == [notes.appending(path: "a.txt").path])
+
+            try FileManager.default.moveItem(at: notes, to: docs)
+            editor.fileMoved(from: notes, to: docs)
+            #expect(editor.openURLs.map(\.path) == [inside.path])
+        }
+
+        /// Go to Line's column stops at the end of the line's text, before
+        /// its break (a CRLF or a lone CR too), not on the next line.
+        @Test(.tags(.fileSystem, .edgeCase), arguments: ["ab\ncd\n", "ab\r\ncd\r\n", "ab\rcd\r"])
+        func goToLineColumnStopsBeforeTheLineBreak(text: String) throws {
+            editor.open(try scratch.file("lines.txt", text))
+            editor.goToLineForTesting(1, column: 10)
+            #expect(editor.debugCaret == 2)
+            #expect(editor.caretLineForTesting == 1)
+            editor.goToLineForTesting(2, column: 2)
+            #expect(editor.caretLineForTesting == 2)
+        }
+
+        /// It says why it couldn't be read, with nothing to edit, save or print.
+        @Test(.tags(.fileSystem, .edgeCase))
+        func anUnreadableFileShowsWhyInsteadOfAnEmptyEditor() throws {
+            let url = try scratch.file("secret.txt", "keep out\n")
+            try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: url.path)
+            defer { try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: url.path) }
+            editor.open(url)
+            #expect(editor.currentURL == url)
+            #expect(editor.printView == nil)
+            #expect(editor.debugEmptyMessage?.contains("secret.txt") == true)
+
+            editor.open(try scratch.file("b.txt", "two\n"))
+            #expect(editor.debugEmptyMessage == nil, "A readable file shows in the editor")
         }
 
         @Test(.tags(.fileSystem), .bug(id: "xmas-sandshell-e7q.32"))

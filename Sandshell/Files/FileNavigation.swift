@@ -75,7 +75,7 @@ final class OpenQuicklyController: NSViewController, NSSearchFieldDelegate, NSTa
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        let base = root.path
+        let base = root.plainPath
         Task { [weak self] in
             let files = await WorkspaceFileIndex.shared.files(under: base)
             guard let self else { return }
@@ -117,7 +117,7 @@ final class OpenQuicklyController: NSViewController, NSSearchFieldDelegate, NSTa
     @objc func openSelected() {
         let row = table.clickedRow >= 0 ? table.clickedRow : table.selectedRow
         guard results.indices.contains(row) else { return NSSound.beep() }
-        onOpen?(root.appendingPathComponent(results[row]))
+        onOpen?(root.appending(path: results[row]))
     }
 
     // MARK: Table
@@ -156,6 +156,7 @@ final class OpenQuicklyCell: NSTableCellView {
     init() {
         super.init(frame: .zero)
         identifier = Self.id
+        icon.setAccessibilityElement(false)   // the name and folder say it all
         folder.font = .systemFont(ofSize: 11)
         folder.textColor = .secondaryLabelColor
         folder.lineBreakMode = .byTruncatingHead
@@ -189,8 +190,8 @@ final class OpenQuicklyCell: NSTableCellView {
     }
 
     func configure(path: String, root: URL, query: String) {
-        let url = root.appendingPathComponent(path)
-        icon.image = NSWorkspace.shared.icon(forFile: url.path)
+        let url = root.appending(path: path)
+        icon.image = NSWorkspace.shared.icon(forFile: url.plainPath)
         let file = (path as NSString).lastPathComponent
         let dir = (path as NSString).deletingLastPathComponent
         folder.stringValue = dir.isEmpty ? root.lastPathComponent : dir
