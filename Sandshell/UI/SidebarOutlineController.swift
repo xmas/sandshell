@@ -1002,21 +1002,21 @@ final class SidebarListController: NSViewController {
     func openSandshellLog() { openInConsole(Log.fileURL) }
 
     func openDaemonLog() {
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        let logURL = home.appendingPathComponent(
-            "Library/Application Support/com.docker.sandboxes/sandboxes/sandboxd/daemon.log")
+        let logURL = URL.homeDirectory.appending(
+            path: "Library/Application Support/com.docker.sandboxes/sandboxes/sandboxd/daemon.log")
         openInConsole(logURL)
     }
 
     private func openInConsole(_ logURL: URL) {
-        let consoleURL = URL(fileURLWithPath: "/System/Applications/Utilities/Console.app")
-        if FileManager.default.fileExists(atPath: consoleURL.path) {
+        let consoleURL = URL(filePath: "/System/Applications/Utilities/Console.app", directoryHint: .isDirectory)
+        if FileManager.default.fileExists(atPath: consoleURL.path(percentEncoded: false)) {
             let cfg = NSWorkspace.OpenConfiguration()
             cfg.activates = true
-            NSWorkspace.shared.open([logURL], withApplicationAt: consoleURL, configuration: cfg) { _, error in
-                if let error {
+            Task {
+                do { _ = try await NSWorkspace.shared.open([logURL], withApplicationAt: consoleURL, configuration: cfg) }
+                catch {
                     Log.error(.app, "open Console failed: \(error.localizedDescription)")
-                    DispatchQueue.main.async { NSWorkspace.shared.activateFileViewerSelecting([logURL]) }
+                    NSWorkspace.shared.activateFileViewerSelecting([logURL])
                 }
             }
         } else {
@@ -1320,10 +1320,10 @@ final class SidebarListController: NSViewController {
 
     /// Returns (.sbx/drops, .sbx/drops-changed-<timestamp>) for a folder.
     private func dropsPaths(for folder: Folder) -> (URL, URL) {
-        let sbx = controller.folderURL(for: folder).appendingPathComponent(".sbx", isDirectory: true)
-        let drops = sbx.appendingPathComponent("drops", isDirectory: true)
-        let staging = sbx.appendingPathComponent("drops-changed-\(Int(Date().timeIntervalSince1970))",
-                                                  isDirectory: true)
+        let sbx = controller.folderURL(for: folder).appending(path: ".sbx", directoryHint: .isDirectory)
+        let drops = sbx.appending(path: "drops", directoryHint: .isDirectory)
+        let staging = sbx.appending(path: "drops-changed-\(Int(Date.now.timeIntervalSince1970))",
+                                    directoryHint: .isDirectory)
         return (drops, staging)
     }
 
@@ -1416,7 +1416,9 @@ final class SidebarListController: NSViewController {
 
     @objc private func contextReveal(_ sender: NSMenuItem) {
         guard let id = sender.representedObject as? UUID, let s = controller.session(id: id) else { return }
-        NSWorkspace.shared.open(URL(fileURLWithPath: s.workdir))
+        if !NSWorkspace.shared.open(URL(filePath: s.workdir, directoryHint: .isDirectory)) {
+            Alerts.inform("Folder Not Found", "\(s.workdir.tildeAbbreviated) no longer exists.", style: .warning)
+        }
     }
 
     @objc private func contextCopy(_ sender: NSMenuItem) {
