@@ -83,6 +83,7 @@ final class FilesPaneController: NSViewController, NSSplitViewDelegate {
         tree.onGitStatus = { [weak self] status in self?.editor.updateGit(status) }
         tree.onFilesChanged = { [weak self] in self?.editor.filesChangedOnDisk() }
         tree.onFileMoved = { [weak self] from, to in self?.editor.fileMoved(from: from, to: to) }
+        tree.onFilesTrashed = { [weak self] urls in self?.editor.filesTrashed(urls) }
     }
 
     override func viewDidLayout() {

@@ -19,6 +19,10 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
     var onFilesChanged: (() -> Void)?
     /// A file or folder was renamed or moved here (open tabs follow it).
     var onFileMoved: ((URL, URL) -> Void)?
+    /// Files or folders were moved to the Trash here (their tabs close). What
+    /// it returns reopens those tabs; Undo Move to Trash calls it once the
+    /// files are back.
+    var onFilesTrashed: (([URL]) -> (@MainActor () -> Void)?)?
 
     private(set) var root: URL?
     private(set) var git = GitStatus.empty
@@ -899,11 +903,24 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
         guard !urls.isEmpty else { return }
         NSWorkspace.shared.recycle(urls) { [weak tree] moved, error in
             MainActor.assumeIsolated {
+                // The tabs showing what went close; Undo opens them again.
+                let reopenTabs = moved.isEmpty ? nil : tree?.onFilesTrashed?(Array(moved.keys))
                 // What did go can come back, even when something else couldn't.
                 if !moved.isEmpty {
                     Self.registerUndo("Move to Trash", on: undo, tree: tree) { _, tree in
-                        for (original, inTrash) in moved { try? FileManager.default.moveItem(at: inTrash, to: original) }
+                        // Something may be back at the old path by now (a tab
+                        // saved there): say so rather than leave it in the
+                        // Trash without a word.
+                        var failures: [String] = []
+                        for (original, inTrash) in moved {
+                            do { try FileManager.default.moveItem(at: inTrash, to: original) }
+                            catch { failures.append(error.localizedDescription) }
+                        }
                         tree?.refreshNow()
+                        reopenTabs?()
+                        if !failures.isEmpty {
+                            Alerts.inform("Couldn’t put back what was moved to the Trash.", failures.joined(separator: "\n"))
+                        }
                     }
                 }
                 tree?.refreshNow()
