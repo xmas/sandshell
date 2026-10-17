@@ -205,7 +205,10 @@ private struct KitStartupSection: View {
                 }
                 VStack(alignment: .leading, spacing: 2) {
                     Text(startup.headline).fontWeight(.medium)
-                    Text(startup.tally).font(.caption).foregroundStyle(.secondary)
+                    // "ran 12 seconds ago" keeps counting on its own.
+                    TimelineView(.periodic(from: .now, by: 1)) { context in
+                        Text(startup.tally(now: context.date)).font(.caption).foregroundStyle(.secondary)
+                    }
                 }
                 Spacer()
                 if let onRefresh {
@@ -259,7 +262,7 @@ extension KitStartupStatus {
     }
 
     /// Kits by outcome and when startup ran ("2 ok · 1 warning · ran 5m ago").
-    var tally: String {
+    func tally(now: Date = .now) -> String {
         var parts: [String] = []
         let ok = entries.count(where: { $0.outcome == .ok || $0.outcome == .noSteps })
         if ok > 0 { parts.append("\(ok) ok") }
@@ -270,7 +273,7 @@ extension KitStartupStatus {
         let skipped = entries.count(where: { $0.outcome == .skipped })
         if skipped > 0 { parts.append("\(skipped) skipped") }
         if let started = report?.startedAt {
-            parts.append("ran " + Format.relative(started))
+            parts.append("ran " + Format.relative(started, now: now))
         }
         return parts.joined(separator: " · ")
     }

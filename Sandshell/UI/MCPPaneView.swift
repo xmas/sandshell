@@ -101,6 +101,9 @@ private struct MCPServersSection: View {
                         VStack(alignment: .leading, spacing: 1) {
                             Text(row.name)
                             Text(row.detail).font(.caption).foregroundStyle(.secondary)
+                            if let error = controller.mcpErrors[row.name] {
+                                Text(error).font(.caption).foregroundStyle(.red).textSelection(.enabled)
+                            }
                         }
                     }
                     Spacer()
@@ -156,9 +159,11 @@ private struct MCPAuthControl: View {
 
 /// Paste a standard MCP config; each server in it is registered via sbx mcp add.
 private struct MCPAddServersSection: View {
-    let controller: WorkspaceController   // only called, never read
+    @ObservedObject var controller: WorkspaceController
 
     @State private var jsonText = ""
+    /// "Add from JSON" is registering the servers pasted.
+    @State private var addingJSON = false
 
     var body: some View {
         Section {
@@ -168,10 +173,13 @@ private struct MCPAddServersSection: View {
                 .overlay {
                     RoundedRectangle(cornerRadius: 5).stroke(.quaternary)
                 }
+            if let error = controller.mcpAddError {
+                Text(error).font(.caption).foregroundStyle(.red).textSelection(.enabled)
+            }
             HStack {
                 Spacer()
                 Button("Add from JSON", action: addFromJSON)
-                    .disabled(jsonText.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .disabled(addingJSON || jsonText.trimmingCharacters(in: .whitespaces).isEmpty)
             }
         } header: {
             Text("Add servers")
@@ -183,10 +191,15 @@ private struct MCPAddServersSection: View {
         }
     }
 
-    /// Register each server in the pasted MCP JSON, then clear the field.
+    /// Register each server in the pasted MCP JSON. The field clears once every
+    /// server in it is added: text with none, or one that failed, stays to fix.
     private func addFromJSON() {
-        controller.addMCPFromJSON(jsonText)
-        jsonText = ""
+        let text = jsonText
+        addingJSON = true
+        Task {
+            if await controller.addMCPFromJSON(text), jsonText == text { jsonText = "" }
+            addingJSON = false
+        }
     }
 }
 

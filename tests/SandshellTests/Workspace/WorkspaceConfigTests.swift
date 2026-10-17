@@ -572,16 +572,64 @@ extension WorkspaceConfigTests {
             #expect(object["sandshellKits"] as? [String] == ["sandshell-claude"])
         }
 
-        @Test func loadOrDefaultReturnsSavedConfig() throws {
+        @Test func aReadableConfigIsLoadedAndReportsNoProblem() throws {
             let saved = makeCustomizedWorkspaceConfig()
             try saved.save(root: root)
             let home = root.appendingPathComponent("home", isDirectory: true)
 
-            let config = WorkspaceConfig.loadOrDefault(root: root, home: home)
+            let (config, unreadable) = WorkspaceConfig.loadReportingProblems(root: root, home: home)
 
             expectSameWorkspaceConfig(config, saved)
+            #expect(unreadable == nil)
             let files = try FileManager.default.contentsOfDirectory(atPath: controlDirPath)
             #expect(files == ["config.json"], "A readable config must not be copied aside")
+        }
+
+        /// What the CLI's open and the setup wizard load an unreadable config.json
+        /// as: unconfigured defaults (the first-run mount sheet comes up), and the
+        /// problem to pass on to the window.
+        @Test(.tags(.workspaceConfigEdgeCase))
+        func anUnreadableConfigLoadsAsUnconfiguredDefaultsAndIsReported() throws {
+            try writeConfigFile("{ \"policy\": ")
+            let home = root.appendingPathComponent("home", isDirectory: true)
+
+            let (config, unreadable) = WorkspaceConfig.loadReportingProblems(root: root, home: home)
+
+            #expect(!config.configured)
+            #expect(config.mcpServers.isEmpty)
+            let problem = try #require(unreadable)
+            #expect(problem.kind == .config)
+            #expect(problem.file == configURL)
+            #expect(problem.keptAs != nil, "The original is copied aside before anything saves over it")
+        }
+
+        /// What the window reports when config.json can't be read: the file, the
+        /// copy kept of it before defaults can be saved over it, and why.
+        @Test(.tags(.workspaceConfigEdgeCase), arguments: Persistence.unreadableContents)
+        func anUnreadableConfigIsCopiedAsideAndReported(contents: String) throws {
+            try writeConfigFile(contents)
+            let error = try #require(throws: DecodingError.self) { try WorkspaceConfig.load(root: root) }
+
+            let problem = WorkspaceConfig.setAside(root: root, error)
+
+            #expect(problem.kind == .config)
+            #expect(problem.file == configURL)
+            #expect(problem.reason == error.localizedDescription)
+            let copy = try #require(problem.keptAs, "A copy of the unreadable file is kept")
+            #expect(copy.deletingLastPathComponent().path == controlDirPath)
+            #expect(copy.lastPathComponent.hasPrefix("config.unreadable-"))
+            #expect(copy.pathExtension == "json")
+            #expect(try String(contentsOf: copy, encoding: .utf8) == contents)
+            #expect(try String(contentsOf: configURL, encoding: .utf8) == contents, "The original stays put")
+        }
+
+        @Test(.tags(.workspaceConfigEdgeCase))
+        func aCopyThatFailsIsReportedAsNotKept() throws {
+            // Nothing at config.json: nothing to copy.
+            let problem = WorkspaceConfig.setAside(root: root, CocoaError(.fileReadCorruptFile))
+
+            #expect(problem.keptAs == nil)
+            #expect(problem.file == configURL)
         }
 
         @Test(.tags(.workspaceConfigEdgeCase))

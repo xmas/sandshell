@@ -128,6 +128,23 @@ struct OpenWindowsTests {
         }
     }
 
+    /// Saved as `URL.path` spelled them (no trailing slash), so a list an older
+    /// build saved names a folder the same way; restored as directory URLs.
+    @Test func rootsAreSavedWithoutATrailingSlashAndComeBackAsDirectories() throws {
+        let folder = try scratch.folder("project")
+        try #require(folder.hasDirectoryPath, "The scratch folder's URL ends in a slash")
+        scratch.run {
+            OpenWindows.replace(with: [.init(root: folder, instanceIndex: 0)])
+        }
+
+        let stored = try #require(scratch.defaults.stringArray(forKey: "openWindowRoots"))
+        #expect(stored == [folder.path])
+        #expect(stored.first?.hasSuffix("/") == false)
+        let restored = try #require(scratch.run { OpenWindows.windows }.first)
+        #expect(restored.root.path == folder.path)
+        #expect(restored.root.hasDirectoryPath, "An existing folder comes back as a directory URL")
+    }
+
     @Test func noWindowsOpenSavesAnEmptyList() throws {
         let folder = try scratch.folder("project")
         scratch.run {

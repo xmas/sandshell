@@ -321,29 +321,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             RootFolderStore.adoptDefault(key)
         }
 
-        var config = WorkspaceConfig.loadOrDefault(root: workspaceURL, home: URL.homeDirectory)
-
         // Merge CLI-specified mounts (ro/rw) into the workspace policy, replacing
         // any existing entry for the same path so re-invocations with changed
         // flags take effect.
-        if !roMounts.isEmpty || !rwMounts.isEmpty {
+        func withExtras(_ policy: MountPolicy) -> MountPolicy {
+            guard !roMounts.isEmpty || !rwMounts.isEmpty else { return policy }
             let extras = roMounts.map { MountSpec(path: $0, readonly: true) }
                        + rwMounts.map { MountSpec(path: $0, readonly: false) }
             let extraPaths = Set(extras.map { $0.path.standardizedFileURL.path })
-            var selections = config.policy.selections
-                .filter { !extraPaths.contains($0.path.standardizedFileURL.path) }
-            selections.append(contentsOf: extras)
-            config.policy.selections = selections
+            var policy = policy
+            policy.selections = policy.selections
+                .filter { !extraPaths.contains($0.path.standardizedFileURL.path) } + extras
+            return policy
         }
-        config.configured = true   // skip the mount-config setup wizard
-        // An open window holds this config in memory (its next save would put
+        // An open window holds the config in memory (its next save would put
         // the old mounts back): it takes them itself, for every window on the
         // folder (they share it), and offers the rebuild they need — once.
         let open = windows.compactMap(\.workspaceController)
             .filter { $0.rootURL.standardizedFileURL.path == workspaceURL.standardizedFileURL.path }
         if let controller = open.first {
-            controller.adoptPolicy(config.policy)
+            controller.adoptPolicy(withExtras(controller.policy))
         } else {
+            let (loaded, unreadable) = WorkspaceConfig.loadReportingProblems(root: workspaceURL, home: URL.homeDirectory)
+            // An unreadable config.json was kept aside: the window says so, and
+            // offers the mounts (defaults + these) before it makes a sandbox.
+            WorkspaceStore.report(unreadable, root: workspaceURL)
+            var config = loaded
+            config.policy = withExtras(config.policy)
+            if unreadable == nil { config.configured = true }   // skip the mount-config setup wizard
             do {
                 try config.save(root: workspaceURL)
             } catch {
@@ -504,7 +509,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func createWindow(root: URL, instanceIndex requested: Int? = nil,
                       restoresLayout: Bool = true) -> MainWindowController? {
         do {
-            try WorkspaceBootstrap.openOrCreate(root: root)
+            // An unreadable state.json is kept aside and a fresh one saved:
+            // the window's store would read that one, so pass the news on.
+            let (_, unreadable) = try WorkspaceBootstrap.openReportingProblems(root: root)
+            WorkspaceStore.report(unreadable, root: root)
         } catch {
             Log.error(.app, "workspace bootstrap failed: \(error)")
             Alerts.inform("Couldn’t open “\(root.lastPathComponent)”", error.localizedDescription)
@@ -608,7 +616,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             RootFolderStore.adoptDefault(url.path)
         }
-        var config = WorkspaceConfig.loadOrDefault(root: url, home: URL.homeDirectory)
+        let (loaded, unreadable) = WorkspaceConfig.loadReportingProblems(root: url, home: URL.homeDirectory)
+        // An unreadable config.json was kept aside: the window says so (its
+        // other settings are defaults now).
+        WorkspaceStore.report(unreadable, root: url)
+        var config = loaded
         config.policy = policy
         // Sandshell's own kits go in their own field (what's unchecked stays off).
         config.kits = kits.filter { !KitStore.isSandshellKit($0) }

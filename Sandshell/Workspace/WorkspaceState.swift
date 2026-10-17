@@ -106,7 +106,7 @@ struct Session: Identifiable, Codable, Hashable {
          order: Int,
          workdir: String,
          transcriptID: String? = nil,
-         createdAt: Date = Date(),
+         createdAt: Date = .now,
          containerAgent: AgentKind? = nil,
          isChat: Bool = false) {
         self.id = id
@@ -277,8 +277,8 @@ struct WorkspaceState: Codable {
         for i in folders.indices where moving.contains(folders[i].id) {
             folders[i].relativePath = newRelative + folders[i].relativePath.dropFirst(old.count)
         }
-        let from = root.appendingPathComponent(old, isDirectory: true).path
-        let to = root.appendingPathComponent(newRelative, isDirectory: true).path
+        let from = root.appending(path: old, directoryHint: .isDirectory).path
+        let to = root.appending(path: newRelative, directoryHint: .isDirectory).path
         for i in sessions.indices {
             guard let moved = Session.workdir(sessions[i].workdir, movedFrom: from, to: to) else { continue }
             if running.contains(sessions[i].id), sessions[i].transcriptWorkdir == nil {
@@ -293,21 +293,37 @@ struct WorkspaceState: Codable {
 
     /// Control directory holding Sandshell's per-workspace files.
     static func controlDir(root: URL) -> URL {
-        root.appendingPathComponent(".sandshell", isDirectory: true)
+        root.appending(path: ".sandshell", directoryHint: .isDirectory)
     }
 
     static func stateURL(root: URL) -> URL {
-        controlDir(root: root).appendingPathComponent("state.json")
+        controlDir(root: root).appending(path: "state.json")
     }
 
     /// Load persisted state, or `nil` if no state file exists yet.
     static func load(root: URL) throws -> WorkspaceState? {
         let url = stateURL(root: root)
-        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        guard FileManager.default.fileExists(atPath: url.path(percentEncoded: false)) else { return nil }
         let data = try Data(contentsOf: url)
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         return try decoder.decode(WorkspaceState.self, from: data)
+    }
+
+    /// Copy a control file that couldn't be read (a merge conflict, a typo, a
+    /// newer build's format) aside as `<name>.unreadable-<time>.<ext>`, before
+    /// anything saves a fresh one over it. The copy, or nil when that failed too.
+    static func keepUnreadableCopy(of url: URL) -> URL? {
+        let name = url.deletingPathExtension().lastPathComponent
+        let copy = url.deletingLastPathComponent()
+            .appending(path: "\(name).unreadable-\(Int(Date.now.timeIntervalSince1970)).\(url.pathExtension)")
+        do {
+            try FileManager.default.copyItem(at: url, to: copy)
+            return copy
+        } catch {
+            Log.error(.workspace, "couldn't keep a copy of \(url.path(percentEncoded: false)): \(error.localizedDescription)")
+            return nil
+        }
     }
 
     /// Atomically write state to `<root>/.sandshell/state.json`.
@@ -321,22 +337,79 @@ struct WorkspaceState: Codable {
     }
 }
 
+/// A control file (`state.json`, `config.json`) that was there when its folder
+/// opened but couldn't be read: it was copied aside and the folder runs on a
+/// fresh one, which the first window on the folder says
+/// (`WorkspaceStore.takeOpenProblems`).
+struct UnreadableWorkspaceFile: Equatable, Sendable {
+    enum Kind: Sendable { case state, config }
+    let kind: Kind
+    let file: URL
+    /// The copy kept of it; nil when that failed too.
+    let keptAs: URL?
+    let reason: String
+
+    /// Keep a copy of `file` (`WorkspaceState.keepUnreadableCopy`) before
+    /// anything saves a fresh one over it, and log why it couldn't be read.
+    static func setAside(_ kind: Kind, file: URL, _ error: any Error) -> Self {
+        let copy = WorkspaceState.keepUnreadableCopy(of: file)
+        let fallback = kind == .state ? "starting a fresh one" : "using defaults"
+        Log.error(.workspace, "\(file.path(percentEncoded: false)) couldn't be read (\(error.localizedDescription)); "
+                  + fallback + (copy.map { ", the original is kept as \($0.lastPathComponent)" } ?? ""))
+        return Self(kind: kind, file: file, keptAs: copy, reason: error.localizedDescription)
+    }
+
+    /// The warning a window opening on the folder shows for `problems` (both
+    /// files in one alert, the first problem of each), or nil for none.
+    static func warning(for problems: [Self]) -> (title: String, message: String)? {
+        let shown = [Kind.config, .state].compactMap { kind in problems.first { $0.kind == kind } }
+        guard !shown.isEmpty else { return nil }
+        let what = shown.map { $0.kind == .config ? "settings" : "session list" }.joined(separator: " and ")
+        return ("This workspace’s \(what) couldn’t be read", shown.map(\.explanation).joined(separator: "\n\n"))
+    }
+
+    /// The file and why, then what Sandshell runs on instead and where the original went.
+    private var explanation: String {
+        let instead = switch (kind, keptAs) {
+        case (.config, let copy?):
+            "Sandshell is using default settings. The original is kept as \(copy.lastPathComponent)."
+        case (.config, nil):
+            "Sandshell is using default settings and couldn’t keep a copy of the original: "
+                + "fix or move it before changing settings."
+        case (.state, let copy?):
+            "Sandshell started a new session list, so the sidebar’s folders and sessions are missing. "
+                + "The original is kept as \(copy.lastPathComponent)."
+        case (.state, nil):
+            "Sandshell started a new session list (the sidebar’s folders and sessions are missing) "
+                + "and couldn’t keep a copy of the original."
+        }
+        return "\(file.path(percentEncoded: false).tildeAbbreviated): \(reason)\n\n\(instead)"
+    }
+}
+
 /// Opens or bootstraps a workspace root: ensures the root, the `.sandshell/`
 /// control dir (+ its `.gitignore`), the root folder row, and each non-root
 /// folder's directory. Pure filesystem + state seeding — no container behavior.
 enum WorkspaceBootstrap {
     /// Default workspace root: `~/Sandshell`.
     static var defaultRoot: URL {
-        FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Sandshell", isDirectory: true)
+        URL.homeDirectory.appending(path: "Sandshell", directoryHint: .isDirectory)
     }
 
-    /// Files under `.sandshell/` that are volatile and must not be committed.
-    private static let gitignoredControlFiles = ["state.json", "status/", "statusline.sh"]
+    /// Files under `.sandshell/` that are volatile and must not be committed
+    /// (an unreadable state.json's copies are as per-user as it is).
+    private static let gitignoredControlFiles = ["state.json", "status/", "statusline.sh", "state.unreadable-*.json"]
 
     /// Ensure the workspace exists on disk and return its (seeded) state.
     @discardableResult
     static func openOrCreate(root: URL = defaultRoot) throws -> WorkspaceState {
+        try openReportingProblems(root: root).state
+    }
+
+    /// `openOrCreate`, also saying when state.json was there but couldn't be
+    /// read (it was copied aside and a fresh one started).
+    static func openReportingProblems(root: URL = defaultRoot) throws
+        -> (state: WorkspaceState, unreadable: UnreadableWorkspaceFile?) {
         let fm = FileManager.default
 
         // 1. Root + control dir.
@@ -345,7 +418,7 @@ enum WorkspaceBootstrap {
         try fm.createDirectory(at: control, withIntermediateDirectories: true)
 
         // 2. `.sandshell/.gitignore` — keep volatile state out of git.
-        let gitignore = control.appendingPathComponent(".gitignore")
+        let gitignore = control.appending(path: ".gitignore")
         let existing = (try? String(contentsOf: gitignore, encoding: .utf8)) ?? ""
         // Lines end in "\n" or "\r\n", as git reads them ("\r\n" is one
         // Character, never equal to "\n").
@@ -360,7 +433,15 @@ enum WorkspaceBootstrap {
         }
 
         // 3. Load existing state or start fresh (legacy projects migrate here).
-        var state = (try? WorkspaceState.load(root: root)) ?? WorkspaceState()
+        //    One that can't be read is kept beside it: step 6 saves over it.
+        var state: WorkspaceState
+        var unreadable: UnreadableWorkspaceFile?
+        do {
+            state = try WorkspaceState.load(root: root) ?? WorkspaceState()
+        } catch {
+            unreadable = .setAside(.state, file: WorkspaceState.stateURL(root: root), error)
+            state = WorkspaceState()
+        }
 
         // 4. Always ensure the root folder exists as the first row. Migrated
         //    workspaces keep their existing (former project) folders below it.
@@ -373,7 +454,7 @@ enum WorkspaceBootstrap {
 
         // 5. Ensure each non-root folder's directory exists on disk.
         for folder in state.folders where !folder.isRoot {
-            let dir = root.appendingPathComponent(folder.relativePath, isDirectory: true)
+            let dir = root.appending(path: folder.relativePath, directoryHint: .isDirectory)
             try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
         }
 
@@ -389,7 +470,7 @@ enum WorkspaceBootstrap {
             let oldOrder = orderedFolders.flatMap { folder in
                 state.sessions.filter { $0.folderID == folder.id }.sorted { $0.order < $1.order }
             }
-            let base = Date()
+            let base = Date.now
             for (index, session) in oldOrder.enumerated() {
                 guard let idx = state.sessions.firstIndex(where: { $0.id == session.id }) else { continue }
                 state.sessions[idx].createdAt = base.addingTimeInterval(-Double(index))
@@ -399,7 +480,7 @@ enum WorkspaceBootstrap {
 
         // 6. Persist (creates state.json on first run; idempotent thereafter).
         try state.save(root: root)
-        return state
+        return (state, unreadable)
     }
 }
 
@@ -412,12 +493,12 @@ enum RecentRoots {
     static var all: [URL] {
         let paths = UserDefaults.standard.stringArray(forKey: key) ?? []
         return paths.filter { FileManager.default.fileExists(atPath: $0) }
-            .map { URL(fileURLWithPath: $0) }
+            .map { URL(filePath: $0, directoryHint: .checkFileSystem) }
     }
 
     /// Record `root` as the most recently opened workspace.
     static func record(_ root: URL) {
-        let path = root.standardizedFileURL.path
+        let path = root.standardizedPath
         var paths = UserDefaults.standard.stringArray(forKey: key) ?? []
         paths.removeAll { $0 == path }
         paths.insert(path, at: 0)
@@ -462,17 +543,27 @@ enum OpenWindows {
         }
         return zip(paths, indexes)
             .filter { FileManager.default.fileExists(atPath: $0.0) }
-            .map { Window(root: URL(fileURLWithPath: $0.0), instanceIndex: $0.1) }
+            .map { Window(root: URL(filePath: $0.0, directoryHint: .checkFileSystem), instanceIndex: $0.1) }
     }
 
     /// Replace the persisted set with the given windows (call whenever windows change).
     static func replace(with windows: [Window]) {
-        let paths = windows.map { $0.root.standardizedFileURL.path }
+        let paths = windows.map(\.root.standardizedPath)
         defaults.set(paths, forKey: key)
         if windows.allSatisfy({ $0.instanceIndex != nil }) {
             defaults.set(["roots": paths, "indexes": windows.compactMap(\.instanceIndex)], forKey: indexesKey)
         } else {
             defaults.removeObject(forKey: indexesKey)
         }
+    }
+}
+
+extension URL {
+    /// The standardized path with no trailing slash, as `URL.path` spelled it:
+    /// one folder's every spelling is one string (how workspace roots are
+    /// stored and matched — "/x/proj/" and "/x/proj" are the same folder).
+    var standardizedPath: String {
+        let path = standardizedFileURL.path(percentEncoded: false)
+        return path.count > 1 && path.hasSuffix("/") ? String(path.dropLast()) : path
     }
 }

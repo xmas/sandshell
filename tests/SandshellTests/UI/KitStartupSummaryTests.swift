@@ -18,12 +18,12 @@ struct KitStartupSummaryTests {
 
     @Test func talliesKitsByOutcome() {
         let summary = status([.ok, .noSteps, .warning, .failed(exitCode: 2), .skipped, .skipped])
-        #expect(summary.tally == "2 ok · 1 warning · 1 failed · 2 skipped")
+        #expect(summary.tally() == "2 ok · 1 warning · 1 failed · 2 skipped")
     }
 
     @Test("Warnings agree in number", arguments: [(1, "1 warning"), (2, "2 warnings")])
     func warningsAgreeInNumber(count: Int, tally: String) {
-        #expect(status(Array(repeating: .warning, count: count)).tally == tally)
+        #expect(status(Array(repeating: .warning, count: count)).tally() == tally)
     }
 
     @Test func namesTheKitsStillInstallingAsAList() {

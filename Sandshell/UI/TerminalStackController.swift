@@ -1040,7 +1040,7 @@ final class TerminalStackController: NSViewController {
             self.updateHeaderStatus(id)
         }.store(in: &cancellables)
         // Tick the work timer every second via the shared workspace clock.
-        controller.$clockTick.dropFirst()
+        controller.clockTick.dropFirst()
             .sink { [weak self] _ in
                 guard let self, let id = self.activeSessionID,
                       self.controller.runtime(id)?.status == .working else { return }

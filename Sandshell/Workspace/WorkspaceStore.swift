@@ -14,6 +14,19 @@ final class WorkspaceStore {
     /// window knows only its own runtimes; "+ New …" mustn't hand out another
     /// window's session as an unused one).
     private(set) var launched: Set<UUID> = []
+    /// A failed write of the folder's files was already reported (by any window
+    /// on it); cleared by the next one that works.
+    var saveFailureReported = false
+    /// Control files that were there but couldn't be read when the folder
+    /// opened (found by this store, or reported before it existed).
+    private var openProblems: [UnreadableWorkspaceFile] = []
+
+    /// What couldn't be read when the folder opened, once: the first window
+    /// on it says so.
+    func takeOpenProblems() -> [UnreadableWorkspaceFile] {
+        defer { openProblems = [] }
+        return openProblems
+    }
 
     private init(root: URL, state: WorkspaceState, config: WorkspaceConfig) {
         self.root = root
@@ -25,18 +38,36 @@ final class WorkspaceStore {
 
     private final class Weak { weak var store: WorkspaceStore?; init(_ s: WorkspaceStore) { store = s } }
     private static var open: [String: Weak] = [:]
+    /// Problems found before a store had their folder open, by root.
+    private static var pending: [String: [UnreadableWorkspaceFile]] = [:]
 
     /// The store for `root`: the one a window already has open, else loaded
     /// (bootstrapping the folder's control files).
     static func shared(root: URL) throws -> WorkspaceStore {
-        let key = root.standardizedFileURL.path
+        let key = root.standardizedPath
         if let store = open[key]?.store { return store }
-        let state = try WorkspaceBootstrap.openOrCreate(root: root)
-        let config = WorkspaceConfig.loadOrDefault(root: root, home: FileManager.default.homeDirectoryForCurrentUser)
+        let (state, stateProblem) = try WorkspaceBootstrap.openReportingProblems(root: root)
+        let (config, configProblem) = WorkspaceConfig.loadReportingProblems(root: root, home: URL.homeDirectory)
         let store = WorkspaceStore(root: root, state: state, config: config)
+        // Reported ones first: they found the original (that write may have failed).
+        for problem in (pending.removeValue(forKey: key) ?? []) + [stateProblem, configProblem].compactMap(\.self) {
+            store.openProblems.add(problem)
+        }
         open = open.filter { $0.value.store != nil }
         open[key] = Weak(store)
         return store
+    }
+
+    /// A control file of `root`'s was found unreadable (and set aside) before
+    /// a window opened on it — by the bootstrap ahead of a window, the CLI's
+    /// open, the setup wizard — and a fresh one may already be saved over it:
+    /// the store that opens on it next has the first window say so. With a
+    /// store already open, its copy is what every window uses (and its next
+    /// write puts the file back), so there's nothing to tell.
+    static func report(_ problem: UnreadableWorkspaceFile?, root: URL) {
+        let key = root.standardizedPath
+        guard let problem, open[key]?.store == nil else { return }
+        pending[key, default: []].add(problem)
     }
 
     // MARK: Writes
@@ -86,9 +117,7 @@ final class WorkspaceStore {
         let first = pending.isEmpty
         pending[part, default: []].insert(ObjectIdentifier(writer))
         guard first else { return }
-        DispatchQueue.main.async { [weak self] in
-            MainActor.assumeIsolated { self?.flush() }
-        }
+        Task { [weak self] in self?.flush() }
     }
 
     private func flush() {
@@ -101,5 +130,13 @@ final class WorkspaceStore {
             })
             if !parts.isEmpty { observer.notify(parts) }
         }
+    }
+}
+
+private extension [UnreadableWorkspaceFile] {
+    /// Add `problem` unless there's one for that file already (the earlier
+    /// one saw the original).
+    mutating func add(_ problem: UnreadableWorkspaceFile) {
+        if !contains(where: { $0.kind == problem.kind }) { append(problem) }
     }
 }

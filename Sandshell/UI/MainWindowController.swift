@@ -256,6 +256,11 @@ final class MainWindowController: NSWindowController {
         // Container phases, subagents and the work timers stay current in
         // every window, a folder still being set up included.
         controller.startMonitoring()
+        // Its config.json or state.json couldn't be read: it runs on defaults
+        // or a fresh session list, so say so first.
+        if let warning = UnreadableWorkspaceFile.warning(for: controller.takeOpenProblems()) {
+            Alerts.inform(warning.title, warning.message, style: .warning, in: window)
+        }
         // First open: configure mounts before bringing the container up
         // (scripted runs take the defaults: nobody's there to answer).
         if controller.needsConfiguration, AutomatedRun.isActive {
