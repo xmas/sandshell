@@ -148,7 +148,7 @@ extension SidebarOutlineControllerTests {
     }
 }
 
-// MARK: - shownSession(picked:last:shown:extending:in:)
+// MARK: - shownSession(picked:last:clicked:shown:in:)
 
 extension SidebarOutlineControllerTests {
     struct ShownSession {
@@ -156,29 +156,41 @@ extension SidebarOutlineControllerTests {
             let testDescription: String
             let picked: [Int]
             let last: Int
+            /// The row a plain or ⌘-click is on (nil: a key, or a ⇧-click).
+            let clicked: Int?
             let shown: SidebarFixture.Name?
-            let extending: Bool
             let expected: SidebarFixture.Name?
         }
 
         @Test(arguments: [
-            Case(testDescription: "a click on a session row", picked: [3], last: 3, shown: .a, extending: false, expected: .b),
-            Case(testDescription: "a subagent row shows its session", picked: [1], last: 1, shown: .b, extending: false, expected: .a),
-            Case(testDescription: "a workflow row shows its session", picked: [4], last: 4, shown: .a, extending: false, expected: .b),
-            Case(testDescription: "⌘-click follows the last row picked", picked: [0, 5], last: 5, shown: .a, extending: false, expected: .c),
-            Case(testDescription: "⌘-click on a subagent row shows its session", picked: [2, 3, 5], last: 2, shown: .c,
-                 extending: false, expected: .a),
+            Case(testDescription: "a click on a session row", picked: [3], last: 3, clicked: 3, shown: .a, expected: .b),
+            Case(testDescription: "an arrow key onto a session row", picked: [3], last: 3, clicked: nil, shown: .a, expected: .b),
+            Case(testDescription: "a subagent row shows its session", picked: [1], last: 1, clicked: 1, shown: .b, expected: .a),
+            Case(testDescription: "a workflow row shows its session", picked: [4], last: 4, clicked: 4, shown: .a, expected: .b),
+            Case(testDescription: "⌘-click follows the row it picks", picked: [0, 5], last: 5, clicked: 5, shown: .a, expected: .c),
+            Case(testDescription: "⌘-click on a subagent row shows its session", picked: [2, 3, 5], last: 2, clicked: 2,
+                 shown: .c, expected: .a),
+            Case(testDescription: "⌘-click that unpicks another row keeps the shown session", picked: [0, 3], last: 3,
+                 clicked: 5, shown: .a, expected: .a),
+            Case(testDescription: "⌘-click that unpicks the shown session follows the last row", picked: [3, 5], last: 5,
+                 clicked: 0, shown: .a, expected: .c),
+            Case(testDescription: "⌘A keeps the shown session", picked: [0, 1, 2, 3, 4, 5], last: 5, clicked: nil,
+                 shown: .a, expected: .a),
+            Case(testDescription: "⌘A with a subagent row last keeps the shown session", picked: [0, 1, 2], last: 2,
+                 clicked: nil, shown: .a, expected: .a),
             Case(testDescription: "⇧-extension over subagent rows keeps the shown session", picked: [0, 1, 2, 3, 4, 5], last: 0,
-                 shown: .c, extending: true, expected: .c),
-            Case(testDescription: "⇧-extension within a session's subagents keeps it", picked: [1, 2], last: 2, shown: .a,
-                 extending: true, expected: .a),
+                 clicked: nil, shown: .c, expected: .c),
+            Case(testDescription: "⇧-extension within a session's subagents keeps it", picked: [1, 2], last: 2, clicked: nil,
+                 shown: .a, expected: .a),
             Case(testDescription: "⇧-extension that leaves the shown session follows the last row", picked: [3, 4, 5], last: 5,
-                 shown: .a, extending: true, expected: .c),
-            Case(testDescription: "nothing picked", picked: [], last: -1, shown: .a, extending: false, expected: nil),
+                 clicked: nil, shown: .a, expected: .c),
+            Case(testDescription: "nothing shown follows the last row", picked: [0, 3], last: 3, clicked: nil, shown: nil,
+                 expected: .b),
+            Case(testDescription: "nothing picked", picked: [], last: -1, clicked: nil, shown: .a, expected: nil),
         ])
         func detailFollows(_ testCase: Case) {
             let shown = SidebarListController.shownSession(picked: IndexSet(testCase.picked), last: testCase.last,
-                                                           shown: testCase.shown?.id, extending: testCase.extending,
+                                                           clicked: testCase.clicked, shown: testCase.shown?.id,
                                                            in: SidebarFixture.rows)
             #expect(shown == testCase.expected?.id)
         }
@@ -252,6 +264,67 @@ extension SidebarOutlineControllerTests {
             #expect(shown.title == "Explore a1")
             #expect(shown.state == .running)
             #expect(shown.startedAt == SidebarFixture.epoch)
+        }
+    }
+}
+
+// MARK: - WorkflowRun.asShown
+
+extension SidebarOutlineControllerTests {
+    struct WorkflowAsShown {
+        private static let phases: [WorkflowRun.Phase] = [.init(title: "Review", detail: nil), .init(title: "Fix", detail: nil)]
+
+        private static func agent(_ id: String, phase: String = "Review", state: WorkflowRun.Agent.State = .running,
+                                  tokens: Int = 1_000, model: String? = "opus", lastWrite: Date = SidebarFixture.epoch)
+            -> WorkflowRun.Agent {
+            .init(id: id, label: "Agent \(id)", phase: phase, model: model, tokens: tokens,
+                  startedAt: SidebarFixture.epoch, lastWrite: lastWrite, state: state)
+        }
+
+        private static func run(_ agents: [WorkflowRun.Agent], lastWrite: Date = SidebarFixture.epoch) -> WorkflowRun {
+            WorkflowRun(id: "wf_1", dir: URL(filePath: "/nonexistent/session/subagents/workflows/wf_1"), name: "Review",
+                        summary: "Review the branch", phases: phases, agents: agents,
+                        startedAt: SidebarFixture.epoch, lastWrite: lastWrite)
+        }
+
+        @Test func whatARunningRunsAgentsWriteDoesNotChangeTheRow() {
+            let later = SidebarFixture.epoch.addingTimeInterval(3)
+            let before = Self.run([Self.agent("w1"), Self.agent("w2", state: .done)])
+            let after = Self.run([Self.agent("w1", tokens: 48_000, model: "sonnet", lastWrite: later),
+                                  Self.agent("w2", state: .done)], lastWrite: later)
+            #expect(before != after)
+            #expect(before.asShown == after.asShown)
+        }
+
+        @Test func anAgentFinishingChangesTheRow() {
+            let before = Self.run([Self.agent("w1"), Self.agent("w2")])
+            let after = Self.run([Self.agent("w1", state: .done), Self.agent("w2")])
+            #expect(before.asShown != after.asShown, "the phase's done count moves")
+        }
+
+        @Test func aNewAgentChangesTheRow() {
+            let before = Self.run([Self.agent("w1")])
+            let after = Self.run([Self.agent("w1"), Self.agent("w2", phase: "Fix")])
+            #expect(before.asShown != after.asShown)
+        }
+
+        @Test func aSettledRunsLastWriteChangesTheRow() {
+            let before = Self.run([Self.agent("w1", state: .done)])
+            let after = Self.run([Self.agent("w1", state: .done)], lastWrite: SidebarFixture.epoch.addingTimeInterval(60))
+            #expect(before.asShown != after.asShown, "it says when it finished")
+        }
+
+        @Test func whatTheRowShowsIsKept() {
+            let original = Self.run([Self.agent("w1", state: .done), Self.agent("w2", phase: "Fix")])
+            let shown = original.asShown
+            #expect(shown.id == original.id)
+            #expect(shown.name == original.name)
+            #expect(shown.summary == original.summary)
+            #expect(shown.startedAt == original.startedAt)
+            #expect(shown.agents.count == 2)
+            #expect(shown.agentsSettled == original.agentsSettled)
+            #expect(shown.phases.map { shown.progress(of: $0) }.map { [$0.done, $0.total] }
+                    == original.phases.map { original.progress(of: $0) }.map { [$0.done, $0.total] })
         }
     }
 }

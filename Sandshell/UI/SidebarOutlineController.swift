@@ -593,9 +593,11 @@ final class SidebarListController: NSViewController {
             self.refreshActive(previous)
             self.refreshActive(self.lastActiveSession)
             // Subagents show for the selected session: list (or unlist) them —
-            // after this selection change, not inside it.
+            // once the click (or key) that changed it is handled, and once for
+            // the selectionDidChange + rowClicked pair. Rows above it may go,
+            // so bring it back into view.
             if [previous, self.lastActiveSession].contains(where: { self.childRowsStale($0) }) {
-                DispatchQueue.main.async { [weak self] in self?.reload() }
+                self.reloadAfterEvent(revealingShown: true)
             }
         }.store(in: &cancellables)
         // Update only the affected session rows (status dot + work-time + live-ness
@@ -609,13 +611,14 @@ final class SidebarListController: NSViewController {
             for id in Set(tasks.keys).union(self.backgroundCounts.keys) { self.updateSessionRow(id) }
             self.backgroundCounts = tasks.mapValues { $0.filter(\.isRunning).count }
         }.store(in: &cancellables)
-        // Only when a row would change: a running subagent's transcript is
-        // written all the time, and every poll would rebuild the list.
+        // Only when a row would change: a running subagent's or workflow's
+        // transcripts are written all the time, and every poll would rebuild
+        // the list. (One reload for a poll that changes both.)
         controller.$subagents.dropFirst().map { $0.mapValues { $0.map(\.asShown) } }.removeDuplicates().sink { [weak self] _ in
-            DispatchQueue.main.async { self?.reload() }
+            self?.reloadAfterEvent()
         }.store(in: &cancellables)
-        controller.$workflows.dropFirst().removeDuplicates().sink { [weak self] _ in
-            DispatchQueue.main.async { self?.reload() }
+        controller.$workflows.dropFirst().map { $0.mapValues { $0.map(\.asShown) } }.removeDuplicates().sink { [weak self] _ in
+            self?.reloadAfterEvent()
         }.store(in: &cancellables)
         controller.$runtimes.dropFirst().sink { [weak self] runtimes in
             self?.runtimesChanged(runtimes)
@@ -755,11 +758,51 @@ final class SidebarListController: NSViewController {
 
     /// A reload asked for while a row was being renamed (run when it ends).
     private var pendingReload = false
+    /// A rename just ended: reloads wait for the rest of the event that ended it.
+    private var endingRename = false
+    /// A reload is on its way (`reloadAfterEvent`), and whether it then brings
+    /// the shown session's row into view.
+    private var reloadScheduled = false
+    private var revealShownAfterReload = false
+
+    /// Run `body` once the event being handled is over — a click's mouse-up
+    /// included. (The main queue is also served in the table's tracking loop
+    /// between mouse-down and -up, where the table still goes by the row index
+    /// it pressed: a reload there moves another row under the click.)
+    private static func afterEvent(_ body: @escaping @MainActor @Sendable () -> Void) {
+        RunLoop.main.perform(inModes: [.default, .modalPanel]) { MainActor.assumeIsolated(body) }
+    }
+
+    /// Reload once the event being handled is over, however often it's asked
+    /// for meanwhile.
+    private func reloadAfterEvent(revealingShown: Bool = false) {
+        if revealingShown { revealShownAfterReload = true }
+        guard !reloadScheduled else { return }
+        reloadScheduled = true
+        Self.afterEvent { [weak self] in
+            guard let self else { return }
+            let reveal = self.revealShownAfterReload
+            self.revealShownAfterReload = false
+            if self.reloadScheduled { self.reload() }
+            if reveal, !self.pendingReload { self.revealShown() }
+        }
+    }
+
+    /// Keep the shown session's row (or the picked row under it) in view: rows
+    /// above it come and go with the selection.
+    private func revealShown() {
+        guard let id = shownSession else { return }
+        let last = outline.selectedRow
+        let target = rows.indices.contains(last) && rows[last].sessionID == id ? last : row(of: id)
+        if let target { outline.scrollRowToVisible(target) }
+    }
 
     private func reload() {
         guard !reloading else { return }
-        // Rebuilding the rows would throw the rename's editor away mid-typing.
-        if renamingID != nil { pendingReload = true; return }
+        reloadScheduled = false
+        // Rebuilding the rows would throw the rename's editor away mid-typing
+        // (and, as it ends, move rows under the click that ended it).
+        if renamingID != nil || endingRename { pendingReload = true; return }
         pendingReload = false
         reloading = true
         defer { reloading = false }
@@ -1128,10 +1171,12 @@ final class SidebarListController: NSViewController {
     /// Search from the footer button (restores route purely by the conversation's cwd).
     @objc private func searchClicked() { onShowSearch?(nil) }
 
+    /// Delete in the list closes the session rows picked there, and only those.
+    /// Nothing picked (the filter hides the shown session) or only subagent
+    /// or workflow rows: a beep — no session closes that the list doesn't
+    /// show picked (⌘W closes the shown one).
     func closeSelectedSession() {
         let ids = selectedSessionIDs
-        if outline.selectedRowIndexes.isEmpty, let id = shownSession { return controller.closeSession(id) }
-        // Only subagent or workflow rows picked: they don't close (nor does their session).
         guard !ids.isEmpty else { return NSSound.beep() }
         controller.closeSessions(ids)
     }
@@ -1177,9 +1222,17 @@ final class SidebarListController: NSViewController {
         let editing = cell.beginRenaming { [weak self] name in
             guard let self else { return }
             self.renamingCell = nil
+            // A rename usually ends with a click on another row: reloads put
+            // off till now (and the rename's own) wait until that click is
+            // handled, so it picks the row the person saw.
+            self.endingRename = true
             if let name { self.controller.renameSession(id, to: name) }
-            if self.pendingReload { self.reload() }
             self.view.window?.makeFirstResponder(self.outline)
+            Self.afterEvent { [weak self] in
+                guard let self else { return }
+                self.endingRename = false
+                if self.pendingReload { self.reload() }
+            }
         }
         if editing { renamingCell = cell }
     }
@@ -1485,20 +1538,33 @@ extension SidebarListController: NSTableViewDelegate {
             outline.rowView(atRow: row, makeIfNecessary: false)?.needsDisplay = true
             return
         }
-        let shown = Self.shownSession(picked: picked, last: outline.selectedRow, shown: shownSession,
-                                      extending: NSApp.currentEvent?.modifierFlags.contains(.shift) == true, in: rows)
+        let shown = Self.shownSession(picked: picked, last: outline.selectedRow, clicked: rowClickedNow,
+                                      shown: shownSession, in: rows)
         let newSelection = shown.map { SidebarSelection.session($0) }
         if controller.selection != newSelection { controller.selection = newSelection }
     }
 
-    /// The session the detail shows for what's picked: the last row picked (a
-    /// subagent or workflow row: its session), or — a shift-extension — the one
-    /// already shown while it (or a row under it) is still picked.
-    nonisolated static func shownSession(picked: IndexSet, last: Int, shown: UUID?, extending: Bool,
+    /// The row a plain or ⌘-click in the list is on, while the selection
+    /// changes for it; nil for keys (⌘A, arrows) and ⇧-clicks.
+    private var rowClickedNow: Int? {
+        guard let event = NSApp.currentEvent, event.window === outline.window,
+              event.type == .leftMouseDown || event.type == .leftMouseUp,
+              !event.modifierFlags.contains(.shift) else { return nil }
+        let row = outline.row(at: outline.convert(event.locationInWindow, from: nil))
+        return row >= 0 ? row : nil
+    }
+
+    /// The session the detail shows for what's picked (a subagent or workflow
+    /// row stands for its session). A click that picks a row shows it. Else —
+    /// ⇧-extension, ⌘A, a ⌘-click that unpicks another row — the one already
+    /// shown stays while it (or a row under it) is still picked; failing
+    /// that, the last row picked.
+    nonisolated static func shownSession(picked: IndexSet, last: Int, clicked: Int?, shown: UUID?,
                                          in rows: [Row]) -> UUID? {
-        if picked.count > 1, extending, let shown,
-           picked.contains(where: { rows.indices.contains($0) && rows[$0].sessionID == shown }) { return shown }
-        return rows.indices.contains(last) ? rows[last].sessionID : nil
+        func session(_ row: Int) -> UUID? { rows.indices.contains(row) ? rows[row].sessionID : nil }
+        if let clicked, picked.contains(clicked) { return session(clicked) }
+        if picked.count > 1, let shown, picked.contains(where: { session($0) == shown }) { return shown }
+        return session(last)
     }
 }
 
@@ -2163,6 +2229,24 @@ extension SubagentInfo {
         var shown = self
         if isRunning { shown.lastWrite = .distantPast }
         return shown
+    }
+}
+
+extension WorkflowRun {
+    /// As its sidebar row shows it: name, phases with how many of their agents
+    /// are done, agent count — and when it last wrote, once its agents have
+    /// settled. Its agents' tokens, models and writes, which change all the
+    /// time while it runs, don't show.
+    var asShown: WorkflowRun {
+        WorkflowRun(id: id, dir: dir, name: name, summary: summary, phases: phases,
+                    agents: agents.map { agent in
+                        var shown = agent
+                        shown.model = nil
+                        shown.tokens = 0
+                        shown.lastWrite = nil
+                        return shown
+                    },
+                    startedAt: startedAt, lastWrite: agentsSettled ? lastWrite : nil)
     }
 }
 
