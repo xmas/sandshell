@@ -18,7 +18,6 @@ actor SbxClient {
 
     // MARK: - Listing
 
-    /// `sbx ls --json`
     /// A sandbox's network policy in brief: hosts allowed and denied
     /// (`sbx policy ls <name> --json`); nil if sbx can't say.
     func networkPolicy(sandbox: String) async -> (allowed: Int, denied: Int)? {
@@ -34,6 +33,7 @@ actor SbxClient {
         return (allowed.count, denied.count)
     }
 
+    /// `sbx ls --json`
     func list() async throws -> [Sandbox] {
         let out = try await run(["ls", "--json"], routine: true)
         guard out.ok else { throw SbxError.command(out.stderr.isEmpty ? out.stdout : out.stderr) }
@@ -58,63 +58,13 @@ actor SbxClient {
         }
     }
 
-    // MARK: - Daemon health
-
-    /// Version + status of the sandboxd daemon *actually running*, from its
-    /// `/daemon/health` endpoint. This can differ from `sbx version` (the CLI
-    /// binary): the daemon is long-lived and keeps running whatever binary first
-    /// started it, so it may lag the upgraded CLI until restarted.
-    struct DaemonHealth: Decodable {
-        let version: String
-        let apiVersion: String
-        let revision: String
-        let status: String
-        let release: Bool
-        enum CodingKeys: String, CodingKey {
-            case version, status, release, revision
-            case apiVersion = "api_version"
-        }
-    }
-
-    /// Default location of the sandboxd unix socket.
-    static var daemonSocketPath: String {
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        return "\(home)/Library/Application Support/com.docker.sandboxes/sandboxes/sandboxd/sandboxd.sock"
-    }
-
-    /// Query the running daemon's `/daemon/health` over its unix socket via
-    /// `curl`. Returns nil if the daemon isn't up or the response can't be parsed.
-    func daemonHealth() async -> DaemonHealth? {
-        let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: "/usr/bin/curl")
-        proc.arguments = ["-s", "--max-time", "3", "--unix-socket",
-                          Self.daemonSocketPath, "http://localhost/daemon/health"]
-        let pipe = Pipe()
-        proc.standardOutput = pipe
-        proc.standardError = Pipe()
-        do { try proc.run() } catch {
-            Log.error(.sbx, "daemon health: curl spawn failed: \(error.localizedDescription)")
-            return nil
-        }
-        proc.waitUntilExit()
-        let raw = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-        guard let json = Self.firstJSONObject(in: raw),
-              let data = json.data(using: .utf8),
-              let health = try? JSONDecoder().decode(DaemonHealth.self, from: data) else {
-            Log.error(.sbx, "daemon health: no parseable response (\(raw.isEmpty ? "empty" : raw))")
-            return nil
-        }
-        return health
-    }
-
     // MARK: - Exec lifecycle socket
 
     /// Default location of the sbx Moby-compatible lifecycle socket. The socket
     /// filename is `docker.sock`, but this is the sbx/docker-next endpoint, not a
     /// dependency on Docker Desktop or the Docker CLI.
     static var execLifecycleSocketPath: String {
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        return "\(home)/.sbx/run/d/docker.sock"
+        URL.homeDirectory.appending(path: ".sbx/run/d/docker.sock").path(percentEncoded: false)
     }
 
     /// Process lifecycle state for an exec created by the sbx socket API.
@@ -168,7 +118,7 @@ actor SbxClient {
     /// response is not parseable.
     func inspectExecLifecycle(id: String,
                               socketPath: String = SbxClient.execLifecycleSocketPath) async -> ExecLifecycleState? {
-        guard let raw = socketGET(path: "/exec/\(id)/json", socketPath: socketPath),
+        guard let raw = await socketGET(path: "/exec/\(id)/json", socketPath: socketPath),
               let json = Self.firstJSONObject(in: raw),
               let data = json.data(using: .utf8),
               let state = try? JSONDecoder().decode(ExecLifecycleState.self, from: data)
@@ -190,7 +140,7 @@ actor SbxClient {
     func activeExecIDs(containerName: String,
                        socketPath: String = SbxClient.execLifecycleSocketPath) async -> Set<String>? {
         let encoded = Self.pathComponent(containerName)
-        guard let raw = socketGET(path: "/containers/\(encoded)/json", socketPath: socketPath),
+        guard let raw = await socketGET(path: "/containers/\(encoded)/json", socketPath: socketPath),
               let json = Self.firstJSONObject(in: raw),
               let data = json.data(using: .utf8),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
@@ -252,97 +202,20 @@ actor SbxClient {
             + "registered here, so it can’t be recreated. Add the agent’s kit under Settings ▸ Agents, then rebuild.")
     }
 
-    // MARK: - Create
-
-    /// `sbx create --no-progress [flags] <agent> <workspace> [config mounts...]`
-    ///
-    /// Run from inside the primary workspace dir so sbx derives a sensible
-    /// default name and container working directory. Appends the standard
-    /// agent-config + shared mounts (conditional on host existence), mirroring
-    /// `sbx.rs::sbx_create_sandbox` + `append_shared_agent_mounts`. Always
-    /// injects `~/.mcp` as a rw mount and loads all registered MCP servers
-    /// via `sbx mcp load` once the sandbox is running.
-    @discardableResult
-    func create(_ opts: CreateOptions) async throws -> CommandOutput {
-        var args: [String] = ["create", "--no-progress"]
-
-        let name = opts.name.trimmingCharacters(in: .whitespaces)
-        if !name.isEmpty { args += ["--name", name] }
-        let branch = opts.branch.trimmingCharacters(in: .whitespaces)
-        if !branch.isEmpty { args += ["--branch", branch] }
-        if let cpus = opts.cpus { args += ["--cpus", String(cpus)] }
-        let mem = opts.memory.trimmingCharacters(in: .whitespaces)
-        if !mem.isEmpty { args += ["--memory", mem] }
-
-        args.append(opts.agent)
-
-        let workspace = opts.workspace.trimmingCharacters(in: .whitespaces)
-        if !workspace.isEmpty { args.append(workspace) }
-
-        // Managed agent config/state mounts. `.claude` is mounted surgically
-        // (specific subpaths, some read-only) rather than whole-directory so the
-        // container never sees host secrets — see `MountPolicy.agentMounts`.
-        let fm = FileManager.default
-        let homeURL = fm.homeDirectoryForCurrentUser
-        let home = homeURL.path
-        MountPolicy.seedAgentMounts(home: homeURL)
-        args += MountPolicy.agentMountSpecs(home: homeURL).map(\.spec)
-        if fm.fileExists(atPath: "\(home)/.gemini") { args.append("\(home)/.gemini") }
-        // Shared mounts created-if-missing then mounted.
-        for sub in [".cache", ".local"] {
-            let p = "\(home)/\(sub)"
-            try? fm.createDirectory(atPath: p, withIntermediateDirectories: true)
-            args.append(p)
-        }
-        for sub in [".rustup"] {
-            let p = "\(home)/\(sub)"
-            if fm.fileExists(atPath: p) { args.append(p) }
-        }
-        let gh = "\(home)/.config/gh"
-        if fm.fileExists(atPath: gh) { args.append("\(gh):ro") }
-
-        // Shared MCP config dir — created if absent, always rw.
-        let mcpDir = "\(home)/.mcp"
-        try? fm.createDirectory(atPath: mcpDir, withIntermediateDirectories: true)
-        args.append(mcpDir)
-
-        // Snapshot names so we can identify the new sandbox after creation.
-        let beforeNames = Set((try? await list().map(\.name)) ?? [])
-
-        let cwd = workspace.isEmpty ? nil : workspace
-        let out = try await run(args, cwd: cwd)
-        if !out.ok { throw SbxError.command(out.stderr.isEmpty ? out.stdout : out.stderr) }
-
-        // Detect new sandbox name, wait until running, then load MCPs.
-        Task {
-            let sandboxName: String
-            if !name.isEmpty {
-                sandboxName = name
-            } else if let found = (try? await self.list())?.first(where: { !beforeNames.contains($0.name) })?.name {
-                sandboxName = found
-            } else {
-                Log.error(.sbx, "create: could not identify new sandbox for MCP loading")
-                return
-            }
-            guard (try? await self.waitUntilRunning(name: sandboxName)) != nil else { return }
-            await self.loadAllMCPs(into: sandboxName, mcpURL: Workspace.defaultMCPURL)
-        }
-
-        return out
-    }
-
     // MARK: - Workspace container lifecycle (Phase 1)
 
     /// `sbx create --no-progress --name <name> <agent> <mounts…>`
     ///
     /// Builds the container for one agent of a `Workspace` from its
-    /// policy-resolved `mounts` (first entry = the rw workspace root). Injects
-    /// `SBX_MCP_URL` and loads all registered MCP servers via `sbx mcp load`
-    /// after the container is running. Run from the root so `sbx` derives a
-    /// sensible workdir.
-    @discardableResult
+    /// policy-resolved `mounts` (first entry = the rw workspace root), with
+    /// `SBX_MCP_URL` set to the workspace's gateway. It doesn't load MCP
+    /// servers: the caller (`WorkspaceController`) does that with `loadMCP`
+    /// once this returns. Run from the root so `sbx` derives a sensible
+    /// workdir.
+    ///
     /// `onExists`: called as soon as the sandbox shows up (before any kit
     /// setup finishes), so a quit meanwhile doesn't leave it unrecorded.
+    @discardableResult
     func create(workspace: Workspace, agent: AgentKind, name: String,
                 mounts: [MountSpec], kits: [String] = [],
                 onExists: (@MainActor @Sendable () -> Void)? = nil) async throws -> Sandbox {
@@ -352,13 +225,13 @@ actor SbxClient {
         if let template = workspace.templateImage(for: agent) { args += ["-t", template] }
         // A private clone of the repo instead of the folder (only for a repo).
         if workspace.cloneRepo,
-           FileManager.default.fileExists(atPath: workspace.rootURL.appendingPathComponent(".git").path) {
+           FileManager.default.fileExists(atPath: workspace.rootURL.appending(path: ".git").path(percentEncoded: false)) {
             args.append("--clone")
         }
         args += kits.flatMap { ["--kit", KitStore.resolve($0)] }
         args.append(agent.createReference)   // a custom agent is created from its kit
         args += mounts.map(\.spec)
-        return try await createAndPoll(args, cwd: workspace.rootURL.path,
+        return try await createAndPoll(args, cwd: workspace.rootURL.path(percentEncoded: false),
                                        env: ["SBX_MCP_URL": workspace.mcpURL.absoluteString],
                                        name: name, waitForKitSetup: !kits.isEmpty, onExists: onExists)
     }
@@ -374,15 +247,6 @@ actor SbxClient {
         return out
     }
 
-    /// Load every server returned by `sbx mcp ls` into `sandbox` (best-effort).
-    private func loadAllMCPs(into sandbox: String, mcpURL: URL) async {
-        let servers = await listMCPServers(mcpURL: mcpURL)
-        for serverName in servers.keys {
-            Log.info(.sbx, "mcp load \(serverName) → \(sandbox)")
-            _ = try? await loadMCP(server: serverName, sandbox: sandbox, mcpURL: mcpURL)
-        }
-    }
-
     /// Kick off an `sbx create …` invocation without blocking on it (`sbx create`
     /// doesn't always exit promptly — it can keep its stdio open via the
     /// long-lived daemon), then poll `sbx ls` once a second until the named
@@ -393,7 +257,7 @@ actor SbxClient {
                                onExists: (@MainActor @Sendable () -> Void)? = nil) async throws -> Sandbox {
         Log.info(.sbx, "creating “\(name)”: sbx \(args.joined(separator: " "))")
         let proc = makeProcess(args, env: env)
-        if let cwd { proc.currentDirectoryURL = URL(fileURLWithPath: cwd) }
+        if let cwd { proc.currentDirectoryURL = URL(filePath: cwd) }
         proc.standardInput = FileHandle.nullDevice
         proc.standardOutput = FileHandle.nullDevice
         // Capture stderr to a temp *file*, not a Pipe: `sbx create` starts the
@@ -402,9 +266,9 @@ actor SbxClient {
         // shared FileHandle/Process callback queue, which then wedges termination
         // delivery for *other* concurrent `sbx` calls (e.g. the `ls` the launch
         // flow runs right after). A file fd is harmless to inherit.
-        let errURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("sbx-create-\(name)-\(UUID().uuidString).err")
-        FileManager.default.createFile(atPath: errURL.path, contents: nil)
+        let errURL = URL.temporaryDirectory
+            .appending(path: "sbx-create-\(name)-\(UUID().uuidString).err")
+        FileManager.default.createFile(atPath: errURL.path(percentEncoded: false), contents: nil)
         guard let errHandle = try? FileHandle(forWritingTo: errURL) else {
             throw SbxError.spawn("could not open stderr capture for create “\(name)”")
         }
@@ -441,9 +305,9 @@ actor SbxClient {
             // (The process check backs up the termination handler.)
             if waitForKitSetup, state.exitCode == nil, proc.isRunning {
                 Log.info(.sbx, "“\(name)” is running; waiting for sbx create to finish (kit setup)")
-                let deadline = Date().addingTimeInterval(15 * 60)
-                while state.exitCode == nil, proc.isRunning, Date() < deadline {
-                    try await Task.sleep(nanoseconds: 500_000_000)
+                let deadline = Date.now.addingTimeInterval(15 * 60)
+                while state.exitCode == nil, proc.isRunning, Date.now < deadline {
+                    try await Task.sleep(for: .milliseconds(500))
                 }
                 if let message = failure() { throw SbxError.command(message) }
                 sandbox = try await waitUntilRunning(name: name, failureMessage: failure)
@@ -461,9 +325,9 @@ actor SbxClient {
     /// (used to bail out early when the create process dies). Times out at 4 min.
     func waitUntilRunning(name: String, timeout: TimeInterval = 240,
                           failureMessage: @escaping () -> String? = { nil }) async throws -> Sandbox {
-        let deadline = Date().addingTimeInterval(timeout)
-        while Date() < deadline {
-            try await Task.sleep(nanoseconds: 1_000_000_000)
+        let deadline = Date.now.addingTimeInterval(timeout)
+        while Date.now < deadline {
+            try await Task.sleep(for: .seconds(1))
             if let sb = try? await status(name: name), sb.isRunning {
                 Log.info(.sbx, "sandbox “\(name)” is running")
                 return sb
@@ -563,11 +427,6 @@ actor SbxClient {
         try await list().first { $0.name == name }
     }
 
-    // MARK: - Kits
-
-    /// `sbx kit inspect <ref> --json` — metadata for a directory, zip, or OCI kit
-    /// reference (pulls the kit for OCI refs, so this can take a few seconds).
-    /// Returns nil when the reference can't be inspected.
     // MARK: - Files into a sandbox
 
     /// Where pasted images go inside a sandbox: its own /tmp, so nothing lands
@@ -578,14 +437,14 @@ actor SbxClient {
     /// agent user), pruning pastes older than a week. True once it's there.
     /// The bytes go in through a temp file on stdin, not a pipe.
     nonisolated static func writePaste(_ data: Data, named name: String, container: String) async -> Bool {
-        let staged = FileManager.default.temporaryDirectory.appendingPathComponent("sandshell-paste-\(UUID().uuidString)")
+        let staged = URL.temporaryDirectory.appending(path: "sandshell-paste-\(UUID().uuidString)")
         guard (try? data.write(to: staged)) != nil, let input = try? FileHandle(forReadingFrom: staged) else { return false }
         defer { try? input.close(); try? FileManager.default.removeItem(at: staged) }
         let dir = pasteDirectory
         let script = "mkdir -p \(dir) && find \(dir) -type f -mtime +7 -delete 2>/dev/null; "
             + "cat > \(dir)/\(SbxCommand.shellQuote(name))"
         let p = Process()
-        p.executableURL = URL(fileURLWithPath: PathFixer.sbxPath())
+        p.executableURL = URL(filePath: PathFixer.sbxPath())
         p.arguments = ["exec", "-i", container, "sh", "-c", script]
         p.standardInput = input
         p.standardOutput = FileHandle.nullDevice
@@ -604,7 +463,7 @@ actor SbxClient {
     @discardableResult
     nonisolated static func reapSessionProcesses(container: String, match: String, immediate: Bool = false) -> Process? {
         let p = Process()
-        p.executableURL = URL(fileURLWithPath: PathFixer.sbxPath())
+        p.executableURL = URL(filePath: PathFixer.sbxPath())
         p.arguments = ["exec", container, "sh", "-c", SbxCommand.reapScript(match: match, immediate: immediate)]
         p.standardInput = FileHandle.nullDevice
         p.standardOutput = FileHandle.nullDevice
@@ -621,25 +480,22 @@ actor SbxClient {
     /// `timeout` the reap is stopped rather than left to land late.
     nonisolated static func reapSessionProcessesAndWait(container: String, match: String, immediate: Bool = false,
                                                         timeout: TimeInterval = 45) async {
-        await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
-            DispatchQueue.global().async {
-                if let p = reapSessionProcesses(container: container, match: match, immediate: immediate) {
-                    let deadline = Date().addingTimeInterval(timeout)
-                    while p.isRunning, Date() < deadline { Thread.sleep(forTimeInterval: 0.05) }
-                    if p.isRunning {
-                        Log.error(.sbx, "reap in \(container) still running after \(Int(timeout))s; stopping it")
-                        p.terminate()
-                    }
-                }
-                done.resume()
+        // Unstructured, so a cancelled caller still waits out the reap.
+        await Task {
+            guard let p = reapSessionProcesses(container: container, match: match, immediate: immediate) else { return }
+            let deadline = Date.now.addingTimeInterval(timeout)
+            while p.isRunning, Date.now < deadline { try? await Task.sleep(for: .milliseconds(50)) }
+            if p.isRunning {
+                Log.error(.sbx, "reap in \(container) still running after \(Int(timeout))s; stopping it")
+                p.terminate()
             }
-        }
+        }.value
     }
 
     /// Block until in-flight reaps finish or `timeout` passes (app quit).
     nonisolated static func waitForReaps(timeout: TimeInterval) {
-        let deadline = Date().addingTimeInterval(timeout)
-        while Date() < deadline {
+        let deadline = Date.now.addingTimeInterval(timeout)
+        while Date.now < deadline {
             let running = reaps.withLock { list -> Bool in
                 list.removeAll { !$0.isRunning }
                 return !list.isEmpty
@@ -663,7 +519,7 @@ actor SbxClient {
     /// `google`, …) that applies to this sandbox — global or scoped to it.
     func hasServiceSecret(_ service: String, sandbox: String) async -> Bool {
         let key = "\(service)\u{0}\(sandbox)"
-        if let (value, at) = secretCache[key], Date().timeIntervalSince(at) < 30 { return value }
+        if let (value, at) = secretCache[key], Date.now.timeIntervalSince(at) < 30 { return value }
         struct Listing: Decodable {
             struct Secret: Decodable { let scope: String; let name: String }
             let secrets: [Secret]
@@ -674,10 +530,15 @@ actor SbxClient {
            let listing = try? JSONDecoder().decode(Listing.self, from: data) {
             found = listing.secrets.contains { $0.name == service && ($0.scope == "global" || $0.scope == sandbox) }
         }
-        secretCache[key] = (found, Date())
+        secretCache[key] = (found, Date.now)
         return found
     }
 
+    // MARK: - Kits
+
+    /// `sbx kit inspect <ref> --json` — metadata for a directory, zip, or OCI kit
+    /// reference (pulls the kit for OCI refs, so this can take a few seconds).
+    /// Returns nil when the reference can't be inspected.
     func kitInspect(_ ref: String) async -> KitInspection? {
         guard let out = try? await run(["kit", "inspect", KitStore.resolve(ref), "--json"], timeout: 90), out.ok,
               let json = Self.firstJSONObject(in: out.stdout),
@@ -706,15 +567,14 @@ actor SbxClient {
     func kitAdd(sandbox name: String, ref: String, cwd: String, mcpURL: URL) async throws -> CommandOutput {
         let args = ["kit", "add", name, KitStore.resolve(ref)]
         Log.info(.sbx, "$ sbx \(args.joined(separator: " "))")
-        let started = Date()
+        let started = Date.now
         let proc = makeProcess(args, env: ["SBX_MCP_URL": mcpURL.absoluteString])
-        proc.currentDirectoryURL = URL(fileURLWithPath: cwd)
+        proc.currentDirectoryURL = URL(filePath: cwd)
         proc.standardInput = FileHandle.nullDevice
-        let tmp = FileManager.default.temporaryDirectory
-        let outURL = tmp.appendingPathComponent("sbx-kit-add-\(UUID().uuidString).out")
-        let errURL = tmp.appendingPathComponent("sbx-kit-add-\(UUID().uuidString).err")
-        FileManager.default.createFile(atPath: outURL.path, contents: nil)
-        FileManager.default.createFile(atPath: errURL.path, contents: nil)
+        let outURL = URL.temporaryDirectory.appending(path: "sbx-kit-add-\(UUID().uuidString).out")
+        let errURL = URL.temporaryDirectory.appending(path: "sbx-kit-add-\(UUID().uuidString).err")
+        FileManager.default.createFile(atPath: outURL.path(percentEncoded: false), contents: nil)
+        FileManager.default.createFile(atPath: errURL.path(percentEncoded: false), contents: nil)
         guard let outHandle = try? FileHandle(forWritingTo: outURL),
               let errHandle = try? FileHandle(forWritingTo: errURL) else {
             throw SbxError.spawn("could not open output capture for kit add “\(name)”")
@@ -730,28 +590,32 @@ actor SbxClient {
 
         let status: Int32 = try await withCheckedThrowingContinuation { cont in
             let once = ResumeOnce()
+            let timeout = TaskHolder()
             proc.terminationHandler = { p in
                 guard once.claim() else { return }
+                timeout.task?.cancel()
                 cont.resume(returning: p.terminationStatus)
+            }
+            // Backstop: a recreate normally takes seconds; a wedged one shouldn't
+            // leave the rebuild spinner up forever. Set before `run()`, so the
+            // termination handler always finds it to cancel.
+            timeout.task = Task.detached { [weak proc] in
+                try? await Task.sleep(for: .seconds(300), clock: .suspending)
+                guard once.claim() else { return }
+                if proc?.isRunning == true { proc?.terminate() }
+                cont.resume(throwing: SbxError.command("sbx kit add timed out after 300s"))
             }
             do {
                 try proc.run()
             } catch {
                 guard once.claim() else { return }
+                timeout.task?.cancel()
                 cont.resume(throwing: SbxError.spawn("\(sbx) \(args.joined(separator: " ")): \(error)"))
-            }
-            // Backstop: a recreate normally takes seconds; a wedged one shouldn't
-            // leave the rebuild spinner up forever.
-            Task.detached { [weak proc] in
-                try? await Task.sleep(nanoseconds: 300 * 1_000_000_000)
-                guard once.claim() else { return }
-                if proc?.isRunning == true { proc?.terminate() }
-                cont.resume(throwing: SbxError.command("sbx kit add timed out after 300s"))
             }
         }
         let out = Self.clean((try? String(contentsOf: outURL, encoding: .utf8)) ?? "")
         let err = Self.clean((try? String(contentsOf: errURL, encoding: .utf8)) ?? "")
-        let ms = Int(Date().timeIntervalSince(started) * 1000)
+        let ms = Int(Date.now.timeIntervalSince(started) * 1000)
         if status == 0 {
             Log.info(.sbx, "→ sbx kit add ok (\(ms)ms)")
         } else {
@@ -780,22 +644,36 @@ actor SbxClient {
 
     // MARK: - Process plumbing
 
-    private func socketGET(path: String, socketPath: String) -> String? {
+    /// GET `path` from the unix socket at `socketPath` (via `curl`); nil when
+    /// the socket is missing or the request fails. Awaits curl's exit instead
+    /// of blocking on it, so the actor serves other calls meanwhile, and reads
+    /// the response as it arrives, so one bigger than the pipe buffer can't
+    /// stall curl.
+    private func socketGET(path: String, socketPath: String) async -> String? {
         guard FileManager.default.fileExists(atPath: socketPath) else { return nil }
         let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: "/usr/bin/curl")
+        proc.executableURL = URL(filePath: "/usr/bin/curl")
         proc.arguments = ["-s", "--max-time", "3", "--unix-socket",
                           socketPath, "http://localhost\(path)"]
         let pipe = Pipe()
         proc.standardOutput = pipe
         proc.standardError = Pipe()
-        do { try proc.run() } catch {
-            Log.error(.sbx, "sbx socket GET \(path) failed to spawn: \(error.localizedDescription)")
-            return nil
+        let box = DataBox()
+        pipe.fileHandleForReading.readabilityHandler = { h in
+            if !box.drain(h) { h.readabilityHandler = nil }
         }
-        proc.waitUntilExit()
-        guard proc.terminationStatus == 0 else { return nil }
-        return String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)
+        return await withCheckedContinuation { cont in
+            proc.terminationHandler = { p in
+                pipe.fileHandleForReading.readabilityHandler = nil
+                box.drain(pipe.fileHandleForReading)   // what the pipe still holds at exit
+                cont.resume(returning: p.terminationStatus == 0 ? String(data: box.data, encoding: .utf8) : nil)
+            }
+            do { try proc.run() } catch {
+                pipe.fileHandleForReading.readabilityHandler = nil
+                Log.error(.sbx, "sbx socket GET \(path) failed to spawn: \(error.localizedDescription)")
+                cont.resume(returning: nil)
+            }
+        }
     }
 
     private static func pathComponent(_ value: String) -> String {
@@ -806,7 +684,7 @@ actor SbxClient {
 
     private func makeProcess(_ args: [String], env: [String: String]? = nil) -> Process {
         let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: sbx)
+        proc.executableURL = URL(filePath: sbx)
         proc.arguments = args
         // Inherit the patched process environment (PATH fix from PathFixer).
         var environment = ProcessInfo.processInfo.environment
@@ -835,9 +713,9 @@ actor SbxClient {
     private func run(_ args: [String], cwd: String? = nil, env: [String: String]? = nil,
                      routine: Bool = false, timeout: TimeInterval? = nil) async throws -> CommandOutput {
         if !routine { Log.info(.sbx, "$ sbx \(args.joined(separator: " "))") }
-        let started = Date()
+        let started = Date.now
         let proc = makeProcess(args, env: env)
-        if let cwd { proc.currentDirectoryURL = URL(fileURLWithPath: cwd) }
+        if let cwd { proc.currentDirectoryURL = URL(filePath: cwd) }
         let outPipe = Pipe()
         let errPipe = Pipe()
         proc.standardOutput = outPipe
@@ -871,7 +749,7 @@ actor SbxClient {
                 errBox.drain(errPipe.fileHandleForReading)
                 let out = Self.clean(String(data: outBox.data, encoding: .utf8) ?? "")
                 let err = Self.clean(String(data: errBox.data, encoding: .utf8) ?? "")
-                let ms = Int(Date().timeIntervalSince(started) * 1000)
+                let ms = Int(Date.now.timeIntervalSince(started) * 1000)
                 if p.terminationStatus != 0 {
                     Log.error(.sbx, "→ sbx \(args.first ?? "") exit \(p.terminationStatus) (\(ms)ms): \(err.isEmpty ? out : err)")
                 } else if !routine {
@@ -880,10 +758,12 @@ actor SbxClient {
                 cont.resume(returning: CommandOutput(stdout: out, stderr: err, status: p.terminationStatus))
             }
             // Timeout backstop: kill a wedged process and resume with an error so
-            // the caller's spinner can't hang indefinitely.
+            // the caller's spinner can't hang indefinitely. On the suspending
+            // clock, so a command that was running when the Mac slept isn't
+            // killed the moment it wakes.
             if let limit {
                 timeoutHolder.task = Task.detached { [weak proc] in
-                    try? await Task.sleep(nanoseconds: UInt64(limit * 1_000_000_000))
+                    try? await Task.sleep(for: .seconds(limit), clock: .suspending)
                     guard once.claim() else { return }
                     outPipe.fileHandleForReading.readabilityHandler = nil
                     errPipe.fileHandleForReading.readabilityHandler = nil
@@ -1011,9 +891,7 @@ enum SbxError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case let .command(m): return m
-        case let .parse(m): return m
-        case let .spawn(m): return m
+        case let .command(m), let .parse(m), let .spawn(m): m
         }
     }
 }

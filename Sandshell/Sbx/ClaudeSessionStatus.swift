@@ -158,8 +158,7 @@ final class ClaudeModelCatalog: ObservableObject {
 
     private init() {
         custom = UserDefaults.standard.stringArray(forKey: Self.customKey) ?? []
-        let cacheURL = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".sandshell/model-prices.json")
+        let cacheURL = URL.homeDirectory.appending(path: ".sandshell/model-prices.json")
         if let data = try? Data(contentsOf: cacheURL),
            let cache = try? JSONDecoder().decode(ClaudePriceSources.FeedCache.self, from: data) {
             feed = cache.models ?? []
@@ -297,13 +296,13 @@ struct ClaudeEffortChoice: Hashable, Identifiable {
 /// agree on paths.
 enum ClaudeStatusFeed {
     static func statusDir(root: URL) -> URL {
-        WorkspaceState.controlDir(root: root).appendingPathComponent("status", isDirectory: true)
+        WorkspaceState.controlDir(root: root).appending(path: "status", directoryHint: .isDirectory)
     }
     static func scriptURL(root: URL) -> URL {
-        WorkspaceState.controlDir(root: root).appendingPathComponent("statusline.sh")
+        WorkspaceState.controlDir(root: root).appending(path: "statusline.sh")
     }
     static func statusFile(root: URL, sessionID: UUID) -> URL {
-        statusDir(root: root).appendingPathComponent("\(sessionID.uuidString).json")
+        statusDir(root: root).appending(path: "\(sessionID.uuidString).json")
     }
 
     /// Ensure the status dir and the (idempotent) feed script exist. Returns the
@@ -328,8 +327,8 @@ enum ClaudeStatusFeed {
     /// Inline JSON for `claude --settings`, pointing `statusLine` at the feed script.
     static func settingsJSON(scriptPath: String) -> String {
         let escaped = scriptPath
-            .replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "\"", with: "\\\"")
+            .replacing("\\", with: "\\\\")
+            .replacing("\"", with: "\\\"")
         return #"{"statusLine":{"type":"command","command":"\#(escaped)"}}"#
     }
 

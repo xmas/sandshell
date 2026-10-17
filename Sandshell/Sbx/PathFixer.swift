@@ -44,7 +44,18 @@ enum PathFixer {
     }
 
     /// Extra env vars to import from the login shell alongside PATH.
-    private static let extraEnvVars = ["SBX_MCP_URL"]
+    static let extraEnvVars = ["SBX_MCP_URL"]
+
+    /// Marks where the probe's own output starts: the rc files an interactive
+    /// shell sources may print banners or prompts to stdout before it.
+    static let envMarker = "__SANDSHELL_ENV__"
+
+    /// What the login shell runs: a marker line, then PATH and each extra var
+    /// on its own line (one `printf`, which repeats its format per argument).
+    static var envProbeScript: String {
+        let varList = extraEnvVars.map { "\"$\($0)\"" }.joined(separator: " ")
+        return "printf '\\n%s\\n' \(envMarker); printf '%s\\n' \"$PATH\" \(varList)"
+    }
 
     /// Ask the user's login shell for PATH and selected extra env vars (interactive
     /// login shell so `.zprofile`/`.zshrc` Homebrew shellenv lines are sourced).
@@ -53,13 +64,10 @@ enum PathFixer {
     private static func loginShellEnv() -> (String, [String: String])? {
         let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
         let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: shell)
+        proc.executableURL = URL(filePath: shell)
         // `-ilc` for zsh/bash; `-lc` for /bin/sh.
         let flag = (shell.hasSuffix("/sh") || shell == "sh") ? "-lc" : "-ilc"
-        // Print PATH on the first line, then each extra var on its own line.
-        let varList = extraEnvVars.map { "\"$\($0)\"" }.joined(separator: "\n")
-        let script = "printf '%s' \"$PATH\"; printf '\\n'; printf '%s\\n' \(varList)"
-        proc.arguments = [flag, script]
+        proc.arguments = [flag, envProbeScript]
         let pipe = Pipe()
         proc.standardOutput = pipe
         proc.standardError = Pipe()
@@ -71,16 +79,20 @@ enum PathFixer {
         }
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
         guard let raw = String(data: data, encoding: .utf8) else { return nil }
-        var lines = raw.components(separatedBy: "\n")
-        // Last line may be empty (trailing newline from printf).
-        if lines.last?.isEmpty == true { lines.removeLast() }
-        let path = lines.first ?? ""
+        return parseEnvProbe(raw)
+    }
+
+    /// PATH and the non-empty `extraEnvVars` from `envProbeScript`'s output:
+    /// the lines after its marker, whatever an rc file printed around them.
+    /// Nil without the marker (the probe never ran: an rc file exited or
+    /// exec'd something else), so nothing is imported.
+    static func parseEnvProbe(_ raw: String) -> (String, [String: String])? {
+        guard let marker = raw.range(of: "\n\(envMarker)\n", options: .backwards) else { return nil }
+        let lines = raw[marker.upperBound...].split(separator: "\n", omittingEmptySubsequences: false)
+        let path = lines.first.map(String.init) ?? ""
         var extras: [String: String] = [:]
-        for (i, key) in extraEnvVars.enumerated() {
-            let lineIdx = i + 1
-            if lineIdx < lines.count, !lines[lineIdx].isEmpty {
-                extras[key] = lines[lineIdx]
-            }
+        for (i, key) in extraEnvVars.enumerated() where i + 1 < lines.count && !lines[i + 1].isEmpty {
+            extras[key] = String(lines[i + 1])
         }
         return (path, extras)
     }
@@ -89,13 +101,13 @@ enum PathFixer {
     /// Mirrors `sbx.rs::sbx_path` candidate probing.
     static func sbxPath() -> String {
         if let found = which("sbx") { return found }
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let home = URL.homeDirectory
         let candidates = [
             "/opt/homebrew/bin/sbx",
             "/usr/local/bin/sbx",
-            "\(home)/.docker/sbx/bin/sbx",
-            "\(home)/.local/bin/sbx",
-            "\(home)/bin/sbx",
+            home.appending(path: ".docker/sbx/bin/sbx").path(percentEncoded: false),
+            home.appending(path: ".local/bin/sbx").path(percentEncoded: false),
+            home.appending(path: "bin/sbx").path(percentEncoded: false),
         ]
         return candidates.first { FileManager.default.fileExists(atPath: $0) } ?? "sbx"
     }

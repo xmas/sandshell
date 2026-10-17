@@ -63,7 +63,7 @@ struct MountPolicy: Codable, Hashable {
     /// is seeded (always created) or already present on the host.
     static func agentMountSpecs(home: URL) -> [MountSpec] {
         agentMounts.compactMap { m in
-            let url = home.appendingPathComponent(m.subpath)
+            let url = home.appending(path: m.subpath, directoryHint: .isDirectory)
             let willExist = m.seed != .ifPresent || isFolder(url.path)
             return willExist ? MountSpec(path: url, readonly: m.readonly) : nil
         }
@@ -80,7 +80,7 @@ struct MountPolicy: Codable, Hashable {
     static func seedAgentMounts(home: URL) {
         let fm = FileManager.default
         for m in agentMounts {
-            let url = home.appendingPathComponent(m.subpath)
+            let url = home.appending(path: m.subpath, directoryHint: .isDirectory)
             switch m.seed {
             case .ifPresent:
                 break
@@ -96,7 +96,7 @@ struct MountPolicy: Codable, Hashable {
     /// The default policy for a new workspace: the existing common folders ro.
     static func makeDefault(home: URL) -> MountPolicy {
         let selections = defaultReadOnlyFolders
-            .map { MountSpec(path: home.appendingPathComponent($0), readonly: true) }
+            .map { MountSpec(path: home.appending(path: $0, directoryHint: .isDirectory), readonly: true) }
             .filter { isFolder($0.path.path) }
         return MountPolicy(selections: selections)
     }

@@ -105,21 +105,22 @@ enum AgentProfileStore {
         var errorDescription: String? {
             switch self {
             case .unreadable(let ref):
-                return "Couldn’t read the kit “\(ref)” (sbx kit inspect failed)."
+                "Couldn’t read the kit “\(ref)” (sbx kit inspect failed)."
             case .notSandboxKit(let ref, let kind):
-                return "“\(ref)” is a \(kind ?? "mixin") kit, not an agent. Agent kits declare kind: sandbox — add mixins under Kits instead."
+                "“\(ref)” is a \(kind ?? "mixin") kit, not an agent. Agent kits declare kind: sandbox — add mixins under Kits instead."
             case .badName(let name):
-                return "The kit’s name “\(name)” can’t be used as an agent name (lowercase letters, digits and hyphens only)."
+                "The kit’s name “\(name)” can’t be used as an agent name (lowercase letters, digits and hyphens only)."
             case .builtin(let name):
-                return "“\(name)” is a built-in agent."
+                "“\(name)” is a built-in agent."
             }
         }
     }
 
     /// Register (or refresh) the agent a `kind: sandbox` kit defines, reading
     /// its name, display name and image with `sbx kit inspect --json`. A
-    /// refresh keeps the user's icon/color/name edits.
-    @discardableResult
+    /// refresh keeps the user's icon/color/name edits. On the main actor, like
+    /// every other write, so nothing lands between its read and its save.
+    @MainActor @discardableResult
     static func register(kitRef ref: String) async throws -> AgentProfile {
         let ref = ref.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let info = await SbxClient.shared.kitInspect(ref) else { throw RegistrationError.unreadable(ref) }

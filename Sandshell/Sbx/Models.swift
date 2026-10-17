@@ -110,18 +110,18 @@ struct AgentKind: RawRepresentable, Hashable, Codable, Identifiable {
     /// agent's registered profile name (`AgentProfileStore`), else the raw id.
     var displayName: String {
         switch self {
-        case .claude: return "Claude"
-        case .codex: return "Codex"
-        case .copilot: return "Copilot"
-        case .cursor: return "Cursor"
-        case .devin: return "Devin"
-        case .dockerAgent: return "Docker Agent"
-        case .droid: return "Droid"
-        case .gemini: return "Gemini"
-        case .kiro: return "Kiro"
-        case .opencode: return "OpenCode"
-        case .shell: return "Shell"
-        default: return AgentProfileStore.profile(for: self)?.displayName ?? rawValue
+        case .claude: "Claude"
+        case .codex: "Codex"
+        case .copilot: "Copilot"
+        case .cursor: "Cursor"
+        case .devin: "Devin"
+        case .dockerAgent: "Docker Agent"
+        case .droid: "Droid"
+        case .gemini: "Gemini"
+        case .kiro: "Kiro"
+        case .opencode: "OpenCode"
+        case .shell: "Shell"
+        default: AgentProfileStore.profile(for: self)?.displayName ?? rawValue
         }
     }
 
@@ -134,17 +134,6 @@ struct AgentKind: RawRepresentable, Hashable, Codable, Identifiable {
     }
 }
 
-/// Options for `sbx create`. Mirrors sbx.rs `CreateOpts`.
-struct CreateOptions {
-    var agent: String = AgentKind.claude.rawValue
-    var workspace: String = ""
-    var name: String = ""
-    var branch: String = ""
-    var cpus: Int? = nil
-    var memory: String = ""
-}
-
-/// Result of running an `sbx` command.
 /// The parts of `sbx inspect <name> --json` Sandshell reads. `kits` lists the
 /// kit references the container was built with, in order, as sbx recorded
 /// them (relative paths made absolute; symlinks and registry refs kept as given).
@@ -155,6 +144,7 @@ struct SandboxInspection: Decodable {
     var state: String?
 }
 
+/// Result of running an `sbx` command.
 struct CommandOutput {
     var stdout: String
     var stderr: String
@@ -198,9 +188,9 @@ enum ImageChannel: String, Codable, CaseIterable, Identifiable {
 
     var displayName: String {
         switch self {
-        case .stable:  return "Stable (Docker release)"
-        case .nightly: return "Nightly (current Claude Code)"
-        case .custom:  return "Custom image…"
+        case .stable:  "Stable (Docker release)"
+        case .nightly: "Nightly (current Claude Code)"
+        case .custom:  "Custom image…"
         }
     }
 
@@ -213,15 +203,15 @@ enum ImageChannel: String, Codable, CaseIterable, Identifiable {
     /// image from "nightly").
     static func flavor(for agent: AgentKind) -> String? {
         switch agent {
-        case .claude:      return "claude-code-docker"
-        case .codex:       return "codex-docker"
-        case .shell:       return "shell-docker"
-        case .gemini:      return "gemini-docker"
-        case .dockerAgent: return "docker-agent-docker"
-        case .opencode:    return "opencode-docker"
-        case .cursor:      return "cursor-agent-docker"
-        case .copilot, .droid, .kiro: return nil
-        default: return nil   // any custom/kit-introduced agent identity
+        case .claude:      "claude-code-docker"
+        case .codex:       "codex-docker"
+        case .shell:       "shell-docker"
+        case .gemini:      "gemini-docker"
+        case .dockerAgent: "docker-agent-docker"
+        case .opencode:    "opencode-docker"
+        case .cursor:      "cursor-agent-docker"
+        case .copilot, .droid, .kiro: nil
+        default: nil   // any custom/kit-introduced agent identity
         }
     }
 

@@ -14,7 +14,7 @@ struct RootProfile: Codable, Hashable, Identifiable {
     var lastOpened: Date? = nil
 
     var id: String { path }
-    var url: URL { URL(fileURLWithPath: path) }
+    var url: URL { URL(filePath: path, directoryHint: .checkFileSystem) }
     var name: String { url.lastPathComponent }
 
     /// Curated icon + color choices for the picker.
@@ -91,7 +91,10 @@ enum RootFolderStore {
     private static var defaults: UserDefaults { suiteName.flatMap(UserDefaults.init(suiteName:)) ?? .standard }
 
     static func standardize(_ path: String) -> String {
-        URL(fileURLWithPath: path).standardizedFileURL.path
+        // Without a trailing slash, so "/a/b/" and "/a/b" are one key ("/" stays).
+        var key = URL(filePath: path).standardizedFileURL.path(percentEncoded: false)
+        while key.count > 1, key.hasSuffix("/") { key.removeLast() }
+        return key
     }
 
     static var all: [RootProfile] {
@@ -139,13 +142,13 @@ enum RootFolderStore {
     static func isKnown(_ path: String) -> Bool {
         let key = standardize(path)
         if all.contains(where: { $0.path == key }) { return true }
-        return (try? WorkspaceConfig.load(root: URL(fileURLWithPath: key)))??.configured == true
+        return (try? WorkspaceConfig.load(root: URL(filePath: key, directoryHint: .checkFileSystem)))??.configured == true
     }
 
     /// Record that a window was opened on `path` (registering it with the
     /// default look if it's new). Every opened folder ends up in the registry,
     /// so the Open Workspace browser can list "all folders ever opened".
-    static func touch(_ path: String, at date: Date = Date()) {
+    static func touch(_ path: String, at date: Date = .now) {
         let key = standardize(path)
         var p = all.first { $0.path == key } ?? RootProfile.makeDefault(path: key)
         p.lastOpened = date
@@ -205,7 +208,7 @@ enum RootFolderStore {
     /// recreated empty as a brand-new workspace.
     static func launchFolder(fallback: URL = WorkspaceBootstrap.defaultRoot) -> URL? {
         guard let path = defaultPath else { return fallback }
-        let chosen = URL(fileURLWithPath: path)
+        let chosen = URL(filePath: path, directoryHint: .checkFileSystem)
         let usable = FileManager.default.fileExists(atPath: path) || standardize(path) == standardize(fallback.path)
         return usable ? chosen : nil
     }

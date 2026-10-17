@@ -174,3 +174,18 @@ struct RootFolderStoreLaunchFolderTests {
         }
     }
 }
+
+struct RootFolderStoreStandardizeTests {
+    @Test("A folder has one registry key however its path is spelled", arguments: [
+        ("/srv/ws", "/srv/ws"),
+        ("/srv/ws/", "/srv/ws"),
+        ("/srv/ws//", "/srv/ws"),
+        ("/srv/x/../ws/", "/srv/ws"),
+        ("/srv/./ws", "/srv/ws"),
+        ("/srv/My Folder/", "/srv/My Folder"),
+        ("/", "/"),
+    ])
+    func oneKeyPerFolder(path: String, key: String) {
+        #expect(RootFolderStore.standardize(path) == key)
+    }
+}

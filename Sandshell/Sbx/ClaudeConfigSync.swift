@@ -12,8 +12,8 @@ enum ClaudeConfigSync {
     /// (honours in-sandbox OAuth state). Native-install fields that confuse the
     /// container's claude are stripped on every sync.
     static func syncMCPServers(home: URL) {
-        let hostSrc    = home.appendingPathComponent(".claude.json")
-        let bindTarget = home.appendingPathComponent(".claude/.claude.json")
+        let hostSrc    = home.appending(path: ".claude.json")
+        let bindTarget = home.appending(path: ".claude/.claude.json")
 
         // Seed the bind target from the host file on first launch.
         if !FileManager.default.fileExists(atPath: bindTarget.path),
@@ -75,7 +75,7 @@ enum ClaudeConfigSync {
         guard let keychainObj = (try? JSONSerialization.jsonObject(with: Data(blob.utf8))) as? [String: Any]
         else { return }
 
-        let dest = home.appendingPathComponent(".claude/.credentials.json")
+        let dest = home.appending(path: ".claude/.credentials.json")
         var fileObj: [String: Any] = readJSON(at: dest) ?? [:]
 
         // claudeAiOauth — single object, take later expiry.
@@ -158,7 +158,7 @@ enum ClaudeConfigSync {
         guard !AutomatedRun.isActive else { return nil }
         let user = ProcessInfo.processInfo.environment["USER"] ?? NSUserName()
         let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: "/usr/bin/security")
+        proc.executableURL = URL(filePath: "/usr/bin/security")
         proc.arguments = ["find-generic-password", "-s", "Claude Code-credentials",
                           "-a", user, "-w"]
         let pipe = Pipe()
@@ -185,7 +185,7 @@ enum ClaudeConfigSync {
     }
 
     private static func clearNeedsAuthCache(home: URL, fileObj: [String: Any]) {
-        let cachePath = home.appendingPathComponent(".claude/mcp-needs-auth-cache.json")
+        let cachePath = home.appending(path: ".claude/mcp-needs-auth-cache.json")
         guard FileManager.default.fileExists(atPath: cachePath.path),
               var cache = readJSON(at: cachePath) else { return }
         let mcpKeys = (fileObj["mcpOAuth"] as? [String: Any]).map { Array($0.keys) } ?? []

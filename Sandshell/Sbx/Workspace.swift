@@ -19,10 +19,10 @@ struct MountSpec: Codable, Hashable, Identifiable {
     /// Parse an `sbx`-style mount string (`"/abs/path"` or `"/abs/path:ro"`).
     init(spec: String) {
         if spec.hasSuffix(":ro") {
-            self.path = URL(fileURLWithPath: String(spec.dropLast(3)))
+            self.path = URL(filePath: String(spec.dropLast(3)))
             self.readonly = true
         } else {
-            self.path = URL(fileURLWithPath: spec)
+            self.path = URL(filePath: spec)
             self.readonly = false
         }
     }
