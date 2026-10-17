@@ -28,11 +28,11 @@ final class QuickLook: NSObject, QLPreviewPanelDataSource {
 
     /// A stable temp file for image data (same bytes → same file).
     nonisolated static func file(for data: Data, ext: String = "png") -> URL? {
-        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("Sandshell Images", isDirectory: true)
+        let dir = URL.temporaryDirectory.appending(path: "Sandshell Images", directoryHint: .isDirectory)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let name = String(format: "Image %08x.%@", UInt32(truncatingIfNeeded: data.hashValue), ext)
-        let url = dir.appendingPathComponent(name)
-        if !FileManager.default.fileExists(atPath: url.path) {
+        let url = dir.appending(path: name)
+        if !FileManager.default.fileExists(atPath: url.path(percentEncoded: false)) {
             do { try data.write(to: url) } catch { return nil }
         }
         return url
@@ -158,10 +158,12 @@ final class TranscriptTextView: NSTextView {
         let menu = NSMenu()
         func add(_ title: String, _ handler: @escaping () -> Void) { menu.addItem(NSMenuItem(title, handler: handler)) }
         add("Quick Look") { if let url = attachment.fileURL { QuickLook.shared.show([url]) } }
-        add("Open in Preview") {
-            if let url = attachment.fileURL {
-                NSWorkspace.shared.open([url], withApplicationAt: URL(fileURLWithPath: "/System/Applications/Preview.app"),
-                                        configuration: NSWorkspace.OpenConfiguration())
+        add("Open in Preview") { [weak self] in
+            guard let url = attachment.fileURL else { return }
+            let preview = URL(filePath: "/System/Applications/Preview.app", directoryHint: .isDirectory)
+            Task {
+                do { _ = try await NSWorkspace.shared.open([url], withApplicationAt: preview, configuration: .init()) }
+                catch { Alerts.inform("Couldn’t open the image in Preview.", error.localizedDescription, in: self?.window) }
             }
         }
         menu.addItem(.separator())
@@ -176,8 +178,10 @@ final class TranscriptTextView: NSTextView {
             panel.nameFieldStringValue = "Image.\(attachment.fileExtension)"
             if let type = UTType(mimeType: attachment.mimeType) { panel.allowedContentTypes = [type] }
             guard let window = self?.window else { return }
-            panel.beginSheetModal(for: window) { response in
-                if response == .OK, let url = panel.url { try? attachment.data.write(to: url) }
+            Task {
+                guard await panel.beginSheetModal(for: window) == .OK, let url = panel.url else { return }
+                do { try attachment.data.write(to: url) }
+                catch { Alerts.inform("Couldn’t save the image.", error.localizedDescription, in: window) }
             }
         }
         return menu

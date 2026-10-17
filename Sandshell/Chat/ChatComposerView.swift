@@ -214,7 +214,7 @@ final class ChatComposerView: NSView, NSTextViewDelegate {
                 let matches = WorkspaceFileIndex.match(files, query: q)
                 guard let self, self.completionGeneration == generation else { return }
                 self.showCompletion(matches.map { rel in
-                    CompletionItem(kind: .file(URL(fileURLWithPath: root).appendingPathComponent(rel), relative: rel),
+                    CompletionItem(kind: .file(URL(filePath: root).appending(path: rel), relative: rel),
                                    title: (rel as NSString).lastPathComponent,
                                    detail: (rel as NSString).deletingLastPathComponent)
                 }, range: range)
@@ -297,12 +297,12 @@ final class ChatComposerView: NSView, NSTextViewDelegate {
                                  accessibilityDescription: nil)
             name.imagePosition = .imageLeading
             name.toolTip = "Quick Look"
-            let remove = NSButton(image: NSImage(systemSymbolName: "xmark.circle.fill", accessibilityDescription: "Remove")!,
-                                  target: self, action: #selector(removeChip(_:)))
+            let remove = NSButton.symbol("xmark.circle.fill", label: "Remove \(a.displayName)", pointSize: 13, weight: .regular,
+                                         target: self, action: #selector(removeChip(_:)))
             remove.tag = i
-            remove.isBordered = false
-            remove.contentTintColor = .secondaryLabelColor
-            remove.toolTip = "Remove attachment"
+            // Unlike the toolbar's, it can be tabbed to, like the chip's name.
+            remove.refusesFirstResponder = false
+            remove.focusRingType = .default
             let chip = NSStackView(views: [name, remove])
             chip.spacing = 2
             chipRow.addArrangedSubview(chip)

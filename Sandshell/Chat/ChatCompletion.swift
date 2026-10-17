@@ -157,6 +157,8 @@ final class MentionAttachment: NSTextAttachment {
                                      withAttributes: [.font: font, .foregroundColor: NSColor.labelColor])
             return true
         }
+        // The name is only pixels in the chip: say it to VoiceOver.
+        image?.accessibilityDescription = "File \(relative)"
         bounds = CGRect(x: 0, y: -5, width: size.width, height: size.height)
     }
 
@@ -174,13 +176,12 @@ actor WorkspaceFileIndex {
                                             "target", "Pods", ".gradle", ".idea", ".hatch", ".sbx"]
 
     func files(under root: String) -> [String] {
-        if let hit = cache[root], Date().timeIntervalSince(hit.at) < 30 { return hit.files }
+        if let hit = cache[root], Date.now.timeIntervalSince(hit.at) < 30 { return hit.files }
         var out: [String] = []
-        let base = URL(fileURLWithPath: root)
-        // The enumerator may hand back the real path (/tmp → /private/tmp;
-        // resolvingSymlinksInPath goes the other way, so realpath).
-        let real = realpath(root, nil).map { defer { free($0) }; return String(cString: $0) }
-        let prefixes = Set([base.path] + (real.map { [$0] } ?? [])).map { $0 + "/" }
+        let base = URL(filePath: root, directoryHint: .isDirectory)
+        // The enumerator may hand back the real path (/tmp → /private/tmp).
+        let prefixes = Set([base.path(percentEncoded: false), base.realPath])
+            .map { $0.hasSuffix("/") ? $0 : $0 + "/" }
         if let e = FileManager.default.enumerator(at: base, includingPropertiesForKeys: [.isDirectoryKey],
                                                   options: [.skipsPackageDescendants]) {
             for case let url as URL in e {
@@ -188,13 +189,13 @@ actor WorkspaceFileIndex {
                 if Self.skip.contains(name) || name == ".DS_Store" { e.skipDescendants(); continue }
                 if e.level > 8 { e.skipDescendants(); continue }
                 if (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true { continue }
-                let path = url.path
+                let path = url.path(percentEncoded: false)
                 guard let prefix = prefixes.first(where: { path.hasPrefix($0) }) else { continue }
                 out.append(String(path.dropFirst(prefix.count)))
                 if out.count >= 20_000 { break }
             }
         }
-        cache[root] = (out, Date())
+        cache[root] = (out, Date.now)
         return out
     }
 
@@ -202,13 +203,12 @@ actor WorkspaceFileIndex {
         guard !query.isEmpty else { return Array(files.sorted { $0.count < $1.count }.prefix(limit)) }
         let q = query.lowercased()
         let scored = files.compactMap { path -> (String, Int)? in
-            let lower = path.lowercased()
-            let name = (lower as NSString).lastPathComponent
-            if name.hasPrefix(q) { return (path, 0) }
-            if name.contains(q) { return (path, 1) }
-            if lower.contains(q) { return (path, 2) }
+            // As the system searches: case and accents aside ("resume" finds Résumé.md).
+            let name = (path as NSString).lastPathComponent
+            if let r = name.localizedStandardRange(of: query) { return (path, r.lowerBound == name.startIndex ? 0 : 1) }
+            if path.localizedStandardContains(query) { return (path, 2) }
             // Subsequence match on the filename (e.g. "chtv" → ChatTranscriptView).
-            return Self.isSubsequence(q, of: name) ? (path, 3) : nil
+            return Self.isSubsequence(q, of: name.lowercased()) ? (path, 3) : nil
         }
         return scored.sorted { $0.1 != $1.1 ? $0.1 < $1.1 : $0.0.count < $1.0.count }.prefix(limit).map(\.0)
     }
