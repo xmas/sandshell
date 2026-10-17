@@ -136,6 +136,13 @@ fileprivate enum AQFixture {
         ("Pick a time", "10:30", "Your answer? — 10:30"),
     ]
 
+    /// A single untitled question whose label (detail, else message) has a colon: message, detail, answer, summary.
+    static let colonLabels: [(String, String?, String, String)] = [
+        ("Pick a color.", "Which one: red or blue?", "Red", "Pick a color. — Red"),
+        ("Enter the meeting time (HH:MM)", nil, "10:30", "Enter the meeting time (HH:MM) — 10:30"),
+        ("Time?", "Format: HH:MM", "10:30", "Time? — 10:30"),
+    ]
+
     /// Answers to a titled "Color" choice and its Other box, and the summary they make.
     static let otherBoxAnswers: [([String: JSONValue], String)] = [
         (["color": "Red", "color_custom": "Maroon"], "Q?\n• Color: Red, Maroon"),
@@ -168,6 +175,28 @@ fileprivate enum AQFixture {
         (true, "Yes"),
         (false, "No"),
         (["a", 1, "b"], "a, b"),
+        // Past Int's range, or not finite: shown as is, without trapping.
+        (.number(1e20), "1e+20"),
+        (.number(Double(UInt64.max)), "1.8446744073709552e+19"),
+        (.number(.infinity), "inf"),
+        (.number(-.infinity), "-inf"),
+    ]
+
+    /// A number field's kind (integer?), a default at the edge of what it can
+    /// send, and the text it fills in — nil when the default couldn't be sent.
+    static let edgeNumberDefaults: [(Bool, Double, String?)] = [
+        (true, 9_007_199_254_740_991, "9007199254740991"),
+        (false, 1e20, "1e+20"),
+        (false, -1e300, "-1e+300"),
+        // Integers a Double doesn't hold exactly (an "unlimited" sentinel), or
+        // not whole, or not finite: the placeholder shows instead.
+        (true, 9_007_199_254_740_992, nil),
+        (true, 1e20, nil),
+        (true, Double(UInt64.max), nil),
+        (true, 2.5, nil),
+        (false, .infinity, nil),
+        (true, -.infinity, nil),
+        (false, .nan, nil),
     ]
 
     static let unrenderableValues: [JSONValue] = [.null, [:], [], [1, 2]]
@@ -191,6 +220,12 @@ fileprivate enum AQFixture {
         ("abc", false, nil),
         ("", true, nil),
         ("1,000", false, nil),
+        ("1e20", false, .number(1e20)),
+        ("9007199254740991", true, .number(9_007_199_254_740_991)),
+        // Whole numbers a Double can't hold exactly aren't what was typed.
+        ("9007199254740993", true, nil),
+        ("99999999999999999999", true, nil),
+        ("1e20", true, nil),
     ]
 }
 
@@ -482,13 +517,10 @@ struct AgentQuestionSummaryTests {
                 "The label (detail or message) is left out, and colons in the answer survive")
     }
 
-    @Test(.tags(.agentQuestionEdgeCase))
-    func colonInTheLabelDoesNotLeakIntoASingleAnswer() {
-        let question = AQFixture.form([AQFixture.field("q", detail: "Which one: red or blue?",
-                                                       kind: .choice(AQFixture.colors))], message: "Pick a color.")
-        withKnownIssue("summary(of:) strips the label off a single untitled question by splitting the line at its first colon, so a colon in the question's detail (or message) leaks part of the label into the answer: \"Pick a color. — red or blue?: Red\"") {
-            #expect(question.summary(of: .accept(["q": "Red"])) == "Pick a color. — Red")
-        }
+    @Test(.tags(.agentQuestionEdgeCase), arguments: AQFixture.colonLabels)
+    func colonInTheLabelDoesNotLeakIntoASingleAnswer(message: String, detail: String?, answer: String, expected: String) {
+        let question = AQFixture.form([AQFixture.field("q", detail: detail)], message: message)
+        #expect(question.summary(of: .accept(["q": .string(answer)])) == expected)
     }
 
     @Test func titledQuestionIsListed() {
@@ -670,10 +702,8 @@ struct AgentQuestionFormTests {
     func multiChoiceOfOnlyUnknownValuesIsUnanswered() {
         let field = AQFixture.field("sizes", kind: .multiChoice(AQFixture.sizes), required: true, defaultValue: ["XL"])
         let (form, _) = AQFixture.makeForm(AQFixture.form([field]))
-        withKnownIssue("value(_:) only treats an empty pick set as unanswered: picks that match no option (e.g. a default outside the options) yield .array([]), so a required multi-choice counts as answered and submits an empty list") {
-            #expect(form.value(field) == nil)
-            #expect(form.canSubmit == false)
-        }
+        #expect(form.value(field) == nil)
+        #expect(form.canSubmit == false, "A default outside the options doesn't answer a required multi-choice")
     }
 
     @Test(arguments: [("  Ada  ", "Ada"), ("\nAda\n", "Ada"), ("Ada Lovelace", "Ada Lovelace")])
@@ -700,14 +730,25 @@ struct AgentQuestionFormTests {
         #expect(form.value(field) == expected)
     }
 
-    @Test(.tags(.agentQuestionEdgeCase), arguments: [("inf", false), ("-infinity", false), ("nan", false), ("inf", true)])
+    @Test(.tags(.agentQuestionEdgeCase),
+          arguments: [("inf", false), ("-infinity", false), ("nan", false), ("inf", true), ("1e400", false), ("-1e400", true)])
     func nonFiniteNumbersHaveNoValue(typed: String, integer: Bool) {
         let field = AQFixture.field("n", kind: .number(integer: integer))
         let (form, _) = AQFixture.makeForm(AQFixture.form([field]))
         form.texts["n"] = typed
-        withKnownIssue("value(_:) accepts anything Double(_:) parses, including \"inf\" and \"nan\": JSON can't carry them (JSONEncoder throws) and summary(of:) traps on Int(Double.infinity)") {
-            #expect(form.value(field) == nil)
-        }
+        #expect(form.value(field) == nil, "JSON can't carry \(typed)")
+    }
+
+    @Test(.tags(.agentQuestionEdgeCase), arguments: AQFixture.edgeNumberDefaults)
+    func numberDefaultsFillTheFormOnlyWithAnAnswer(integer: Bool, number: Double, shown: String?) {
+        let field = AQFixture.field("n", kind: .number(integer: integer), required: true, defaultValue: .number(number))
+        let (form, log) = AQFixture.makeForm(AQFixture.form([field]))
+        #expect(form.texts["n"] == shown)
+        // What's filled in is an answer as it stands: the default itself, sent as is.
+        #expect(form.value(field) == (shown == nil ? nil : .number(number)))
+        #expect(form.canSubmit == (shown != nil), "a required field is answered exactly when its default is filled in")
+        form.submit()
+        #expect(log.answers == (shown == nil ? [] : [.accept(["n": .number(number)])]))
     }
 
     @Test func toggleValueDefaultsToOff() {

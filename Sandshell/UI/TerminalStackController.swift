@@ -1810,6 +1810,10 @@ final class TerminalStackController: NSViewController {
     }
 
     private func showChat(_ id: UUID, _ chat: ChatSessionView) {
+        // `refresh` runs on every revision (another chat named, a store change
+        // from another window): a chat already up here keeps the keyboard where
+        // you put it — a card's text field, the sidebar, the Files editor.
+        let alreadyShown = activeSessionID == id && chat.superview === host && !chat.isHidden
         adopt(chat)
         hideHostContents(except: chat)
         chat.isHidden = false
@@ -1825,7 +1829,7 @@ final class TerminalStackController: NSViewController {
         kitBannerContextActive = true
         updateKitBanner()
         updateFocusRing()
-        if isFocused { chat.focusComposer() }
+        if isFocused, !alreadyShown { chat.focusComposer() }
     }
 
     // MARK: Reconnecting chats

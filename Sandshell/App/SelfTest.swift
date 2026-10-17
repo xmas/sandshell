@@ -1737,7 +1737,8 @@ enum SelfTest {
         if let view = tree.surfaces.chats[s.id] {
             view.debugTranscript.debugHoverFirstReply()
             await wait(0.4)
-            check(view.debugTranscript.debugReplyActionsShown, "hovering a reply shows Copy / Fork")
+            check(view.debugTranscript.debugReplyActionsShown && view.debugTranscript.debugForkShown,
+                  "hovering a reply shows Copy / Fork")
             snapshot(window, "fork-hover")
         }
         let first = c.items.compactMap { if case .agentText(_, let t) = $0 { t } else { nil } }.first { $0.contains("ALPHA-ONE") } ?? "ALPHA-ONE"
@@ -2633,6 +2634,12 @@ enum SelfTest {
         check(links.contains { $0.0 == "https://example.com/x" }, "a URL is a link")
         check(links.contains { $0.0 == "/usr/bin/git" }, "an absolute path that exists is a link")
         check(!links.contains { $0.0.contains("no/such") }, "a path that doesn't exist isn't")
+
+        // No fork handler here (as in a subagent's window): the hover bar is Copy alone.
+        view.frame = NSRect(x: 0, y: 0, width: 600, height: 400)
+        view.layoutSubtreeIfNeeded()
+        view.debugHoverFirstReply()
+        check(view.debugReplyActionsShown && !view.debugForkShown, "a transcript that can't fork hovers Copy alone")
 
         // Paths with spaces: quoted, backslash-escaped, or bare.
         let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("sandshell-links-\(UUID().uuidString.prefix(6))")

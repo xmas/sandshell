@@ -36,6 +36,8 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
     private var hovered: Int?
     private let hoverBackground = NSView()
     private let replyActions = NSStackView()
+    /// Shown only where forking is wired (not in a subagent's window).
+    private weak var forkButton: NSButton?
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -78,6 +80,7 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
         copy.setAccessibilityIdentifier("chat-reply-copy")
         fork.setAccessibilityIdentifier("chat-reply-fork")
         replyActions.setViews([copy, fork], in: .leading)
+        forkButton = fork
         replyActions.spacing = 2
         replyActions.edgeInsets = NSEdgeInsets(top: 2, left: 4, bottom: 2, right: 4)
         replyActions.wantsLayer = true
@@ -383,6 +386,7 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
         hoverBackground.isHidden = false
         replyActions.layer?.backgroundColor = NSColor.textBackgroundColor.cgColor
         replyActions.layer?.borderColor = NSColor.separatorColor.cgColor
+        forkButton?.isHidden = onFork == nil
         let size = replyActions.fittingSize
         replyActions.frame = NSRect(x: hoverBackground.frame.maxX - size.width - 6,
                                     y: hoverBackground.frame.minY - size.height / 2,
@@ -407,6 +411,8 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
         }
     }
     var debugReplyActionsShown: Bool { !replyActions.isHidden }
+    /// Whether the hover bar offers Fork to New Chat (only where forking is wired).
+    var debugForkShown: Bool { !replyActions.isHidden && forkButton?.isHidden == false }
     /// Self-test: every link in the transcript as (text, link).
     var debugLinks: [(String, String)] {
         guard let storage = textView.textStorage else { return [] }
