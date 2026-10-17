@@ -1593,6 +1593,12 @@ final class TerminalStackController: NSViewController {
             chat.onClosed = { [controller] why in controller.setStopped(id, why) }
             chat.onUnexpectedExit = { [surfaces] in surfaces.onChatAgentExit(id) }
             chat.onUsage = { [surfaces] in surfaces.onChatStatus(id) }
+            chat.onWaitingChange = { [controller] waiting in controller.setWaiting(id, waiting) }
+            chat.onNeedsInput = { [controller, surfaces] text in
+                guard !(NSApp.isActive && surfaces.isShown(id)), let s = controller.session(id: id) else { return }
+                NotificationManager.shared.sendNeedsInput(sessionID: id, agentName: s.agent.displayName,
+                                                          sessionName: s.name, text: text)
+            }
             controller.setStopped(id, nil)
             var lastPrompt: String?
             chat.onPrompt = { [controller] prompt in
@@ -1742,6 +1748,7 @@ final class TerminalStackController: NSViewController {
         surfaces.leftoverProcesses[id] = chat.session.processMatch
         chat.removeFromSuperview()
         controller.setLive(id, false)
+        controller.setWaiting(id, false)   // its question went with it
         controller.setStopped(id, nil)   // a stopped chat's reason doesn't follow it to Terminal
     }
 

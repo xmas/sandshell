@@ -183,6 +183,14 @@ enum MainMenu {
         let prevSession = viewMenu.addItem(withTitle: "Select Previous Session",
                                            action: #selector(AppDelegate.selectPreviousSession(_:)), keyEquivalent: "[")
         prevSession.keyEquivalentModifierMask = [.command, .shift]
+        // ⌘] / ⌘[ too, unlisted (the same commands).
+        for (key, action) in [("]", #selector(AppDelegate.selectNextSession(_:))),
+                              ("[", #selector(AppDelegate.selectPreviousSession(_:)))] {
+            let hidden = NSMenuItem(key == "]" ? "Select Next Session" : "Select Previous Session", action: action, key: key)
+            hidden.isHidden = true
+            hidden.allowsKeyEquivalentWhenHidden = true
+            viewMenu.addItem(hidden)
+        }
         viewMenu.addItem(.separator())
         let showTabBar = viewMenu.addItem(withTitle: "Show Tab Bar",
                                           action: #selector(NSWindow.toggleTabBar(_:)), keyEquivalent: "t")

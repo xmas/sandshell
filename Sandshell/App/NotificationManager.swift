@@ -47,6 +47,19 @@ final class NotificationManager: NSObject {
         UNUserNotificationCenter.current().add(request)
     }
 
+    /// The agent is waiting on the person (a question, a permission).
+    func sendNeedsInput(sessionID: UUID, agentName: String, sessionName: String, text: String) {
+        guard !AutomatedRun.isActive else { return }
+        let content = UNMutableNotificationContent()
+        content.title = "\(agentName) needs you — \(sessionName)"
+        content.body = text.count > 160 ? String(text.prefix(157)) + "…" : text
+        content.sound = .default
+        content.threadIdentifier = sessionID.uuidString
+        content.userInfo = ["sessionID": sessionID.uuidString]
+        UNUserNotificationCenter.current().add(UNNotificationRequest(
+            identifier: "needs-input-\(sessionID.uuidString)", content: content, trigger: nil))
+    }
+
     /// Posted (object: session UUID) when a background-task notification is
     /// tapped: the pane showing that session opens its task list.
     static let showBackgroundTasks = Notification.Name("SandshellShowBackgroundTasks")

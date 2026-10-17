@@ -106,7 +106,22 @@ final class ChatSession: ObservableObject {
             if case .closed(let why) = phase, oldValue != phase { onClosed?(why) }
         }
     }
-    @Published private(set) var permission: PendingPermission?
+    @Published private(set) var permission: PendingPermission? { didSet { reportWaiting() } }
+    /// A question the agent is waiting on (AskUserQuestion, Codex's
+    /// request_user_input, an MCP server's form or sign-in link).
+    @Published private(set) var question: AgentQuestion? { didSet { reportWaiting() } }
+    /// Waiting on the person (a question or a permission is up), or not.
+    var onWaitingChange: ((Bool) -> Void)?
+    private var wasWaiting = false
+    private func reportWaiting() {
+        let waiting = question != nil || permission != nil
+        guard waiting != wasWaiting else { return }
+        wasWaiting = waiting
+        onWaitingChange?(waiting)
+    }
+    private var waitingQuestions: [AgentQuestion] = []
+    /// The agent needs the person (a question or a permission): for a notification.
+    var onNeedsInput: ((String) -> Void)?
     /// Permission requests that came in while one was already being asked:
     /// each gets its turn (an unanswered one would hang the agent's turn).
     private var waitingPermissions: [PendingPermission] = []
@@ -442,6 +457,9 @@ final class ChatSession: ObservableObject {
         "protocolVersion": 1,
         "clientCapabilities": [
             "fs": ["readTextFile": false, "writeTextFile": false], "terminal": false,
+            // Questions from the agent: forms (AskUserQuestion, Codex's
+            // request_user_input, MCP forms) and links (an MCP server's sign-in).
+            "elicitation": ["form": [:], "url": [:]],
             "_meta": ["jetbrains": ["air": ["version": 1, "capabilities": ["asyncTasks", "agentFileChangeReport"]]]],
         ],
     ]
@@ -460,7 +478,7 @@ final class ChatSession: ObservableObject {
         // Nothing it does from here on is news to anyone (a send or a start
         // still finishing would otherwise report "finished" or "stopped").
         onUsage = nil; onSessionID = nil; onWorkingChange = nil; onPrompt = nil
-        onClosed = nil; onUnexpectedExit = nil; onOtherAppIdle = nil
+        onClosed = nil; onUnexpectedExit = nil; onOtherAppIdle = nil; onNeedsInput = nil; onWaitingChange = nil
         queued = nil
         stopFollowing()
         pumpTask?.cancel()
@@ -621,6 +639,18 @@ final class ChatSession: ObservableObject {
         for p in waitingPermissions { connection?.respond(id: p.id, result: ["outcome": ["outcome": "cancelled"]]) }
         waitingPermissions = []
         if let p = permission { answerPermission(p, optionID: nil) }
+        for q in waitingQuestions { connection?.respond(id: q.rpcID, result: AgentQuestion.Answer.cancel.result) }
+        waitingQuestions = []
+        if let q = question { answerQuestion(q, .cancel) }
+    }
+
+    /// Answer the agent's question (and keep the exchange in the transcript).
+    func answerQuestion(_ q: AgentQuestion, _ answer: AgentQuestion.Answer) {
+        if case .url(let url, _) = q.mode, case .accept = answer { NSWorkspace.shared.open(url) }
+        connection?.respond(id: q.rpcID, result: answer.result)
+        notice(q.summary(of: answer), isError: false)
+        waitingQuestions.removeAll { $0 == q }
+        if question == q { question = waitingQuestions.isEmpty ? nil : waitingQuestions.removeFirst() }
     }
 
     /// Answer the pending permission prompt; nil = cancelled.
@@ -1172,6 +1202,16 @@ final class ChatSession: ObservableObject {
             if let call { apply(call.merging(["sessionUpdate": "tool_call_update"])) }
             let request = PendingPermission(id: id, title: title, options: opts)
             if permission == nil { permission = request } else { waitingPermissions.append(request) }
+            onNeedsInput?(title)
+        case .request(let id, "elicitation/create", let params):
+            guard let q = AgentQuestion.parse(id: id, params: params) else {
+                connection?.respondError(id: id, code: -32602, message: "Sandshell can't show this question")
+                return
+            }
+            if question == nil { question = q } else { waitingQuestions.append(q) }
+            onNeedsInput?(q.message)
+        case .notification("elicitation/complete", _):
+            break   // an MCP sign-in finished in the browser: nothing waits on it here
         case .request(let id, let method, _):
             connection?.respondError(id: id, code: -32601, message: "\(method) is not supported by Sandshell")
         case .stderr(let line):
@@ -1182,6 +1222,7 @@ final class ChatSession: ObservableObject {
             if line.hasPrefix("sandshell: ") { launchError = String(line.dropFirst("sandshell: ".count)) }
         case .closed(let status):
             permission = nil; waitingPermissions = []
+            question = nil; waitingQuestions = []
             if case .closed = phase { return }   // already explained (e.g. not signed in)
             let wasUp = phase == .ready || phase == .running
             canReconnect = true

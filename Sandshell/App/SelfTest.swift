@@ -95,6 +95,7 @@ enum SelfTest {
         case "pane-buttons": await paneButtons(window)
         case "files-alone": await filesAlone(window)
         case "two-windows": await twoWindows(window)
+        case "question": await agentQuestion(window)
         case "sandbox-access": await sandboxAccess(window)
         case "launch-failure": await launchFailure(window)
         case "fork": await fork(window)
@@ -719,6 +720,85 @@ enum SelfTest {
               && (try? String(contentsOf: lockedFile, encoding: .utf8)) == "edit keep me\n", "then it saves and closes")
         try? FileManager.default.removeItem(at: locked)
         try? FileManager.default.removeItem(at: typed)
+    }
+
+    /// An agent's interactive question (ACP elicitation): the forms Claude's
+    /// AskUserQuestion and Codex's request_user_input send parse right, and a
+    /// real Claude turn asks, gets an answer through the form, and uses it.
+    /// Fixture: `chat`.
+    private static func agentQuestion(_ window: MainWindowController) async {
+        // Claude's shape: question_<n> + question_<n>_custom, multi-select as an array.
+        let claude = AgentQuestion.parse(id: 7, params: [
+            "mode": "form", "sessionId": "s", "toolCallId": "t1", "message": "Please answer the following questions.",
+            "requestedSchema": ["type": "object", "properties": [
+                "question_1_custom": ["type": "string", "title": "Other"],
+                "question_0": ["type": "string", "title": "Color", "description": "Which color?",
+                               "oneOf": [["const": "Red", "title": "Red", "description": "Warm"],
+                                         ["const": "Blue", "title": "Blue",
+                                          "_meta": ["_claude/askUserQuestionOption": ["preview": "#00f"]]]]],
+                "question_1": ["type": "array", "title": "Sizes", "description": "Which sizes?",
+                               "items": ["anyOf": [["const": "S", "title": "S"], ["const": "L", "title": "L"]]]],
+                "question_0_custom": ["type": "string", "title": "Other"],
+            ]]])
+        check(claude?.questions.map(\.id) == ["question_0", "question_1"]
+              && claude?.fields.map(\.id) == ["question_0", "question_0_custom", "question_1", "question_1_custom"],
+              "parse (Claude): questions in order, each followed by its Other box (\(claude?.fields.map(\.id) ?? []))")
+        if let q = claude, case .choice(let options) = q.questions[0].kind, case .multiChoice = q.questions[1].kind {
+            check(options.map(\.value) == ["Red", "Blue"] && options[0].detail == "Warm" && options[1].preview == "#00f",
+                  "parse (Claude): options with details and previews")
+            let summary = q.summary(of: .accept(["question_0": "Blue", "question_1": ["S", "L"], "question_1_custom": "XL"]))
+            check(summary.contains("Color: Blue") && summary.contains("Sizes: S, L, XL"), "summary: \(summary)")
+        } else { check(false, "parse (Claude): a choice and a multi-choice") }
+        // Codex's shape: required order, secret text, a note field marked by questionId.
+        let codex = AgentQuestion.parse(id: "c1", params: [
+            "mode": "form", "sessionId": "s", "message": "Codex needs your input to continue.",
+            "requestedSchema": ["type": "object", "required": ["zeta", "alpha"], "properties": [
+                "alpha": ["type": "string", "title": "API token?", "_meta": ["codex": ["isSecret": true]]],
+                "zeta": ["type": "string", "title": "Proceed?", "oneOf": [["const": "Yes", "title": "Yes"], ["const": "No", "title": "No"]]],
+                "zeta_note": ["type": "string", "title": "Additional answer or note",
+                              "_meta": ["codex": ["questionId": "zeta", "role": "user_note"]]],
+            ]]])
+        check(codex?.questions.map(\.id) == ["zeta", "alpha"] && codex?.companion(of: codex!.questions[0])?.id == "zeta_note"
+              && codex?.questions[1].kind == .text(secret: true) && codex?.questions.allSatisfy(\.required) == true,
+              "parse (Codex): required order, its note box, a secret field")
+        let url = AgentQuestion.parse(id: 9, params: ["mode": "url", "message": "Sign in to Linear",
+                                                      "url": "https://linear.app/oauth", "elicitationId": "e1"])
+        check(url?.mode == .url(URL(string: "https://linear.app/oauth")!, elicitationID: "e1"), "parse: a sign-in link")
+        check(AgentQuestion.parse(id: 10, params: ["mode": "url", "url": "file:///etc/passwd"]) == nil,
+              "parse: a non-web link isn't offered")
+
+        // A real turn: Claude asks, the form answers, the reply uses it.
+        guard let tree = window.paneTree, let ws = window.workspaceController else { return log("no window") }
+        guard let s = ws.newChatInCurrentContext() else { return log("no folder to start a chat in") }
+        func chat() -> ChatSession? { tree.surfaces.chats[s.id]?.session }
+        check(await until(600) { chat()?.phase == .ready }, "chat reaches ready")
+        guard let c = chat() else { return }
+        c.send(text: "Use the AskUserQuestion tool to ask me which color I prefer, with exactly two options: Red and Blue. "
+               + "After I answer, reply with exactly the color I picked and nothing else.", attachments: [])
+        check(await until(180) { c.question != nil }, "the agent's question shows in the chat")
+        guard let q = c.question else { return snapshot(window, "question-missing") }
+        log("question: \(q.message) fields \(q.fields.map(\.id))")
+        snapshot(window, "question")
+        guard let form = tree.surfaces.chats[s.id]?.debugQuestionForm, form.question == q else {
+            return check(false, "the question has a form")
+        }
+        check(ws.runtime(s.id)?.isWaiting == true, "the session's row says it's waiting for you")
+        guard let (_, options) = form.singleChoice, let blue = options.firstIndex(where: { $0.value.contains("Blue") }) else {
+            return check(false, "a single choice with Blue (\(q.fields.map(\.kind)))")
+        }
+        check(!form.canSubmit || q.questions.allSatisfy { !$0.required }, "nothing picked yet")
+        form.pick(blue)
+        check(form.canSubmit, "picking an option makes it answerable")
+        form.submit()
+        check(c.question == nil, "answering clears the question")
+        check(ws.runtime(s.id)?.isWaiting == false, "and the row stops waiting")
+        check(c.items.contains { if case .notice(_, let t, false) = $0 { t.contains("Blue") } else { false } },
+              "the transcript keeps the answer")
+        check(await until(180) {
+            c.phase == .ready && c.items.contains { if case .agentText(_, let t) = $0 { t.contains("Blue") } else { false } }
+        }, "the reply uses the answer")
+        snapshot(window, "question-answered")
+        ws.closeSession(s.id)
     }
 
     /// Two windows on one folder (Duplicate Window): one copy of the folder's

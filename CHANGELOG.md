@@ -3,6 +3,7 @@
 A running log of what changed, newest first. Yes, we actually write these.
 
 ## Unreleased
+- **Agents can ask you questions in chats.** When Claude (AskUserQuestion), Codex, or an MCP server asks something mid-turn, the question appears above the composer with its options (and each option's preview), an "Other" box, Skip and Submit — Return submits, Esc skips, 1–9 pick. The session's row says "Waiting for you", you get a notification if you're elsewhere, and the transcript keeps what you answered. An MCP server's sign-in link opens in your browser.
 - **Undo a turn's edits.** When Claude changes files in a chat, the turn ends with "Changed 3 files · Undo": Undo shows what it would put back, then restores those files to how they were before that message (Claude Code's checkpoints; shell-command changes aren't tracked).
 - **MCP servers at a glance.** A Claude chat's footer shows "MCP 3/4" (red when one's failing); click for each server's status, what it runs, its error and its tools, with Reconnect and Enable/Disable.
 - **Stop a background task** from the Background Tasks list (a chat's subagents, background commands and monitors).

@@ -1165,6 +1165,8 @@ struct SessionRuntime: Equatable {
     var lastActivityAt: Date?
     /// A live terminal is open for this session (drives bold name weight).
     var isLive: Bool = false
+    /// The agent is waiting on the person (a question or a permission prompt).
+    var isWaiting: Bool = false
     /// The session's agent stopped and can't go on (a chat that isn't signed
     /// in, or whose agent exited): why, shown instead of "Ready".
     var stoppedReason: String?
@@ -1292,6 +1294,13 @@ extension WorkspaceController {
 
     /// Whether a session has a live terminal (set by the detail pane).
     func isLive(_ id: UUID) -> Bool { runtimes[id]?.isLive ?? false }
+    func setWaiting(_ id: UUID, _ waiting: Bool) {
+        var rt = runtimes[id] ?? SessionRuntime()
+        guard rt.isWaiting != waiting else { return }
+        rt.isWaiting = waiting
+        runtimes[id] = rt
+    }
+
     func setStopped(_ id: UUID, _ reason: String?) {
         var rt = runtimes[id] ?? SessionRuntime()
         guard rt.stoppedReason != reason else { return }

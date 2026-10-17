@@ -166,6 +166,7 @@ final class ChatSessionView: NSView {
 
         // Permission bar + composer stack: a hidden bar collapses (no blank band).
         let bottom = NSStackView(views: [permissionBar, composer])
+        bottomStack = bottom
         bottom.orientation = .vertical
         bottom.alignment = .width
         bottom.spacing = 8
@@ -223,6 +224,7 @@ final class ChatSessionView: NSView {
             self.transcript.update(items)
         }.store(in: &bag)
         session.$permission.sink { [weak self] in self?.showPermission($0) }.store(in: &bag)
+        session.$question.sink { [weak self] in self?.showQuestion($0) }.store(in: &bag)
         session.$mcpServers.sink { [weak self] in self?.showMCPSummary($0) }.store(in: &bag)
         session.$hasQueued.dropFirst().sink { [weak self] _ in
             guard let self else { return }
@@ -347,6 +349,32 @@ final class ChatSessionView: NSView {
         usageLabel.toolTip = "Context: \(usage.used) of \(usage.size) tokens"
     }
 
+
+    /// The agent's question, above the composer, with the keyboard while it's up.
+    private func showQuestion(_ q: AgentQuestion?) {
+        if let host = questionHost, host.form.question == q { return }
+        let hadFocus = questionHost.map { window?.firstResponder === $0 } ?? false
+        questionHost?.removeFromSuperview()
+        questionHost = nil
+        guard let q else {
+            if hadFocus { composer.focus() }
+            return
+        }
+        let host = AgentQuestionHost(AgentQuestionForm(q) { [weak self] answer in
+            self?.session.answerQuestion(q, answer)
+        })
+        bottomStack?.insertArrangedSubview(host, at: 0)
+        if let stack = bottomStack { host.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true }
+        questionHost = host
+        if window?.isKeyWindow == true { window?.makeFirstResponder(host) }
+    }
+
+    private var questionHost: AgentQuestionHost?
+    private weak var bottomStack: NSStackView?
+
+    #if DEBUG
+    var debugQuestionForm: AgentQuestionForm? { questionHost?.form }
+    #endif
 
     private func showPermission(_ p: PendingPermission?) {
         permissionButtons.arrangedSubviews.forEach { $0.removeFromSuperview() }

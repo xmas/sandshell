@@ -1411,6 +1411,14 @@ final class SessionCellView: NSTableCellView {
         if let workdirName { parts.append(workdirName) }
         let work = runtime.flatMap { compactWorkTime($0.liveWorkSeconds()) }
         switch runtime?.stoppedReason == nil ? runtime?.status : nil {
+        case .working where runtime?.isWaiting == true:
+            // Waiting on you (a question or a permission): no sweep, an orange dot.
+            workingView.stopAnimating()
+            workingView.isHidden = true
+            statusDot.layer?.backgroundColor = NSColor.systemOrange.cgColor
+            statusDot.isHidden = false
+            timeLabel.isHidden = true
+            parts.append("Waiting for you")
         case .working:
             workingView.isHidden = false
             workingView.startAnimating()

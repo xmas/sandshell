@@ -1,4 +1,5 @@
 import AppKit
+import GhosttyTerminal
 import SwiftUI
 
 struct AppScriptStatus: Encodable {
@@ -564,6 +565,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // Monitors fire on the main thread; only Sendable values cross in.
             let handled = MainActor.assumeIsolated { () -> Bool in
                 guard let app = NSApp.delegate as? AppDelegate else { return false }
+                // Only for a focused terminal, which takes every key itself; anywhere
+                // else (text, lists, sheets, other windows, alerts) the menu bar's own
+                // key equivalents apply, and ⌘D in a Save sheet is Desktop again.
+                guard NSApp.modalWindow == nil, let key = NSApp.keyWindow, key.attachedSheet == nil,
+                      key.windowController is MainWindowController,
+                      key.firstResponder is AppTerminalView else { return false }
                 if cmd {
                     // Shift turns "[" / "]" into "{" / "}" in charactersIgnoringModifiers,
                     // so match both forms for ⌘⇧[ / ⌘⇧].
