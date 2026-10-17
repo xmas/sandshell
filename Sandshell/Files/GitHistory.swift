@@ -108,16 +108,18 @@ enum GitHistory {
         if case .commit = scope {} else {
             let known = Set(files.map(\.path))
             for path in untracked where !known.contains(path) {
-                // Lines as git counts them: a trailing newline doesn't start one.
-                let lines = (try? String(contentsOfFile: path, encoding: .utf8))
-                    .map { text -> Int in
-                        let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
-                        return lines.count - (text.hasSuffix("\n") ? 1 : 0)
-                    }
+                let lines = (try? String(contentsOfFile: path, encoding: .utf8)).map(lineCount)
                 files.append(ScopedFile(path: path, change: .untracked, added: lines, removed: 0))
             }
         }
         return files.sorted { $0.path < $1.path }
+    }
+
+    /// Lines as git counts them: one per "\n", plus an unterminated last one —
+    /// an empty file has none. (Bytes, not Characters: "\r\n" is one Character.)
+    nonisolated static func lineCount(_ text: String) -> Int {
+        let newlines = text.utf8.count(where: { $0 == UInt8(ascii: "\n") })
+        return newlines + (text.isEmpty || text.utf8.last == UInt8(ascii: "\n") ? 0 : 1)
     }
 
     /// One file's diff in a commit, or since the base (working tree included).
