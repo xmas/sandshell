@@ -9,6 +9,8 @@ actor SbxClient {
     private let sbx: String
     /// `hasServiceSecret` result per service + scope, briefly cached (checked per launch).
     private var secretCache: [String: (Bool, Date)] = [:]
+    /// Whether the log says yet if sbx's exec inspection includes what an exec runs.
+    private var loggedExecCommands = false
 
     init() {
         self.sbx = PathFixer.sbxPath()
@@ -161,17 +163,6 @@ actor SbxClient {
         }
     }
 
-    /// Which exec, of those that started since a launch, is the launch's own:
-    /// the one whose command carries its tag (`SANDSHELL_LAUNCH=…`). When sbx
-    /// doesn't say what execs run, only a lone new one is taken — never a guess
-    /// among several, which may be another session's agent, a reap or a log read.
-    static func launchExec(among candidates: [(id: String, state: ExecLifecycleState?)], tag: String) -> String? {
-        if let own = candidates.first(where: { $0.state?.command?.contains(tag) == true }) { return own.id }
-        guard candidates.count == 1, let only = candidates.first, let state = only.state,
-              state.command == nil else { return nil }
-        return only.id
-    }
-
     /// Inspect an sbx exec id over the lifecycle socket.
     /// Returns nil when the socket is unavailable, the exec id is gone, or the
     /// response is not parseable.
@@ -182,6 +173,14 @@ actor SbxClient {
               let data = json.data(using: .utf8),
               let state = try? JSONDecoder().decode(ExecLifecycleState.self, from: data)
         else { return nil }
+        if !loggedExecCommands {
+            // Whether a terminal's exec is told apart by its launch tag, or only
+            // by being the lone new one (`LaunchExecFinder`).
+            loggedExecCommands = true
+            Log.info(.sbx, state.command == nil
+                ? "sbx's exec inspection doesn't say what an exec runs (no ProcessConfig): terminals' execs are told apart by count only"
+                : "sbx's exec inspection says what an exec runs (ProcessConfig): terminals' execs are told apart by their launch tag")
+        }
         return state
     }
 

@@ -2,8 +2,9 @@ import AppKit
 import Testing
 @testable import Sandshell
 
-/// ⌘F in a terminal borrows the clipboard to read the scrollback, then puts
-/// back what was there with `NSPasteboard.snapshotItems()` / `restore(_:)`.
+/// A terminal's ⌘F (scrollback) and its selection's context menu borrow the
+/// clipboard to read text, then put back what was there with
+/// `NSPasteboard.snapshotItems()` / `restore(_:)`.
 /// Each test uses a pasteboard of its own, never the person's clipboard.
 struct PasteboardSnapshotTests {
     /// A private pasteboard for `body`, released afterwards.

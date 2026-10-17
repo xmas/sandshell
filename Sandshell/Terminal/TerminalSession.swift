@@ -82,16 +82,9 @@ final class LinkOpeningTerminalView: AppTerminalView {
     /// snapshot the general pasteboard, use ghostty's copy, then restore.
     private func readSelectedText() -> String? {
         let pb = NSPasteboard.general
-        let saved: [NSPasteboardItem] = (pb.pasteboardItems ?? []).map { item in
-            let copy = NSPasteboardItem()
-            for type in item.types {
-                if let data = item.data(forType: type) { copy.setData(data, forType: type) }
-            }
-            return copy
-        }
+        let saved = pb.snapshotItems()
         let text = copySelectedTextToPasteboard() ? pb.string(forType: .string) : nil
-        pb.clearContents()
-        if !saved.isEmpty { pb.writeObjects(saved) }
+        pb.restore(saved)
         return text
     }
 
