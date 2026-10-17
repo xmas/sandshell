@@ -98,7 +98,27 @@ final class SidebarListController: NSViewController {
     private(set) var displayedSessionIDs: [UUID] = []
 
     /// What each row shows: a session, or one of its subagents beneath it.
-    enum Row: Equatable { case session(UUID), subagent(SubagentInfo), workflow(UUID, WorkflowRun) }
+    enum Row: Equatable, Identifiable {
+        case session(UUID), subagent(SubagentInfo), workflow(UUID, WorkflowRun)
+
+        /// Which row it is, whatever it shows now (a subagent's state, a run's progress).
+        enum ID: Hashable { case session(UUID), subagent(UUID, String), workflow(UUID, String) }
+        var id: ID {
+            switch self {
+            case .session(let id): .session(id)
+            case .subagent(let info): .subagent(info.sessionID, info.id)
+            case .workflow(let session, let run): .workflow(session, run.id)
+            }
+        }
+        /// The session it is, or sits under.
+        var sessionID: UUID {
+            switch self {
+            case .session(let id): id
+            case .subagent(let info): info.sessionID
+            case .workflow(let session, _): session
+            }
+        }
+    }
     private(set) var rows: [Row] = []
     /// Subagent lists opened / closed by the person (else: open while one runs,
     /// or for the selected session).
@@ -129,6 +149,16 @@ final class SidebarListController: NSViewController {
     /// Stops a session's background task (the pane that runs its chat does it).
     var onStopTask: ((UUID, String) async -> Bool)?
     func row(of id: UUID) -> Int? { rows.firstIndex(of: .session(id)) }
+
+    /// Whether a session's subagent and workflow rows are in the list now.
+    private func childRowsShown(of id: UUID) -> Bool {
+        row(of: id).map { parentSession(ofRow: $0 + 1) == id } ?? false
+    }
+    /// A listed session whose child rows should show, or go, by now (they follow the selection).
+    private func childRowsStale(_ id: UUID?) -> Bool {
+        guard let id, row(of: id) != nil else { return false }
+        return showsSubagents(of: id) != childRowsShown(of: id)
+    }
 
     func showsSubagents(of id: UUID) -> Bool {
         let list = controller.subagents[id] ?? [], runs = controller.workflows[id] ?? []
@@ -274,7 +304,7 @@ final class SidebarListController: NSViewController {
             guard let self else { return false }
             let row = self.outline.selectedRow
             if let id = self.sessionID(atRow: row), self.childCount(of: id) > 0 {
-                guard self.showsSubagents(of: id) != right else { return false }
+                guard self.childRowsShown(of: id) != right else { return false }
                 self.setShowsSubagents(right, of: id)
                 return true
             }
@@ -285,11 +315,13 @@ final class SidebarListController: NSViewController {
             }
             return false
         }
-        // Reduce Motion / Increase Contrast changed: redraw the rows.
-        NotificationCenter.default.addObserver(forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification,
-                                               object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.outline.reloadData() }
-        }
+        // Reduce Motion / Increase Contrast changed: redraw the rows. (NSWorkspace
+        // posts it on its own center, not the default one.)
+        NSWorkspace.shared.notificationCenter
+            .publisher(for: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.reload() }
+            .store(in: &cancellables)
         scroll.documentView = outline
 
         // ── Header: the folder's chosen icon/color + its name (last path
@@ -560,6 +592,13 @@ final class SidebarListController: NSViewController {
             // unless it's still live) — no wait for the terminal to launch.
             self.refreshActive(previous)
             self.refreshActive(self.lastActiveSession)
+            // Subagents show for the selected session: list (or unlist) them —
+            // once the click (or key) that changed it is handled, and once for
+            // the selectionDidChange + rowClicked pair. Rows above it may go,
+            // so bring it back into view.
+            if [previous, self.lastActiveSession].contains(where: { self.childRowsStale($0) }) {
+                self.reloadAfterEvent(revealingShown: true)
+            }
         }.store(in: &cancellables)
         // Update only the affected session rows (status dot + work-time + live-ness
         // + unread) — all session state is now in one `runtimes` publisher. A
@@ -572,11 +611,14 @@ final class SidebarListController: NSViewController {
             for id in Set(tasks.keys).union(self.backgroundCounts.keys) { self.updateSessionRow(id) }
             self.backgroundCounts = tasks.mapValues { $0.filter(\.isRunning).count }
         }.store(in: &cancellables)
-        controller.$subagents.dropFirst().removeDuplicates().sink { [weak self] _ in
-            DispatchQueue.main.async { self?.reload() }
+        // Only when a row would change: a running subagent's or workflow's
+        // transcripts are written all the time, and every poll would rebuild
+        // the list. (One reload for a poll that changes both.)
+        controller.$subagents.dropFirst().map { $0.mapValues { $0.map(\.asShown) } }.removeDuplicates().sink { [weak self] _ in
+            self?.reloadAfterEvent()
         }.store(in: &cancellables)
-        controller.$workflows.dropFirst().removeDuplicates().sink { [weak self] _ in
-            DispatchQueue.main.async { self?.reload() }
+        controller.$workflows.dropFirst().map { $0.mapValues { $0.map(\.asShown) } }.removeDuplicates().sink { [weak self] _ in
+            self?.reloadAfterEvent()
         }.store(in: &cancellables)
         controller.$runtimes.dropFirst().sink { [weak self] runtimes in
             self?.runtimesChanged(runtimes)
@@ -635,6 +677,11 @@ final class SidebarListController: NSViewController {
         for id in displayedSessionIDs where controller.lastActivity(id) != nil {
             updateSessionRow(id)
         }
+        // Finished subagents and workflows say when they finished.
+        let finished = (Range(outline.rows(in: outline.visibleRect)) ?? 0..<0).filter {
+            subagent(atRow: $0).map { !$0.isRunning } ?? (workflow(atRow: $0) != nil)
+        }
+        if !finished.isEmpty { outline.reloadData(forRowIndexes: IndexSet(finished), columnIndexes: [0]) }
     }
 
     private var lastRuntimes: [UUID: SessionRuntime] = [:]
@@ -643,8 +690,12 @@ final class SidebarListController: NSViewController {
         var needsReorder = false
         for id in Set(new.keys).union(lastRuntimes.keys) where new[id] != lastRuntimes[id] {
             if new[id]?.isLive != lastRuntimes[id]?.isLive {
-                // isLive drives name weight — needs a full cell reconfigure.
-                if !reloading, let row = row(of: id) {
+                // isLive drives name weight — needs a full cell reconfigure
+                // (once a rename in it ends: that would throw its editor away).
+                if id == renamingID {
+                    pendingReload = true
+                    updateSessionRow(id)
+                } else if !reloading, let row = row(of: id) {
                     outline.reloadData(forRowIndexes: IndexSet([row]), columnIndexes: IndexSet([0]))
                 }
             } else {
@@ -705,27 +756,87 @@ final class SidebarListController: NSViewController {
 
     // MARK: Reload (preserving selection)
 
+    /// A reload asked for while a row was being renamed (run when it ends).
+    private var pendingReload = false
+    /// A rename just ended: reloads wait for the rest of the event that ended it.
+    private var endingRename = false
+    /// A reload is on its way (`reloadAfterEvent`), and whether it then brings
+    /// the shown session's row into view.
+    private var reloadScheduled = false
+    private var revealShownAfterReload = false
+
+    /// Run `body` once the event being handled is over — a click's mouse-up
+    /// included. (The main queue is also served in the table's tracking loop
+    /// between mouse-down and -up, where the table still goes by the row index
+    /// it pressed: a reload there moves another row under the click.)
+    private static func afterEvent(_ body: @escaping @MainActor @Sendable () -> Void) {
+        RunLoop.main.perform(inModes: [.default, .modalPanel]) { MainActor.assumeIsolated(body) }
+    }
+
+    /// Reload once the event being handled is over, however often it's asked
+    /// for meanwhile.
+    private func reloadAfterEvent(revealingShown: Bool = false) {
+        if revealingShown { revealShownAfterReload = true }
+        guard !reloadScheduled else { return }
+        reloadScheduled = true
+        Self.afterEvent { [weak self] in
+            guard let self else { return }
+            let reveal = self.revealShownAfterReload
+            self.revealShownAfterReload = false
+            if self.reloadScheduled { self.reload() }
+            if reveal, !self.pendingReload { self.revealShown() }
+        }
+    }
+
+    /// Keep the shown session's row (or the picked row under it) in view: rows
+    /// above it come and go with the selection.
+    private func revealShown() {
+        guard let id = shownSession else { return }
+        let last = outline.selectedRow
+        let target = rows.indices.contains(last) && rows[last].sessionID == id ? last : row(of: id)
+        if let target { outline.scrollRowToVisible(target) }
+    }
+
     private func reload() {
         guard !reloading else { return }
+        reloadScheduled = false
+        // Rebuilding the rows would throw the rename's editor away mid-typing
+        // (and, as it ends, move rows under the click that ended it).
+        if renamingID != nil || endingRename { pendingReload = true; return }
+        pendingReload = false
         reloading = true
         defer { reloading = false }
 
+        // What's picked, by identity: rows come, go and move with every reload.
+        let picked = Set(outline.selectedRowIndexes.compactMap { rows.indices.contains($0) ? rows[$0].id : nil })
         displayedSessionIDs = controller.orderedSessions.filter(matchesSearch).map(\.id)
         rows = displayedSessionIDs.flatMap { id -> [Row] in
             [.session(id)] + (showsSubagents(of: id) ? childRows(of: id) : [])
         }
         outline.reloadData()
-        applySelectionToOutline()
+        applySelectionToOutline(keeping: picked)
         updateEmptyState()
     }
 
-    private func applySelectionToOutline() {
-        if let row = outline.selectedRowIndexes.first, parentSession(ofRow: row) != nil { return }   // a child row stays picked
-        if case let .session(id) = controller.selection, let row = row(of: id) {
-            outline.selectRowIndexes([row], byExtendingSelection: false)
-        } else {
-            outline.deselectAll(nil)
-        }
+    /// The session the detail shows (the controller's selection).
+    private var shownSession: UUID? {
+        if case let .session(id) = controller.selection { return id }
+        return nil
+    }
+
+    private func applySelectionToOutline(keeping picked: Set<Row.ID> = []) {
+        let select = Self.rowsToSelect(keeping: picked, shown: shownSession, in: rows)
+        if select.isEmpty { outline.deselectAll(nil) } else { outline.selectRowIndexes(select, byExtendingSelection: false) }
+    }
+
+    /// The rows to pick after a reload: those picked before, wherever they are
+    /// now — when the shown session (or a row under it) is still among them —
+    /// else the shown session's row.
+    nonisolated static func rowsToSelect(keeping picked: Set<Row.ID>, shown: UUID?, in rows: [Row]) -> IndexSet {
+        guard let shown else { return [] }
+        let kept = IndexSet(rows.indices.filter { picked.contains(rows[$0].id) })
+        if kept.contains(where: { rows[$0].sessionID == shown }) { return kept }
+        return rows.firstIndex(of: .session(shown)).map { IndexSet(integer: $0) } ?? []
     }
 
     /// Move the outline highlight to match `sel` (programmatic selection), with
@@ -762,8 +873,12 @@ final class SidebarListController: NSViewController {
     /// Single click: (re)publish the selection — even if unchanged — so the
     /// detail pane re-launches a session whose terminal hasn't started yet
     /// (re-clicking an already-selected row doesn't fire selectionDidChange).
+    /// A ⌘- or ⇧-click only changes what's picked (selectionDidChange did that):
+    /// republishing its row would undo a ⌘-click that unpicked it.
     @objc private func rowClicked() {
         let row = outline.clickedRow
+        let modifiers = NSApp.currentEvent?.modifierFlags ?? []
+        guard modifiers.isDisjoint(with: [.command, .shift]), outline.selectedRowIndexes.contains(row) else { return }
         if let info = subagent(atRow: row) {
             controller.selection = .session(info.sessionID)
             return SubagentWindowController.show(info, workspace: controller)
@@ -1056,9 +1171,13 @@ final class SidebarListController: NSViewController {
     /// Search from the footer button (restores route purely by the conversation's cwd).
     @objc private func searchClicked() { onShowSearch?(nil) }
 
+    /// Delete in the list closes the session rows picked there, and only those.
+    /// Nothing picked (the filter hides the shown session) or only subagent
+    /// or workflow rows: a beep — no session closes that the list doesn't
+    /// show picked (⌘W closes the shown one).
     func closeSelectedSession() {
         let ids = selectedSessionIDs
-        if ids.isEmpty, case let .session(id) = controller.selection { return controller.closeSession(id) }
+        guard !ids.isEmpty else { return NSSound.beep() }
         controller.closeSessions(ids)
     }
 
@@ -1081,15 +1200,41 @@ final class SidebarListController: NSViewController {
         beginRename(id)
     }
 
+    /// The row being renamed; reloads wait for it (see `reload`).
+    private weak var renamingCell: SessionCellView?
+    private var renamingID: UUID? { renamingCell.flatMap { $0.isRenaming ? $0.sessionID : nil } }
+
     func beginRename(_ id: UUID) {
+        // Session ▸ Rename… with the sidebar hidden: show it, and edit once it's back.
+        if let window = view.window?.windowController as? MainWindowController, window.isSidebarCollapsed {
+            window.setSidebarCollapsed(false)
+            return DispatchQueue.main.async { [weak self] in self?.renameInRow(id) }
+        }
+        renameInRow(id)
+    }
+
+    private func renameInRow(_ id: UUID) {
+        // The filter hides its row: clear it.
+        if row(of: id) == nil, !searchQuery.isEmpty { searchField.clear() }
         guard let row = row(of: id) else { return }
         outline.scrollRowToVisible(row)
         guard let cell = outline.view(atColumn: 0, row: row, makeIfNecessary: true) as? SessionCellView else { return }
-        cell.beginRenaming { [weak self] name in
+        let editing = cell.beginRenaming { [weak self] name in
             guard let self else { return }
+            self.renamingCell = nil
+            // A rename usually ends with a click on another row: reloads put
+            // off till now (and the rename's own) wait until that click is
+            // handled, so it picks the row the person saw.
+            self.endingRename = true
             if let name { self.controller.renameSession(id, to: name) }
             self.view.window?.makeFirstResponder(self.outline)
+            Self.afterEvent { [weak self] in
+                guard let self else { return }
+                self.endingRename = false
+                if self.pendingReload { self.reload() }
+            }
         }
+        if editing { renamingCell = cell }
     }
 
     // MARK: Copy
@@ -1311,11 +1456,20 @@ extension SidebarListController: NSTableViewDataSource {
         guard !displayedSessionIDs.isEmpty, info.draggingSource as? NSTableView !== tableView,
               info.draggingPasteboard.canReadObject(forClasses: [NSURL.self],
                                                     options: [.urlReadingFileURLsOnly: true]) else { return [] }
-        // Onto a session (a subagent row's drop goes to its session).
-        var target = min(max(row, 0), rows.count - 1)
-        while target > 0, sessionID(atRow: target) == nil { target -= 1 }
-        tableView.setDropRow(target, dropOperation: .on)
+        let pointer = tableView.row(at: tableView.convert(info.draggingLocation, from: nil))
+        tableView.setDropRow(Self.dropRow(proposed: row, between: dropOperation == .above, pointer: pointer, in: rows),
+                             dropOperation: .on)
         return .copy
+    }
+
+    /// The session row a file drop lands on. Near a row's edge the table
+    /// proposes the gap ("above" the next row): that's the row under the
+    /// pointer (else the one above the gap). A subagent or workflow row's drop
+    /// goes to its session.
+    nonisolated static func dropRow(proposed row: Int, between: Bool, pointer: Int, in rows: [Row]) -> Int {
+        let target = min(max(between ? (pointer >= 0 ? pointer : row - 1) : row, 0), rows.count - 1)
+        guard rows.indices.contains(target) else { return target }
+        return rows.firstIndex(of: .session(rows[target].sessionID)) ?? target
     }
 
     func tableView(_ tableView: NSTableView, acceptDrop info: NSDraggingInfo, row: Int,
@@ -1360,9 +1514,10 @@ extension SidebarListController: NSTableViewDelegate {
                 workdirName: workdirName(for: session),
                 backgroundCount: controller.runningBackgroundTasks(id))
             if childCount(of: id) > 0 {
-                cell.showDisclosure(expanded: showsSubagents(of: id), count: childCount(of: id)) { [weak self] in
+                // What the list shows now (whether they should show changes with the selection).
+                cell.showDisclosure(expanded: childRowsShown(of: id), count: childCount(of: id)) { [weak self] in
                     guard let self else { return }
-                    self.setShowsSubagents(!self.showsSubagents(of: id), of: id)
+                    self.setShowsSubagents(!self.childRowsShown(of: id), of: id)
                 }
             }
         }
@@ -1371,20 +1526,45 @@ extension SidebarListController: NSTableViewDelegate {
 
     func tableViewSelectionDidChange(_ notification: Notification) {
         guard !reloading, !settingSelection else { return }
-        // A subagent row: its session stays the one shown.
-        if let parent = parentSession(ofRow: outline.selectedRow), outline.selectedRowIndexes.count == 1 {
-            if controller.selection != .session(parent) { controller.selection = .session(parent) }
+        let picked = outline.selectedRowIndexes
+        // Nothing picked (a click below the rows): the shown session stays
+        // picked. The app reads no selection as "no session" (⌘W would close
+        // the window while a pane still shows it).
+        if picked.isEmpty {
+            guard let id = shownSession, let row = row(of: id) else { return }
+            settingSelection = true
+            defer { settingSelection = false }
+            outline.selectRowIndexes([row], byExtendingSelection: false)
+            outline.rowView(atRow: row, makeIfNecessary: false)?.needsDisplay = true
             return
         }
-        // With several picked, the detail follows the last one picked.
-        var row = outline.selectedRow
-        if outline.selectedRowIndexes.count > 1, case .session(let id)? = controller.selection,
-           let current = displayedSessionIDs.firstIndex(of: id), outline.selectedRowIndexes.contains(current),
-           NSApp.currentEvent?.modifierFlags.contains(.shift) == true {
-            row = current   // a shift-extension keeps the one already shown
-        }
-        let newSelection: SidebarSelection? = sessionID(atRow: row).map { .session($0) }
+        let shown = Self.shownSession(picked: picked, last: outline.selectedRow, clicked: rowClickedNow,
+                                      shown: shownSession, in: rows)
+        let newSelection = shown.map { SidebarSelection.session($0) }
         if controller.selection != newSelection { controller.selection = newSelection }
+    }
+
+    /// The row a plain or ⌘-click in the list is on, while the selection
+    /// changes for it; nil for keys (⌘A, arrows) and ⇧-clicks.
+    private var rowClickedNow: Int? {
+        guard let event = NSApp.currentEvent, event.window === outline.window,
+              event.type == .leftMouseDown || event.type == .leftMouseUp,
+              !event.modifierFlags.contains(.shift) else { return nil }
+        let row = outline.row(at: outline.convert(event.locationInWindow, from: nil))
+        return row >= 0 ? row : nil
+    }
+
+    /// The session the detail shows for what's picked (a subagent or workflow
+    /// row stands for its session). A click that picks a row shows it. Else —
+    /// ⇧-extension, ⌘A, a ⌘-click that unpicks another row — the one already
+    /// shown stays while it (or a row under it) is still picked; failing
+    /// that, the last row picked.
+    nonisolated static func shownSession(picked: IndexSet, last: Int, clicked: Int?, shown: UUID?,
+                                         in rows: [Row]) -> UUID? {
+        func session(_ row: Int) -> UUID? { rows.indices.contains(row) ? rows[row].sessionID : nil }
+        if let clicked, picked.contains(clicked) { return session(clicked) }
+        if picked.count > 1, let shown, picked.contains(where: { session($0) == shown }) { return shown }
+        return session(last)
     }
 }
 
@@ -1394,7 +1574,7 @@ extension SidebarSearchField: NSTextFieldDelegate {
     func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
         switch selector {
         case #selector(NSResponder.cancelOperation(_:)):
-            if field.stringValue.isEmpty { onMoveDown?() } else { field.stringValue = ""; onChange?("") }
+            if field.stringValue.isEmpty { onMoveDown?() } else { clear() }
             return true
         case #selector(NSResponder.moveDown(_:)), #selector(NSResponder.insertNewline(_:)):
             onMoveDown?()
@@ -1515,6 +1695,12 @@ final class SidebarSearchField: NSView {
     var onMoveDown: (() -> Void)?
 
     func focus() { window?.makeFirstResponder(field) }
+
+    /// Empty it: every session shows again.
+    func clear() {
+        field.stringValue = ""
+        onChange?("")
+    }
 
     #if DEBUG
     /// As if typed (one keystroke's change).
@@ -1843,24 +2029,36 @@ final class SessionCellView: NSTableCellView {
     private var renameDone: ((String?) -> Void)?
     private var nameBeforeRename = ""
 
+    /// Its name is being edited.
+    var isRenaming: Bool { renameDone != nil && nameLabel.currentEditor() != nil }
+
     /// Edit the name in place: Return keeps it, Esc puts the old one back.
-    func beginRenaming(_ done: @escaping (String?) -> Void) {
+    /// False when it can't take focus (not on screen): nothing is left editable.
+    func beginRenaming(_ done: @escaping (String?) -> Void) -> Bool {
         renameDone = done
         nameBeforeRename = nameLabel.stringValue
         nameLabel.isEditable = true
         nameLabel.isSelectable = true
         nameLabel.delegate = self
-        window?.makeFirstResponder(nameLabel)
+        guard window?.makeFirstResponder(nameLabel) == true else {
+            renameDone = nil
+            nameLabel.isEditable = false
+            nameLabel.isSelectable = false
+            return false
+        }
         nameLabel.currentEditor()?.selectAll(nil)
+        return true
     }
 
+    /// `name` nil: cancelled. Committing it unchanged counts as cancelling (it
+    /// would pin the automatic name and add an Undo step).
     private func finishRenaming(_ name: String?) {
         guard let done = renameDone else { return }
         renameDone = nil
         nameLabel.isEditable = false
         nameLabel.isSelectable = false
         if name == nil { nameLabel.stringValue = nameBeforeRename }
-        done(name)
+        done(name == nameBeforeRename ? nil : name)
     }
 
     #if DEBUG
@@ -2026,6 +2224,34 @@ extension SidebarListController: NSMenuItemValidation {
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         if item.action == #selector(copy(_:)) { return !selectedSessionIDs.isEmpty }
         return true
+    }
+}
+
+extension SubagentInfo {
+    /// As its sidebar row shows it: a running one just says "Working", so the
+    /// writes its transcript gets all the time don't change it.
+    var asShown: SubagentInfo {
+        var shown = self
+        if isRunning { shown.lastWrite = .distantPast }
+        return shown
+    }
+}
+
+extension WorkflowRun {
+    /// As its sidebar row shows it: name, phases with how many of their agents
+    /// are done, agent count — and when it last wrote, once its agents have
+    /// settled. Its agents' tokens, models and writes, which change all the
+    /// time while it runs, don't show.
+    var asShown: WorkflowRun {
+        WorkflowRun(id: id, dir: dir, name: name, summary: summary, phases: phases,
+                    agents: agents.map { agent in
+                        var shown = agent
+                        shown.model = nil
+                        shown.tokens = 0
+                        shown.lastWrite = nil
+                        return shown
+                    },
+                    startedAt: startedAt, lastWrite: agentsSettled ? lastWrite : nil)
     }
 }
 

@@ -355,6 +355,40 @@ struct WorkspaceStateSessionTests {
         #expect(decoded.lastActiveAt == WorkspaceStateFixture.referenceDate)
     }
 
+    struct RenameCase: Sendable, CustomTestStringConvertible {
+        let testDescription: String
+        let pinned: Bool
+        let newName: String
+        /// The name and pin after it; nil: nothing changes.
+        let expected: (name: String, pinned: Bool)?
+    }
+
+    @Test(arguments: [
+        RenameCase(testDescription: "a new name pins it", pinned: false, newName: "Release", expected: ("Release", true)),
+        RenameCase(testDescription: "a new name, trimmed", pinned: true, newName: "  Release \n", expected: ("Release", true)),
+        RenameCase(testDescription: "the same automatic name pins it", pinned: false, newName: "Fix login",
+                   expected: ("Fix login", true)),
+        RenameCase(testDescription: "empty unpins and keeps the name", pinned: true, newName: "", expected: ("Fix login", false)),
+        RenameCase(testDescription: "the same pinned name", pinned: true, newName: "Fix login", expected: nil),
+        RenameCase(testDescription: "the same pinned name, padded", pinned: true, newName: " Fix login\t", expected: nil),
+        RenameCase(testDescription: "empty when already automatic", pinned: false, newName: "", expected: nil),
+        RenameCase(testDescription: "blank when already automatic", pinned: false, newName: "  \n", expected: nil),
+    ])
+    func renamedChangesOnlyNameAndPin(_ testCase: RenameCase) {
+        var session = Session(folderID: UUID(), agent: .claude, name: "Fix login", order: 3, workdir: "/workspace",
+                              transcriptID: "t-1", createdAt: WorkspaceStateFixture.referenceDate, isChat: true)
+        session.isNamedByUser = testCase.pinned
+        let renamed = session.renamed(to: testCase.newName)
+        if let expected = testCase.expected {
+            var want = session
+            want.name = expected.name
+            want.isNamedByUser = expected.pinned
+            #expect(renamed == want)
+        } else {
+            #expect(renamed == nil, "nothing to save or undo")
+        }
+    }
+
     @Test(arguments: [false, true])
     func roundTripsThroughJSON(withOptionalFields: Bool) throws {
         var session = Session(folderID: UUID(), agent: AgentKind(rawValue: "my-kit-agent"), name: "Named",
