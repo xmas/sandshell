@@ -215,13 +215,32 @@ final class TerminalSession {
         }
     }
 
-    /// ⌘ shortcuts our app menu owns. Ghostty's default keybinds (e.g.
-    /// super+comma → open config, super+z → its own undo) would otherwise
-    /// swallow them before the macOS menu sees them while a terminal has focus.
-    static let releasedMenuKeys = [
-        "super+c", "super+comma", "super+shift+comma", "super+w", "super+f",
-        "super+z", "super+shift+z",
-        "super+shift+left_bracket", "super+shift+right_bracket",
+    /// Ghostty's default keybinds that land on our menu's ⌘ shortcuts. A
+    /// focused terminal runs its bindings before the menu sees the key, and
+    /// most of these are Ghostty app commands (open config, quit, new window,
+    /// close window, undo, full screen, inspector…) that this embedding drops,
+    /// so the key did nothing; ⌘C is Edit ▸ Copy's, which copies the
+    /// selection. Unbound, the menu gets the key (when no menu item takes it,
+    /// the terminal still does).
+    ///
+    /// Left to Ghostty: ⌘V, ⌘A and ⌘0 (paste, select all, font size, done in
+    /// the terminal); ⌘E, ⌘G, ⇧⌘G and ⌘J, whose text-find menu items have
+    /// nothing to do in a terminal; and the pane commands ⌘D, ⇧⌘D, ⌥⌘W and
+    /// ⌃⌘=, which AppDelegate's shortcut monitor routes in a workspace window
+    /// and which, from a terminal on this Mac, would reach into the workspace
+    /// window behind it. `ReleasedMenuKeysTests` asks the bundled Ghostty
+    /// about every menu shortcut.
+    ///
+    /// Written as Ghostty's defaults are, with the character: "super+," and
+    /// "super+shift+[" unbind them; the key names "super+comma" and
+    /// "super+shift+left_bracket" are other keys and unbind nothing.
+    nonisolated static let releasedMenuKeys = [
+        "super+,", "super+shift+,", "super+q", "super+n",
+        "super+w", "super+shift+w", "super+shift+t",
+        "super+z", "super+shift+z", "super+c",
+        "super+f", "super+shift+f",
+        "super+alt+i", "super+ctrl+f",
+        "super+[", "super+]", "super+shift+[", "super+shift+]",
     ]
 
     /// Font, cursor and the released menu shortcuts: what every Sandshell

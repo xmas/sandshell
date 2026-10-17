@@ -270,21 +270,46 @@ private final class TerminalRuntimeController {
     }
 }
 
-/// Something to put into a session's chat once it's open: text and files for
-/// the composer, or (send) a message to send — with any attachments, pasted
-/// images included, that a message queued in an earlier chat carried.
+/// What's waiting for a session's chat to open, in two parts that never mix:
+/// a message to send, and text and files for the composer, where they wait
+/// for the person to look them over (nothing there goes on its own).
 struct ChatDraft {
-    var text: String
-    var urls: [URL]
-    var attachments: [ChatAttachment] = []
-    var send: Bool
+    /// Text and files gathered from every draft that came in.
+    struct Part: Equatable {
+        var text = ""
+        var urls: [URL] = []
+        /// Pasted images and the like, which a message queued in an earlier
+        /// chat can carry.
+        var attachments: [ChatAttachment] = []
 
-    /// Another draft for the same chat while this one waits: the texts are
-    /// joined, the files added, and it's sent if either one was to be.
-    mutating func add(text more: String, urls moreURLs: [URL], send sendToo: Bool) {
-        text = [text, more].filter { !$0.isEmpty }.joined(separator: "\n\n")
-        urls += moreURLs
-        send = send || sendToo
+        var isEmpty: Bool { text.isEmpty && urls.isEmpty && attachments.isEmpty }
+
+        /// The texts are joined, a paragraph apart; the files are added.
+        mutating func add(text more: String, urls moreURLs: [URL] = [], attachments moreAttachments: [ChatAttachment] = []) {
+            text = [text, more].filter { !$0.isEmpty }.joined(separator: "\n\n")
+            urls += moreURLs
+            attachments += moreAttachments
+        }
+    }
+
+    /// Sent as one message as soon as the chat is up: asks, "send now"
+    /// requests, a message queued in the session's last chat.
+    var message = Part()
+    /// Put in the composer: files dropped on the session, text to edit first.
+    var composer = Part()
+
+    /// Another draft while the chat starts: a message joins the message, the
+    /// rest the composer.
+    mutating func add(text: String, urls: [URL], send: Bool) {
+        if send { message.add(text: text, urls: urls) } else { composer.add(text: text, urls: urls) }
+    }
+
+    /// The message a closing chat had queued behind its turn: it goes first,
+    /// ahead of anything asked since.
+    mutating func putFirst(text: String, attachments: [ChatAttachment]) {
+        var first = Part(text: text, attachments: attachments)
+        first.add(text: message.text, urls: message.urls, attachments: message.attachments)
+        message = first
     }
 }
 
@@ -367,11 +392,7 @@ final class SessionSurfaces {
         // A message queued behind its turn is kept for the session's next chat
         // (a reconnect sends it) instead of vanishing.
         if let waiting = chat.session.takeQueued() {
-            var draft = drafts[id] ?? ChatDraft(text: "", urls: [], send: true)
-            draft.text = [waiting.text, draft.text].filter { !$0.isEmpty }.joined(separator: "\n\n")
-            draft.attachments = waiting.attachments + draft.attachments
-            draft.send = true
-            drafts[id] = draft
+            drafts[id, default: ChatDraft()].putFirst(text: waiting.text, attachments: waiting.attachments)
         }
         let wasWorking = chat.session.phase == .running
         chat.session.close()
@@ -1704,8 +1725,16 @@ final class TerminalStackController: NSViewController {
             controller.setLive(id, true)
             chat.start()
             surfaces.onLaunched(id)
+            // The message goes when the agent is ready; the composer's part
+            // stays there to be looked over.
             if let draft = drafts.removeValue(forKey: id) {
-                view.applyDraft(text: draft.text, urls: draft.urls, attachments: draft.attachments, send: draft.send)
+                if !draft.message.isEmpty {
+                    view.applyDraft(text: draft.message.text, urls: draft.message.urls,
+                                    attachments: draft.message.attachments, send: true)
+                }
+                if !draft.composer.isEmpty {
+                    view.applyDraft(text: draft.composer.text, urls: draft.composer.urls, send: false)
+                }
             }
         }
     }
@@ -1736,9 +1765,7 @@ final class TerminalStackController: NSViewController {
     /// starts (with whatever was already waiting for it).
     func queueDraft(_ text: String, urls: [URL], send: Bool, for id: UUID) {
         if let chat = chats[id] { return chat.applyDraft(text: text, urls: urls, send: send) }
-        var draft = drafts[id] ?? ChatDraft(text: "", urls: [], send: false)
-        draft.add(text: text, urls: urls, send: send)
-        drafts[id] = draft
+        drafts[id, default: ChatDraft()].add(text: text, urls: urls, send: send)
     }
 
     private func showChat(_ id: UUID, _ chat: ChatSessionView) {
@@ -2046,10 +2073,11 @@ extension TerminalStackController {
     }
 
     /// Files dropped or pasted into a session, copied into its folder's
-    /// `.sbx/drops` (which the sandbox sees). One that can't be copied keeps
-    /// its host path, and `onFailure` hears why (once a call).
-    private static func materializeDroppedURLs(_ urls: [URL], workdir: String,
-                                               onFailure: (any Error) -> Void) -> [String] {
+    /// `.sbx/drops` (which the sandbox sees). One that can't be copied — or
+    /// every one, when `.sbx/drops` can't be made — keeps its host path, and
+    /// `onFailure` hears why (once a call).
+    static func materializeDroppedURLs(_ urls: [URL], workdir: String,
+                                       onFailure: (any Error) -> Void) -> [String] {
         let dropDir = URL(filePath: workdir, directoryHint: .isDirectory)
             .appending(path: ".sbx/drops", directoryHint: .isDirectory)
         do {
@@ -2057,7 +2085,7 @@ extension TerminalStackController {
         } catch {
             Log.error(.app, "drop: failed to create \(dropDir.path): \(error)")
             onFailure(error)
-            return []
+            return urls.map(\.path)
         }
         var failure: (any Error)?
         let paths = urls.compactMap { url in
