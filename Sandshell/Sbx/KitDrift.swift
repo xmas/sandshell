@@ -39,7 +39,7 @@ struct KitDrift: Equatable {
         let t = ref.trimmingCharacters(in: .whitespacesAndNewlines)
         if t.hasPrefix("/") || t.hasPrefix("~") || t == "." || t == ".." || t.hasPrefix("./") || t.hasPrefix("../") {
             let expanded = (t as NSString).expandingTildeInPath
-            let url = expanded.hasPrefix("/") ? URL(fileURLWithPath: expanded) : root.appendingPathComponent(expanded)
+            let url = expanded.hasPrefix("/") ? URL(filePath: expanded) : root.appending(path: expanded)
             return url.standardizedFileURL.realPath
         }
         guard !t.contains("://"), !t.hasPrefix("git+") else { return t }

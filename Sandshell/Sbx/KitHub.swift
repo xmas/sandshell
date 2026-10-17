@@ -43,9 +43,6 @@ enum KitHub {
         // first page (HTTP 403), and a namespace's images outnumber its kits.
         var url: URL? = URL(string: "https://hub.docker.com/v2/namespaces/\(namespace)/repositories/?page_size=100&name=-kit")
         var kits: [HubKit] = []
-        let iso = ISO8601DateFormatter()
-        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        let isoPlain = ISO8601DateFormatter()
         var pages = 0
         while let u = url, pages < 5 {
             pages += 1
@@ -56,7 +53,10 @@ enum KitHub {
             }
             let page = try JSONDecoder().decode(Page.self, from: data)
             for r in page.results where r.name.hasSuffix("-kit") {
-                let date = r.last_updated.flatMap { iso.date(from: $0) ?? isoPlain.date(from: $0) }
+                let date = r.last_updated.flatMap {
+                    (try? Date($0, strategy: Date.ISO8601FormatStyle(includingFractionalSeconds: true)))
+                        ?? (try? Date($0, strategy: .iso8601))
+                }
                 kits.append(HubKit(namespace: namespace, name: r.name,
                                    description: Self.cleanDescription(r.description ?? ""),
                                    pullCount: r.pull_count ?? 0, lastUpdated: date))
@@ -71,40 +71,6 @@ enum KitHub {
     static func cleanDescription(_ s: String) -> String {
         let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
         if t == "|" || t == ">" || t == ">-" || t == "|-" { return "" }
-        return t.replacingOccurrences(of: "\n", with: " ")
+        return t.replacing("\n", with: " ")
     }
-}
-
-/// What `sbx kit inspect <ref> --json` tells us about a kit (schema v1 or v2;
-/// every field optional so a newer spec can't break decoding).
-struct KitInspection: Decodable {
-    var name: String?
-    var displayName: String?
-    var description: String?
-    var permissions: Permissions?
-    var caps: Permissions?           // schema v1 spelling
-    var ports: [Port]?
-    var agentInstructions: AgentInstructions?
-    /// `sandbox` (defines an agent; the create positional) or `mixin` (`--kit`).
-    var kind: String?
-    var sandbox: SandboxSpec?
-    /// A mixin made for one agent only (`requires: { agent: claude }`).
-    var requires: Requires?
-    struct Requires: Decodable { var agent: String? }
-
-    struct SandboxSpec: Decodable { var image: String?; var entrypoint: [String]? }
-    struct Permissions: Decodable {
-        struct Network: Decodable { var allow: [String]?; var deny: [String]? }
-        var network: Network?
-    }
-    struct Port: Decodable {
-        var container: Int?
-        var proto: String?
-        var name: String?
-        enum CodingKeys: String, CodingKey { case container, name, proto = "protocol" }
-    }
-    struct AgentInstructions: Decodable { var content: String? }
-
-    var networkAllow: [String] { (permissions ?? caps)?.network?.allow ?? [] }
-    var title: String? { displayName ?? name }
 }

@@ -75,8 +75,8 @@ enum KitStore {
     /// What sbx is given for `ref`: Sandshell's own kits are the app's bundled copies.
     static func resolve(_ ref: String) -> String {
         guard sandshellKits.contains(where: { $0.ref == ref }),
-              let dir = SbxCommand.bundledKits?.appendingPathComponent(ref) else { return ref }
-        return dir.path
+              let dir = SbxCommand.bundledKits?.appending(path: ref) else { return ref }
+        return dir.path(percentEncoded: false)
     }
 
     /// Official kits worth having in every sandbox: cheap, no ports, and they
@@ -204,7 +204,7 @@ enum KitStore {
     /// Lightweight `spec.yaml` read (top-level `displayName:` / `description:`),
     /// mirroring the old sbx-ui parser — avoids a YAML dependency.
     static func parseSpec(at dir: String) -> (displayName: String?, summary: String?) {
-        let url = URL(fileURLWithPath: dir).appendingPathComponent("spec.yaml")
+        let url = URL(filePath: dir).appending(path: "spec.yaml")
         guard let text = try? String(contentsOf: url, encoding: .utf8) else { return (nil, nil) }
         var displayName: String?
         var summary: String?

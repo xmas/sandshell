@@ -19,31 +19,31 @@ enum KitStartupOutcome: Equatable {
 
     var isProblem: Bool {
         switch self {
-        case .warning, .failed, .skipped: return true
-        case .running, .ok, .noSteps: return false
+        case .warning, .failed, .skipped: true
+        case .running, .ok, .noSteps: false
         }
     }
 
     var label: String {
         switch self {
-        case .running:                return "installing"
-        case .ok:                     return "ok"
-        case .warning:                return "warning"
-        case .failed(let code):       return "failed (exit \(code))"
-        case .skipped:                return "skipped"
-        case .noSteps:                return "not run"
+        case .running:                "installing"
+        case .ok:                     "ok"
+        case .warning:                "warning"
+        case .failed(let code):       "failed (exit \(code))"
+        case .skipped:                "skipped"
+        case .noSteps:                "not run"
         }
     }
 
     /// Ranking so a kit's aggregate outcome is its worst step.
     fileprivate var severity: Int {
         switch self {
-        case .ok: return 0
-        case .noSteps: return 0
-        case .running: return 1
-        case .warning: return 2
-        case .skipped: return 3
-        case .failed: return 4
+        case .ok: 0
+        case .noSteps: 0
+        case .running: 1
+        case .warning: 2
+        case .skipped: 3
+        case .failed: 4
         }
     }
 }
@@ -152,7 +152,7 @@ struct KitStartupStatus: Equatable {
 
     /// Reconcile the configured kit refs against a parsed report.
     static func make(containerName: String, kitRefs: [String], report: KitStartupReport?,
-                     fetchError: String? = nil, now: Date = Date()) -> KitStartupStatus {
+                     fetchError: String? = nil, now: Date = .now) -> KitStartupStatus {
         var entries: [KitStartupEntry] = []
         for ref in kitRefs {
             let name = KitStartupParser.kitName(forRef: ref)
@@ -302,8 +302,6 @@ enum KitStartupParser {
         // "=== dispatcher run 2026-09-17T21:25:15Z ==="
         let body = line.dropFirst(runMarker.count)
         let stamp = body.split(separator: " ").first.map(String.init) ?? ""
-        let f = ISO8601DateFormatter()
-        f.formatOptions = [.withInternetDateTime]
-        return f.date(from: stamp)
+        return try? Date(stamp, strategy: .iso8601)
     }
 }
