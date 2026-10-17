@@ -61,10 +61,8 @@ final class HistoryStore: ObservableObject {
     init(home: URL, roots: [String], cacheDirectory: URL? = nil) {
         self.home = home
         self.roots = roots
-        let cacheDir = cacheDirectory ?? FileManager.default
-            .urls(for: .applicationSupportDirectory, in: .userDomainMask)
-            .first?.appendingPathComponent("Sandshell")
-            ?? home.appendingPathComponent(".sandshell")
+        let cacheDir = cacheDirectory
+            ?? URL.applicationSupportDirectory.appending(path: "Sandshell", directoryHint: .isDirectory)
         self.cache = HistoryCache(directory: cacheDir)
     }
 
@@ -74,21 +72,21 @@ final class HistoryStore: ObservableObject {
     /// (callers still match titles and folders themselves).
     func matches(for query: String) async -> [String: HistoryCache.Match] {
         guard let cache else { return [:] }
-        return await Task.detached(priority: .userInitiated) {
-            Dictionary(cache.search(query: query).map { ($0.path, $0) }, uniquingKeysWith: { a, _ in a })
-        }.value
+        return await Self.search(cache, query: query)
+    }
+
+    @concurrent private nonisolated static func search(_ cache: HistoryCache,
+                                                       query: String) async -> [String: HistoryCache.Match] {
+        Dictionary(cache.search(query: query).map { ($0.path, $0) }, uniquingKeysWith: { a, _ in a })
     }
 
     func load() {
         guard !loading else { return }
         loading = true
         let home = self.home, roots = self.roots, cache = self.cache
-        Task.detached(priority: .userInitiated) {
-            let recs = Self.scan(home: home, roots: roots, cache: cache)
-            await MainActor.run {
-                self.records = recs
-                self.loading = false
-            }
+        Task(priority: .userInitiated) {
+            records = await Self.scan(home: home, roots: roots, cache: cache)
+            loading = false
         }
     }
 
@@ -104,9 +102,9 @@ final class HistoryStore: ObservableObject {
     /// responsive. Only conversations within the workspace mounts are kept
     /// (others can't be restored) — Claude's are picked by project folder before
     /// any parsing, so other projects' don't use up the cap. Cache hits avoid
-    /// re-parsing unchanged files.
-    private nonisolated static func scan(home: URL, roots: [String],
-                                         cache: HistoryCache?) -> [ConversationRecord] {
+    /// re-parsing unchanged files. Runs off the main actor.
+    @concurrent private nonisolated static func scan(home: URL, roots: [String],
+                                                     cache: HistoryCache?) async -> [ConversationRecord] {
         let scanLimit = 2_000
         let files = claudeFiles(home: home, roots: roots).map { ($0.0, $0.1, AgentKind.claude) }
             + TranscriptReader.codexFiles(home: home).map { ($0.url, $0.date, AgentKind.codex) }
@@ -122,7 +120,7 @@ final class HistoryStore: ObservableObject {
     /// under a root encodes to a name starting with the root's.
     private nonisolated static func claudeFiles(home: URL, roots: [String]) -> [(URL, Date)] {
         let fm = FileManager.default
-        let projects = home.appendingPathComponent(".claude/projects")
+        let projects = home.appending(path: ".claude/projects", directoryHint: .isDirectory)
         guard let dirs = try? fm.contentsOfDirectory(
             at: projects, includingPropertiesForKeys: nil) else { return [] }
         let prefixes = roots.map { String(TranscriptReader.claudeEncodedDir(for: $0).prefix(200)) }

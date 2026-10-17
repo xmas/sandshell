@@ -152,7 +152,7 @@ final class SearchStore: ObservableObject {
         selectedID = results[min(max(current + delta, 0), results.count - 1)].id
     }
 
-    var liveCount: Int { results.lazy.filter(\.isLive).count }
+    var liveCount: Int { results.count(where: \.isLive) }
     var pastCount: Int { results.count - liveCount }
 
     // MARK: Ranking
@@ -170,8 +170,8 @@ final class SearchStore: ObservableObject {
 
         func tier(title: String, folder: String?, hit: HistoryCache.Match?) -> MatchTier? {
             var best = hit?.tier
-            if title.lowercased().contains(q) { best = .title }
-            else if let folder, folder.lowercased().contains(q) { best = min(best ?? .folder, .folder) }
+            if title.localizedStandardContains(q) { best = .title }
+            else if let folder, folder.localizedStandardContains(q) { best = min(best ?? .folder, .folder) }
             return best
         }
 
@@ -180,7 +180,7 @@ final class SearchStore: ObservableObject {
         for (order, s) in sessions.enumerated() {
             let record = s.transcriptID.flatMap { recordByID[$0] }
             if let id = s.transcriptID { openTranscripts.insert(id) }
-            let hit = record.flatMap { matches[$0.url.path] }
+            let hit = record.flatMap { matches[$0.url.path(percentEncoded: false)] }
             let t = q.isEmpty ? nil : tier(title: s.name, folder: s.workdir, hit: hit)
             if !q.isEmpty, t == nil { continue }
             live.append((SearchResult(
@@ -193,7 +193,7 @@ final class SearchStore: ObservableObject {
 
         var past: [SearchResult] = []
         for r in records where !openTranscripts.contains(r.id) {
-            let hit = matches[r.url.path]
+            let hit = matches[r.url.path(percentEncoded: false)]
             let t = q.isEmpty ? nil : tier(title: r.title, folder: r.cwd, hit: hit)
             if !q.isEmpty, t == nil { continue }
             past.append(SearchResult(
