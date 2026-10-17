@@ -181,6 +181,8 @@ enum MainMenu {
         // Titled Show/Hide by AppDelegate's validation.
         viewMenu.addItem(NSMenuItem("Hide Sidebar", action: #selector(AppDelegate.toggleSessionSidebar(_:)),
                                     key: "s", modifiers: [.command, .control]))
+        viewMenu.addItem(NSMenuItem("Show Session Details", action: #selector(AppDelegate.toggleSessionDetails(_:)),
+                                    key: "i", modifiers: [.command, .option]))
         // NSWindow names and validates these (Show/Hide Toolbar).
         viewMenu.addItem(NSMenuItem("Hide Toolbar", action: #selector(NSWindow.toggleToolbarShown(_:)),
                                     key: "t", modifiers: [.command, .option]))

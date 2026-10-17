@@ -176,6 +176,7 @@ private struct BackgroundTaskRow: View {
         case .agent: return "person.2"
         case .shell: return "terminal"
         case .monitor: return "waveform.path.ecg"
+        case .workflow: return "point.3.connected.trianglepath.dotted"
         }
     }
 

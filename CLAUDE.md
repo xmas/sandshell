@@ -39,7 +39,18 @@ Distributed via the Homebrew tap `xmas/xmas` (public repo `xmas/homebrew-xmas`; 
 
 ## Tests
 
-UI tests are AppleScript-based (no XCTest/unit tests exist):
+### Unit tests (Swift Testing)
+
+```bash
+scripts/run-unit-tests.sh                    # build + run every suite (xcodebuild test, build-tests/)
+scripts/run-unit-tests.sh AgentQuestionTests # only these suites/tests
+```
+
+`tests/SandshellTests` (target `SandshellTests`, mirrors the source folders) tests the app's core logic with Swift Testing — parsing, coding, scripts, path and git handling. It's hosted in the app, which opens no windows and touches no sandboxes when it sees it's hosting tests (`AppDelegate.isHostingTests`). Write new tests per the swift-testing-pro skill: structs, `#expect`/`#require`, parameterized where it fits, temp dirs for anything on disk, never the user's home, `UserDefaults.standard`, `~/.claude` or sbx. A production bug a test exposes is a bead (and a `withKnownIssue` until fixed).
+
+### UI tests
+
+UI tests are AppleScript-based:
 
 ```bash
 scripts/run-ui-tests.sh                 # build + run all tests

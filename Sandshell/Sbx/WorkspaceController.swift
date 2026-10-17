@@ -38,6 +38,8 @@ final class WorkspaceController: ObservableObject {
     @Committed private(set) var backgroundTasks: [UUID: [BackgroundTask]] = [:]
     /// Each Claude session's subagents (the sidebar shows them under it).
     @Committed private(set) var subagents: [UUID: [SubagentInfo]] = [:]
+    /// Each Claude session's workflows (the Workflow tool's runs), newest last.
+    @Committed private(set) var workflows: [UUID: [WorkflowRun]] = [:]
     private var subagentPollTask: Task<Void, Never>?
     private var transcriptURLs: [UUID: URL] = [:]
     /// What each sandbox is (kernel, distribution, mount types), asked once.
@@ -868,15 +870,18 @@ final class WorkspaceController: ObservableObject {
                                    uniquingKeysWith: { a, _ in a })
             targets.append((session.id, url, known))
         }
-        let found = await Task.detached(priority: .utility) { () -> [UUID: [SubagentInfo]] in
-            var out: [UUID: [SubagentInfo]] = [:]
+        let (found, runs) = await Task.detached(priority: .utility) { () -> ([UUID: [SubagentInfo]], [UUID: [WorkflowRun]]) in
+            var out: [UUID: [SubagentInfo]] = [:], runs: [UUID: [WorkflowRun]] = [:]
             for (id, url, known) in targets {
                 let list = SubagentScanner.scan(sessionID: id, transcript: url, known: known)
                 if !list.isEmpty { out[id] = Array(list.suffix(12)) }
+                let wf = WorkflowScanner.scan(transcript: url)
+                if !wf.isEmpty { runs[id] = Array(wf.suffix(12)) }
             }
-            return out
+            return (out, runs)
         }.value
         if found != subagents { subagents = found }
+        if runs != workflows { workflows = runs }
     }
 
     /// Poll workspace container status every 5 s so `containerPhases` stays

@@ -73,6 +73,7 @@ final class NotificationManager: NSObject {
         case .agent: what = "Subagent"
         case .shell: what = "Background command"
         case .monitor: what = "Monitor"
+        case .workflow: what = "Workflow"
         }
         switch task.state {
         case .failed: content.title = "\(what) failed — \(task.title)"

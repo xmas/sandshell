@@ -38,3 +38,5 @@ __pycache__/
 # Sandshell kits ship a .sandshell folder
 !kits/**/.sandshell/
 build-dev2/
+build-tests/
+build-tests.log

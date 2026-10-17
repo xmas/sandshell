@@ -153,7 +153,7 @@ prepare search
 run search         search quick
 
 # Real agent turns (the signed-in account, a few tiny turns each).
-for s in chat fork follow reconnect chat-model background warm queue question subagents; do
+for s in chat fork follow reconnect chat-model background warm queue question subagents details; do
   prepare chat
   run "$s" chat account
 done

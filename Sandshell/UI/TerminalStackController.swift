@@ -1487,6 +1487,30 @@ final class TerminalStackController: NSViewController {
         showStatus("“\(session.name)” is open in another window on this folder.", busy: false)
     }
 
+    /// The chat's Session Details (context, background tasks, connectors,
+    /// environment), shown beside it when the person has it on.
+    private func attachInspector(to view: ChatSessionView, chat: ChatSession, sessionID id: UUID) {
+        let model = SessionInspectorModel(sessionID: id, chat: chat, workspace: controller)
+        model.stopTask = { [weak chat] task in await chat?.stopBackgroundTask(task.id) ?? false }
+        model.openWorkflow = { [weak self, weak chat] run in
+            guard let self else { return }
+            let taskID = self.controller.backgroundTasks[id]?.first { $0.runID == run.id }?.id
+            WorkflowWindowController.show(run, sessionID: id, workspace: self.controller,
+                                          stop: taskID.map { tid in { await chat?.stopBackgroundTask(tid) ?? false } })
+        }
+        model.openSubagent = { [weak self] info in
+            guard let self else { return }
+            SubagentWindowController.show(info, workspace: self.controller)
+        }
+        model.openTask = { [weak self] _ in self?.showBackgroundTasks() }
+        model.showMCP = { [weak view] in view?.showMCPDetails() }
+        model.openMCPSettings = { [weak self] in
+            guard let self else { return }
+            SettingsWindowController.show(for: self.controller, pane: .mcp, owner: self.view.window)
+        }
+        view.setInspector(NSHostingView(rootView: SessionInspectorView(model: model)))
+    }
+
     /// The session's prior history is gone — ask whether to start fresh.
     private func confirmStartFresh(_ session: Session) -> Bool {
         Alerts.confirm("Couldn’t restore “\(session.name)”.", "This session’s \(session.agent.displayName) history "
@@ -1617,6 +1641,7 @@ final class TerminalStackController: NSViewController {
                 }
             }
             let view = ChatSessionView(session: chat)
+            attachInspector(to: view, chat: chat, sessionID: id)
             view.onReconnect = { [weak self] in self?.reconnectChat(id) }
             view.onOpenFile = { [weak self] url, line in self?.onOpenFileInFiles?(url, line) }
             view.onFork = { [weak self] reply in

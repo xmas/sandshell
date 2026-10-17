@@ -180,6 +180,15 @@ final class ChatSessionView: NSView {
             v.translatesAutoresizingMaskIntoConstraints = false
             addSubview(v)
         }
+        // The conversation's column: up to the edge, or to the inspector beside it.
+        addLayoutGuide(column)
+        columnToEdge = column.trailingAnchor.constraint(equalTo: trailingAnchor)
+        NSLayoutConstraint.activate([
+            column.leadingAnchor.constraint(equalTo: leadingAnchor),
+            column.topAnchor.constraint(equalTo: topAnchor),
+            column.bottomAnchor.constraint(equalTo: bottomAnchor),
+            columnToEdge,
+        ])
         NSLayoutConstraint.activate([
             // Edge to edge over the transcript: the sea is full bleed. It takes
             // the transcript's size and imposes none (see `sizingOptions`).
@@ -191,15 +200,15 @@ final class ChatSessionView: NSView {
         NSLayoutConstraint.activate([
             transcript.topAnchor.constraint(equalTo: topAnchor),
             transcript.leadingAnchor.constraint(equalTo: leadingAnchor),
-            transcript.trailingAnchor.constraint(equalTo: trailingAnchor),
+            transcript.trailingAnchor.constraint(equalTo: column.trailingAnchor),
 
             bottom.topAnchor.constraint(equalTo: transcript.bottomAnchor, constant: 6),
             bottom.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
-            bottom.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
+            bottom.trailingAnchor.constraint(equalTo: column.trailingAnchor, constant: -16),
 
             footer.topAnchor.constraint(equalTo: bottom.bottomAnchor, constant: 6),
             footer.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
-            footer.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
+            footer.trailingAnchor.constraint(equalTo: column.trailingAnchor, constant: -16),
             footer.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -10),
         ])
     }
@@ -304,6 +313,63 @@ final class ChatSessionView: NSView {
         mcpButton.toolTip = failing.isEmpty ? "MCP servers in this session"
             : "\(failing.map(\.name).joined(separator: ", ")) \(failing.count == 1 ? "isn’t" : "aren’t") working"
     }
+
+    // MARK: Inspector (beside the conversation)
+
+    private let column = NSLayoutGuide()
+    private var columnToEdge: NSLayoutConstraint!
+    private var inspector: NSView?
+    private var inspectorConstraints: [NSLayoutConstraint] = []
+    /// The person wants it shown (it still steps aside in a narrow pane).
+    var inspectorWanted = false { didSet { updateInspector() } }
+    /// Below this width the conversation keeps the whole pane.
+    static let inspectorMinPaneWidth: CGFloat = 640
+
+    /// The session inspector to show beside the conversation (built once);
+    /// shown while Session Details is on (View ▸ Show Session Details).
+    func setInspector(_ view: NSView) {
+        inspector?.removeFromSuperview()
+        view.translatesAutoresizingMaskIntoConstraints = false
+        inspector = view
+        inspectorWanted = SessionDetails.isShown
+        NotificationCenter.default.publisher(for: SessionDetails.didToggle)
+            .sink { [weak self] _ in self?.inspectorWanted = SessionDetails.isShown }
+            .store(in: &bag)
+        updateInspector()
+    }
+
+    var isInspectorShown: Bool { inspector?.superview === self }
+
+    private func updateInspector() {
+        guard let inspector else { return }
+        let show = inspectorWanted && bounds.width >= Self.inspectorMinPaneWidth
+        guard show != isInspectorShown else { return }
+        NSLayoutConstraint.deactivate(inspectorConstraints)
+        if show {
+            addSubview(inspector)
+            inspectorConstraints = [
+                inspector.topAnchor.constraint(equalTo: topAnchor),
+                inspector.bottomAnchor.constraint(equalTo: bottomAnchor),
+                inspector.trailingAnchor.constraint(equalTo: trailingAnchor),
+                inspector.widthAnchor.constraint(equalToConstant: 300),
+                column.trailingAnchor.constraint(equalTo: inspector.leadingAnchor),
+            ]
+            columnToEdge.isActive = false
+            NSLayoutConstraint.activate(inspectorConstraints)
+        } else {
+            inspector.removeFromSuperview()
+            inspectorConstraints = []
+            columnToEdge.isActive = true
+        }
+    }
+
+    override func layout() {
+        super.layout()
+        updateInspector()
+    }
+
+    /// The MCP details (the Connectors card's rows open them too).
+    func showMCPDetails() { showMCP() }
 
     @objc private func showMCP() {
         NSPopover.toggle(&mcpPopover, below: mcpButton) { .hosting(MCPStatusView(session: session)) }

@@ -4,7 +4,7 @@ import Foundation
 /// tool), a background shell command (`Bash` with `run_in_background`) or a
 /// `Monitor` — reconstructed from the session's transcript.
 struct BackgroundTask: Identifiable, Equatable, Sendable {
-    enum Kind: String, Sendable { case agent, shell, monitor }
+    enum Kind: String, Sendable { case agent, shell, monitor, workflow }
     enum State: String, Sendable { case running, completed, failed, stopped }
 
     /// Claude Code's task id (`backgroundTaskId` / `agentId` / Monitor's task).
@@ -25,6 +25,9 @@ struct BackgroundTask: Identifiable, Equatable, Sendable {
     var events = 0
     /// Where the output goes (a path inside the session's sandbox for shells).
     var outputPath: String?
+    /// A workflow's run id (`wf_…`): its agents are under the session's
+    /// `subagents/workflows/<run id>/` (see `WorkflowScanner`).
+    var runID: String?
     /// Launched before Sandshell started watching and never seen finishing —
     /// Claude Code's background tasks don't outlive its process.
     var orphaned = false
@@ -115,7 +118,7 @@ struct BackgroundTaskParser: Sendable {
 
     private mutating func noteLaunch(_ block: [String: Any], at: Date) {
         guard let id = block["id"] as? String, let tool = block["name"] as? String,
-              ["Bash", "Agent", "Task", "Monitor"].contains(tool) else { return }
+              ["Bash", "Agent", "Task", "Monitor", "Workflow"].contains(tool) else { return }
         let input = block["input"] as? [String: Any] ?? [:]
         // A foreground Bash call never becomes a task; skip the bookkeeping.
         if tool == "Bash", input["run_in_background"] as? Bool != true { return }
@@ -127,6 +130,9 @@ struct BackgroundTaskParser: Sendable {
         case "Agent", "Task":
             title = description ?? "Subagent"
             detail = input["subagent_type"] as? String
+        case "Workflow":
+            title = (input["name"] as? String) ?? "Workflow"   // the script's meta name arrives with the result
+            detail = nil
         default:
             title = description ?? command ?? tool
             detail = command
@@ -141,7 +147,16 @@ struct BackgroundTaskParser: Sendable {
         var taskID: String?
         var kind = BackgroundTask.Kind.shell
         var outputPath: String?
+        var title = launch.title, detail = launch.detail, runID: String?
         switch launch.tool {
+        case "Workflow":
+            kind = .workflow
+            taskID = toolUseResult?["taskId"] as? String
+                ?? Self.firstMatch(#"Workflow launched in background\. Task ID: ([A-Za-z0-9_-]+)"#, in: resultText)
+            runID = toolUseResult?["runId"] as? String ?? Self.firstMatch(#"Run ID: (wf_[A-Za-z0-9_-]+)"#, in: resultText)
+            title = toolUseResult?["workflowName"] as? String ?? title
+            detail = toolUseResult?["summary"] as? String
+                ?? Self.firstMatch(#"Summary: ([^\n]+)"#, in: resultText)
         case "Bash":
             taskID = toolUseResult?["backgroundTaskId"] as? String
                 ?? Self.firstMatch(#"running in background with ID: ([A-Za-z0-9_-]+)"#, in: resultText)
@@ -157,8 +172,10 @@ struct BackgroundTaskParser: Sendable {
             taskID = Self.firstMatch(#"Monitor started \(task ([A-Za-z0-9_-]+)"#, in: resultText)
         }
         guard let taskID, !tasks.contains(where: { $0.id == taskID }) else { return }
-        tasks.append(BackgroundTask(id: taskID, kind: kind, title: launch.title, detail: launch.detail,
-                                    startedAt: launch.at, outputPath: outputPath))
+        var task = BackgroundTask(id: taskID, kind: kind, title: title, detail: detail,
+                                  startedAt: launch.at, outputPath: outputPath)
+        task.runID = runID
+        tasks.append(task)
     }
 
     private mutating func noteNotifications(in text: String, at: Date) {

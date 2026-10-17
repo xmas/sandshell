@@ -68,7 +68,8 @@ enum SelfTest {
         // The inspector starts closed, the sidebar and inspector at their default widths.
         for key in defaults.dictionaryRepresentation().keys
         where key.hasPrefix("filesPaneVisible") || key.hasPrefix("NSSplitView Subview Frames MainSplit")
-            || key.hasPrefix("filesTabs:") || key.hasPrefix("filesExpanded:") {
+            || key.hasPrefix("filesTabs:") || key.hasPrefix("filesExpanded:")
+            || ["sessionDetailsShown", "inspectorCardOrder", "inspectorCollapsedCards"].contains(key) {
             defaults.removeObject(forKey: key)
         }
         for key in defaults.dictionaryRepresentation().keys where key.hasPrefix("paneLayout:") {
@@ -103,6 +104,7 @@ enum SelfTest {
         case "question": await agentQuestion(window)
         case "mac": await macBehaviors(window)
         case "subagents": await subagentRows(window)
+        case "details": await sessionDetails(window)
         case "sandbox-access": await sandboxAccess(window)
         case "launch-failure": await launchFailure(window)
         case "fork": await fork(window)
@@ -727,6 +729,71 @@ enum SelfTest {
               && (try? String(contentsOf: lockedFile, encoding: .utf8)) == "edit keep me\n", "then it saves and closes")
         try? FileManager.default.removeItem(at: locked)
         try? FileManager.default.removeItem(at: typed)
+    }
+
+    /// Session Details beside a chat: shown with the setting on, its cards
+    /// there, a workflow run (made on disk the way Claude Code writes one)
+    /// opening in its window with phases and agents. Fixture: `chat`.
+    private static func sessionDetails(_ window: MainWindowController) async {
+        guard let tree = window.paneTree, let ws = window.workspaceController else { return log("no window") }
+        if !SessionDetails.isShown { SessionDetails.toggle() }
+        guard let s = ws.newChatInCurrentContext() else { return log("no folder to start a chat in") }
+        func view() -> ChatSessionView? { tree.surfaces.chats[s.id] }
+        check(await until(600) { view()?.session.phase == .ready }, "chat reaches ready")
+        guard let v = view() else { return }
+        await wait(1)
+        check(v.isInspectorShown, "Session Details shows beside the chat")
+        v.session.send(text: "Reply with exactly the word PONG and nothing else.", attachments: [])
+        check(await until(180) { v.session.phase == .ready && v.session.usage != nil }, "a turn gives it usage to show")
+        await wait(1)
+        snapshot(window, "details")
+        SessionDetails.toggle()
+        await wait(0.5)
+        check(v.isInspectorShown == false, "View ▸ Hide Session Details hides it")
+        SessionDetails.toggle()
+        await wait(0.5)
+        check(v.isInspectorShown, "and Show brings it back")
+
+        // A workflow run as Claude Code writes it.
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("sandshell-wf-\(UUID().uuidString)")
+        let transcript = tmp.appendingPathComponent("s1.jsonl")
+        let runDir = tmp.appendingPathComponent("s1/subagents/workflows/wf_test-1")
+        let scripts = tmp.appendingPathComponent("s1/workflows/scripts")
+        try? FileManager.default.createDirectory(at: runDir, withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(at: scripts, withIntermediateDirectories: true)
+        try? Data().write(to: transcript)
+        try? """
+        export const meta = {
+          name: 'review-changes',
+          description: 'Review the diff, then verify each finding',
+          phases: [{ title: 'Review', detail: 'one reviewer per area' }, { title: "Verify", detail: "skeptics" }],
+        }
+        """.write(to: scripts.appendingPathComponent("review-changes-wf_test-1.js"), atomically: true, encoding: .utf8)
+        let journal = [#"{"type":"launched"}"#,
+                       #"{"type":"started","agentId":"a1","label":"review:ui","phase":"Review"}"#,
+                       #"{"type":"started","agentId":"a2","label":"review:core","phase":"Review"}"#,
+                       #"{"type":"result","agentId":"a1","result":"ok"}"#,
+                       #"{"type":"started","agentId":"a3","label":"verify:1","phase":"Verify"}"#]
+        try? (journal.joined(separator: "\n") + "\n").write(to: runDir.appendingPathComponent("journal.jsonl"), atomically: true, encoding: .utf8)
+        for (id, tokens) in [("a1", 1200), ("a2", 3400), ("a3", 500)] {
+            let lines = [#"{"type":"user","isSidechain":true,"timestamp":"2026-10-17T07:00:00.000Z","message":{"role":"user","content":"go"}}"#,
+                         #"{"type":"assistant","isSidechain":true,"timestamp":"2026-10-17T07:01:30.000Z","message":{"id":"m","role":"assistant","model":"claude-opus-5-5","usage":{"input_tokens":\#(tokens),"output_tokens":0},"content":[{"type":"text","text":"done"}]}}"#]
+            try? (lines.joined(separator: "\n") + "\n").write(to: runDir.appendingPathComponent("agent-\(id).jsonl"), atomically: true, encoding: .utf8)
+        }
+        let runs = WorkflowScanner.scan(transcript: transcript)
+        check(runs.count == 1 && runs[0].name == "review-changes" && runs[0].phases.map(\.title) == ["Review", "Verify"],
+              "a workflow run reads with its name and phases (\(runs.map(\.name)))")
+        if let run = runs.first {
+            check(run.progress(of: run.phases[0]) == (done: 1, total: 2) && run.totalTokens == 5100
+                  && run.agents.first?.model == "claude-opus-5-5", "its agents: progress, tokens, model")
+            WorkflowWindowController.show(run, sessionID: s.id, workspace: ws, stop: nil)
+            await wait(1)
+            let w = NSApp.windows.first { $0.title == "review-changes" }
+            check(w?.isVisible == true, "the workflow opens in its window")
+            if let w { w.alphaValue = 0.01; snapshot(w, "workflow-window"); w.close() }
+        }
+        try? FileManager.default.removeItem(at: tmp)
+        ws.closeSession(s.id)
     }
 
     /// Subagents under their session: the scanner reads `<session>/subagents/`
@@ -2226,6 +2293,13 @@ enum SelfTest {
         if let c = chat(a.id) {
             let mcp = await until(20) { c.mcpServers != nil }
             check(mcp, "MCP status loads by itself")
+            // The /context breakdown, through the wrapper (Session Details' Context card).
+            await c.refreshContextUsage()
+            let usage = c.contextUsage
+            log("context: \(usage.map { "\($0.percentage)% of \($0.maxTokens), \($0.categories.map(\.name))" } ?? c.contextUsageUnavailable ?? "nil")")
+            check(usage.map { $0.maxTokens > 0 && $0.categories.contains { $0.kind == .used && $0.tokens > 0 } } == true,
+                  "the context breakdown comes back with used categories")
+            check(usage?.categories.contains { $0.kind == .free } == true, "and the free space")
         }
         // The full Undo / Stop / MCP round trip.
         ws.closeSession(a.id)

@@ -902,6 +902,35 @@ final class ChatSession: ObservableObject {
     }
 
     /// Ask Claude Code which MCP servers this session has, and how they're doing.
+    /// Claude Code's /context breakdown (nil until asked, or when the
+    /// sandbox's kit predates it — then `contextUsageUnavailable` says why).
+    @Published private(set) var contextUsage: ContextUsage?
+    @Published private(set) var contextUsageUnavailable: String?
+
+    func refreshContextUsage(detail: String = "full") async {
+        guard hasExtras else {
+            contextUsageUnavailable = "Needs the sandshell-claude kit (Settings ▸ Kits)."
+            return
+        }
+        do {
+            let v = try await extra(["op": "contextUsage", "detail": .string(detail)])
+            if let usage = ContextUsage(v) {
+                if usage != contextUsage { contextUsage = usage }
+                contextUsageUnavailable = nil
+            }
+        } catch {
+            // An older wrapper (sandbox not rebuilt since): it answers "Unknown Sandshell request".
+            contextUsageUnavailable = error.localizedDescription.contains("Unknown Sandshell request")
+                ? "Rebuild this sandbox to see the breakdown (its kit predates it)." : error.localizedDescription
+        }
+    }
+
+    /// Compact the conversation now (Claude Code's /compact).
+    func compact() {
+        guard phase == .ready else { return }
+        send(text: "/compact", attachments: [])
+    }
+
     func refreshMCP() async throws {
         mcpServers = Self.mcpServers(try await extra(["op": "mcpStatus"]))
     }

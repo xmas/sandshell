@@ -111,7 +111,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 #endif
     }
 
+    /// Launched as the host of the unit tests: no windows, sandboxes or
+    /// restored state — the tests exercise the code, not the app.
+    static let isHostingTests = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+        || ProcessInfo.processInfo.environment["XCTestBundlePath"] != nil
+
     func applicationDidFinishLaunching(_ notification: Notification) {
+        if Self.isHostingTests { return }
         // Patch PATH first so `sbx`/`docker`/`brew` resolve when launched from
         // Finder/Spotlight, and so libghostty's spawned subprocess inherits it.
         PathFixer.patchProcessPath()
@@ -713,6 +719,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: Session menu (the focused pane's session, like the toolbar)
 
+    @MainActor @objc func toggleSessionDetails(_ sender: Any?) { SessionDetails.toggle() }
     @MainActor @objc func focusSessionFilter(_ sender: Any?) { activeController?.sidebarController?.focusFilter() }
     @MainActor @objc func reopenClosedSession(_ sender: Any?) { activeController?.reopenClosedSession() }
     @MainActor @objc func renameSession(_ sender: Any?) { activeController?.sidebarController?.beginRenameSelected() }
@@ -833,6 +840,9 @@ extension AppDelegate: NSMenuItemValidation {
         case #selector(toggleFiles(_:)):
             item.title = controller?.isFilesShown == true ? "Hide Files" : "Show Files"
             return controller != nil
+        case #selector(toggleSessionDetails(_:)):
+            item.title = SessionDetails.isShown ? "Hide Session Details" : "Show Session Details"
+            return true
         case #selector(toggleSessionSidebar(_:)):
             item.title = controller?.isSidebarCollapsed == true ? "Show Sidebar" : "Hide Sidebar"
             return controller != nil
