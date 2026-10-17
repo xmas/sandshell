@@ -245,12 +245,12 @@ private struct AgentsInspectorPane: View {
 /// (rebuilding the container) on confirmation. Switching panes discards edits.
 private struct MountsInspectorPane: View {
     @ObservedObject var controller: WorkspaceController
-    @StateObject private var model: MountConfigModel
+    @State private var model: MountConfigModel
     @State private var confirming = false
 
     init(controller: WorkspaceController) {
         self.controller = controller
-        _model = StateObject(wrappedValue: MountConfigModel(
+        _model = State(initialValue: MountConfigModel(
             home: controller.home, root: controller.rootURL, policy: controller.policy))
     }
 
