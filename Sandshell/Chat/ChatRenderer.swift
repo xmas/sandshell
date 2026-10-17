@@ -764,17 +764,24 @@ enum SyntaxHighlighter {
         let full = NSRange(location: 0, length: out.length)
         let hashComments = ["python", "shell", "ruby", "yaml", "toml"].contains(lang)
 
-        func paint(_ pattern: String, _ color: NSColor, options: NSRegularExpression.Options = []) {
-            guard let re = try? NSRegularExpression(pattern: pattern, options: options) else { return }
+        func paint(_ pattern: String, _ color: NSColor) {
+            guard let re = try? NSRegularExpression(pattern: pattern) else { return }
             for m in re.matches(in: source, range: full) { out.addAttribute(.foregroundColor, value: color, range: m.range) }
         }
         paint(#"\b\d+(\.\d+)?\b"#, .systemBlue)
         paint(#"\b[A-Z][A-Za-z0-9_]+\b"#, .systemTeal)
         let words = keywords[lang] ?? keywords["swift"]!.union(keywords["js"]!)
         paint(#"\b("# + words.map(NSRegularExpression.escapedPattern(for:)).joined(separator: "|") + #")\b"#, .systemPink)
-        paint(#""(\\.|[^"\\\n])*"|'(\\.|[^'\\\n])*'|`(\\.|[^`\\])*`"#, .systemRed)
-        paint(hashComments ? #"#.*$"# : #"//.*$"#, .secondaryLabelColor, options: .anchorsMatchLines)
-        paint(#"/\*[\s\S]*?\*/"#, .secondaryLabelColor)
+        // Strings and comments in one pass, leftmost first: a comment marker in
+        // a string ("https://…", "#tag") stays string, a quote in a comment stays comment.
+        let string = #""(\\.|[^"\\\n])*"|'(\\.|[^'\\\n])*'|`(\\.|[^`\\])*`"#
+        let comment = (hashComments ? #"#.*$"# : #"//.*$"#) + #"|/\*[\s\S]*?\*/"#
+        if let re = try? NSRegularExpression(pattern: "(?<string>\(string))|\(comment)", options: .anchorsMatchLines) {
+            for m in re.matches(in: source, range: full) {
+                let isString = m.range(withName: "string").location != NSNotFound
+                out.addAttribute(.foregroundColor, value: isString ? NSColor.systemRed : .secondaryLabelColor, range: m.range)
+            }
+        }
         return out
     }
 }

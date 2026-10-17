@@ -1312,10 +1312,24 @@ struct ChatRendererTests {
         func commentMarkersInsideStringsStayString(language: String, source: String, inside: String) throws {
             let highlighted = SyntaxHighlighter.highlight(source, language: language, font: font)
             let range = try #require(CRFixture.range(of: inside, in: highlighted))
-            let color = CRFixture.color(in: highlighted, at: range.location)
-            withKnownIssue("Comments are painted after strings by a regex that knows nothing about string literals, so a // (or # in hash-comment languages) inside a string, such as a URL, turns the rest of the line comment-gray") {
-                #expect(color == NSColor.systemRed)
-            }
+            #expect(CRFixture.color(in: highlighted, at: range.location) == NSColor.systemRed)
+        }
+
+        @Test(.tags(.edgeCase), arguments: [
+            ("swift", "x // don't \"quote\" me", "quote"),
+            ("swift", "/* \"a\" */ let b = 1", "a"),
+            ("python", "x = 1  # it's \"here\"", "here"),
+        ])
+        func quotesInsideCommentsStayComment(language: String, source: String, inside: String) throws {
+            let highlighted = SyntaxHighlighter.highlight(source, language: language, font: font)
+            let range = try #require(CRFixture.range(of: inside, in: highlighted))
+            #expect(CRFixture.color(in: highlighted, at: range.location) == NSColor.secondaryLabelColor)
+        }
+
+        @Test func aStringAfterACommentOnTheNextLineIsStillAString() throws {
+            let highlighted = SyntaxHighlighter.highlight("// see \"x\"\nlet s = \"https://a.b\" // c", language: "swift", font: font)
+            try CRFixture.verifyTokenColor("\"https://a.b\"", in: highlighted, is: .systemRed)
+            try CRFixture.verifyTokenColor("// c", in: highlighted, is: .secondaryLabelColor)
         }
     }
 
