@@ -231,10 +231,10 @@ private struct KitsInspectorPane: View {
 /// Agents pane for the inspector: register custom (kit-defined) agents and pick
 /// which this workspace offers. Applies immediately — nothing to rebuild.
 private struct AgentsInspectorPane: View {
-    @StateObject private var model: AgentConfigModel
+    @State private var model: AgentConfigModel
 
     init(controller: WorkspaceController) {
-        _model = StateObject(wrappedValue: AgentConfigModel(
+        _model = State(initialValue: AgentConfigModel(
             enabled: controller.customAgents, apply: { [weak controller] in controller?.setCustomAgents($0) }))
     }
 
