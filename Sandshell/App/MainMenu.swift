@@ -248,8 +248,9 @@ enum MainMenu {
         mainMenu.addItem(helpItem)
         let helpMenu = NSMenu(title: "Help")
         helpItem.submenu = helpMenu
+        // ⌥⌘/: ⇧⌘/ (⌘?) is the system's own Help-menu search.
         helpMenu.addItem(NSMenuItem("Keyboard Shortcuts", action: #selector(AppDelegate.showKeyboardShortcuts(_:)),
-                                    key: "/", modifiers: [.command, .shift]))
+                                    key: "/", modifiers: [.command, .option]))
         helpMenu.addItem(NSMenuItem("Release Notes", action: #selector(AppDelegate.showReleaseNotes(_:))))
         helpMenu.addItem(.separator())
         helpMenu.addItem(NSMenuItem("Show Sandshell Log", action: #selector(AppDelegate.showSandshellLog(_:))))

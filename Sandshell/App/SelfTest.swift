@@ -944,7 +944,7 @@ enum SelfTest {
         let shortcuts = ShortcutsWindowController.collect()
         func has(_ title: String, _ keys: String) -> Bool { shortcuts.contains { $0.title == title && $0.keys == keys } }
         check(has("Stop", "⌘.") && has("Restart", "⌘R") && has("Reopen Closed Session", "⇧⌘T")
-              && has("Filter Sessions", "⌥⌘F") && has("Print…", "⌘P") && has("Keyboard Shortcuts", "⇧⌘/"),
+              && has("Filter Sessions", "⌥⌘F") && has("Print…", "⌘P") && has("Keyboard Shortcuts", "⌥⌘/"),
               "the menu bar has Session, File and Help commands with their shortcuts")
         check(!shortcuts.contains { $0.title == "Show Tab Bar" || $0.title == "Move Tab to New Window" },
               "no tab commands in a window that doesn't tab")
