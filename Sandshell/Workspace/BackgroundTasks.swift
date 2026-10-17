@@ -49,7 +49,9 @@ struct BackgroundTaskParser: Sendable {
     /// Background-capable tool calls awaiting their result, by tool_use id.
     private var launches: [String: Launch] = [:]
     /// Notifications show up twice (queued, then delivered); handle each once.
-    private var seenNotifications: Set<Int> = []
+    /// The queued copies not yet delivered, by body: a delivery uses one up,
+    /// so the same text queued again later (a Monitor's repeated line) counts.
+    private var undelivered: [String: Int] = [:]
 
     private struct Launch: Sendable {
         let tool: String
@@ -82,9 +84,12 @@ struct BackgroundTaskParser: Sendable {
                 for block in Self.blocks(obj["message"]) where block["type"] as? String == "tool_result" {
                     noteResult(block, toolUseResult: obj["toolUseResult"] as? [String: Any], at: at)
                 }
-                if let text = Self.text(of: obj["message"]) { noteNotifications(in: text, at: at) }
+                if let text = Self.text(of: obj["message"]) { noteNotifications(in: text, at: at, queued: false) }
             case "queue-operation":
-                if let content = obj["content"] as? String { noteNotifications(in: content, at: at) }
+                // Only an enqueue is a new entry (a dequeue, remove… is that entry leaving).
+                if obj["operation"] as? String ?? "enqueue" == "enqueue", let content = obj["content"] as? String {
+                    noteNotifications(in: content, at: at, queued: true)
+                }
             default:
                 continue
             }
@@ -178,12 +183,17 @@ struct BackgroundTaskParser: Sendable {
         tasks.append(task)
     }
 
-    private mutating func noteNotifications(in text: String, at: Date) {
+    private mutating func noteNotifications(in text: String, at: Date, queued: Bool) {
         guard text.contains("<task-notification>") else { return }
         for chunk in text.components(separatedBy: "<task-notification>").dropFirst() {
             let body = chunk.components(separatedBy: "</task-notification>").first ?? chunk
-            guard seenNotifications.insert(body.hashValue).inserted,
-                  let id = Self.tag("task-id", in: body),
+            if queued {
+                undelivered[body, default: 0] += 1
+            } else if let copies = undelivered[body] {
+                undelivered[body] = copies > 1 ? copies - 1 : nil
+                continue   // the delivered copy of one already handled
+            }
+            guard let id = Self.tag("task-id", in: body),
                   let i = tasks.firstIndex(where: { $0.id == id }) else { continue }
             var summary = Self.tag("summary", in: body)
             let status = Self.tag("status", in: body)?.lowercased()
@@ -268,8 +278,9 @@ enum SubagentProgress {
         defer { try? fh.close() }
         let size = (try? fh.seekToEnd()) ?? 0
         try? fh.seek(toOffset: size > UInt64(maxBytes) ? size - UInt64(maxBytes) : 0)
-        guard let data = try? fh.readToEnd(), let text = String(data: data, encoding: .utf8) else { return nil }
-        for line in text.split(separator: "\n").reversed() {
+        // Lossy: the window can start mid-character (that first line is cut anyway).
+        guard let data = try? fh.readToEnd() else { return nil }
+        for line in String(decoding: data, as: UTF8.self).split(separator: "\n").reversed() {
             guard line.contains("\"assistant\""),
                   let obj = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
                   obj["type"] as? String == "assistant",
@@ -277,9 +288,10 @@ enum SubagentProgress {
             for block in blocks.reversed() {
                 if block["type"] as? String == "tool_use", let name = block["name"] as? String {
                     let input = block["input"] as? [String: Any] ?? [:]
+                    // The first one that says something: a blank description falls through to the command.
                     let what = ["description", "file_path", "command", "pattern", "url", "query"]
-                        .lazy.compactMap { input[$0] as? String }.first
-                    return what.map { "\(name): \(BackgroundTaskParser.oneLine($0))" } ?? name
+                        .lazy.compactMap { (input[$0] as? String).map(BackgroundTaskParser.oneLine) }.first { !$0.isEmpty }
+                    return what.map { "\(name): \($0)" } ?? name
                 }
                 if block["type"] as? String == "text", let t = block["text"] as? String,
                    !t.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
