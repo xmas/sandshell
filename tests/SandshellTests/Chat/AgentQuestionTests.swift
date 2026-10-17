@@ -75,10 +75,13 @@ fileprivate enum AQFixture {
             ]]])
     }
 
+    /// A form for `question`, reading numbers as `locale` writes them (POSIX
+    /// unless a test says otherwise, so no case depends on the Mac's settings).
     @MainActor
-    static func makeForm(_ question: AgentQuestion) -> (form: AgentQuestionForm, log: AQAnswerLog) {
+    static func makeForm(_ question: AgentQuestion, locale: Locale = Locale(identifier: "en_US_POSIX"))
+        -> (form: AgentQuestionForm, log: AQAnswerLog) {
         let log = AQAnswerLog()
-        let form = AgentQuestionForm(question) { log.answers.append($0) }
+        let form = AgentQuestionForm(question, locale: locale) { log.answers.append($0) }
         return (form, log)
     }
 
@@ -226,6 +229,22 @@ fileprivate enum AQFixture {
         ("9007199254740993", true, nil),
         ("99999999999999999999", true, nil),
         ("1e20", true, nil),
+    ]
+
+    /// Typed text, the locale it's read in, integer?, and the number it is.
+    static let localizedNumberCases: [(String, String, Bool, Double?)] = [
+        ("3,5", "de_DE", false, 3.5),
+        ("-2,25", "fr_FR", false, -2.25),
+        ("1.000,5", "de_DE", false, 1000.5),
+        ("12,0", "de_DE", true, 12),
+        ("1,000", "en_US", false, 1000),
+        // JSON's spelling, as a default is filled in, reads anywhere.
+        ("3.5", "de_DE", false, 3.5),
+        ("2,5", "de_DE", true, nil),
+        ("3,5", "en_US", false, nil),
+        // Only the whole text: a number followed by more isn't that number.
+        ("3abc", "de_DE", false, nil),
+        ("3,5 kg", "de_DE", false, nil),
     ]
 }
 
@@ -675,6 +694,52 @@ struct AgentQuestionFormTests {
         #expect(form.previewed.isEmpty)
     }
 
+    @Test func clickingAChoicePicksItAndClickingAgainClearsIt() {
+        let field = AQFixture.field("color", kind: .choice(AQFixture.colors))
+        let (form, _) = AQFixture.makeForm(AQFixture.form([field]))
+        form.toggle(AQFixture.colors[0], in: field)
+        #expect(form.picks["color"] == "Red")
+        form.toggle(AQFixture.colors[1], in: field)
+        #expect(form.picks["color"] == "Blue", "Another option replaces the pick")
+        form.toggle(AQFixture.colors[1], in: field)
+        #expect(form.picks["color"] == nil, "Clicking the picked option clears it")
+        #expect(form.previewed["color"] == AQFixture.colors[1], "The option clicked last is previewed")
+    }
+
+    @Test func clickingAMultiChoiceAddsAndRemovesOptions() {
+        let field = AQFixture.field("sizes", kind: .multiChoice(AQFixture.sizes))
+        let (form, _) = AQFixture.makeForm(AQFixture.form([field]))
+        form.toggle(AQFixture.sizes[0], in: field)
+        form.toggle(AQFixture.sizes[2], in: field)
+        #expect(form.multiPicks["sizes"] == ["S", "L"])
+        form.toggle(AQFixture.sizes[0], in: field)
+        #expect(form.multiPicks["sizes"] == ["L"])
+        #expect(form.previewed["sizes"] == AQFixture.sizes[0])
+    }
+
+    @Test(.tags(.agentQuestionEdgeCase),
+          arguments: [AgentQuestion.Field.Kind.text(secret: false), .number(integer: true), .toggle])
+    func clickingAnOptionOfAFieldWithoutOptionsChangesNothing(kind: AgentQuestion.Field.Kind) {
+        let field = AQFixture.field("q", kind: kind)
+        let (form, _) = AQFixture.makeForm(AQFixture.form([field]))
+        form.toggle(AQFixture.colors[0], in: field)
+        #expect(form.picks.isEmpty)
+        #expect(form.multiPicks.isEmpty)
+        #expect(form.previewed.isEmpty)
+    }
+
+    /// What `$form[text:]` and `$form[isOn:]` bind a text box and a toggle to.
+    @Test func bindingSubscriptsReadAndWriteTheAnswers() {
+        let (form, _) = AQFixture.makeForm(AQFixture.form([AQFixture.field("name"),
+                                                            AQFixture.field("agree", kind: .toggle)]))
+        #expect(form[text: "name"] == "", "An untouched box is empty")
+        #expect(form[isOn: "agree"] == false, "An untouched toggle is off")
+        form[text: "name"] = "Ada"
+        form[isOn: "agree"] = true
+        #expect(form.texts == ["name": "Ada"])
+        #expect(form.toggles == ["agree": true])
+    }
+
     @Test func choiceValueIsThePick() {
         let field = AQFixture.field("color", kind: .choice(AQFixture.colors))
         let (form, _) = AQFixture.makeForm(AQFixture.form([field]))
@@ -728,6 +793,25 @@ struct AgentQuestionFormTests {
         let (form, _) = AQFixture.makeForm(AQFixture.form([field]))
         form.texts["n"] = typed
         #expect(form.value(field) == expected)
+    }
+
+    @Test(arguments: AQFixture.localizedNumberCases)
+    func numberIsReadAsTheLocaleWritesIt(typed: String, locale: String, integer: Bool, expected: Double?) {
+        let field = AQFixture.field("n", kind: .number(integer: integer))
+        let (form, _) = AQFixture.makeForm(AQFixture.form([field]), locale: Locale(identifier: locale))
+        form.texts["n"] = typed
+        #expect(form.value(field) == expected.map(JSONValue.number))
+    }
+
+    /// A required number typed with a decimal comma answers the field: Submit
+    /// isn't left disabled with nothing saying why.
+    @Test func decimalCommaAnswersARequiredNumber() {
+        let field = AQFixture.field("ratio", kind: .number(integer: false), required: true)
+        let (form, log) = AQFixture.makeForm(AQFixture.form([field]), locale: Locale(identifier: "de_DE"))
+        form.texts["ratio"] = "3,5"
+        #expect(form.canSubmit)
+        form.submit()
+        #expect(log.answers == [.accept(["ratio": .number(3.5)])])
     }
 
     @Test(.tags(.agentQuestionEdgeCase),

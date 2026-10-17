@@ -124,11 +124,12 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
     #endif
 
     /// Coalesce bursts of streaming updates into one pass per runloop turn.
+    /// The pass draws the latest items (`self.items`), not the first call's.
     func update(_ items: [ChatItem]) {
         self.items = items
         guard !pending else { return }
         pending = true
-        DispatchQueue.main.async { [weak self] in
+        Task { [weak self] in
             guard let self else { return }
             self.pending = false
             self.apply(self.items)
@@ -244,7 +245,9 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
         // Markdown links arrive uncolored; color every link but a tool group's line.
         out.enumerateAttribute(.link, in: whole) { value, range, _ in
             guard let value else { return }
-            let toggle = (value as? URL).map { $0.scheme == "sandshell-chat" && $0.path.hasPrefix("/group-") } ?? false
+            let toggle = (value as? URL).map {
+                $0.scheme == "sandshell-chat" && $0.path(percentEncoded: false).hasPrefix("/group-")
+            } ?? false
             if !toggle { out.addAttribute(.foregroundColor, value: NSColor.linkColor, range: range) }
         }
         Self.urlDetector?.enumerateMatches(in: text, range: whole) { m, _, _ in
@@ -258,13 +261,13 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
         func existing(_ token: String) -> String? {
             guard checked < 400 else { return nil }
             checked += 1
-            let expanded = (token.replacingOccurrences(of: "\\ ", with: " ") as NSString).expandingTildeInPath
+            let expanded = (token.replacing("\\ ", with: " ") as NSString).expandingTildeInPath
             let path = expanded.hasPrefix("/") ? expanded : (workdir as NSString).appendingPathComponent(expanded)
             return fm.fileExists(atPath: path) ? path : nil
         }
         func link(_ path: String, _ range: NSRange, line: String?) {
             guard free(range) else { return }
-            var link = URLComponents(url: URL(fileURLWithPath: path), resolvingAgainstBaseURL: false)
+            var link = URLComponents(url: URL(filePath: path, directoryHint: .checkFileSystem), resolvingAgainstBaseURL: false)
             if let line { link?.fragment = "L" + line }
             if let url = link?.url { out.addAttributes([.link: url, .foregroundColor: NSColor.linkColor], range: range) }
         }
@@ -493,7 +496,8 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
             return true
         }
         guard let url = link as? URL, url.scheme == "sandshell-chat", url.host == "toggle" else { return false }
-        let id = url.path.removingPercentEncoding.map { String($0.dropFirst()) } ?? ""
+        // Decoded once (`toggleURL` encoded it once): an id with a % in it survives.
+        let id = String(url.path(percentEncoded: false).dropFirst())
         if expanded.contains(id) { expanded.remove(id) } else { expanded.insert(id) }
         let keep = stickToBottom
         stickToBottom = false   // don't jump while the user reads what they opened

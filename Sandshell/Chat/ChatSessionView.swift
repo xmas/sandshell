@@ -1,4 +1,3 @@
-import AppKit
 import Combine
 import SwiftUI
 
@@ -34,6 +33,8 @@ final class ChatSessionView: NSView {
     private var sendDespiteOtherApp = false
     /// "Send When It Finishes": the composer's message goes once the other app is idle.
     private(set) var sendingWhenOtherAppIdles = false
+    /// Gives up on "Send When It Finishes"; each new wait replaces it.
+    private var idleTimeout: Task<Void, Never>?
 
     /// Maps dropped/pasted file URLs to paths the sandbox can read (files outside
     /// the mounts are copied into the workspace's drops dir by the host).
@@ -77,6 +78,9 @@ final class ChatSessionView: NSView {
 
     /// Relaunch the agent on this conversation (the pane wires it).
     var onReconnect: (() -> Void)?
+
+    /// The session's name, as the sidebar shows it (the pane wires it).
+    var sessionName: (() -> String?)?
 
     /// A reply's "Fork to New Chat" (the window wires it to the controller).
     var onFork: ((String) -> Void)? {
@@ -128,6 +132,7 @@ final class ChatSessionView: NSView {
         composer.onSubmit = { [weak self] text, attachments in
             guard let self else { return false }
             self.sendingWhenOtherAppIdles = false   // sent (or queued) by hand
+            self.idleTimeout?.cancel()
             return self.session.submit(text: text, attachments: attachments)
         }
         composer.shouldSubmit = { [weak self] in self?.confirmSendWhileOtherAppWorks() ?? true }
@@ -256,8 +261,11 @@ final class ChatSessionView: NSView {
         session.$question.sink { [weak self] in self?.showQuestion($0) }.store(in: &bag)
         session.$mcpServers.sink { [weak self] in self?.showMCPSummary($0) }.store(in: &bag)
         session.$hasQueued.dropFirst().sink { [weak self] _ in
-            guard let self else { return }
-            DispatchQueue.main.async { self.showPhase(self.session.phase) }
+            // @Published sends before it stores: read it on the next turn.
+            Task { [weak self] in
+                guard let self else { return }
+                self.showPhase(self.session.phase)
+            }
         }.store(in: &bag)
         session.$hasExtras.sink { [weak self] on in
             self?.mcpButton.isHidden = !on
@@ -328,10 +336,10 @@ final class ChatSessionView: NSView {
     private func showMCPSummary(_ servers: [ChatSession.MCPServer]?) {
         guard let servers else { mcpButton.title = "MCP"; mcpButton.contentTintColor = nil; return }
         let failing = servers.filter { $0.status == "failed" || $0.status == "needs-auth" }
-        mcpButton.title = servers.isEmpty ? "MCP" : "MCP \(servers.filter { $0.status == "connected" }.count)/\(servers.count)"
+        mcpButton.title = servers.isEmpty ? "MCP" : "MCP \(servers.count { $0.status == "connected" })/\(servers.count)"
         mcpButton.contentTintColor = failing.isEmpty ? nil : .systemRed
         mcpButton.toolTip = failing.isEmpty ? "MCP servers in this session"
-            : "\(failing.map(\.name).joined(separator: ", ")) \(failing.count == 1 ? "isn’t" : "aren’t") working"
+            : "\(failing.map(\.name).formatted()) \(failing.count == 1 ? "isn’t" : "aren’t") working"
     }
 
     // MARK: Inspector (beside the conversation)
@@ -413,9 +421,10 @@ final class ChatSessionView: NSView {
                     return Alerts.inform("Nothing to undo", preview.error ?? "These files are already as they were before this message.", in: window)
                 }
                 let names = preview.files.map { ($0 as NSString).lastPathComponent }
+                // The first eight, then how many more: "a.swift, b.swift, and 3 more".
+                let shown = Array(names.prefix(8)) + (names.count > 8 ? ["\(names.count - 8) more"] : [])
                 let info = "Puts \(names.count == 1 ? "1 file" : "\(names.count) files") back as they were before it "
-                    + "(+\(preview.insertions) −\(preview.deletions) lines):\n\(names.prefix(8).joined(separator: ", "))"
-                    + (names.count > 8 ? " and \(names.count - 8) more" : "")
+                    + "(+\(preview.insertions) −\(preview.deletions) lines):\n\(shown.formatted())"
                     + "\n\nChanges made by shell commands aren’t tracked and stay as they are. The conversation isn’t changed."
                 guard await Alerts.confirm("Undo the changes from this message?", info, confirm: "Undo Changes",
                                            destructive: true, in: window) else { return }
@@ -431,9 +440,9 @@ final class ChatSessionView: NSView {
     private func showUsage(_ usage: ChatSession.Usage?) {
         guard let usage else { usageLabel.stringValue = ""; return }
         var parts = ["\(Format.tokens(usage.used)) / \(Format.tokens(usage.size)) ctx"]
-        if let cost = usage.cost { parts.append(String(format: "$%.2f", cost)) }
+        if let cost = usage.cost { parts.append(cost.formatted(.currency(code: "USD"))) }
         usageLabel.stringValue = parts.joined(separator: " · ")
-        usageLabel.toolTip = "Context: \(usage.used) of \(usage.size) tokens"
+        usageLabel.toolTip = "Context: \(usage.used.formatted()) of \(usage.size.formatted()) tokens"
     }
 
 
@@ -533,7 +542,8 @@ final class ChatSessionView: NSView {
         alert.addButton(withTitle: "Send When It Finishes")
         alert.addButton(withTitle: "Send Anyway")
         alert.addButton(withTitle: "Cancel")
-        alert.beginSheetModal(for: window) { [weak self] response in
+        Task { [weak self] in
+            let response = await alert.beginSheetModal(for: window)
             guard let self else { return }
             switch response {
             case .alertFirstButtonReturn: self.sendWhenOtherAppIdles()
@@ -552,21 +562,26 @@ final class ChatSessionView: NSView {
             guard let self, self.sendingWhenOtherAppIdles else { return }
             self.sendingWhenOtherAppIdles = false
             self.session.onOtherAppIdle = nil
+            self.idleTimeout?.cancel()
             // Give its last lines a moment to land, so the reload sees them.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+            Task { [weak self] in
+                try? await Task.sleep(for: .seconds(1.5))
                 guard let self else { return }
                 self.sendDespiteOtherApp = true
                 self.composer.submitFromButton()
             }
         }
         sendingWhenOtherAppIdles = true
+        // An earlier wait's timeout mustn't end this one.
+        idleTimeout?.cancel()
         // It may have finished while the question was up.
         guard session.otherAppIsWorking else { return send() }
         statusLabel.stringValue = "Sends when \(session.otherWriterName) finishes…"
         session.onOtherAppIdle = send
-        // Don't wait forever on an app that never says it's done.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 30 * 60) { [weak self] in
-            guard let self, self.sendingWhenOtherAppIdles else { return }
+        // Don't wait forever on an app that never says it's done (half an hour awake).
+        idleTimeout = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(30 * 60), clock: .suspending)
+            guard !Task.isCancelled, let self, self.sendingWhenOtherAppIdles else { return }
             self.sendingWhenOtherAppIdles = false
             self.session.onOtherAppIdle = nil
             self.showPhase(self.session.phase)
@@ -594,45 +609,29 @@ final class ChatSessionView: NSView {
 
 }
 
-/// An empty chat: a sea of creatures to stir up, over what to do next.
-private struct ChatEmptyState: View {
-    let agent: String
-    let folder: String
-
-    var body: some View {
-        SeaBackdrop {
-            VStack(spacing: 14) {
-                Text("What should \(agent) work on?")
-                    .font(.title3.weight(.medium))
-                    .foregroundStyle(.secondary)
-                Text("It works in \(folder), inside its sandbox. Type / for commands, @ to mention a file, or drop files here.")
-                    .font(.callout)
-                    .foregroundStyle(.tertiary)
-                    .multilineTextAlignment(.center)
-                    .frame(maxWidth: 360)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .padding(.horizontal, 24)
-            .accessibilityElement(children: .combine)
-        }
-    }
-}
-
 // MARK: - File ▸ Print / Export Conversation
 
 extension ChatSessionView {
     @objc func printDocument(_ sender: Any?) { transcript.printTranscript() }
 
+    /// What File ▸ Export Conversation… calls the conversation (its heading)
+    /// and the file it suggests: the session's own name, whichever session the
+    /// window's title follows.
+    var exportName: (heading: String, fileName: String) {
+        let name = sessionName?() ?? session.title
+        return (name, (name.isEmpty ? "Conversation" : name).replacing("/", with: "-") + ".md")
+    }
+
     @objc func exportConversation(_ sender: Any?) {
         guard let window else { return }
-        let name = window.title.components(separatedBy: " — ").last ?? session.title
+        let name = exportName
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.init(filenameExtension: "md") ?? .plainText]
-        panel.nameFieldStringValue = (name.isEmpty ? "Conversation" : name).replacingOccurrences(of: "/", with: "-") + ".md"
-        panel.directoryURL = URL(fileURLWithPath: session.workdir)
-        let markdown = session.markdownExport(sessionName: name)
-        panel.beginSheetModal(for: window) { response in
-            guard response == .OK, let url = panel.url else { return }
+        panel.nameFieldStringValue = name.fileName
+        panel.directoryURL = URL(filePath: session.workdir, directoryHint: .isDirectory)
+        let markdown = session.markdownExport(sessionName: name.heading)
+        Task {
+            guard await panel.beginSheetModal(for: window) == .OK, let url = panel.url else { return }
             do { try markdown.write(to: url, atomically: true, encoding: .utf8) }
             catch { Alerts.inform("Couldn’t export the conversation.", error.localizedDescription, in: window) }
         }

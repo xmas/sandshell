@@ -1767,6 +1767,7 @@ final class TerminalStackController: NSViewController {
             view.onFork = { [controller] reply in
                 if controller.forkChat(id, upTo: reply) == nil { NSSound.beep() }
             }
+            view.sessionName = { [controller] in controller.session(id: id)?.name }
             view.resolveFileURLs = { urls in
                 Self.materializeDroppedURLs(urls, workdir: current.workdir).map { URL(fileURLWithPath: $0) }
             }

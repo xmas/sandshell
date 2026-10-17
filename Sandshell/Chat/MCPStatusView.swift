@@ -15,20 +15,24 @@ struct MCPStatusView: View {
                 Text("MCP Servers").font(.headline)
                 Spacer()
                 if busy == "*" { ProgressView().controlSize(.small) }
-                Button { run("*") { try await session.refreshMCP() } } label: { Image(systemName: "arrow.clockwise") }
+                Button("Check Again", systemImage: "arrow.clockwise", action: refresh)
+                    .labelStyle(.iconOnly)
                     .buttonStyle(.borderless).help("Check again")
             }
             .padding([.horizontal, .top], 14).padding(.bottom, 8)
             Divider()
             if let servers = session.mcpServers {
                 if servers.isEmpty {
-                    Text("This session has no MCP servers. Add them in Settings ▸ MCP, or in the project’s .mcp.json.")
-                        .font(.callout).foregroundStyle(.secondary).padding(14)
+                    ContentUnavailableView("No MCP Servers", systemImage: "server.rack",
+                                           description: Text("Add them in Settings ▸ MCP, or in the project’s .mcp.json."))
                 } else {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 0) {
                             ForEach(servers) { server in
-                                row(server)
+                                MCPServerRow(server: server, isBusy: busy == server.name,
+                                             isExpanded: $expanded[contains: server.name],
+                                             reconnect: { reconnect(server) },
+                                             toggleEnabled: { toggleEnabled(server) })
                                 Divider().padding(.leading, 14)
                             }
                         }
@@ -44,50 +48,19 @@ struct MCPStatusView: View {
             }
         }
         .frame(width: 400)
-        .task { run("*") { try await session.refreshMCP() } }
+        .task { refresh() }
     }
 
-    @ViewBuilder private func row(_ s: ChatSession.MCPServer) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 8) {
-                Circle().fill(Self.color(s.status)).frame(width: 8, height: 8)
-                Text(s.name).font(.system(size: 13, weight: .semibold))
-                if let v = s.version { Text(v).font(.caption).foregroundStyle(.tertiary) }
-                Spacer()
-                Text(Self.label(s.status)).font(.caption).foregroundStyle(Self.color(s.status))
-            }
-            if let detail = s.detail {
-                Text(detail).font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
-                    .lineLimit(2).truncationMode(.middle).textSelection(.enabled)
-            }
-            if let err = s.error, s.status != "connected" {
-                Text(err).font(.caption).foregroundStyle(.red).textSelection(.enabled)
-            }
-            HStack(spacing: 10) {
-                if let where_ = s.source ?? s.scope { Text("from \(where_)").font(.caption).foregroundStyle(.tertiary) }
-                if !s.tools.isEmpty {
-                    Button(expanded.contains(s.name) ? "Hide \(s.tools.count) tools" : "\(s.tools.count) tools") {
-                        if expanded.contains(s.name) { expanded.remove(s.name) } else { expanded.insert(s.name) }
-                    }
-                    .buttonStyle(.link).font(.caption)
-                }
-                Spacer()
-                if busy == s.name { ProgressView().controlSize(.mini) }
-                if s.status != "disabled" {
-                    Button("Reconnect") { run(s.name) { try await session.reconnectMCP(s.name) } }
-                        .controlSize(.small)
-                }
-                Button(s.status == "disabled" ? "Enable" : "Disable") {
-                    run(s.name) { try await session.setMCP(s.name, enabled: s.status == "disabled") }
-                }
-                .controlSize(.small)
-            }
-            if expanded.contains(s.name) {
-                Text(s.tools.joined(separator: "  ·  ")).font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(.secondary).textSelection(.enabled)
-            }
-        }
-        .padding(.horizontal, 14).padding(.vertical, 10)
+    private func refresh() {
+        run("*") { try await session.refreshMCP() }
+    }
+
+    private func reconnect(_ server: ChatSession.MCPServer) {
+        run(server.name) { try await session.reconnectMCP(server.name) }
+    }
+
+    private func toggleEnabled(_ server: ChatSession.MCPServer) {
+        run(server.name) { try await session.setMCP(server.name, enabled: server.status == "disabled") }
     }
 
     private func run(_ key: String, _ work: @escaping () async throws -> Void) {
@@ -117,5 +90,14 @@ struct MCPStatusView: View {
         case "disabled": "Off"
         default: "Connecting…"
         }
+    }
+}
+
+private extension Set {
+    /// Whether `member` is in the set; setting it inserts or removes it
+    /// (a `Binding<Bool>` through `$set[contains: member]`).
+    subscript(contains member: Element) -> Bool {
+        get { contains(member) }
+        set { if newValue { insert(member) } else { remove(member) } }
     }
 }

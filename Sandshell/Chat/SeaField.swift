@@ -20,7 +20,6 @@ struct SeaField: View {
     /// Rings of water spreading from under touched creatures.
     private struct Ripple { let center: CGPoint; let start: Date; let size: Double }
     @State private var ripples: [Ripple] = []
-    @State private var lastNow = Date()
 
     static let size = CGSize(width: 400, height: 168)
     private static let reach: Double = 46       // how near the pointer has to pass
@@ -57,7 +56,7 @@ struct SeaField: View {
             Canvas { context, _ in draw(in: context, now: timeline.date) }
                 .onChange(of: timeline.date) { _, now in prune(now) }
         }
-        .contentShape(Rectangle())
+        .contentShape(.rect)
         .onContinuousHover(coordinateSpace: .local) { phase in
             if case .active(let point) = phase { stir(at: point) }
         }
@@ -77,7 +76,7 @@ struct SeaField: View {
 
     /// The pointer passed `point`: creatures near it react (unless they just did).
     private func stir(at point: CGPoint) {
-        let now = Date()
+        let now = Date.now
         for i in Self.creatures.indices {
             let h = home(i)
             let dx = h.x - point.x, dy = h.y - point.y
@@ -153,34 +152,6 @@ struct SeaField: View {
     }
 
     private static func easeOut(_ t: Double) -> Double { 1 - pow(1 - t, 3) }
-}
-
-/// The empty chat: the sea's band above the prompt, the sea itself spread over
-/// the whole pane so bubbles never meet an edge.
-struct SeaBackdrop<Content: View>: View {
-    var initialSplash: CGPoint?
-    @ViewBuilder var content: Content
-
-    var body: some View {
-        VStack(spacing: 14) {
-            Color.clear
-                .frame(maxWidth: SeaField.size.width)
-                .frame(height: SeaField.size.height)
-                .anchorPreference(key: SeaBandKey.self, value: .bounds) { $0 }
-            content.allowsHitTesting(false)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .backgroundPreferenceValue(SeaBandKey.self) { anchor in
-            GeometryReader { proxy in
-                if let anchor { SeaField(band: proxy[anchor], initialSplash: initialSplash) }
-            }
-        }
-    }
-}
-
-private struct SeaBandKey: PreferenceKey {
-    static let defaultValue: Anchor<CGRect>? = nil
-    static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) { value = value ?? nextValue() }
 }
 
 /// Small deterministic generator, so the field looks the same every time.
