@@ -598,14 +598,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     // ⇧⌘F (⌘F stays Find).
                     case "F": app.showSearch(nil); return true
                     case "f" where shift: app.showSearch(nil); return true
+                    case "s" where ctrl: app.toggleSessionSidebar(nil); return true
+                    case "t" where ctrl: app.toggleChatTerminal(nil); return true
+                    case ".": app.stopSession(nil); return true
+                    case "r" where !shift && !opt && !ctrl: app.restartSession(nil); return true
                     case "[", "{": app.selectPreviousSession(nil); return true
                     case "]", "}": app.selectNextSession(nil); return true
-                    default: break
-                    }
-                } else if ctrl {   // ⌃1 hides the sidebar (terminal only), ⌃2 shows it
-                    switch chars {
-                    case "1": app.hideSidebar(nil); return true
-                    case "2": app.showSidebar(nil); return true
                     default: break
                     }
                 }
@@ -627,8 +625,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// ⌘, — open the Settings window.
+    /// ⌘, — open the Settings window (for the front folder; with no window
+    /// open, the most recent folder's).
     @MainActor @objc func openSettings(_ sender: Any?) {
+        if let controller = activeController ?? windows.first { return controller.showSettings() }
+        showMainWindow(nil)
         activeController?.showSettings()
     }
 
@@ -705,15 +706,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         activeController?.newSession()
     }
 
-    /// ⌥1 — hide the sidebar (terminal only).
-    @MainActor @objc func hideSidebar(_ sender: Any?) {
-        activeController?.setSidebarCollapsed(true)
+    /// ⌃⌘S — show or hide the sidebar.
+    @MainActor @objc func toggleSessionSidebar(_ sender: Any?) {
+        activeController?.toggleSidebar()
     }
 
-    /// ⌥2 — show the sidebar.
-    @MainActor @objc func showSidebar(_ sender: Any?) {
-        activeController?.setSidebarCollapsed(false)
+    // MARK: Session menu (the focused pane's session, like the toolbar)
+
+    @MainActor @objc func focusSessionFilter(_ sender: Any?) { activeController?.sidebarController?.focusFilter() }
+    @MainActor @objc func reopenClosedSession(_ sender: Any?) { activeController?.reopenClosedSession() }
+    @MainActor @objc func renameSession(_ sender: Any?) { activeController?.sidebarController?.beginRenameSelected() }
+    @MainActor @objc func stopSession(_ sender: Any?) { activeController?.paneTree?.stopClicked() }
+    @MainActor @objc func restartSession(_ sender: Any?) { activeController?.paneTree?.headerRestartClicked() }
+    @MainActor @objc func revealSessionFolder(_ sender: Any?) { activeController?.paneTree?.revealInFinderClicked() }
+    @MainActor @objc func toggleChatTerminal(_ sender: Any?) { activeController?.paneTree?.toggleChatClicked() }
+    @MainActor @objc func openHostTerminal(_ sender: Any?) { activeController?.sidebarController?.openHostTerminal() }
+
+    // MARK: Help menu
+
+    @MainActor @objc func showSandshellLog(_ sender: Any?) { activeController?.sidebarController?.openSandshellLog() }
+    @MainActor @objc func showDaemonLog(_ sender: Any?) { activeController?.sidebarController?.openDaemonLog() }
+    @MainActor @objc func showStatusDebug(_ sender: Any?) { activeController?.sidebarController?.openStatusDebugWindow() }
+    @MainActor @objc func showReleaseNotes(_ sender: Any?) {
+        NSWorkspace.shared.open(URL(string: "https://github.com/xmas/homebrew-xmas/releases")!)
     }
+    @MainActor @objc func showKeyboardShortcuts(_ sender: Any?) { ShortcutsWindowController.shared.show() }
 
     /// ⌘⇧] — select the next session.
     @MainActor @objc func selectNextSession(_ sender: Any?) {
@@ -805,3 +822,51 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return true
     }
 }
+
+// MARK: - Menu validation
+
+extension AppDelegate: NSMenuItemValidation {
+    /// Workspace commands need a workspace window; toggles say what they'll do.
+    @MainActor func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        let controller = activeController
+        switch item.action {
+        case #selector(toggleFiles(_:)):
+            item.title = controller?.isFilesShown == true ? "Hide Files" : "Show Files"
+            return controller != nil
+        case #selector(toggleSessionSidebar(_:)):
+            item.title = controller?.isSidebarCollapsed == true ? "Show Sidebar" : "Hide Sidebar"
+            return controller != nil
+        case #selector(closeSessionOrWindow(_:)):
+            if let key = NSApp.keyWindow, !windows.contains(where: { $0.window === key }) {
+                item.title = "Close"
+                return true
+            }
+            item.title = controller?.closesSession == true ? "Close Session" : "Close Window"
+            return NSApp.keyWindow != nil
+        case #selector(reopenClosedSession(_:)):
+            return controller?.canReopenClosedSession ?? false
+        case #selector(renameSession(_:)):
+            return controller?.closesSession ?? false
+        case #selector(stopSession(_:)):
+            return controller?.paneTree?.canPerformSessionAction(#selector(TerminalStackController.stopClicked)) ?? false
+        case #selector(restartSession(_:)):
+            return controller?.paneTree?.canPerformSessionAction(#selector(TerminalStackController.headerRestartClicked)) ?? false
+        case #selector(revealSessionFolder(_:)):
+            return controller?.paneTree?.canPerformSessionAction(#selector(TerminalStackController.revealInFinderClicked)) ?? false
+        case #selector(toggleChatTerminal(_:)):
+            item.title = controller?.paneTree?.chatToggleTitle ?? "Show as Chat"
+            return controller?.paneTree?.canPerformSessionAction(#selector(TerminalStackController.toggleChatClicked)) ?? false
+        case #selector(newSession(_:)), #selector(newChat(_:)), #selector(duplicateWindow(_:)), #selector(openQuickly(_:)),
+             #selector(showSearch(_:)), #selector(openFilesInSplit(_:)), #selector(splitRight(_:)), #selector(splitDown(_:)),
+             #selector(closePane(_:)), #selector(focusNextPane(_:)), #selector(focusPreviousPane(_:)),
+             #selector(equalizePanes(_:)), #selector(selectNextSession(_:)), #selector(selectPreviousSession(_:)),
+             #selector(showBackgroundTasks(_:)), #selector(openHostTerminal(_:)), #selector(showSandshellLog(_:)),
+             #selector(showDaemonLog(_:)), #selector(showStatusDebug(_:)), #selector(closeWindow(_:)),
+             #selector(focusSessionFilter(_:)):
+            return controller != nil || (item.action == #selector(showSearch(_:)) && NSApp.keyWindow?.windowController is SearchWindowController)
+        default:
+            return true
+        }
+    }
+}
+

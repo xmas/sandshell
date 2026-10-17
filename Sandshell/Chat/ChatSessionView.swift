@@ -495,3 +495,25 @@ private struct ChatEmptyState: View {
         }
     }
 }
+
+// MARK: - File ▸ Print / Export Conversation
+
+extension ChatSessionView {
+    @objc func printDocument(_ sender: Any?) { transcript.printTranscript() }
+
+    @objc func exportConversation(_ sender: Any?) {
+        guard let window else { return }
+        let name = window.title.components(separatedBy: " — ").last ?? session.title
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.init(filenameExtension: "md") ?? .plainText]
+        panel.nameFieldStringValue = (name.isEmpty ? "Conversation" : name).replacingOccurrences(of: "/", with: "-") + ".md"
+        panel.directoryURL = URL(fileURLWithPath: session.workdir)
+        let markdown = session.markdownExport(sessionName: name)
+        panel.beginSheetModal(for: window) { response in
+            guard response == .OK, let url = panel.url else { return }
+            do { try markdown.write(to: url, atomically: true, encoding: .utf8) }
+            catch { Alerts.inform("Couldn’t export the conversation.", error.localizedDescription, in: window) }
+        }
+    }
+}
+

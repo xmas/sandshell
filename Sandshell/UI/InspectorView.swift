@@ -1,20 +1,22 @@
 import AppKit
 import SwiftUI
 
-/// The per-root settings inspector, shown as a native macOS sheet from the
-/// sidebar gear. A fixed-size view with a System-Settings-style tab strip at the
-/// top, the selected pane in the middle, and a Done button pinned at the bottom
-/// (also bound to Esc). The frame is fixed so switching panes never resizes or
-/// repositions the sheet.
+/// A folder's settings, in its Settings window (`SettingsWindowController`).
+/// A fixed-size view with a System-Settings-style tab strip at the top and the
+/// selected pane below; Esc closes the window. The frame is fixed so switching
+/// panes never resizes the window.
 struct InspectorView: View {
     @ObservedObject var controller: WorkspaceController
     let onClose: () -> Void
+    var onPaneChange: (InspectorPane) -> Void = { _ in }
     @State private var pane: InspectorPane
 
-    init(controller: WorkspaceController, initialPane: InspectorPane = .general, onClose: @escaping () -> Void) {
+    init(controller: WorkspaceController, initialPane: InspectorPane = .general, onClose: @escaping () -> Void,
+         onPaneChange: @escaping (InspectorPane) -> Void = { _ in }) {
         self.controller = controller
         self.onClose = onClose
-        _pane = State(initialValue: initialPane)
+        self.onPaneChange = onPaneChange
+        _pane = State(initialValue: initialPane == .git ? .general : initialPane)
     }
 
     /// Post (object: the workspace's controller) to open its settings on a tab
@@ -28,35 +30,26 @@ struct InspectorView: View {
             paneContent
                 .frame(width: InspectorMetrics.paneWidth, height: InspectorMetrics.paneHeight, alignment: .top)
                 .clipped()
-            Divider()
-            footer
         }
         .frame(width: InspectorMetrics.paneWidth + 20)
         .background(Color(nsColor: .windowBackgroundColor))
+        // Esc closes (no Done button: it's a window, with a close button).
+        .background(Button("", action: onClose).keyboardShortcut(.cancelAction)
+            .opacity(0).frame(width: 0, height: 0).accessibilityHidden(true))
+        .onChange(of: pane) { _, p in onPaneChange(p) }
     }
 
     /// Settings-style row of tinted icon tabs.
     private var tabStrip: some View {
         HStack(spacing: 4) {
             Spacer(minLength: 0)
-            ForEach(InspectorPane.allCases) { p in
+            ForEach(InspectorPane.allCases.filter { $0 != .git }) { p in
                 TabButton(pane: p, isSelected: pane == p) { pane = p }
             }
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 9)
-    }
-
-    private var footer: some View {
-        HStack {
-            Spacer()
-            Button("Close", action: onClose)
-                .keyboardShortcut(.cancelAction)   // Esc dismisses
-                .accessibilityIdentifier("inspector-close")
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
     }
 
     @ViewBuilder private var paneContent: some View {
@@ -113,6 +106,8 @@ private struct TabButton: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(pane.title)
+        .accessibilityAddTraits(isSelected ? [.isSelected, .isButton] : .isButton)
         .accessibilityIdentifier("inspector-tab-\(pane.rawValue)")
     }
 }

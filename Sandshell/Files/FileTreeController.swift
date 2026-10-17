@@ -17,6 +17,8 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
     var onGitStatus: ((GitStatus) -> Void)?
     /// Something under the root changed on disk (the editor reloads clean files).
     var onFilesChanged: (() -> Void)?
+    /// A file or folder was renamed or moved here (open tabs follow it).
+    var onFileMoved: ((URL, URL) -> Void)?
 
     private(set) var root: URL?
     private(set) var git = GitStatus.empty
@@ -80,7 +82,13 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
         outline.action = #selector(clicked)
         outline.doubleAction = #selector(doubleClicked)
         outline.setDraggingSourceOperationMask(.copy, forLocal: false)
+        outline.setDraggingSourceOperationMask([.move, .copy], forLocal: true)
+        outline.registerForDraggedTypes([.fileURL])
+        outline.allowsMultipleSelection = true
         outline.onQuickLook = { [weak self] in self?.quickLookSelection() }
+        outline.onReturn = { [weak self] in self?.openSelection() }
+        outline.onTrash = { [weak self] in self?.trash(self?.selectedURLs ?? []) }
+        outline.setAccessibilityLabel("Files")
         outline.setAccessibilityIdentifier("files-tree")
         let menu = NSMenu()
         menu.delegate = self
@@ -215,6 +223,7 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
         node.loadChildren()
         rootNode = node
         outline.reloadData()
+        restoreExpansion()
         watcher = FileWatcher(path: url.path) { [weak self] in self?.scheduleRefresh() }
         refreshGit()
     }
@@ -562,6 +571,245 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
         onOpen?(node.url)
     }
 
+    // MARK: Expansion (remembered per folder)
+
+    private var expansionKey: String? { root.map { "filesExpanded:" + $0.standardizedFileURL.path } }
+    private var restoringExpansion = false
+
+    private func relativePath(_ url: URL) -> String? {
+        guard let root, url.path.hasPrefix(root.path + "/") else { return nil }
+        return String(url.path.dropFirst(root.path.count + 1))
+    }
+
+    /// The node for `url`, loading folders on the way down.
+    func node(for url: URL) -> FileNode? {
+        guard let rootNode, let rel = relativePath(url) else { return nil }
+        var node = rootNode
+        for name in rel.split(separator: "/") {
+            if !node.isLoaded { node.loadChildren() }
+            guard let child = node.children?.first(where: { $0.name == name }) else { return nil }
+            node = child
+        }
+        return node
+    }
+
+    private func restoreExpansion() {
+        guard let key = expansionKey, let paths = UserDefaults.standard.stringArray(forKey: key), let root else { return }
+        restoringExpansion = true
+        defer { restoringExpansion = false }
+        for rel in paths.sorted(by: { $0.split(separator: "/").count < $1.split(separator: "/").count }) {
+            if let node = node(for: root.appendingPathComponent(rel)), node.isDirectory { outline.expandItem(node) }
+        }
+    }
+
+    private func saveExpansion() {
+        guard !restoringExpansion, filterResults == nil, searchGroups == nil, !changedOnly, let key = expansionKey else { return }
+        var expanded: [String] = []
+        for row in 0..<outline.numberOfRows {
+            if let node = outline.item(atRow: row) as? FileNode, node.isDirectory, outline.isItemExpanded(node),
+               let rel = relativePath(node.url) { expanded.append(rel) }
+        }
+        UserDefaults.standard.set(expanded, forKey: key)
+    }
+
+    func outlineViewItemDidExpand(_ notification: Notification) { saveExpansion() }
+    func outlineViewItemDidCollapse(_ notification: Notification) { saveExpansion() }
+
+    // MARK: Selection, Return, ⌘C
+
+    var selectedURLs: [URL] { outline.selectedRowIndexes.compactMap { (outline.item(atRow: $0) as? FileNode)?.url } }
+
+    /// Return: open the selected file(s); a folder opens or closes.
+    private func openSelection() {
+        let nodes = outline.selectedRowIndexes.compactMap { outline.item(atRow: $0) as? FileNode }
+        if nodes.count == 1, let folder = nodes.first, folder.isDirectory {
+            outline.isItemExpanded(folder) ? outline.collapseItem(folder) : outline.expandItem(folder)
+            return
+        }
+        for node in nodes where !node.isDirectory { onOpen?(node.url) }
+        if let match = outline.item(atRow: outline.selectedRow) as? MatchNode { onOpenAtLine?(match.url, match.line, match.text) }
+    }
+
+    /// ⌘C: the selected files (for Finder) and their paths (for text).
+    @objc func copy(_ sender: Any?) {
+        guard !selectedURLs.isEmpty else { return NSSound.beep() }
+        writeSelection(to: .general)
+    }
+
+    func writeSelection(to pb: NSPasteboard) {
+        let urls = selectedURLs
+        pb.clearContents()
+        pb.writeObjects(urls as [NSURL])
+        pb.setString(urls.map(\.path).joined(separator: "\n"), forType: .string)
+    }
+
+    #if DEBUG
+    func debugSelect(_ urls: [URL]) {
+        let rows = urls.compactMap { url -> Int? in node(for: url).map { outline.row(forItem: $0) } }.filter { $0 >= 0 }
+        outline.selectRowIndexes(IndexSet(rows), byExtendingSelection: false)
+    }
+    func debugRefresh() { refreshNow() }
+    func debugExpand(_ url: URL) { if let n = node(for: url) { outline.expandItem(n) } }
+    func debugCollapseAll() { outline.collapseItem(nil, collapseChildren: true) }
+    func debugIsExpanded(_ url: URL) -> Bool { node(for: url).map { outline.isItemExpanded($0) } ?? false }
+    #endif
+
+    // MARK: File operations (undoable)
+
+    private var undo: UndoManager? { view.window?.undoManager }
+
+    /// Where something new goes: the clicked/selected folder, or a file's folder, or the root.
+    private var targetFolder: URL? {
+        let url = menuTargets.first ?? selectedURLs.first
+        guard let url else { return root }
+        if let node = node(for: url), node.isDirectory { return url }
+        return url.deletingLastPathComponent()
+    }
+
+    static func unique(_ name: String, in dir: URL, copy: Bool = false) -> URL {
+        let base = (name as NSString).deletingPathExtension, ext = (name as NSString).pathExtension
+        func make(_ n: Int) -> URL {
+            let stem = copy ? (n == 1 ? "\(base) copy" : "\(base) copy \(n)") : (n == 1 ? base : "\(base) \(n)")
+            return dir.appendingPathComponent(ext.isEmpty ? stem : "\(stem).\(ext)")
+        }
+        var n = 1
+        while FileManager.default.fileExists(atPath: make(n).path) { n += 1 }
+        return make(n)
+    }
+
+    private func refreshNow() {
+        rootNode?.reloadLoaded()
+        if !filter.stringValue.isEmpty { applyFilter() } else { outline.reloadData() }
+    }
+
+    /// Select `url` in the tree (refreshing first), and start renaming it.
+    private func selectAndRename(_ url: URL) {
+        refreshNow()
+        guard let node = node(for: url) else { return }
+        var parent = node.url.deletingLastPathComponent()
+        var chain: [FileNode] = []
+        while parent.path.count > (root?.path.count ?? 0), let p = self.node(for: parent) { chain.insert(p, at: 0); parent.deleteLastPathComponent() }
+        chain.forEach { outline.expandItem($0) }
+        let row = outline.row(forItem: node)
+        guard row >= 0 else { return }
+        outline.selectRowIndexes([row], byExtendingSelection: false)
+        outline.scrollRowToVisible(row)
+        beginRename(row: row)
+    }
+
+    func newFile() { create(directory: false) }
+    func newFolder() { create(directory: true) }
+
+    private func create(directory: Bool) {
+        guard let dir = targetFolder else { return }
+        let url = Self.unique(directory ? "untitled folder" : "untitled.txt", in: dir)
+        do {
+            if directory { try FileManager.default.createDirectory(at: url, withIntermediateDirectories: false) }
+            else { try Data().write(to: url, options: .withoutOverwriting) }
+        } catch { return Alerts.inform("Couldn’t create “\(url.lastPathComponent)”.", error.localizedDescription) }
+        undo?.registerUndo(withTarget: self) { tree in MainActor.assumeIsolated { tree.trash([url], undoable: false) } }
+        undo?.setActionName(directory ? "New Folder" : "New File")
+        selectAndRename(url)
+    }
+
+    private func beginRename(row: Int) {
+        guard let node = outline.item(atRow: row) as? FileNode,
+              let cell = outline.view(atColumn: 0, row: row, makeIfNecessary: true) as? FileCell else { return }
+        cell.beginRenaming { [weak self] name in
+            guard let self, let name, !name.isEmpty, name != node.name, !name.contains("/") else {
+                self?.view.window?.makeFirstResponder(self?.outline)
+                return
+            }
+            self.move(node.url, to: node.url.deletingLastPathComponent().appendingPathComponent(name), action: "Rename")
+            self.view.window?.makeFirstResponder(self.outline)
+        }
+    }
+
+    /// Move or rename, undoably; open tabs follow.
+    @discardableResult
+    func move(_ from: URL, to: URL, action: String) -> Bool {
+        do { try FileManager.default.moveItem(at: from, to: to) } catch {
+            Alerts.inform("Couldn’t \(action.lowercased()) “\(from.lastPathComponent)”.", error.localizedDescription)
+            return false
+        }
+        onFileMoved?(from, to)
+        undo?.registerUndo(withTarget: self) { tree in MainActor.assumeIsolated { _ = tree.move(to, to: from, action: action) } }
+        undo?.setActionName(action)
+        refreshNow()
+        return true
+    }
+
+    func duplicate(_ urls: [URL]) {
+        var made: [URL] = []
+        for url in urls {
+            let copy = Self.unique(url.lastPathComponent, in: url.deletingLastPathComponent(), copy: true)
+            if (try? FileManager.default.copyItem(at: url, to: copy)) != nil { made.append(copy) }
+        }
+        guard !made.isEmpty else { return NSSound.beep() }
+        undo?.registerUndo(withTarget: self) { tree in MainActor.assumeIsolated { tree.trash(made, undoable: false) } }
+        undo?.setActionName("Duplicate")
+        refreshNow()
+    }
+
+    /// Move to Trash (⌘⌫); Undo puts them back.
+    func trash(_ urls: [URL], undoable: Bool = true) {
+        guard !urls.isEmpty else { return }
+        NSWorkspace.shared.recycle(urls) { [weak self] moved, error in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                if let error { return Alerts.inform("Couldn’t move to the Trash.", error.localizedDescription) }
+                if undoable {
+                    self.undo?.registerUndo(withTarget: self) { tree in
+                        MainActor.assumeIsolated {
+                            for (original, inTrash) in moved { try? FileManager.default.moveItem(at: inTrash, to: original) }
+                            tree.refreshNow()
+                        }
+                    }
+                    self.undo?.setActionName("Move to Trash")
+                }
+                self.refreshNow()
+            }
+        }
+    }
+
+    // MARK: Drops (Finder → a folder: copy in; within the tree: move)
+
+    func outlineView(_ outlineView: NSOutlineView, validateDrop info: NSDraggingInfo, proposedItem item: Any?,
+                     proposedChildIndex index: Int) -> NSDragOperation {
+        guard root != nil, filterResults == nil, searchGroups == nil, !changedOnly,
+              info.draggingPasteboard.canReadObject(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true])
+        else { return [] }
+        // Onto a folder (a file's own folder when dropped on a file).
+        var folder = item as? FileNode
+        if let f = folder, !f.isDirectory { folder = nil }
+        outlineView.setDropItem(folder, dropChildIndex: NSOutlineViewDropOnItemIndex)
+        let isInternal = info.draggingSource as? NSOutlineView === outlineView
+        return isInternal && !NSEvent.modifierFlags.contains(.option) ? .move : .copy
+    }
+
+    func outlineView(_ outlineView: NSOutlineView, acceptDrop info: NSDraggingInfo, item: Any?, childIndex index: Int) -> Bool {
+        guard let dest = (item as? FileNode)?.url ?? root,
+              let urls = info.draggingPasteboard.readObjects(forClasses: [NSURL.self],
+                                                             options: [.urlReadingFileURLsOnly: true]) as? [URL] else { return false }
+        let isInternal = info.draggingSource as? NSOutlineView === outlineView && !NSEvent.modifierFlags.contains(.option)
+        var done = false
+        undo?.beginUndoGrouping()
+        for url in urls where url.deletingLastPathComponent().standardizedFileURL != dest.standardizedFileURL || !isInternal {
+            guard !dest.path.hasPrefix(url.path + "/"), dest != url else { continue }   // not into itself
+            let target = Self.unique(url.lastPathComponent, in: dest, copy: !isInternal)
+            if isInternal {
+                done = move(url, to: target, action: "Move") || done
+            } else if (try? FileManager.default.copyItem(at: url, to: target)) != nil {
+                undo?.registerUndo(withTarget: self) { tree in MainActor.assumeIsolated { tree.trash([target], undoable: false) } }
+                undo?.setActionName("Copy")
+                done = true
+            }
+        }
+        undo?.endUndoGrouping()
+        refreshNow()
+        return done
+    }
+
     @objc private func doubleClicked() {
         guard let node = outline.item(atRow: outline.clickedRow) as? FileNode else { return }
         if node.isDirectory {
@@ -591,6 +839,38 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
         menu.addItem(.separator())
         add("Reveal in Finder") { NSWorkspace.shared.activateFileViewerSelecting(urls) }
         add("Open with Default App") { urls.forEach { NSWorkspace.shared.open($0) } }
+        if urls.count == 1, !urls[0].hasDirectoryPath {
+            let apps = NSWorkspace.shared.urlsForApplications(toOpen: urls[0]).prefix(12)
+            if !apps.isEmpty {
+                menu.addItem(NSMenuItem("Open With", submenu: apps.map { app in
+                    let item = NSMenuItem(FileManager.default.displayName(atPath: app.path)) {
+                        NSWorkspace.shared.open(urls, withApplicationAt: app, configuration: NSWorkspace.OpenConfiguration())
+                    }
+                    let icon = NSWorkspace.shared.icon(forFile: app.path)
+                    icon.size = NSSize(width: 16, height: 16)
+                    item.image = icon
+                    return item
+                }))
+            }
+        }
+        add("Share…") { [weak self] in
+            guard let self else { return }
+            let row = self.outline.clickedRow >= 0 ? self.outline.clickedRow : self.outline.selectedRow
+            let rect = row >= 0 ? self.outline.rect(ofRow: row) : self.outline.visibleRect
+            NSSharingServicePicker(items: urls as [NSURL]).show(relativeTo: rect, of: self.outline, preferredEdge: .maxY)
+        }
+        menu.addItem(.separator())
+        add("New File") { [weak self] in self?.newFile() }
+        add("New Folder") { [weak self] in self?.newFolder() }
+        if urls.count == 1 {
+            add("Rename…") { [weak self] in
+                guard let self, let node = self.node(for: urls[0]) else { return }
+                let row = self.outline.row(forItem: node)
+                if row >= 0 { self.beginRename(row: row) }
+            }
+        }
+        add("Duplicate") { [weak self] in self?.duplicate(urls) }
+        add("Move to Trash") { [weak self] in self?.trash(urls) }
         menu.addItem(.separator())
         add("Copy Path") { Self.copy(urls.map(\.path)) }
         if let root {
@@ -614,9 +894,16 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
 /// Outline that maps Space to Quick Look (the Finder convention).
 final class FileOutlineView: NSOutlineView {
     var onQuickLook: (() -> Void)?
+    var onReturn: (() -> Void)?
+    var onTrash: (() -> Void)?
     override func keyDown(with event: NSEvent) {
-        if event.charactersIgnoringModifiers == " ", event.modifierFlags.intersection(.deviceIndependentFlagsMask).isEmpty {
+        let flags = event.modifierFlags.intersection([.command, .option, .control, .shift])
+        if event.charactersIgnoringModifiers == " ", flags.isEmpty {
             onQuickLook?()
+        } else if event.keyCode == 36 || event.keyCode == 76, flags.isEmpty {
+            onReturn?()        // Return: open
+        } else if event.keyCode == 51 || event.keyCode == 117, flags == .command {
+            onTrash?()         // ⌘⌫: Move to Trash
         } else {
             super.keyDown(with: event)
         }
@@ -658,6 +945,28 @@ final class FileCell: NSTableCellView {
     }
 
     required init?(coder: NSCoder) { fatalError() }
+
+    private var renameDone: ((String?) -> Void)?
+
+    /// Edit the name in place (Return keeps it, Esc cancels).
+    func beginRenaming(_ done: @escaping (String?) -> Void) {
+        renameDone = done
+        name.isEditable = true
+        name.isSelectable = true
+        name.delegate = self
+        window?.makeFirstResponder(name)
+        // The name without its extension selected, like Finder.
+        let stem = (name.stringValue as NSString).deletingPathExtension
+        name.currentEditor()?.selectedRange = NSRange(location: 0, length: (stem as NSString).length)
+    }
+
+    fileprivate func finishRenaming(_ value: String?) {
+        guard let done = renameDone else { return }
+        renameDone = nil
+        name.isEditable = false
+        name.isSelectable = false
+        done(value)
+    }
 
     func configure(icon image: NSImage, title: String, change: GitStatus.Change?, dirtyFolder: Bool,
                    counts: (added: Int?, removed: Int?)? = nil) {
@@ -786,3 +1095,20 @@ extension FileTreeController {
     }
 }
 #endif
+
+extension FileCell: NSTextFieldDelegate {
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+        guard selector == #selector(NSResponder.cancelOperation(_:)) else { return false }
+        finishRenaming(nil)
+        return true
+    }
+    func controlTextDidEndEditing(_ obj: Notification) { finishRenaming(textField?.stringValue) }
+}
+
+extension FileTreeController: NSMenuItemValidation {
+    func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        if item.action == #selector(copy(_:)) { return !selectedURLs.isEmpty }
+        return true
+    }
+}
+

@@ -65,7 +65,12 @@ enum SelfTest {
     static func prepare() {
         guard let scenario = requested, !["files-relaunch", "files-alone"].contains(scenario) else { return }
         let defaults = UserDefaults.standard
-        defaults.removeObject(forKey: "filesPaneVisible")   // the inspector starts closed too
+        // The inspector starts closed, the sidebar and inspector at their default widths.
+        for key in defaults.dictionaryRepresentation().keys
+        where key.hasPrefix("filesPaneVisible") || key.hasPrefix("NSSplitView Subview Frames MainSplit")
+            || key.hasPrefix("filesTabs:") || key.hasPrefix("filesExpanded:") {
+            defaults.removeObject(forKey: key)
+        }
         for key in defaults.dictionaryRepresentation().keys where key.hasPrefix("paneLayout:") {
             defaults.removeObject(forKey: key)
         }
@@ -96,6 +101,7 @@ enum SelfTest {
         case "files-alone": await filesAlone(window)
         case "two-windows": await twoWindows(window)
         case "question": await agentQuestion(window)
+        case "mac": await macBehaviors(window)
         case "sandbox-access": await sandboxAccess(window)
         case "launch-failure": await launchFailure(window)
         case "fork": await fork(window)
@@ -720,6 +726,149 @@ enum SelfTest {
               && (try? String(contentsOf: lockedFile, encoding: .utf8)) == "edit keep me\n", "then it saves and closes")
         try? FileManager.default.removeItem(at: locked)
         try? FileManager.default.removeItem(at: typed)
+    }
+
+    /// Mac conventions (the Mac-arsed audit): the menu bar's commands and their
+    /// validation, undoable close / rename, Reopen Closed Session, the sidebar's
+    /// multi-selection, copy, live filter and inline rename, Files' copy, file
+    /// operations with undo, tabs and expansion remembered, the Settings window.
+    /// Fixture: `files` (two shell sessions in a git repo). Copies go to a
+    /// private pasteboard (never the person's clipboard).
+    private static func macBehaviors(_ window: MainWindowController) async {
+        guard let ws = window.workspaceController, let app = NSApp.delegate as? AppDelegate,
+              let sidebar = window.sidebarController, let w = window.window, let undo = w.undoManager
+        else { return log("no window") }
+        let sessions = ws.orderedSessions
+        guard sessions.count >= 2 else { return check(false, "the fixture has two sessions") }
+        let (a, b) = (sessions[0], sessions[1])
+        let pb = NSPasteboard(name: .init("sandshell-selftest-\(UUID().uuidString)"))
+        defer { pb.releaseGlobally() }
+
+        // The menu bar: the commands are there, with their shortcuts; no dead items.
+        let shortcuts = ShortcutsWindowController.collect()
+        func has(_ title: String, _ keys: String) -> Bool { shortcuts.contains { $0.title == title && $0.keys == keys } }
+        check(has("Stop", "⌘.") && has("Restart", "⌘R") && has("Reopen Closed Session", "⇧⌘T")
+              && has("Filter Sessions", "⌥⌘F") && has("Print…", "⌘P") && has("Keyboard Shortcuts", "⇧⌘/"),
+              "the menu bar has Session, File and Help commands with their shortcuts")
+        check(!shortcuts.contains { $0.title == "Show Tab Bar" || $0.title == "Move Tab to New Window" },
+              "no tab commands in a window that doesn't tab")
+        let menuTitles = (NSApp.mainMenu?.items ?? []).compactMap { $0.submenu?.title }
+        check(menuTitles.contains("Session") && menuTitles.contains("Help"), "a Session menu (\(menuTitles))")
+        func validate(_ action: Selector) -> NSMenuItem {
+            let item = NSMenuItem("", action: action)
+            _ = app.validateMenuItem(item)
+            return item
+        }
+        ws.selection = .session(a.id)
+        await wait(0.5)
+        check(validate(#selector(AppDelegate.closeSessionOrWindow(_:))).title == "Close Session", "⌘W says Close Session")
+        let filesTitle = validate(#selector(AppDelegate.toggleFiles(_:))).title
+        check(filesTitle == (window.isFilesShown ? "Hide Files" : "Show Files"), "View says what Files will do (\(filesTitle))")
+        check(validate(#selector(AppDelegate.toggleSessionSidebar(_:))).title == "Hide Sidebar", "and the sidebar")
+
+        // Close is undoable; Reopen Closed Session brings back the last one.
+        ws.closeSession(a.id)
+        check(ws.session(id: a.id) == nil && undo.canUndo && undo.undoActionName == "Close Session", "closing offers Undo Close Session")
+        undo.undo()
+        check(ws.session(id: a.id) != nil, "Undo brings the session back")
+        ws.closeSession(b.id)
+        check(window.canReopenClosedSession, "Reopen Closed Session is available")
+        window.reopenClosedSession()
+        check(ws.session(id: b.id) != nil && ws.selection == .session(b.id), "Reopen Closed Session brings it back, selected")
+
+        // Rename: it sticks (prompts no longer rename it) and undoes.
+        ws.renameSession(a.id, to: "Release checklist")
+        ws.autoName(a.id, from: "some later prompt")
+        check(ws.session(id: a.id)?.name == "Release checklist" && ws.session(id: a.id)?.isNamedByUser == true,
+              "a renamed session keeps its name")
+        undo.undo()
+        check(ws.session(id: a.id)?.name == a.name && ws.session(id: a.id)?.isNamedByUser == false, "Undo Rename")
+        // Inline, from the row.
+        await wait(0.3)
+        sidebar.beginRename(a.id)
+        if let cell = sidebar.debugCell(a.id) {
+            cell.debugFinishRenaming("Renamed inline")
+            check(ws.session(id: a.id)?.name == "Renamed inline", "renaming in the row")
+        } else { check(false, "the row's cell") }
+        ws.renameSession(a.id, to: "")   // back to automatic naming
+
+        // The sidebar: two selected → copy has both, one undo closes and restores both.
+        await wait(0.3)
+        sidebar.debugSelect([a.id, b.id])
+        check(sidebar.selectedSessionIDs.count == 2, "the sidebar selects two sessions")
+        sidebar.writeSelection(to: pb)
+        let copied = pb.string(forType: .string) ?? ""
+        check(copied.split(separator: "\n").count == 2 && copied.contains(a.workdir), "⌘C copies both (\(copied))")
+        sidebar.closeSelectedSession()
+        check(ws.session(id: a.id) == nil && ws.session(id: b.id) == nil && undo.undoActionName == "Close Sessions",
+              "Delete closes the whole selection")
+        undo.undo()
+        check(ws.session(id: a.id) != nil && ws.session(id: b.id) != nil, "one Undo brings both back")
+        // Live filter.
+        sidebar.debugFilter(String(b.name.prefix(7)))
+        await wait(0.3)
+        check(sidebar.displayedSessionIDs == [b.id] || sidebar.displayedSessionIDs.contains(b.id) && !sidebar.displayedSessionIDs.contains(a.id),
+              "the filter narrows as you type (\(sidebar.displayedSessionIDs.count))")
+        sidebar.debugFilter("")
+        await wait(0.3)
+        check(sidebar.displayedSessionIDs.count == ws.orderedSessions.count, "clearing it shows them all")
+
+        // Files: copy, new file, rename, duplicate, trash — each undoable.
+        window.toggleFiles()
+        await wait(1)
+        guard let files = window.inspectorFiles else { return check(false, "the Files inspector") }
+        check(await until(10) { files.tree.root != nil }, "Files has a root")
+        let repo = files.tree.root!
+        let readme = repo.appendingPathComponent("README.md")
+        files.tree.debugSelect([readme])
+        files.tree.writeSelection(to: pb)
+        let fileURLs = pb.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? []
+        check(fileURLs.map(\.path) == [readme.path] && pb.string(forType: .string) == readme.path,
+              "⌘C in Files copies the file (for Finder) and its path")
+        let made = FileTreeController.unique("untitled.txt", in: repo)
+        try? Data().write(to: made)
+        let renamed = repo.appendingPathComponent("notes-\(UUID().uuidString.prefix(4)).txt")
+        files.open(made)
+        await wait(0.3)
+        files.tree.debugRefresh()
+        check(files.tree.move(made, to: renamed, action: "Rename"), "rename a file")
+        check(FileManager.default.fileExists(atPath: renamed.path) && files.editor.openURLs.contains(renamed),
+              "renamed on disk, and its open tab follows")
+        undo.undo()
+        check(FileManager.default.fileExists(atPath: made.path) && !FileManager.default.fileExists(atPath: renamed.path),
+              "Undo Rename puts the old name back")
+        files.tree.duplicate([made])
+        let copy = repo.appendingPathComponent("untitled copy.txt")
+        check(FileManager.default.fileExists(atPath: copy.path), "Duplicate makes “untitled copy.txt”")
+        files.tree.trash([copy])
+        check(await until(5) { !FileManager.default.fileExists(atPath: copy.path) }, "Move to Trash")
+        await wait(0.3)
+        undo.undo()
+        check(await until(5) { FileManager.default.fileExists(atPath: copy.path) }, "Undo puts it back from the Trash")
+        files.tree.trash([copy, made], undoable: false)
+        _ = await until(5) { !FileManager.default.fileExists(atPath: made.path) }
+
+        // Expansion and tabs are remembered for the folder.
+        let src = repo.appendingPathComponent("src")
+        files.tree.debugExpand(src)
+        let expanded = UserDefaults.standard.stringArray(forKey: "filesExpanded:" + repo.standardizedFileURL.path) ?? []
+        check(expanded.contains("src"), "an opened folder is remembered (\(expanded))")
+        files.open(readme)
+        await wait(0.3)
+        let tabs = files.editor.tabsKey.flatMap { UserDefaults.standard.stringArray(forKey: $0) } ?? []
+        check(tabs.contains(readme.path), "open tabs are remembered (\(tabs.count))")
+        window.toggleFiles()
+
+        // Settings: a window of its own, on the pane used last.
+        window.showSettings()
+        await wait(0.5)
+        let settings = SettingsWindowController.window(for: w)
+        check(settings?.isVisible == true && settings?.sheetParent == nil && w.attachedSheet == nil,
+              "Settings opens as a window, not a sheet")
+        settings?.close()
+        // Split sizes are kept per window.
+        check(UserDefaults.standard.dictionaryRepresentation().keys.contains { $0.hasPrefix("NSSplitView Subview Frames MainSplit") },
+              "the sidebar and inspector widths are saved")
     }
 
     /// An agent's interactive question (ACP elicitation): the forms Claude's

@@ -77,6 +77,7 @@ final class FilesPaneController: NSViewController, NSSplitViewDelegate {
         tree.onOpenAtLine = { [weak self] url, line, query in self?.editor.open(url, line: line, highlight: query) }
         tree.onGitStatus = { [weak self] status in self?.editor.updateGit(status) }
         tree.onFilesChanged = { [weak self] in self?.editor.filesChangedOnDisk() }
+        tree.onFileMoved = { [weak self] from, to in self?.editor.fileMoved(from: from, to: to) }
     }
 
     override func viewDidLayout() {
@@ -120,6 +121,11 @@ final class FilesPaneController: NSViewController, NSSplitViewDelegate {
         _ = view   // make sure children are loaded
         tree.setRoot(folder)
         tree.sandboxAccess = access
+        // The first folder names where this surface's tabs are kept.
+        if editor.tabsKey == nil, let folder {
+            editor.tabsKey = "filesTabs:" + folder.standardizedFileURL.path
+            editor.restoreTabs()
+        }
     }
 
     func open(_ url: URL) {
@@ -150,3 +156,21 @@ final class FilesPaneController: NSViewController, NSSplitViewDelegate {
     }
     #endif
 }
+
+// MARK: - ⌘W in Files
+
+extension FilesPaneController: NSMenuItemValidation {
+    /// ⌘W with Files focused closes the open file's tab; with none open, it's
+    /// the window's usual Close Session / Close Window.
+    @objc func closeSessionOrWindow(_ sender: Any?) {
+        if editor.closeCurrentTab() { return }
+        (NSApp.delegate as? AppDelegate)?.closeSessionOrWindow(sender)
+    }
+
+    func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        guard item.action == #selector(closeSessionOrWindow(_:)) else { return true }
+        if editor.hasOpenTab { item.title = "Close Tab"; return true }
+        return (NSApp.delegate as? AppDelegate)?.validateMenuItem(item) ?? true
+    }
+}
+

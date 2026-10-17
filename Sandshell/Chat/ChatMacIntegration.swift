@@ -142,9 +142,19 @@ final class TranscriptTextView: NSTextView {
         context == .outsideApplication ? [.copy] : [.copy, .generic]
     }
 
+    /// The reply under a right-click: its actions lead the menu (Copy Reply, Fork…).
+    var replyMenuItems: ((NSPoint) -> [NSMenuItem])?
+
     override func menu(for event: NSEvent) -> NSMenu? {
         let base = super.menu(for: event) ?? NSMenu()
-        guard let attachment = image(at: convert(event.locationInWindow, from: nil)) else { return base }
+        let point = convert(event.locationInWindow, from: nil)
+        guard let attachment = image(at: point) else {
+            let items = replyMenuItems?(point) ?? []
+            guard !items.isEmpty else { return base }
+            base.insertItem(.separator(), at: 0)
+            for item in items.reversed() { base.insertItem(item, at: 0) }
+            return base
+        }
         let menu = NSMenu()
         func add(_ title: String, _ handler: @escaping () -> Void) { menu.addItem(NSMenuItem(title, handler: handler)) }
         add("Quick Look") { if let url = attachment.fileURL { QuickLook.shared.show([url]) } }

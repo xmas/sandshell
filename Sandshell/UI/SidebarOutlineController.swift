@@ -32,6 +32,27 @@ extension AgentKind {
 final class SidebarTableView: NSTableView {
     var menuProvider: ((Int) -> NSMenu?)?
     var onDeleteKey: (() -> Void)?
+    var onReturnKey: (() -> Void)?
+    private var keyObservers: [NSObjectProtocol] = []
+
+    // The selection is drawn muted when the window isn't key or the list isn't
+    // focused (like native lists): redraw rows when either changes.
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        keyObservers.forEach(NotificationCenter.default.removeObserver)
+        keyObservers = []
+        guard let window else { return }
+        for name in [NSWindow.didBecomeKeyNotification, NSWindow.didResignKeyNotification] {
+            keyObservers.append(NotificationCenter.default.addObserver(forName: name, object: window, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.redrawRows() }
+            })
+        }
+    }
+    override func becomeFirstResponder() -> Bool { defer { redrawRows() }; return super.becomeFirstResponder() }
+    override func resignFirstResponder() -> Bool { defer { redrawRows() }; return super.resignFirstResponder() }
+    private func redrawRows() {
+        enumerateAvailableRowViews { row, _ in row.needsDisplay = true }
+    }
 
     override func menu(for event: NSEvent) -> NSMenu? {
         let row = self.row(at: convert(event.locationInWindow, from: nil))
@@ -42,6 +63,11 @@ final class SidebarTableView: NSTableView {
         // Delete / Backspace closes the selected session.
         if event.keyCode == 51 || event.keyCode == 117 {
             onDeleteKey?()
+            return
+        }
+        // Return renames (Finder's convention).
+        if event.keyCode == 36, event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty {
+            onReturnKey?()
             return
         }
         super.keyDown(with: event)
@@ -168,6 +194,8 @@ final class SidebarListController: NSViewController {
         outline.intercellSpacing = NSSize(width: 0, height: 1)
         outline.dataSource = self
         outline.delegate = self
+        outline.allowsMultipleSelection = true
+        outline.setAccessibilityLabel("Sessions")
         outline.registerForDraggedTypes([.fileURL])
         outline.setDraggingSourceOperationMask(.copy, forLocal: false)
         // Sessions drag onto the detail area's panes (split or replace there).
@@ -176,6 +204,12 @@ final class SidebarListController: NSViewController {
         outline.action = #selector(rowClicked)
         outline.menuProvider = { [weak self] row in self?.contextMenu(forRow: row) }
         outline.onDeleteKey = { [weak self] in self?.closeSelectedSession() }
+        outline.onReturnKey = { [weak self] in self?.beginRenameSelected() }
+        // Reduce Motion / Increase Contrast changed: redraw the rows.
+        NotificationCenter.default.addObserver(forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification,
+                                               object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.outline.reloadData() }
+        }
         scroll.documentView = outline
 
         // ── Header: the folder's chosen icon/color + its name (last path
@@ -216,6 +250,11 @@ final class SidebarListController: NSViewController {
         searchField.onChange = { [weak self] text in
             self?.searchQuery = text
             self?.reload()
+        }
+        searchField.onMoveDown = { [weak self] in
+            guard let self, !self.displayedSessionIDs.isEmpty else { return }
+            self.view.window?.makeFirstResponder(self.outline)
+            if self.outline.selectedRow < 0 { self.controller.selection = .session(self.displayedSessionIDs[0]) }
         }
         newSessionButton.translatesAutoresizingMaskIntoConstraints = false
         newSessionButton.target = self
@@ -609,6 +648,8 @@ final class SidebarListController: NSViewController {
             updateSessionRow(id)   // selecting a session marks it seen — clear the dot
         }
         guard targetRow != outline.selectedRow else { return }
+        // Part of a multi-selection the person made: keep it.
+        if targetRow >= 0, outline.selectedRowIndexes.count > 1, outline.selectedRowIndexes.contains(targetRow) { return }
         let previousRow = outline.selectedRow
         settingSelection = true
         defer { settingSelection = false }
@@ -742,10 +783,12 @@ final class SidebarListController: NSViewController {
         let flags = NSApp.currentEvent?.modifierFlags ?? []
         if flags.contains(.option) { openStatusDebugWindow(); return }
         if flags.contains(.control) { openDaemonLog(); return }
-        openInConsole(Log.fileURL)
+        openSandshellLog()
     }
 
-    private func openDaemonLog() {
+    func openSandshellLog() { openInConsole(Log.fileURL) }
+
+    func openDaemonLog() {
         let home = FileManager.default.homeDirectoryForCurrentUser
         let logURL = home.appendingPathComponent(
             "Library/Application Support/com.docker.sandboxes/sandboxes/sandboxd/daemon.log")
@@ -770,7 +813,7 @@ final class SidebarListController: NSViewController {
 
     private var statusDebugWindow: StatusDebugWindowController?
 
-    private func openStatusDebugWindow() {
+    func openStatusDebugWindow() {
         if statusDebugWindow == nil {
             statusDebugWindow = StatusDebugWindowController(controller: controller)
         }
@@ -780,15 +823,10 @@ final class SidebarListController: NSViewController {
     /// Present the per-root settings inspector (gear next to Search, and ⌘,) as a
     /// native macOS sheet — a fixed-size SwiftUI view; Close or Esc dismisses it.
     /// No-op if a sheet is already up (so ⌘, doesn't stack inspectors).
-    @objc func presentInspector() { presentInspector(pane: .general) }
+    @objc func presentInspector() { presentInspector(pane: nil) }
 
-    func presentInspector(pane: InspectorPane) {
-        guard presentedViewControllers?.isEmpty != false else { return }
-        var sheet: NSViewController?
-        let inspector = InspectorView(controller: controller, initialPane: pane, onClose: { sheet?.dismiss(nil) })
-        let hosting = NSHostingController(rootView: inspector)
-        sheet = hosting
-        presentAsSheet(hosting)
+    func presentInspector(pane: InspectorPane?) {
+        SettingsWindowController.show(for: controller, pane: pane, owner: view.window)
     }
 
     // MARK: New Session menu
@@ -922,7 +960,77 @@ final class SidebarListController: NSViewController {
     @objc private func searchClicked() { onShowSearch?(nil) }
 
     func closeSelectedSession() {
-        if case let .session(id) = controller.selection { controller.closeSession(id) }
+        let ids = selectedSessionIDs
+        if ids.isEmpty, case let .session(id) = controller.selection { return controller.closeSession(id) }
+        controller.closeSessions(ids)
+    }
+
+    /// The selected sessions, in list order.
+    var selectedSessionIDs: [UUID] {
+        outline.selectedRowIndexes.compactMap { displayedSessionIDs.indices.contains($0) ? displayedSessionIDs[$0] : nil }
+    }
+
+    /// What a context menu at `row` acts on: the whole selection when the row
+    /// is part of it, else just that row (Finder's rule).
+    private func menuTargets(row: Int) -> [UUID] {
+        guard displayedSessionIDs.indices.contains(row) else { return [] }
+        return outline.selectedRowIndexes.contains(row) ? selectedSessionIDs : [displayedSessionIDs[row]]
+    }
+
+    // MARK: Rename (Return, Session ▸ Rename…, the context menu)
+
+    func beginRenameSelected() {
+        guard case let .session(id) = controller.selection else { return }
+        beginRename(id)
+    }
+
+    func beginRename(_ id: UUID) {
+        guard let row = displayedSessionIDs.firstIndex(of: id) else { return }
+        outline.scrollRowToVisible(row)
+        guard let cell = outline.view(atColumn: 0, row: row, makeIfNecessary: true) as? SessionCellView else { return }
+        cell.beginRenaming { [weak self] name in
+            guard let self else { return }
+            if let name { self.controller.renameSession(id, to: name) }
+            self.view.window?.makeFirstResponder(self.outline)
+        }
+    }
+
+    // MARK: Copy
+
+    /// ⌘C: each selected session as "name — folder path" (and its folder path
+    /// alone, for one); the same as a drag carries.
+    @objc func copy(_ sender: Any?) {
+        guard !selectedSessionIDs.isEmpty else { return NSSound.beep() }
+        writeSelection(to: .general)
+    }
+
+    func writeSelection(to pb: NSPasteboard) {
+        pb.clearContents()
+        pb.setString(pasteboardText(selectedSessionIDs), forType: .string)
+    }
+
+    #if DEBUG
+    func debugSelect(_ ids: [UUID]) {
+        outline.selectRowIndexes(IndexSet(ids.compactMap { displayedSessionIDs.firstIndex(of: $0) }), byExtendingSelection: false)
+    }
+    func debugFilter(_ text: String) { searchField.debugSetText(text) }
+    func debugCell(_ id: UUID) -> SessionCellView? {
+        displayedSessionIDs.firstIndex(of: id).flatMap { outline.view(atColumn: 0, row: $0, makeIfNecessary: true) as? SessionCellView }
+    }
+    #endif
+
+    private func pasteboardText(_ ids: [UUID]) -> String {
+        let sessions = ids.compactMap { controller.session(id: $0) }
+        if sessions.count == 1 { return "\(sessions[0].name) — \(sessions[0].workdir)" }
+        return sessions.map { "\($0.name) — \($0.workdir)" }.joined(separator: "\n")
+    }
+
+    /// Edit ▸ Find ▸ Filter Sessions (⌥⌘F): the sidebar's filter field.
+    func focusFilter() {
+        if let item = (view.window?.windowController as? MainWindowController), item.isSidebarCollapsed {
+            item.setSidebarCollapsed(false)
+        }
+        searchField.focus()
     }
 
     // MARK: Context menu — Drops
@@ -986,12 +1094,22 @@ final class SidebarListController: NSViewController {
             for item in newSessionMenuItems() { menu.addItem(item) }
             return menu
         }
+        let targets = menuTargets(row: row)
+        if targets.count > 1 {
+            menu.addItem(menuItem("Close \(targets.count) Sessions", #selector(contextCloseSessions), object: targets))
+            menu.addItem(menuItem("Copy \(targets.count) Sessions", #selector(contextCopy), object: targets))
+            return menu
+        }
+        menu.addItem(menuItem("Rename…", #selector(contextRename), object: session.id))
         menu.addItem(menuItem("Close Session", #selector(contextCloseSession), object: session.id))
+        menu.addItem(.separator())
         menu.addItem(menuItem("Open Files in Split", #selector(contextOpenFiles), object: session.id))
         if SbxCommand.supportsACP(session.agent) {
             menu.addItem(menuItem(session.isChat ? "Show as Terminal" : "Show as Chat",
                                   #selector(contextToggleChat), object: session.id))
         }
+        menu.addItem(menuItem("Reveal in Finder", #selector(contextReveal), object: session.id))
+        menu.addItem(menuItem("Copy", #selector(contextCopy), object: [session.id]))
         menu.addItem(.separator())
         menu.addItem(dropsSubmenuItem(for: session.folderID))
         return menu
@@ -1017,6 +1135,25 @@ final class SidebarListController: NSViewController {
         if let id = sender.representedObject as? UUID { controller.closeSession(id) }
     }
 
+    @objc private func contextCloseSessions(_ sender: NSMenuItem) {
+        if let ids = sender.representedObject as? [UUID] { controller.closeSessions(ids) }
+    }
+
+    @objc private func contextRename(_ sender: NSMenuItem) {
+        if let id = sender.representedObject as? UUID { beginRename(id) }
+    }
+
+    @objc private func contextReveal(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? UUID, let s = controller.session(id: id) else { return }
+        NSWorkspace.shared.open(URL(fileURLWithPath: s.workdir))
+    }
+
+    @objc private func contextCopy(_ sender: NSMenuItem) {
+        guard let ids = sender.representedObject as? [UUID] else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(pasteboardText(ids), forType: .string)
+    }
+
     fileprivate func closeSessionFromRow(_ id: UUID) { controller.closeSession(id) }
 }
 
@@ -1028,16 +1165,24 @@ extension SidebarListController: NSTableViewDataSource {
     /// A session row drags out as a session (onto a pane edge: split there).
     func tableView(_ tableView: NSTableView, pasteboardWriterForRow row: Int) -> (any NSPasteboardWriting)? {
         guard row >= 0, row < displayedSessionIDs.count else { return nil }
+        let id = displayedSessionIDs[row]
         let item = NSPasteboardItem()
-        item.setString(displayedSessionIDs[row].uuidString, forType: .sandshellSession)
+        item.setString(id.uuidString, forType: .sandshellSession)
+        // Out of the app: its folder's path as text (Terminal, TextEdit…). Not
+        // a file URL, which a Finder drop would take as "copy the project".
+        if let s = controller.session(id: id) { item.setString(s.workdir, forType: .string) }
         return item
+    }
+
+    func tableView(_ tableView: NSTableView, typeSelectStringFor tableColumn: NSTableColumn?, row: Int) -> String? {
+        displayedSessionIDs.indices.contains(row) ? controller.session(id: displayedSessionIDs[row])?.name : nil
     }
 
     /// Files dragged onto a session row attach to that session (chat: as
     /// attachments; terminal: as sandbox-readable paths).
     func tableView(_ tableView: NSTableView, validateDrop info: NSDraggingInfo, proposedRow row: Int,
                    proposedDropOperation dropOperation: NSTableView.DropOperation) -> NSDragOperation {
-        guard !displayedSessionIDs.isEmpty,
+        guard !displayedSessionIDs.isEmpty, info.draggingSource as? NSTableView !== tableView,
               info.draggingPasteboard.canReadObject(forClasses: [NSURL.self],
                                                     options: [.urlReadingFileURLsOnly: true]) else { return [] }
         tableView.setDropRow(min(max(row, 0), displayedSessionIDs.count - 1), dropOperation: .on)
@@ -1084,10 +1229,32 @@ extension SidebarListController: NSTableViewDelegate {
 
     func tableViewSelectionDidChange(_ notification: Notification) {
         guard !reloading, !settingSelection else { return }
-        let row = outline.selectedRow
+        // With several picked, the detail follows the last one picked.
+        var row = outline.selectedRow
+        if outline.selectedRowIndexes.count > 1, case .session(let id)? = controller.selection,
+           let current = displayedSessionIDs.firstIndex(of: id), outline.selectedRowIndexes.contains(current),
+           NSApp.currentEvent?.modifierFlags.contains(.shift) == true {
+            row = current   // a shift-extension keeps the one already shown
+        }
         let newSelection: SidebarSelection? = (row >= 0 && row < displayedSessionIDs.count)
             ? .session(displayedSessionIDs[row]) : nil
         if controller.selection != newSelection { controller.selection = newSelection }
+    }
+}
+
+extension SidebarSearchField: NSTextFieldDelegate {
+    func controlTextDidChange(_ obj: Notification) { onChange?(field.stringValue) }
+
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+        switch selector {
+        case #selector(NSResponder.cancelOperation(_:)):
+            if field.stringValue.isEmpty { onMoveDown?() } else { field.stringValue = ""; onChange?("") }
+            return true
+        case #selector(NSResponder.moveDown(_:)), #selector(NSResponder.insertNewline(_:)):
+            onMoveDown?()
+            return true
+        default: return false
+        }
     }
 }
 
@@ -1121,7 +1288,10 @@ final class SidebarRowView: NSTableRowView {
         let path = NSBezierPath(roundedRect: bounds.insetBy(dx: 8, dy: 2), xRadius: 9, yRadius: 9)
         let selected = drawsSelection && isSelected
         if selected {
-            (theme.isDark ? NSColor.white(0.10) : theme.selection).setFill()
+            // Vivid in the focused list of the key window, muted otherwise.
+            let focused = window?.isKeyWindow == true && (superview as? NSTableView).map { window?.firstResponder === $0 } ?? false
+            let fill = theme.isDark ? NSColor.white(focused ? 0.10 : 0.06) : theme.selection
+            (focused || theme.isDark ? fill : fill.withAlphaComponent(0.55)).setFill()
             path.fill()
         }
         if isHovered {
@@ -1177,8 +1347,8 @@ final class SidebarSearchField: NSView {
         field.lineBreakMode = .byTruncatingTail
         field.usesSingleLineMode = true
         field.cell?.usesSingleLineMode = true
-        field.target = self
-        field.action = #selector(changed)
+        field.delegate = self
+        field.setAccessibilityLabel("Filter sessions")
 
         addSubview(icon)
         addSubview(field)
@@ -1195,7 +1365,18 @@ final class SidebarSearchField: NSView {
     }
     @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
 
-    @objc private func changed() { onChange?(field.stringValue) }
+    /// ↓ / Return from the field: into the list.
+    var onMoveDown: (() -> Void)?
+
+    func focus() { window?.makeFirstResponder(field) }
+
+    #if DEBUG
+    /// As if typed (one keystroke's change).
+    func debugSetText(_ text: String) {
+        field.stringValue = text
+        controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: field))
+    }
+    #endif
 
     func style(bg: NSColor, fg: NSColor, muted: NSColor) {
         layer?.backgroundColor = bg.cgColor
@@ -1254,6 +1435,12 @@ final class WorkingSweepView: NSView {
 
     func startAnimating() {
         guard window != nil, bounds.width > 7 else { return }
+        // Reduce Motion: a still pill in the middle of the track.
+        if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            pillLayer.removeAnimation(forKey: "sweep")
+            pillLayer.position = CGPoint(x: bounds.midX, y: bounds.midY)
+            return
+        }
         if pillLayer.animation(forKey: "sweep") != nil { return }
         let animation = CABasicAnimation(keyPath: "position.x")
         animation.fromValue = 3.5
@@ -1401,7 +1588,8 @@ final class SessionCellView: NSTableCellView {
     /// clicking a session bolds it immediately (before its terminal launches).
     func setActive(_ active: Bool) {
         nameLabel.font = .systemFont(ofSize: 13.5, weight: active ? .semibold : .regular)
-        nameLabel.textColor = active ? fg : fg.withAlphaComponent(0.55)
+        let contrast = NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
+        nameLabel.textColor = active || contrast ? fg : fg.withAlphaComponent(0.55)
     }
 
     /// Update the runtime-driven bits (left-rail sweep/dot + time, subline) in
@@ -1433,6 +1621,7 @@ final class SessionCellView: NSTableCellView {
             statusDot.isHidden = !unread       // accent dot only when ready + unseen
             timeLabel.isHidden = true
             parts.append(runtime?.lastActivityAt.map { relativeActivity($0) } ?? "Ready")
+            if unread { parts.append("New") }   // not just the dot's colour
         default:
             workingView.stopAnimating()
             workingView.isHidden = true
@@ -1466,6 +1655,49 @@ final class SessionCellView: NSTableCellView {
     override func mouseMoved(with event: NSEvent) { syncHover() }
 
     @objc private func closeClicked() { if let sessionID { owner?.closeSessionFromRow(sessionID) } }
+
+    // MARK: Inline rename
+
+    private var renameDone: ((String?) -> Void)?
+    private var nameBeforeRename = ""
+
+    /// Edit the name in place: Return keeps it, Esc puts the old one back.
+    func beginRenaming(_ done: @escaping (String?) -> Void) {
+        renameDone = done
+        nameBeforeRename = nameLabel.stringValue
+        nameLabel.isEditable = true
+        nameLabel.isSelectable = true
+        nameLabel.delegate = self
+        window?.makeFirstResponder(nameLabel)
+        nameLabel.currentEditor()?.selectAll(nil)
+    }
+
+    private func finishRenaming(_ name: String?) {
+        guard let done = renameDone else { return }
+        renameDone = nil
+        nameLabel.isEditable = false
+        nameLabel.isSelectable = false
+        if name == nil { nameLabel.stringValue = nameBeforeRename }
+        done(name)
+    }
+
+    #if DEBUG
+    var debugName: String { nameLabel.stringValue }
+    func debugFinishRenaming(_ name: String?) {
+        if let name { nameLabel.stringValue = name }
+        finishRenaming(name)
+    }
+    #endif
+}
+
+extension SessionCellView: NSTextFieldDelegate {
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+        guard selector == #selector(NSResponder.cancelOperation(_:)) else { return false }
+        finishRenaming(nil)
+        return true
+    }
+
+    func controlTextDidEndEditing(_ obj: Notification) { finishRenaming(nameLabel.stringValue) }
 }
 
 /// Coarse relative time for the session subline: "just now" → "2m ago" → "3h ago".
@@ -1594,7 +1826,24 @@ final class SidebarHeaderView: NSStackView {
 
     override func mouseDown(with event: NSEvent) { onClick?() }
 
+    // A button to VoiceOver and Full Keyboard Access: it opens the workspace menu.
+    override func isAccessibilityElement() -> Bool { true }
+    override func accessibilityRole() -> NSAccessibility.Role? { .popUpButton }
+    override func accessibilityLabel() -> String? {
+        "Workspace: " + (arrangedSubviews.compactMap { ($0 as? NSTextField)?.stringValue }.first ?? "")
+    }
+    override func accessibilityPerformPress() -> Bool { onClick?(); return true }
+    override func accessibilityPerformShowMenu() -> Bool { onClick?(); return true }
+
     override func resetCursorRects() {
         addCursorRect(bounds, cursor: .pointingHand)
     }
 }
+
+extension SidebarListController: NSMenuItemValidation {
+    func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        if item.action == #selector(copy(_:)) { return !selectedSessionIDs.isEmpty }
+        return true
+    }
+}
+

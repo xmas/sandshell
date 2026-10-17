@@ -80,6 +80,11 @@ enum MainMenu {
                                       action: #selector(AppDelegate.showSearch(_:)), keyEquivalent: "f")
         search.keyEquivalentModifierMask = [.command, .shift]
         fileMenu.addItem(withTitle: "Save", action: #selector(FileEditorController.saveDocument(_:)), keyEquivalent: "s")
+        fileMenu.addItem(NSMenuItem("Revert to Saved", action: #selector(FileEditorController.revertDocumentToSaved(_:))))
+        fileMenu.addItem(NSMenuItem("Export Conversation…", action: #selector(ChatSessionView.exportConversation(_:)),
+                                    key: "e", modifiers: [.command, .shift]))
+        fileMenu.addItem(.separator())
+        fileMenu.addItem(NSMenuItem("Print…", action: #selector(ChatSessionView.printDocument(_:)), key: "p"))
         fileMenu.addItem(withTitle: "Welcome to Sandshell…",
                          action: #selector(AppDelegate.runFirstLaunchSetup(_:)), keyEquivalent: "")
         fileMenu.addItem(.separator())
@@ -90,6 +95,8 @@ enum MainMenu {
         let closeWindow = fileMenu.addItem(withTitle: "Close Window",
                                            action: #selector(AppDelegate.closeWindow(_:)), keyEquivalent: "w")
         closeWindow.keyEquivalentModifierMask = [.command, .shift]
+        fileMenu.addItem(NSMenuItem("Reopen Closed Session", action: #selector(AppDelegate.reopenClosedSession(_:)),
+                                    key: "t", modifiers: [.command, .shift]))
 
         // MARK: Edit menu (Cut/Copy/Paste/Select All/Undo route via responder chain)
         let editItem = NSMenuItem()
@@ -115,6 +122,7 @@ enum MainMenu {
             finderItem("Find Next", .nextMatch, "g"),
             finderItem("Find Previous", .previousMatch, "g", [.command, .shift]),
             finderItem("Use Selection for Find", .setSearchString, "e"),
+            NSMenuItem("Filter Sessions", action: #selector(AppDelegate.focusSessionFilter(_:)), key: "f", modifiers: [.command, .option]),
             NSMenuItem(title: "Jump to Selection", action: #selector(NSResponder.centerSelectionInVisibleArea(_:)),
                        keyEquivalent: "j"),
             .separator(),
@@ -170,33 +178,45 @@ enum MainMenu {
                                         keyEquivalent: "=")
         equalize.keyEquivalentModifierMask = [.command, .control]
         viewMenu.addItem(.separator())
-        let hideSidebar = viewMenu.addItem(withTitle: "Hide Sidebar",
-                                           action: #selector(AppDelegate.hideSidebar(_:)), keyEquivalent: "1")
-        hideSidebar.keyEquivalentModifierMask = [.control]
-        let showSidebar = viewMenu.addItem(withTitle: "Show Sidebar",
-                                           action: #selector(AppDelegate.showSidebar(_:)), keyEquivalent: "2")
-        showSidebar.keyEquivalentModifierMask = [.control]
+        // Titled Show/Hide by AppDelegate's validation.
+        viewMenu.addItem(NSMenuItem("Hide Sidebar", action: #selector(AppDelegate.toggleSessionSidebar(_:)),
+                                    key: "s", modifiers: [.command, .control]))
+        // NSWindow names and validates these (Show/Hide Toolbar).
+        viewMenu.addItem(NSMenuItem("Hide Toolbar", action: #selector(NSWindow.toggleToolbarShown(_:)),
+                                    key: "t", modifiers: [.command, .option]))
+        viewMenu.addItem(NSMenuItem("Customize Toolbar…", action: #selector(NSWindow.runToolbarCustomizationPalette(_:))))
         viewMenu.addItem(.separator())
-        let nextSession = viewMenu.addItem(withTitle: "Select Next Session",
-                                           action: #selector(AppDelegate.selectNextSession(_:)), keyEquivalent: "]")
-        nextSession.keyEquivalentModifierMask = [.command, .shift]
-        let prevSession = viewMenu.addItem(withTitle: "Select Previous Session",
-                                           action: #selector(AppDelegate.selectPreviousSession(_:)), keyEquivalent: "[")
-        prevSession.keyEquivalentModifierMask = [.command, .shift]
+        viewMenu.addItem(NSMenuItem("Enter Full Screen", action: #selector(NSWindow.toggleFullScreen(_:)),
+                                    key: "f", modifiers: [.command, .control]))
+
+        // MARK: Session menu (the focused pane's session — what the toolbar acts on)
+        let sessionItem = NSMenuItem()
+        mainMenu.addItem(sessionItem)
+        let sessionMenu = NSMenu(title: "Session")
+        sessionItem.submenu = sessionMenu
+        sessionMenu.addItem(NSMenuItem("Stop", action: #selector(AppDelegate.stopSession(_:)), key: "."))
+        sessionMenu.addItem(NSMenuItem("Restart", action: #selector(AppDelegate.restartSession(_:)), key: "r"))
+        sessionMenu.addItem(.separator())
+        sessionMenu.addItem(NSMenuItem("Show as Chat", action: #selector(AppDelegate.toggleChatTerminal(_:)),
+                                       key: "t", modifiers: [.command, .control]))
+        sessionMenu.addItem(NSMenuItem("Reveal in Finder", action: #selector(AppDelegate.revealSessionFolder(_:)),
+                                       key: "r", modifiers: [.command, .option]))
+        sessionMenu.addItem(NSMenuItem("Rename Session…", action: #selector(AppDelegate.renameSession(_:))))
+        sessionMenu.addItem(.separator())
+        sessionMenu.addItem(NSMenuItem("Select Next Session", action: #selector(AppDelegate.selectNextSession(_:)),
+                                       key: "]", modifiers: [.command, .shift]))
+        sessionMenu.addItem(NSMenuItem("Select Previous Session", action: #selector(AppDelegate.selectPreviousSession(_:)),
+                                       key: "[", modifiers: [.command, .shift]))
         // ⌘] / ⌘[ too, unlisted (the same commands).
         for (key, action) in [("]", #selector(AppDelegate.selectNextSession(_:))),
                               ("[", #selector(AppDelegate.selectPreviousSession(_:)))] {
             let hidden = NSMenuItem(key == "]" ? "Select Next Session" : "Select Previous Session", action: action, key: key)
             hidden.isHidden = true
             hidden.allowsKeyEquivalentWhenHidden = true
-            viewMenu.addItem(hidden)
+            sessionMenu.addItem(hidden)
         }
-        viewMenu.addItem(.separator())
-        let showTabBar = viewMenu.addItem(withTitle: "Show Tab Bar",
-                                          action: #selector(NSWindow.toggleTabBar(_:)), keyEquivalent: "t")
-        showTabBar.keyEquivalentModifierMask = [.command, .shift]
-        viewMenu.addItem(withTitle: "Show All Tabs",
-                         action: #selector(NSWindow.toggleTabOverview(_:)), keyEquivalent: "")
+        sessionMenu.addItem(.separator())
+        sessionMenu.addItem(NSMenuItem("Open Terminal on This Mac", action: #selector(AppDelegate.openHostTerminal(_:))))
 
         // MARK: Window menu
         let windowItem = NSMenuItem()
@@ -212,17 +232,6 @@ enum MainMenu {
                                                  action: #selector(AppDelegate.showBackgroundTasks(_:)), keyEquivalent: "b")
         backgroundTasks.keyEquivalentModifierMask = [.command, .option]
         windowMenu.addItem(.separator())
-        let prevTab = windowMenu.addItem(withTitle: "Show Previous Tab",
-                                         action: #selector(NSWindow.selectPreviousTab(_:)), keyEquivalent: "\t")
-        prevTab.keyEquivalentModifierMask = [.control, .shift]
-        let nextTab = windowMenu.addItem(withTitle: "Show Next Tab",
-                                         action: #selector(NSWindow.selectNextTab(_:)), keyEquivalent: "\t")
-        nextTab.keyEquivalentModifierMask = [.control]
-        windowMenu.addItem(withTitle: "Move Tab to New Window",
-                           action: #selector(NSWindow.moveTabToNewWindow(_:)), keyEquivalent: "")
-        windowMenu.addItem(withTitle: "Merge All Windows",
-                           action: #selector(NSWindow.mergeAllWindows(_:)), keyEquivalent: "")
-        windowMenu.addItem(.separator())
         windowMenu.addItem(withTitle: "Bring All to Front",
                            action: #selector(NSApplication.arrangeInFront(_:)), keyEquivalent: "")
         windowMenu.addItem(.separator())
@@ -237,6 +246,20 @@ enum MainMenu {
         mainMenu.addItem(helpItem)
         let helpMenu = NSMenu(title: "Help")
         helpItem.submenu = helpMenu
+        helpMenu.addItem(NSMenuItem("Keyboard Shortcuts", action: #selector(AppDelegate.showKeyboardShortcuts(_:)),
+                                    key: "/", modifiers: [.command, .shift]))
+        helpMenu.addItem(NSMenuItem("Release Notes", action: #selector(AppDelegate.showReleaseNotes(_:))))
+        helpMenu.addItem(.separator())
+        helpMenu.addItem(NSMenuItem("Show Sandshell Log", action: #selector(AppDelegate.showSandshellLog(_:))))
+        // Hold ⌥ / ⌃ for the other logs.
+        let status = NSMenuItem("Show Status Debug Window", action: #selector(AppDelegate.showStatusDebug(_:)))
+        status.keyEquivalentModifierMask = [.option]
+        status.isAlternate = true
+        helpMenu.addItem(status)
+        let daemon = NSMenuItem("Show sbx Daemon Log", action: #selector(AppDelegate.showDaemonLog(_:)))
+        daemon.keyEquivalentModifierMask = [.control]
+        daemon.isAlternate = true
+        helpMenu.addItem(daemon)
         helpMenu.addItem(withTitle: "Check sbx Daemon Health…",
                          action: #selector(AppDelegate.checkDaemonHealth(_:)), keyEquivalent: "")
 

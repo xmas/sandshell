@@ -1410,3 +1410,33 @@ private extension JSONValue {
         return .object(o)
     }
 }
+
+// MARK: - Export
+
+extension ChatSession {
+    /// The conversation as Markdown (File ▸ Export Conversation…): prompts,
+    /// replies, tool calls by title, plans, notices.
+    func markdownExport(sessionName: String) -> String {
+        var out = ["# \(sessionName)", ""]
+        for item in items {
+            switch item {
+            case .user(_, let text, let attachments):
+                out += ["## You", "", text]
+                if !attachments.isEmpty { out += ["", attachments.map { "📎 \($0)" }.joined(separator: "  ")] }
+            case .agentText(_, let text): out += ["## \(agent.displayName)", "", text]
+            case .thought: continue
+            case .tool(let call): out += ["> 🔧 \(call.title)\(call.status == "failed" ? " (failed)" : "")"]
+            case .toolGroup(let calls): out += calls.map { "> 🔧 \($0.title)" }
+            case .plan(_, let entries):
+                out += ["**Plan**", ""] + entries.map { "- [\($0.status == "completed" ? "x" : " ")] \($0.content)" }
+            case .notice(_, let text, let isError): out += ["_\(isError ? "⚠️ " : "")\(text)_"]
+            case .image: out += ["_(image)_"]
+            case .fileChanges(_, let paths, let restored):
+                out += ["_\(restored ? "Restored" : "Changed") \(paths.count) file\(paths.count == 1 ? "" : "s"): \(paths.joined(separator: ", "))_"]
+            }
+            out.append("")
+        }
+        return out.joined(separator: "\n")
+    }
+}
+

@@ -45,6 +45,6 @@ on run argv
 		delay 1
 	end repeat
 
-	Helpers's axPressIdentifier(windowTitle, "inspector-close", 10)
+	Helpers's axCloseSettings(windowTitle)
 	return "PASS: 04_settings_sandboxes_lifecycle — Stop, Run, and Delete all reflected correctly in the Sandboxes pane"
 end run

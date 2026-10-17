@@ -474,7 +474,9 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
     private var dropTarget: (TerminalStackController, Edge?)?
 
     private func dragUpdated(_ info: NSDraggingInfo) -> NSDragOperation {
-        guard info.draggingPasteboard.string(forType: .sandshellSession) != nil else { return [] }
+        // Only this window's folder's sessions (another window's would open empty here).
+        guard let raw = info.draggingPasteboard.string(forType: .sandshellSession),
+              let id = UUID(uuidString: raw), controller.session(id: id) != nil else { return [] }
         let point = view.convert(info.draggingLocation, from: nil)
         guard let pane = panes.first(where: { $0.view.convert($0.view.bounds, to: view).contains(point) }) else {
             dropOverlay.isHidden = true
@@ -497,7 +499,7 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
     private func performDrop(_ info: NSDraggingInfo) -> Bool {
         dropOverlay.isHidden = true
         guard let raw = info.draggingPasteboard.string(forType: .sandshellSession), let id = UUID(uuidString: raw),
-              let (pane, edge) = dropTarget else { return false }
+              controller.session(id: id) != nil, let (pane, edge) = dropTarget else { return false }
         if let edge {
             split(pane, edge: edge, showing: id)
         } else {
@@ -607,6 +609,8 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
 
 extension PaneTreeController: NSToolbarItemValidation {
     func validateToolbarItem(_ item: NSToolbarItem) -> Bool { toolbarPane?.validateToolbarItem(item) ?? false }
+    func canPerformSessionAction(_ action: Selector) -> Bool { toolbarPane?.canPerformSessionAction(action) ?? false }
+    var chatToggleTitle: String { toolbarPane?.chatToggleTitle ?? "Show as Chat" }
 }
 
 /// NSSplitView that knows its layout node.

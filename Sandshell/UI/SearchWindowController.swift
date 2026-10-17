@@ -167,6 +167,14 @@ private struct SearchView: View {
             .contextMenu(forSelectionType: SearchResult.ID.self) { ids in
                 if let result = store.results.first(where: { ids.contains($0.id) }) {
                     Button(result.isLive ? "Show Session" : "Restore Session") { onOpen(result) }
+                    Divider()
+                    Button("Copy") { Self.copy(result) }
+                    if let folder = result.folder {
+                        Button("Reveal Folder in Finder") { NSWorkspace.shared.open(URL(fileURLWithPath: folder)) }
+                    }
+                    if let url = result.transcriptURL {
+                        Button("Reveal Transcript in Finder") { NSWorkspace.shared.activateFileViewerSelecting([url]) }
+                    }
                 }
             } primaryAction: { ids in
                 // Double-click / Return in the list.
@@ -174,6 +182,11 @@ private struct SearchView: View {
             }
             .onChange(of: store.selectedID) { _, id in
                 if let id { proxy.scrollTo(id) }
+            }
+            // ⌘C: the selected result's title and folder.
+            .onCopyCommand {
+                guard let result = store.results.first(where: { $0.id == store.selectedID }) else { return [] }
+                return [NSItemProvider(object: Self.text(result) as NSString)]
             }
             .overlay { emptyState }
         }
@@ -183,6 +196,20 @@ private struct SearchView: View {
         ResultRow(result: result, query: store.matchedQuery)
             .tag(result.id)
             .id(result.id)
+            // Drags out as its transcript (a file) when there is one, else as text.
+            .onDrag {
+                if let url = result.transcriptURL { return NSItemProvider(contentsOf: url) ?? NSItemProvider(object: Self.text(result) as NSString) }
+                return NSItemProvider(object: Self.text(result) as NSString)
+            }
+    }
+
+    static func text(_ result: SearchResult) -> String {
+        [result.title, result.folder].compactMap { $0 }.joined(separator: " — ")
+    }
+
+    static func copy(_ result: SearchResult) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text(result), forType: .string)
     }
 
     @ViewBuilder

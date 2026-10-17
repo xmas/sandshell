@@ -28,10 +28,10 @@ on run argv
 		end if
 	on error msg
 		try
-			Helpers's axPressIdentifier(windowTitle, "inspector-close", 5)
+			Helpers's axCloseSettings(windowTitle)
 		end try
 		error msg
 	end try
-	Helpers's axPressIdentifier(windowTitle, "inspector-close", 10)
+	Helpers's axCloseSettings(windowTitle)
 	return "PASS: 05_folders_pane — Folders pane lists the workspace's folders with New Folder / Add Existing…"
 end run

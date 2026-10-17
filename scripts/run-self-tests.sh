@@ -133,6 +133,8 @@ run panes          files  quick
 run pane-buttons   files  quick
 run files-alone    files  quick
 run two-windows    files  quick
+prepare files
+run mac            files  quick
 prepare title-strip-workspace   # a long name: the folder chip test measures it
 run title-strip    title-strip-workspace quick
 prepare title-strip-workspace

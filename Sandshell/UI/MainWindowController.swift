@@ -14,7 +14,8 @@ final class MainWindowController: NSWindowController {
     private var filesPane: FilesPaneController?
     private var filesItem: NSSplitViewItem?
     private var selectionObserver: AnyCancellable?
-    private static let filesVisibleKey = "filesPaneVisible"
+    /// Whether this window's Files inspector is open (per folder and window).
+    private var filesVisibleKey = "filesPaneVisible"
     private var detail: PaneTreeController?
     /// This workspace's Search window (⇧⌘F), created on first use.
     private var searchWindow: SearchWindowController?
@@ -117,8 +118,12 @@ final class MainWindowController: NSWindowController {
             fatalError("Sandshell: could not open the workspace at \(root.path)")
         }
         workspace = controller
+        controller.undoManager = window.undoManager
 
         let split = NSSplitViewController()
+        // Sidebar and inspector widths (and whether they're collapsed), per window.
+        split.splitView.autosaveName = instanceIndex == 0 ? "MainSplit-\(root.path)" : "MainSplit-\(root.path)#\(instanceIndex)"
+        filesVisibleKey = "filesPaneVisible:" + (instanceIndex == 0 ? root.path : "\(root.path)#\(instanceIndex)")
 
         let sidebarVC = SidebarListController(controller: controller)
         self.sidebar = sidebarVC
@@ -191,7 +196,7 @@ final class MainWindowController: NSWindowController {
         filesItem.minimumThickness = 480
         filesItem.maximumThickness = 1600
         filesItem.canCollapse = true
-        filesItem.isCollapsed = !UserDefaults.standard.bool(forKey: Self.filesVisibleKey)
+        filesItem.isCollapsed = !UserDefaults.standard.bool(forKey: filesVisibleKey)
         self.filesItem = filesItem
         split.addSplitViewItem(filesItem)
         // Follow the active session's folder (the workspace root otherwise).
@@ -436,7 +441,7 @@ final class MainWindowController: NSWindowController {
         guard let item = filesItem else { return }
         let show = item.isCollapsed
         NSAnimationContext.runAnimationGroup { _ in item.animator().isCollapsed = !show }
-        UserDefaults.standard.set(show, forKey: Self.filesVisibleKey)
+        UserDefaults.standard.set(show, forKey: filesVisibleKey)
         syncFilesRoot()
     }
 
@@ -504,6 +509,20 @@ final class MainWindowController: NSWindowController {
         workspace?.selection = .session(id)
         window?.makeKeyAndOrderFront(nil)
         return true
+    }
+
+    var sidebarController: SidebarListController? { sidebar }
+
+    func reopenClosedSession() {
+        if workspace?.reopenLastClosed() == nil { NSSound.beep() }
+    }
+    var canReopenClosedSession: Bool { !(workspace?.recentlyClosed.isEmpty ?? true) }
+    var isSidebarCollapsed: Bool { sidebarItem?.isCollapsed ?? false }
+    var isFilesShown: Bool { !(filesItem?.isCollapsed ?? true) }
+    /// What ⌘W would close here: a session, or the window.
+    var closesSession: Bool {
+        if let workspace, case .session = workspace.selection { return true }
+        return false
     }
 
     /// ⌘W closes the selected session, falling back to closing the window.
@@ -618,6 +637,7 @@ extension MainWindowController: NSWindowDelegate {
     func windowWillClose(_ notification: Notification) {
         detail?.teardown()
         searchWindow?.close()
+        if let window { SettingsWindowController.close(for: window) }
         backgroundTasksPanel?.close()   // it shows (and stops) this window's sessions
         backgroundTasksPanel = nil
         onClose?()
@@ -648,7 +668,7 @@ extension MainWindowController: NSToolbarDelegate {
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
         [.sidebarToggle, .identity, .sessionStatus, .filesToggle, .search,
-         .revealFolder, .stopSession, .restartSession, .flexibleSpace, .space]
+         .revealFolder, .stopSession, .restartSession, .chatToggle, .flexibleSpace, .space]
     }
 
     func toolbar(_ toolbar: NSToolbar,

@@ -311,6 +311,12 @@ final class ClaudeStatsView: NSView {
 /// bar in Claude Code's own multi-line status line.
 final class ContextGaugeView: NSView {
     var fraction: CGFloat = 0 { didSet { needsDisplay = true } }
+
+    // A level indicator to VoiceOver ("Context, 42 percent").
+    override func isAccessibilityElement() -> Bool { true }
+    override func accessibilityRole() -> NSAccessibility.Role? { .levelIndicator }
+    override func accessibilityLabel() -> String? { "Context used" }
+    override func accessibilityValue() -> Any? { "\(Int((fraction * 100).rounded())) percent" }
     var fillColor: NSColor = .systemGreen { didSet { needsDisplay = true } }
     var trackColor: NSColor = .quaternaryLabelColor { didSet { needsDisplay = true } }
 

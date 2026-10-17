@@ -84,7 +84,50 @@ struct LineChanges: Equatable {
 /// view (diff vs HEAD), and Quick Look for everything that isn't text.
 @MainActor
 final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuItemValidation {
-    private var files: [OpenFile] = []
+    private var files: [OpenFile] = [] { didSet { saveTabs() } }
+
+    // MARK: Tabs remembered across launches
+
+    /// Where this editor's open tabs are kept (set by its Files surface).
+    var tabsKey: String?
+
+    private func saveTabs() {
+        guard let tabsKey, !restoringTabs else { return }
+        UserDefaults.standard.set(files.map(\.url.path), forKey: tabsKey)
+    }
+    private var restoringTabs = false
+
+    /// Reopen the tabs saved under `tabsKey` (those whose files still exist).
+    func restoreTabs() {
+        guard let tabsKey, files.isEmpty,
+              let paths = UserDefaults.standard.stringArray(forKey: tabsKey), !paths.isEmpty else { return }
+        restoringTabs = true
+        for path in paths where FileManager.default.fileExists(atPath: path) {
+            let f = OpenFile(url: URL(fileURLWithPath: path))
+            files.append(f)
+        }
+        restoringTabs = false
+        if let last = files.last { show(last) } else { rebuildTabs() }
+    }
+
+    /// A file (or a folder holding it) was renamed or moved: its tab follows,
+    /// unsaved edits and all.
+    func fileMoved(from old: URL, to new: URL) {
+        commitEditorText()
+        for (i, file) in files.enumerated() {
+            let path = file.url.path
+            guard path == old.path || path.hasPrefix(old.path + "/") else { continue }
+            let moved = OpenFile(url: URL(fileURLWithPath: new.path + path.dropFirst(old.path.count)))
+            moved.text = file.text
+            moved.savedText = file.savedText
+            moved.selection = file.selection
+            moved.mode = file.mode
+            files[i] = moved
+            if current === file { current = moved; shownInEditor = moved }
+        }
+        if let current { pathLabel.stringValue = displayPath(current.url) }
+        rebuildTabs()
+    }
     private var current: OpenFile?
     private var git = GitStatus.empty
     /// What Changes diffs against: uncommitted (with stage/revert), or a
@@ -958,8 +1001,35 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
         }
     }
 
+    /// File ▸ Print: the open file as text.
+    @objc func printDocument(_ sender: Any?) {
+        guard current?.isText == true else { return NSSound.beep() }
+        let op = NSPrintOperation(view: editor)
+        op.jobTitle = current?.url.lastPathComponent ?? "Untitled"
+        if let window = view.window { op.runModal(for: window, delegate: nil, didRun: nil, contextInfo: nil) } else { op.run() }
+    }
+
+    /// File ▸ Revert to Saved: drop unsaved edits (after asking).
+    @objc func revertDocumentToSaved(_ sender: Any?) {
+        commitEditorText()
+        guard let file = current, file.isDirty else { return }
+        guard Alerts.confirm("Revert “\(file.url.lastPathComponent)” to the saved version?",
+                             "Your unsaved changes will be lost.", confirm: "Revert") else { return }
+        reload(file)
+    }
+
+    /// The open file's tab, closed (asking about unsaved edits); false if none is open.
+    @discardableResult
+    func closeCurrentTab() -> Bool {
+        guard let current, let i = files.firstIndex(where: { $0 === current }) else { return false }
+        close(i)
+        return true
+    }
+    var hasOpenTab: Bool { current != nil }
+
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         if item.action == #selector(saveDocument(_:)) { return current?.isDirty == true }
+        if item.action == #selector(revertDocumentToSaved(_:)) { commitEditorText(); return current?.isDirty == true }
         if item.action == #selector(goToLine(_:)) { return current?.isText == true }
         return true
     }
@@ -1003,12 +1073,19 @@ final class EditorTab: NSView {
             heightAnchor.constraint(equalToConstant: 24),
         ])
         setAccessibilityRole(.button)
-        setAccessibilityLabel(title)
+        setAccessibilityLabel(title + (dirty ? ", edited" : ""))
+        setAccessibilitySelected(selected)
     }
 
     required init?(coder: NSCoder) { fatalError() }
 
     override func mouseDown(with event: NSEvent) { onSelect?() }
+
+    override func isAccessibilityElement() -> Bool { true }
+    override func accessibilityPerformPress() -> Bool { onSelect?(); return true }
+    override func accessibilityCustomActions() -> [NSAccessibilityCustomAction]? {
+        [NSAccessibilityCustomAction(name: "Close Tab") { [weak self] in self?.onClose?(); return true }]
+    }
     @objc private func closeClicked() { onClose?() }
 }
 

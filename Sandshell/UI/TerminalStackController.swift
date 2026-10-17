@@ -2126,11 +2126,10 @@ extension TerminalStackController: NSToolbarItemValidation {
     /// Chat/Terminal toggle only for Claude sessions, and it shows the mode you'd
     /// switch *to*.
     func validateToolbarItem(_ item: NSToolbarItem) -> Bool {
-        if item.action == #selector(revealInFinderClicked) { return activeSessionID != nil || shownFiles != nil }
-        guard item.action == #selector(toggleChatClicked) else { return activeSessionID != nil }
-        let session = activeSessionID.flatMap { controller.session(id: $0) }
-        let isChat = session?.isChat ?? false
-        let label = isChat ? "Show as Terminal" : "Show as Chat"
+        guard let action = item.action else { return false }
+        guard action == #selector(toggleChatClicked) else { return canPerformSessionAction(action) }
+        let label = chatToggleTitle
+        let isChat = label == "Show as Terminal"
         if item.label != label {
             item.label = label
             item.paletteLabel = "Chat / Terminal"
@@ -2138,7 +2137,26 @@ extension TerminalStackController: NSToolbarItemValidation {
             item.image = NSImage(systemSymbolName: isChat ? "terminal" : "bubble.left.and.text.bubble.right",
                                  accessibilityDescription: label)
         }
-        return session.map { SbxCommand.supportsACP($0.agent) } ?? false
+        return canPerformSessionAction(action)
+    }
+
+    /// Whether a session action (toolbar, Session menu) applies to what this pane shows.
+    func canPerformSessionAction(_ action: Selector) -> Bool {
+        switch action {
+        case #selector(revealInFinderClicked): return activeSessionID != nil || shownFiles != nil
+        case #selector(toggleChatClicked):
+            return activeSessionID.flatMap { controller.session(id: $0) }.map { SbxCommand.supportsACP($0.agent) } ?? false
+        case #selector(stopClicked):
+            guard let id = activeSessionID else { return false }
+            if let chat = chats[id] { return chat.session.phase == .running }
+            return terminals[id] != nil
+        default: return activeSessionID != nil
+        }
+    }
+
+    /// The Chat ⇄ Terminal command's name: the mode it switches to.
+    var chatToggleTitle: String {
+        activeSessionID.flatMap { controller.session(id: $0) }?.isChat == true ? "Show as Terminal" : "Show as Chat"
     }
 }
 

@@ -71,6 +71,8 @@ struct Session: Identifiable, Codable, Hashable {
     /// Shown as a native chat (ACP) instead of a terminal. Both drive the same
     /// agent conversation (`transcriptID`), so switching keeps the history.
     var isChat: Bool
+    /// Named by the person (Rename): automatic naming leaves it alone.
+    var isNamedByUser = false
 
     /// The agent whose container this session runs in: the override when present,
     /// otherwise the session's own agent.
@@ -101,6 +103,7 @@ struct Session: Identifiable, Codable, Hashable {
     enum CodingKeys: String, CodingKey {
         case id, folderID, agent, name, order, workdir, transcriptID, createdAt, containerAgent
         case isChat = "chat"
+        case isNamedByUser = "namedByUser"
         case projectID   // legacy key (pre-folders model)
     }
 
@@ -118,6 +121,7 @@ struct Session: Identifiable, Codable, Hashable {
         createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt) ?? .distantPast
         containerAgent = try c.decodeIfPresent(AgentKind.self, forKey: .containerAgent)
         isChat = try c.decodeIfPresent(Bool.self, forKey: .isChat) ?? false
+        isNamedByUser = try c.decodeIfPresent(Bool.self, forKey: .isNamedByUser) ?? false
     }
 
     func encode(to encoder: Encoder) throws {
@@ -132,6 +136,7 @@ struct Session: Identifiable, Codable, Hashable {
         try c.encode(createdAt, forKey: .createdAt)
         try c.encodeIfPresent(containerAgent, forKey: .containerAgent)
         if isChat { try c.encode(true, forKey: .isChat) }
+        if isNamedByUser { try c.encode(true, forKey: .isNamedByUser) }
     }
 }
 

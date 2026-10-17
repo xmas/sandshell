@@ -86,6 +86,7 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
         replyActions.isHidden = true
         tv.addSubview(replyActions)
         tv.onHover = { [weak self] point in self?.hover(at: point) }
+        tv.replyMenuItems = { [weak self] point in self?.replyMenuItems(at: point) ?? [] }
 
         scrollView.contentView.postsBoundsChangedNotifications = true
         NotificationCenter.default.addObserver(self, selector: #selector(scrolled),
@@ -400,14 +401,49 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
     #endif
 
     @objc private func copyReply() {
-        guard let text = hoveredText else { return }
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(text, forType: .string)
+        guard let i = hovered else { return }
+        copyReplyText(at: i)
     }
 
     @objc private func forkReply() {
         guard let text = hoveredText else { return }
         onFork?(text)
+    }
+
+    /// File ▸ Print: the whole transcript, paginated.
+    func printTranscript() {
+        let op = NSPrintOperation(view: textView)
+        op.jobTitle = window?.title ?? "Conversation"
+        if let window { op.runModal(for: window, delegate: nil, didRun: nil, contextInfo: nil) } else { op.run() }
+    }
+
+    /// A reply as its Markdown (plain text) and as it looks (rich text).
+    private func copyReplyText(at index: Int) {
+        guard index < segments.count, case .agentText(_, let markdown) = segments[index].item else { return }
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString(markdown, forType: .string)
+        if let storage = textView.textStorage {
+            let start = segments[..<index].reduce(0) { $0 + $1.length }
+            let range = NSRange(location: start, length: segments[index].length)
+            if NSMaxRange(range) <= storage.length,
+               let rtf = storage.attributedSubstring(from: range).rtf(from: NSRange(location: 0, length: range.length), documentAttributes: [:]) {
+                pb.setData(rtf, forType: .rtf)
+            }
+        }
+    }
+
+    /// Right-click on a reply: the hover actions, reachable without a pointer hover.
+    private func replyMenuItems(at point: NSPoint) -> [NSMenuItem] {
+        guard let hit = reply(at: point), case .agentText(_, let text) = segments[hit.index].item else { return [] }
+        var items = [NSMenuItem("Copy Reply") { [weak self] in self?.copyReplyText(at: hit.index) }]
+        if onFork != nil { items.append(NSMenuItem("Fork from This Reply") { [weak self] in self?.onFork?(text) }) }
+        items.append(NSMenuItem("Share Reply…") { [weak self] in
+            guard let self, let frame = self.frame(of: NSRange(location: self.segments[..<hit.index].reduce(0) { $0 + $1.length },
+                                                                length: self.segments[hit.index].length)) else { return }
+            NSSharingServicePicker(items: [text as NSString]).show(relativeTo: frame, of: self.textView, preferredEdge: .minY)
+        })
+        return items
     }
 
     // MARK: NSTextViewDelegate

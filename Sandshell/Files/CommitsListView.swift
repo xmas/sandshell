@@ -55,6 +55,10 @@ final class CommitsListView: NSView, NSTableViewDataSource, NSTableViewDelegate 
         table.dataSource = self
         table.delegate = self
         table.setAccessibilityIdentifier("files-commits")
+        table.setAccessibilityLabel("Commits")
+        let menu = NSMenu()
+        menu.delegate = self
+        table.menu = menu
         scroll.documentView = table
         scroll.hasVerticalScroller = true
         scroll.drawsBackground = false
@@ -212,3 +216,39 @@ private final class CommitCell: NSTableCellView {
         toolTip = nil
     }
 }
+
+// MARK: - Copy (⌘C, context menu)
+
+extension CommitsListView: NSMenuDelegate, NSMenuItemValidation {
+    /// The commit under a right-click (else the selected one).
+    private var targetCommit: GitCommit? {
+        let row = table.clickedRow >= 0 ? table.clickedRow : table.selectedRow
+        guard rows.indices.contains(row), case .commit(let c) = rows[row] else { return nil }
+        return c
+    }
+
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        menu.removeAllItems()
+        guard let c = targetCommit else { return }
+        menu.addItem(NSMenuItem("Copy Commit ID") { Self.copy(c.sha) })
+        menu.addItem(NSMenuItem("Copy Short ID") { Self.copy(c.short) })
+        menu.addItem(NSMenuItem("Copy Subject") { Self.copy(c.subject) })
+        menu.addItem(NSMenuItem("Copy ID and Subject") { Self.copy("\(c.short) \(c.subject)") })
+    }
+
+    /// ⌘C on a commit: its short id and subject ("abc1234 Fix the thing").
+    @objc func copy(_ sender: Any?) {
+        guard let c = targetCommit else { return NSSound.beep() }
+        Self.copy("\(c.short) \(c.subject)")
+    }
+
+    func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        item.action == #selector(copy(_:)) ? targetCommit != nil : true
+    }
+
+    private static func copy(_ text: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+    }
+}
+

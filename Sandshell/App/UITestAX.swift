@@ -27,9 +27,14 @@ enum UITestAX {
         wakeSwiftUI(window)
         switch verb {
         case "sheets":
-            var n = 0, sheet = window.attachedSheet
+            // (A workspace's Settings window counts: it used to be a sheet.)
+            var n = SettingsWindowController.window(for: window)?.isVisible == true ? 1 : 0, sheet = window.attachedSheet
             while let s = sheet { n += 1; sheet = s.attachedSheet }
             return "\(n)"
+        case "close-settings":
+            guard let settings = SettingsWindowController.window(for: window) else { return "missing" }
+            settings.performClose(nil)
+            return "ok"
         case "dump":
             return elements(in: window).prefix(600).map {
                 "\(type(of: $0.object)) id=\($0.identifier ?? "-") label=\($0.label ?? "-")"
@@ -97,6 +102,7 @@ enum UITestAX {
         var roots: [NSWindow] = []
         var sheet = window.attachedSheet
         while let s = sheet { roots.insert(s, at: 0); sheet = s.attachedSheet }
+        if let settings = SettingsWindowController.window(for: window) { roots.insert(settings, at: 0) }
         roots.append(window)
         roots.append(contentsOf: window.childWindows ?? [])
         var out: [Node] = []

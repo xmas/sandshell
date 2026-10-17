@@ -15,6 +15,7 @@ final class ChoicePopUp: NSPopUpButton {
         super.init(frame: .zero, pullsDown: true)
         Self.style(self)
         toolTip = tip
+        setAccessibilityLabel(tip)   // VoiceOver: "Model, Opus, pop-up button"
         target = self
         action = #selector(picked)
     }

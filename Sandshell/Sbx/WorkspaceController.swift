@@ -73,6 +73,10 @@ final class WorkspaceController: ObservableObject {
         get { store.config }
         set { store.setConfig(newValue, by: self) }
     }
+    /// The window's undo manager: closing, renaming… sessions can be undone.
+    weak var undoManager: UndoManager?
+    /// Sessions closed in this window, most recent last (Reopen Closed Session).
+    var recentlyClosed: [Session] = []
     private var containerPollTask: Task<Void, Never>?
     private var clockCancellable: AnyCancellable?
     private var statusFeedCancellable: AnyCancellable?
@@ -1694,6 +1698,7 @@ extension WorkspaceController {
         let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty,
               let idx = state.sessions.firstIndex(where: { $0.id == id }),
+              !state.sessions[idx].isNamedByUser,
               state.sessions[idx].name != trimmed else { return }
         state.sessions[idx].name = trimmed
         saveState()
@@ -1761,9 +1766,75 @@ extension WorkspaceController {
     }
 
     func closeSession(_ id: UUID) {
-        state.sessions.removeAll { $0.id == id }
+        guard let index = state.sessions.firstIndex(where: { $0.id == id }) else { return }
+        let closed = state.sessions.remove(at: index)
+        recentlyClosed.append(closed)
+        if recentlyClosed.count > 20 { recentlyClosed.removeFirst() }
         clearSelectionIfGone()
         saveState()
+        // Undo puts it back where it was (it resumes its conversation when shown).
+        undoManager?.registerUndo(withTarget: self) { controller in
+            MainActor.assumeIsolated { _ = controller.reopenSession(closed, at: index) }
+        }
+        undoManager?.setActionName("Close Session")
+    }
+
+    /// Close several at once: one undo puts them all back.
+    func closeSessions(_ ids: [UUID]) {
+        guard ids.count > 1 else { return ids.first.map(closeSession) ?? () }
+        undoManager?.beginUndoGrouping()
+        for id in ids { closeSession(id) }
+        undoManager?.setActionName("Close Sessions")
+        undoManager?.endUndoGrouping()
+    }
+
+    /// Session ▸ Rename: the person's name sticks (prompts no longer rename it).
+    /// Empty puts automatic naming back.
+    func renameSession(_ id: UUID, to name: String) {
+        guard let idx = state.sessions.firstIndex(where: { $0.id == id }) else { return }
+        let old = state.sessions[idx]
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed != old.name || old.isNamedByUser == trimmed.isEmpty else { return }
+        state.sessions[idx].name = trimmed.isEmpty ? old.name : trimmed
+        state.sessions[idx].isNamedByUser = !trimmed.isEmpty
+        saveState()
+        undoManager?.registerUndo(withTarget: self) { controller in
+            MainActor.assumeIsolated {
+                controller.renameSession(id, to: old.isNamedByUser ? old.name : "")
+                if !old.isNamedByUser, let i = controller.state.sessions.firstIndex(where: { $0.id == id }) {
+                    controller.state.sessions[i].name = old.name
+                    controller.saveState()
+                }
+            }
+        }
+        undoManager?.setActionName("Rename Session")
+    }
+
+
+    /// File ▸ Reopen Closed Session (⇧⌘T): the last one closed, selected.
+    @discardableResult
+    func reopenLastClosed() -> Session? {
+        while let last = recentlyClosed.popLast() {
+            if session(id: last.id) == nil, folder(id: last.folderID) != nil { return reopenSession(last, at: 0) }
+        }
+        return nil
+    }
+
+    @discardableResult
+    private func reopenSession(_ session: Session, at index: Int) -> Session? {
+        guard self.session(id: session.id) == nil else { return nil }
+        recentlyClosed.removeAll { $0.id == session.id }
+        // Its folder went meanwhile: the root folder holds it.
+        var restored = session
+        if folder(id: session.folderID) == nil, let root = folders.first { restored.folderID = root.id }
+        state.sessions.insert(restored, at: min(index, state.sessions.count))
+        saveState()
+        selection = .session(restored.id)
+        undoManager?.registerUndo(withTarget: self) { controller in
+            MainActor.assumeIsolated { controller.closeSession(restored.id) }
+        }
+        undoManager?.setActionName("Close Session")
+        return restored
     }
 
     private func clearSelectionIfGone() {

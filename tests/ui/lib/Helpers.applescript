@@ -76,6 +76,11 @@ on axPressLabel(windowTitle, label, timeoutSeconds)
 	return my axPress("press-label", windowTitle, label, timeoutSeconds)
 end axPressLabel
 
+-- Close the workspace window's Settings window.
+on axCloseSettings(windowTitle)
+	return my axCommand("close-settings", windowTitle, "")
+end axCloseSettings
+
 on axWaitForSheet(windowTitle, timeoutSeconds)
 	set deadline to (current date) + timeoutSeconds
 	repeat
