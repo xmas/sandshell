@@ -74,12 +74,9 @@ for tool in xcodegen xcodebuild gh git shasum hdiutil; do
   command -v "$tool" >/dev/null || problem "$tool not found on PATH"
 done
 
-# make-dmg.sh draws the DMG background with Pillow; fail now, not after the build.
-HAVE_PIL=0
-for cand in /usr/bin/python3 python3 /opt/homebrew/bin/python3; do
-  if command -v "$cand" >/dev/null 2>&1 && "$cand" -c 'import PIL' >/dev/null 2>&1; then HAVE_PIL=1; break; fi
-done
-[[ $HAVE_PIL == 1 ]] && ok "python3 with Pillow" || problem "no python3 with Pillow (needed by make-dmg.sh): /usr/bin/python3 -m pip install --user pillow"
+# make-dmg.sh uses the committed DMG background; fail now, not after the build.
+[[ -f "$ROOT/scripts/dmg-background.png" ]] && ok "DMG background (scripts/dmg-background.png)" \
+  || problem "scripts/dmg-background.png is missing: python3 scripts/make-dmg-background.py scripts/dmg-background.png (needs Pillow)"
 
 BRANCH="$(git rev-parse --abbrev-ref HEAD)"
 [[ "$BRANCH" == main ]] && ok "on main" || problem "sandshell is on '$BRANCH', not main"

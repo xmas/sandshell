@@ -31,16 +31,10 @@ cp "$SCRIPT_DIR/dmg-readme.txt" "$STAGE/Read Me First.txt"
 # Versioned, ever-growing release notes (canonical copy lives in the repo root).
 cp "$SCRIPT_DIR/../CHANGELOG.md" "$STAGE/Release Notes.txt"
 
-# Custom window background (hidden .background folder). The generator needs
-# Pillow; Xcode's /usr/bin/python3 ships it, Homebrew's usually doesn't, so pick
-# by capability rather than by PATH order (a Homebrew-first PATH broke 0.2.14).
+# Custom window background (hidden .background folder), drawn once by
+# make-dmg-background.py: rerun it (it needs Pillow) after changing the design.
 mkdir -p "$STAGE/.background"
-PY=""
-for cand in /usr/bin/python3 python3 /opt/homebrew/bin/python3; do
-  if command -v "$cand" >/dev/null 2>&1 && "$cand" -c 'import PIL' >/dev/null 2>&1; then PY="$cand"; break; fi
-done
-[[ -n "$PY" ]] || { echo "error: no python3 with Pillow (PIL) found — e.g. /usr/bin/python3 -m pip install pillow" >&2; exit 1; }
-"$PY" "$SCRIPT_DIR/make-dmg-background.py" "$STAGE/.background/background.png" >/dev/null
+cp "$SCRIPT_DIR/dmg-background.png" "$STAGE/.background/background.png"
 
 # 2. Create a read/write DMG sized to the content (+ slack for the layout).
 SIZE_KB=$(du -sk "$STAGE" | cut -f1)

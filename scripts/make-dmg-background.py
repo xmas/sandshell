@@ -4,6 +4,11 @@
 Drawn at 2x (1200x960) for a 600x480-pt Finder window. Icon positions in
 make-dmg.sh are in points and line up with the callouts drawn here.
 
+The DMG uses the committed copy, scripts/dmg-background.png; after changing
+the design, regenerate it (needs Pillow, e.g. in a venv) and commit it:
+
+    python3 scripts/make-dmg-background.py scripts/dmg-background.png
+
 Usage: make-dmg-background.py <output.png>
 """
 import sys
