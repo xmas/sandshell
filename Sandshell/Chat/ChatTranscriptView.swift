@@ -33,9 +33,8 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
     var onFork: ((_ replyText: String) -> Void)?
     /// "Undo" on a turn's changed-files line.
     var onUndo: ((_ turn: String) -> Void)?
-    /// The reply under the pointer: a soft highlight behind it and Copy / Fork.
+    /// The reply under the pointer, which shows Copy / Fork.
     private var hovered: Int?
-    private let hoverBackground = NSView()
     private let replyActions = NSStackView()
     /// Shown only where forking is wired (not in a subagent's window).
     private weak var forkButton: NSButton?
@@ -80,10 +79,6 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
         tv.textLayoutManager?.delegate = fragments
         tv.setAccessibilityIdentifier("chat-transcript")
 
-        hoverBackground.wantsLayer = true
-        hoverBackground.layer?.cornerRadius = 8
-        hoverBackground.isHidden = true
-        tv.addSubview(hoverBackground, positioned: .below, relativeTo: nil)
         let copy = Self.actionButton("doc.on.doc", "Copy", #selector(copyReply), self)
         let fork = Self.actionButton("arrow.triangle.branch", "Fork to New Chat", #selector(forkReply), self)
         copy.setAccessibilityIdentifier("chat-reply-copy")
@@ -140,6 +135,7 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
     @objc private func textHeightChanged() {
         let height = textView.frame.height
         if document.frame.height != height { document.setFrameSize(NSSize(width: document.frame.width, height: height)) }
+        layoutVisibleText()
     }
 
     /// Once per runloop turn, however many times layout asks.
@@ -160,6 +156,12 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
         convert(textView.frame, from: textView.superview).insetBy(dx: textView.textContainerInset.width, dy: 0)
     }
     var debugTextViewWidth: CGFloat { textView.frame.width }
+    /// Self-test: TextKit 2 has laid out what's on screen, down to the end once scrolled there.
+    var debugViewportReachesEnd: Bool {
+        guard let tlm = textView.textLayoutManager, let viewport = tlm.textViewportLayoutController.viewportRange else { return false }
+        return viewport.endLocation.compare(tlm.documentRange.endLocation) != .orderedAscending
+    }
+    func debugScrollToBottom() { scrollToBottom() }
     var debugClipOrigin: NSPoint { scrollView.contentView.bounds.origin }
     var debugDocHeight: CGFloat { textView.frame.height }
     #endif
@@ -238,13 +240,27 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
            let range = NSTextRange(location: tail, end: last) {
             tlm.ensureLayout(for: range)
         }
+        textHeightChanged()   // the document as tall as the text, laid out to its end
         programmaticScroll = true
-        textView.scrollToEndOfDocument(nil)
+        // The clip itself: the text view's scrollToEndOfDocument doesn't reach a
+        // scroll view it isn't the document of.
+        let clip = scrollView.contentView
+        let bottom = max(0, document.frame.height - clip.bounds.height)
+        clip.scroll(to: NSPoint(x: clip.bounds.minX, y: bottom))
+        scrollView.reflectScrolledClipView(clip)
         programmaticScroll = false
+        layoutVisibleText()
+    }
+
+    private func layoutVisibleText() {
+        textView.textLayoutManager?.textViewportLayoutController.layoutViewport()
     }
 
     /// Follow new output only while the user is at (or near) the bottom.
     @objc private func scrolled() {
+        // The text view isn't the scroll view's document (it sits in a centered
+        // one), so TextKit 2 isn't told what scrolled into view: lay that out.
+        layoutVisibleText()
         guard !programmaticScroll, let doc = scrollView.documentView else { return }
         let clip = scrollView.contentView.bounds
         stickToBottom = clip.maxY >= doc.frame.height - 24
@@ -432,21 +448,18 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
         let hit = point.flatMap { reply(at: $0) }
         hovered = hit?.index
         guard let hit else {
-            hoverBackground.isHidden = true
             replyActions.isHidden = true
             return
         }
-        let dark = effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-        hoverBackground.layer?.backgroundColor = NSColor.labelColor.withAlphaComponent(dark ? 0.06 : 0.035).cgColor
-        hoverBackground.frame = hit.frame.insetBy(dx: -10, dy: -6)
-        hoverBackground.isHidden = false
+        // Just the buttons, no highlight behind the reply.
+        let area = hit.frame.insetBy(dx: -10, dy: -6)
         replyActions.layer?.backgroundColor = NSColor.textBackgroundColor.cgColor
         replyActions.layer?.borderColor = NSColor.separatorColor.cgColor
         // Fork is from a reply; your own messages just copy.
         forkButton?.isHidden = onFork == nil || !isReply(hit.index)
         let size = replyActions.fittingSize
-        replyActions.frame = NSRect(x: hoverBackground.frame.maxX - size.width - 6,
-                                    y: hoverBackground.frame.minY - size.height / 2,
+        replyActions.frame = NSRect(x: area.maxX - size.width - 6,
+                                    y: area.minY - size.height / 2,
                                     width: size.width, height: size.height)
         replyActions.isHidden = false
     }
@@ -526,10 +539,26 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
         if let window { op.runModal(for: window, delegate: nil, didRun: nil, contextInfo: nil) } else { op.run() }
     }
 
+    /// What was just copied lights up in the accent color and fades.
+    private func flashCopied(_ range: NSRange) {
+        guard let frame = frame(of: range) else { return }
+        let flash = NSView(frame: frame.insetBy(dx: -8, dy: -4))
+        flash.wantsLayer = true
+        flash.layer?.cornerRadius = 8
+        flash.layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.18).cgColor
+        textView.addSubview(flash, positioned: .below, relativeTo: nil)
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = 0.55
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            flash.animator().alphaValue = 0
+        }, completionHandler: { flash.removeFromSuperview() })
+    }
+
     /// A reply as its Markdown (plain text) and as it looks (rich text); a
     /// message of yours as you typed it.
     private func copyReplyText(at index: Int) {
         guard index < segments.count, let markdown = Self.copyableText(segments[index].item) else { return }
+        flashCopied(NSRange(location: segments[..<index].reduce(0) { $0 + $1.length }, length: segments[index].length))
         let pb = NSPasteboard.general
         pb.clearContents()
         pb.setString(markdown, forType: .string)

@@ -800,6 +800,16 @@ enum SelfTest {
         check(v.isInspectorShown, "Session Details shows beside the chat")
         v.session.send(text: "Reply with exactly the word PONG and nothing else.", attachments: [])
         check(await until(180) { v.session.phase == .ready && v.session.usage != nil }, "a turn gives it usage to show")
+        // A long conversation, at its end: the text there is laid out (drawn), not blank until a resize.
+        let long: [ChatItem] = (0..<120).flatMap { i -> [ChatItem] in
+            [.user(id: UUID(), text: "Question \(i)?", attachments: []),
+             .agentText(id: "long-\(i)", text: "Answer \(i): " + String(repeating: "words go here ", count: 30))]
+        }
+        v.debugTranscript.debugApplyNow(long)
+        v.debugTranscript.debugScrollToBottom()
+        await wait(0.5)
+        check(v.debugTranscript.debugViewportReachesEnd, "a long conversation shows its end once scrolled there")
+        snapshot(window, "long-transcript")
         v.debugComposer.debugType((1...60).map { "line \($0)" }.joined(separator: "\n"))
         v.layoutSubtreeIfNeeded()
         let field = v.debugComposer.debugFieldHeight
