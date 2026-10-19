@@ -19,41 +19,27 @@ final class MainWindowController: NSWindowController {
     private var detail: PaneTreeController?
     /// This workspace's Search window (⇧⌘F), created on first use.
     private var searchWindow: SearchWindowController?
-    // Native-toolbar identity + live status, updated from the detail controller.
-    private let toolbarBadge = AgentBadgeView(side: 26, fontSize: 11, radius: 8)
+    // The title bar: the focused session's name, the Sandbox group, the Files toggle.
     private let toolbarName = NSTextField(labelWithString: "")
-    private let toolbarSubtitle = NSTextField(labelWithString: "")
-    private let toolbarStatus = NSTextField(labelWithString: "")
-    /// The single, persistent identity view (badge + name/subtitle). Built once
+    /// The single, persistent identity view (the session's name). Built once
     /// and handed ONLY to the inserted toolbar item (see the `flag` gate in the
     /// toolbar delegate) so NSToolbar's palette/measurement passes can't
     /// re-parent its shared subviews and leave the live item blank.
     private lazy var identityItemView: NSStackView = {
-        for label in [toolbarName, toolbarSubtitle] {
-            label.setContentCompressionResistancePriority(.init(40), for: .horizontal)
-            label.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        }
-        let text = NSStackView(views: [toolbarName, toolbarSubtitle])
-        text.orientation = .vertical
-        text.alignment = .leading
-        text.spacing = 0
-        let stack = NSStackView(views: [toolbarBadge, text])
+        toolbarName.setContentCompressionResistancePriority(.init(40), for: .horizontal)
+        toolbarName.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        let stack = NSStackView(views: [toolbarName])
         stack.orientation = .horizontal
         stack.alignment = .centerY
-        stack.spacing = 8
         // 200–360 pt, as wide as it can be: a long session name truncates
         // instead of blowing the whole toolbar into the overflow menu.
         // Priorities sit under fittingSizeCompression (50), so the toolbar
-        // measures the item at its 200 pt minimum, yet once laid out the labels
-        // (40) truncate before they spill past the stack's edge (45) over the
-        // status and buttons beside it. Clipping is the last resort.
+        // measures the item at its 200 pt minimum, yet once laid out the label
+        // (40) truncates before it spills past the stack's edge (45) over the
+        // buttons beside it. Clipping is the last resort.
         stack.setHuggingPriority(.init(1), for: .horizontal)
-        // The name column takes all the room after the badge; hugging its
-        // content, it shrank to the subtitle's width and cut a name that fit.
         stack.distribution = .fill
-        text.setHuggingPriority(.init(1), for: .horizontal)
         stack.setClippingResistancePriority(.init(45), for: .horizontal)
-        text.setClippingResistancePriority(.init(45), for: .horizontal)
         stack.clipsToBounds = true
         NSLayoutConstraint.activate([
             stack.widthAnchor.constraint(greaterThanOrEqualToConstant: 200),
@@ -62,6 +48,19 @@ final class MainWindowController: NSWindowController {
         ])
         return stack
     }()
+    /// Stop / Restart for the focused session's process in its sandbox.
+    private lazy var sandboxActions = SandboxActionsView(
+        target: self, stop: #selector(stopFromToolbar), restart: #selector(restartFromToolbar))
+    /// The Files sidebar's toggle (pressed while it shows).
+    private lazy var filesToggleButton = ChromeButton(
+        "Files", symbol: "sidebar.right", symbolConfiguration: .role(.body),
+        toolTip: "Show or hide Files (⇧⌥⌘0)", target: self, action: #selector(toggleFilesFromToolbar), id: "toolbar-files")
+    /// The Files sidebar's own close button, at the end of its header.
+    private lazy var filesCloseButton = NSButton.symbol(
+        "sidebar.right", label: "Hide Files (⇧⌥⌘0)", pointSize: TypeRole.body.symbolPointSize,
+        size: NSSize(width: 28, height: 24), target: self, action: #selector(toggleFilesFromToolbar), id: "files-close")
+    /// Follows the Files sidebar however it collapses (toggle, menu, a drag).
+    private var filesCollapseObserver: NSKeyValueObservation?
     /// The workspace root this window is bound to (window-per-folder).
     let root: URL
     /// This window's theme controller (for chrome that opens its own windows,
@@ -168,8 +167,8 @@ final class MainWindowController: NSWindowController {
         detail.newSessionMenu = { [weak self] in self?.sidebar?.newSessionMenu() }
         detail.onShowFiles = { [weak self] changesOnly in self?.showInFiles(changesOnly: changesOnly) }
         detail.onOpenFile = { [weak self] url, line in self?.showInFiles(url, line: line) }
-        // Drive the toolbar identity (badge + name/subtitle) from the active
-        // session; fall back to the folder name when nothing is selected.
+        // Drive the toolbar identity (the session's name) from the focused
+        // pane; nothing when it shows no session.
         detail.onChromeChange = { [weak self] chrome in
             guard let self else { return }
             // The window title feeds the Window menu (and Mission Control), where
@@ -177,24 +176,15 @@ final class MainWindowController: NSWindowController {
             // the folder name. The visible titlebar is hidden; the toolbar shows
             // only the session (the sidebar header already names the folder).
             let folder = self.root.lastPathComponent
+            // No status, timer or subtitle up here: the sidebar row carries those.
             if let chrome {
-                self.toolbarBadge.isHidden = chrome.agent == nil
-                if let agent = chrome.agent { self.toolbarBadge.configure(agent) }
                 self.toolbarName.stringValue = chrome.title
-                self.toolbarSubtitle.stringValue = chrome.subtitle
                 self.window?.title = "\(folder) — \(chrome.title)"
             } else {
-                self.toolbarBadge.isHidden = true
                 self.toolbarName.stringValue = ""
-                self.toolbarSubtitle.stringValue = ""
                 self.window?.title = folder
             }
-        }
-        // Live "Working ◷ …" / "Ready" status in the toolbar (green while working).
-        detail.onStatusChange = { [weak self] text, working in
-            guard let self else { return }
-            self.toolbarStatus.stringValue = text
-            self.toolbarStatus.textColor = working ? .sessionWorking : .secondaryLabelColor
+            self.window?.toolbar?.validateVisibleItems()
         }
         let detailItem = NSSplitViewItem(viewController: detail)
         detailItem.minimumThickness = 420
@@ -212,13 +202,14 @@ final class MainWindowController: NSWindowController {
             guard let self, case .session(let id)? = self.workspace?.selection else { return NSSound.beep() }
             self.detail?.askAgent(text, on: id)
         }
+        // Files is the window's right sidebar: full height (its header sits in
+        // the title bar, over its own background), 300–480 pt, never a pane.
         let filesItem = NSSplitViewItem(inspectorWithViewController: files)
-        filesItem.minimumThickness = 480
-        filesItem.maximumThickness = 1600
+        filesItem.minimumThickness = 300
+        filesItem.maximumThickness = 480
         filesItem.canCollapse = true
-        // Below the toolbar like the panes: the header is one strip in the
-        // window's title-bar color, with nothing of the Files pane drawn in it.
-        filesItem.allowsFullHeightLayout = false
+        filesItem.allowsFullHeightLayout = true
+        filesItem.titlebarSeparatorStyle = .none
         filesItem.isCollapsed = !UserDefaults.standard.bool(forKey: filesVisibleKey)
         self.filesItem = filesItem
         split.addSplitViewItem(filesItem)
@@ -228,9 +219,12 @@ final class MainWindowController: NSWindowController {
         }
 
         window.contentViewController = split
-        // Native window toolbar for the session actions (reveal/stop/restart),
-        // reorderable + customizable; and, in DEBUG, a construction-tape banner.
+        // Native window toolbar (identity, Sandbox group, Files); and, in
+        // DEBUG, a construction-tape banner.
         installMainToolbar()
+        filesCollapseObserver = filesItem.observe(\.isCollapsed, options: [.new]) { [weak self] _, _ in
+            MainActor.assumeIsolated { self?.filesVisibilityChanged() }
+        }
         installDebugTapeIfNeeded()
         window.setContentSize(NSSize(width: 1000, height: 640))
         // Restore this folder's remembered frame; for a folder opened for the
@@ -282,43 +276,49 @@ final class MainWindowController: NSWindowController {
         // The transparent titlebar shows the window background; use the title-bar
         // color (== panel normally, the selected Main color when matching terminal).
         window?.backgroundColor = colors.titleBar
+        sandboxActions.apply(colors)
+        filesToggleButton.apply(colors)
+        filesCloseButton.contentTintColor = colors.text2
+        toolbarName.textColor = colors.text
+        filesPane?.applyChrome(colors)
     }
 
     // MARK: - Toolbar + debug construction tape
 
-    /// Attach the native, user-customizable window toolbar (its items are built by
-    /// the `NSToolbarDelegate` conformance below).
+    /// Attach the window toolbar (its items are built by the `NSToolbarDelegate`
+    /// conformance below).
     private func installMainToolbar() {
         toolbarName.font = .role(.title)
         toolbarName.lineBreakMode = .byTruncatingTail
-        toolbarSubtitle.font = .role(.code)
-        toolbarSubtitle.textColor = .secondaryLabelColor
-        toolbarSubtitle.lineBreakMode = .byTruncatingMiddle
-        toolbarStatus.font = .role(.code)
-        toolbarStatus.textColor = .secondaryLabelColor
-        toolbarStatus.setContentHuggingPriority(.init(1), for: .horizontal)
-        NSLayoutConstraint.activate([
-            toolbarStatus.widthAnchor.constraint(greaterThanOrEqualToConstant: 40),
-            toolbarStatus.widthAnchor.constraint(lessThanOrEqualToConstant: 150),
-        ])
+        toolbarName.setAccessibilityIdentifier("toolbar-identity")
         toolbarName.stringValue = ""   // no session yet: the sidebar header names the folder
-        toolbarBadge.isHidden = true
 
-        // Identifier is versioned so an item-set change discards the stale
-        // autosaved arrangement (which otherwise pins items to old positions).
-        // Bump the version when default items change: autosaved configurations
-        // would otherwise hide new items (v3 added the Chat/Terminal toggle, v5
-        // Search).
-        let toolbar = NSToolbar(identifier: "MainWindowToolbar.v5")
+        // A fixed set, not customizable (one home per action), so nothing is
+        // autosaved. The identifier is versioned all the same, and what older
+        // versions autosaved is dropped, so none of their items (status,
+        // reveal, search…) lingers.
+        Self.forgetOldToolbarConfigurations()
+        let toolbar = NSToolbar(identifier: Self.toolbarIdentifier)
         toolbar.delegate = self
-        toolbar.allowsUserCustomization = true
-        toolbar.autosavesConfiguration = true
+        toolbar.allowsUserCustomization = false
+        toolbar.autosavesConfiguration = false
         toolbar.displayMode = .iconOnly
         window?.toolbar = toolbar
         window?.toolbarStyle = .unified
         // Center the traffic lights on the toolbar's identity item (AppKit's
         // default on the macOS 27 SDK toolbar sits low, crowding the sidebar header).
         (window as? TrafficLightInsetWindow)?.trafficLightAlignmentView = identityItemView
+        filesVisibilityChanged()
+    }
+
+    nonisolated static let toolbarIdentifier = "MainWindowToolbar.v6"
+
+    /// The arrangements earlier toolbars autosaved (v1–v5, when it was
+    /// customizable): forgotten, so no stale item set stays in defaults.
+    nonisolated static func forgetOldToolbarConfigurations(_ defaults: UserDefaults = .standard) {
+        for version in ["", ".v2", ".v3", ".v4", ".v5"] {
+            defaults.removeObject(forKey: "NSToolbar Configuration MainWindowToolbar" + version)
+        }
     }
 
     /// DEBUG-only: a faint construction-tape watermark inserted **behind** the
@@ -387,19 +387,45 @@ final class MainWindowController: NSWindowController {
     var searchWindowController: SearchWindowController? { searchWindow }
 
     #if DEBUG
-    /// Self-test: the toolbar's identity and status views' widths.
-    var debugToolbarWidths: (identity: CGFloat, status: CGFloat, visible: Int, items: Int) {
-        (identityItemView.frame.width, toolbarStatus.frame.width,
-         window?.toolbar?.visibleItems?.count ?? -1, window?.toolbar?.items.count ?? -1)
+    /// Self-test: the identity item's width, and how many of the toolbar's
+    /// shown items fit (the rest would go to its overflow menu).
+    var debugToolbarWidths: (identity: CGFloat, visible: Int, items: Int, missing: [String]) {
+        // The title bar's own items (the separator and space past it are the
+        // Files sidebar's, laid out only while it shows).
+        let items = window?.toolbar?.items ?? []
+        let main = items.prefix { $0.itemIdentifier != .inspectorTrackingSeparator }
+            .filter { !$0.isHidden && $0.itemIdentifier != .flexibleSpace }
+        let visible = Set((window?.toolbar?.visibleItems ?? []).map(\.itemIdentifier))
+        let missing = main.filter { !visible.contains($0.itemIdentifier) }.map(\.itemIdentifier.rawValue)
+        return (identityItemView.frame.width, main.count - missing.count, main.count, missing)
+    }
+    /// Self-test: the toolbar's items, by identifier, in order.
+    var debugToolbarItems: [String] { window?.toolbar?.items.map(\.itemIdentifier.rawValue) ?? [] }
+    /// Self-test: the toolbar's default items, by identifier, in order.
+    var debugDefaultToolbarItems: [String] {
+        window?.toolbar.map { toolbarDefaultItemIdentifiers($0).map(\.rawValue) } ?? []
+    }
+    /// Self-test: the title bar's session name.
+    var debugIdentity: String { toolbarName.stringValue }
+    /// Self-test: the Sandbox group — shown, and Stop / Restart enabled.
+    var debugSandboxGroup: (shown: Bool, stop: Bool, restart: Bool) {
+        window?.toolbar?.validateVisibleItems()
+        let item = window?.toolbar?.items.first { $0.itemIdentifier == .sandbox }
+        return (item.map { !$0.isHidden } ?? false, sandboxActions.stopButton.isEnabled,
+                sandboxActions.restartButton.isEnabled)
+    }
+    /// Self-test: the Files toggle shows pressed; the sidebar's header shows.
+    var debugFilesToggle: (on: Bool, headerShown: Bool) {
+        let header = window?.toolbar?.items.first { $0.itemIdentifier == .filesHeader }
+        return (filesToggleButton.isOn, header.map { !$0.isHidden } ?? false)
     }
     /// Self-test: set the toolbar's session name, then the name label's width
     /// against the identity item's.
     var debugToolbarNameFits: Bool {
         toolbarName.alignmentRect(forFrame: toolbarName.frame).width >= toolbarName.intrinsicContentSize.width - 6
     }
-    func debugToolbarName(_ name: String, subtitle: String? = nil) -> (label: CGFloat, identity: CGFloat) {
+    func debugToolbarName(_ name: String) -> (label: CGFloat, identity: CGFloat) {
         toolbarName.stringValue = name
-        if let subtitle { toolbarSubtitle.stringValue = subtitle }
         identityItemView.layoutSubtreeIfNeeded()
         // The alignment rect: a label's frame runs 2 pt past its text each side.
         let text = toolbarName.alignmentRect(forFrame: toolbarName.frame)
@@ -458,33 +484,83 @@ final class MainWindowController: NSWindowController {
     }
     func toggleSidebar() { setSidebarCollapsed(!(sidebarItem?.isCollapsed ?? false)) }
 
-    /// View ▸ Show Files (⌥⌘0) / toolbar: the session folder's tree + editor.
-    func toggleFiles() {
-        guard let item = filesItem else { return }
-        let show = item.isCollapsed
-        NSAnimationContext.runAnimationGroup { _ in item.animator().isCollapsed = !show }
-        UserDefaults.standard.set(show, forKey: filesVisibleKey)
-        syncFilesRoot()
+    /// View ▸ Show / Hide Files (⇧⌥⌘0), the title bar's Files button, the
+    /// sidebar's own close button: the window's Files sidebar, which follows
+    /// the selected session's folder.
+    func toggleFiles() { setFilesShown(!isFilesShown) }
+
+    func setFilesShown(_ show: Bool) {
+        guard let item = filesItem, item.isCollapsed == show else { return }
+        // Scripted runs (an offscreen window) don't animate: the split there
+        // never gets past the first frame of the expansion.
+        if AutomatedRun.isActive { item.isCollapsed = !show } else {
+            NSAnimationContext.runAnimationGroup { _ in item.animator().isCollapsed = !show }
+        }
+        filesVisibilityChanged()
     }
 
-    /// Toolbar Files button: toggles the trailing Files pane.
+    /// Panes that can't shrink enough leave no room for Files: the split lays
+    /// it out past the window's edge. Widen the window by what's missing (as
+    /// far as the screen allows) so the sidebar shows.
+    private func fitFilesInWindow() {
+        guard isFilesShown, let window, let files = filesPane?.view else { return }
+        window.contentView?.layoutSubtreeIfNeeded()
+        let overflow = files.convert(files.bounds, to: nil).maxX - window.frame.width
+        guard overflow > 0.5 else { return }
+        var frame = window.frame
+        frame.size.width += ceil(overflow)
+        if let screen = window.screen?.visibleFrame {
+            frame.size.width = min(frame.width, screen.width)
+            if frame.maxX > screen.maxX { frame.origin.x = max(screen.minX, screen.maxX - frame.width) }
+        }
+        window.setFrame(frame, display: true, animate: !AutomatedRun.isActive)
+    }
+
     @objc func toggleFilesFromToolbar() { toggleFiles() }
+
+    /// The Files sidebar showed or hid (however it happened): the toggle's
+    /// pressed state, its header in the title bar, the window's saved state,
+    /// and the folder it shows.
+    private func filesVisibilityChanged() {
+        let shown = isFilesShown
+        filesToggleButton.isOn = shown
+        // The Files sidebar's part of the title bar (its tracking separator,
+        // header, space and close button) comes and goes with it. Removed,
+        // not hidden: hidden items still take room at the bar's end.
+        if let toolbar = window?.toolbar {
+            let separator = toolbar.items.firstIndex { $0.itemIdentifier == .inspectorTrackingSeparator }
+            if shown, separator == nil {
+                for id in Self.filesToolbarItems { toolbar.insertItem(withItemIdentifier: id, at: toolbar.items.count) }
+            } else if !shown, let separator {
+                while toolbar.items.count > separator { toolbar.removeItem(at: toolbar.items.count - 1) }
+            }
+        }
+        UserDefaults.standard.set(shown, forKey: filesVisibleKey)
+        syncFilesRoot()
+        // Once it has expanded (and been laid out), make sure it's in the window.
+        if shown {
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .milliseconds(350))
+                self?.fitFilesInWindow()
+            }
+        }
+    }
 
     /// A pane's branch crumb or a chat's file link: the Files sidebar (shown
     /// if it isn't) with just the changes, or `url` open (at `line`).
     func showInFiles(_ url: URL? = nil, line: Int? = nil, changesOnly: Bool = false) {
-        if filesItem?.isCollapsed == true { toggleFiles() }
+        setFilesShown(true)
         guard let files = filesPane else { return }
         if changesOnly { files.showChanges() }
         guard let url else { return }
         if let line { files.editor.open(url, line: line, highlight: "") } else { files.open(url) }
     }
 
-    /// File ▸ Open Quickly (⇧⌘O) when no Files surface has focus: the trailing
-    /// Files pane, shown if needed.
+    /// File ▸ Open Quickly (⇧⌘O) when no Files surface has focus: the Files
+    /// sidebar, shown if needed.
     func openQuickly() {
         if let item = filesItem, !item.isCollapsed, let files = filesPane { return files.openQuickly(nil) }
-        toggleFiles()
+        setFilesShown(true)
         // After the inspector's expand animation, so the popover anchors in place.
         Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(300))
@@ -503,7 +579,7 @@ final class MainWindowController: NSWindowController {
         filesPane?.setRoot(folder, access: workspace.sandboxAccess(for: folder, agent: agent))
     }
 
-    /// ⇧⌘F / sidebar footer / toolbar: search this workspace's open sessions and
+    /// ⇧⌘F / the sidebar: search this workspace's open sessions and
     /// the past conversations that can be restored into it.
     func showSearch(preferredFolder: UUID? = nil) {
         guard let workspace else { return }
@@ -513,7 +589,6 @@ final class MainWindowController: NSWindowController {
         search.show()
     }
 
-    @objc func showSearchFromToolbar() { showSearch() }
 
     /// ⌘, — open the per-root settings inspector sheet (all settings live there).
     func showSettings() {
@@ -689,117 +764,99 @@ extension MainWindowController: NSWindowDelegate {
 }
 
 private extension NSToolbarItem.Identifier {
-    static let sidebarToggle  = NSToolbarItem.Identifier("sidebarToggle")
-    static let identity       = NSToolbarItem.Identifier("identity")
-    static let sessionStatus  = NSToolbarItem.Identifier("sessionStatus")
-    static let revealFolder   = NSToolbarItem.Identifier("revealFolder")
-    static let stopSession    = NSToolbarItem.Identifier("stopSession")
-    static let restartSession = NSToolbarItem.Identifier("restartSession")
-    static let chatToggle     = NSToolbarItem.Identifier("chatToggle")
-    static let filesToggle    = NSToolbarItem.Identifier("filesToggle")
-    static let search         = NSToolbarItem.Identifier("search")
+    static let sidebarToggle = NSToolbarItem.Identifier("sidebarToggle")
+    static let identity      = NSToolbarItem.Identifier("identity")
+    static let sandbox       = NSToolbarItem.Identifier("sandbox")
+    static let filesToggle   = NSToolbarItem.Identifier("filesToggle")
+    /// The Files sidebar's header ("Files · main · 6 changed") and close
+    /// button: over the sidebar, past the inspector's tracking separator.
+    static let filesHeader   = NSToolbarItem.Identifier("filesHeader")
+    static let filesClose    = NSToolbarItem.Identifier("filesClose")
 }
 
 extension MainWindowController: NSToolbarDelegate {
+    /// The title bar: sidebar toggle · the session's name · Sandbox (Stop,
+    /// Restart) · Files. Reveal in Finder lives in the pane's folder crumb,
+    /// Chat ⇄ Terminal in the pane strip, Search in the sidebar (and ⇧⌘F).
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
         // Our own sidebar toggle, not `.toggleSidebar`: the system item is a
         // bezeled button that renders as a glass capsule (and can hold a focus
         // ring) on macOS 26+/SDK 27 builds.
-        // Chat ⇄ Terminal lives on each pane (title strip), not here.
-        [.sidebarToggle, .identity, .flexibleSpace, .sessionStatus,
-         .revealFolder, .stopSession, .restartSession, .search, .filesToggle]
+        [.sidebarToggle, .identity, .flexibleSpace, .sandbox, .filesToggle]
     }
 
+    /// Over the Files sidebar while it shows (`filesVisibilityChanged`): its
+    /// header, and its close button at the far end.
+    fileprivate static let filesToolbarItems: [NSToolbarItem.Identifier] =
+        [.inspectorTrackingSeparator, .filesHeader, .flexibleSpace, .filesClose]
+
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [.sidebarToggle, .identity, .sessionStatus, .filesToggle, .search,
-         .revealFolder, .stopSession, .restartSession, .chatToggle, .flexibleSpace, .space]
+        toolbarDefaultItemIdentifiers(toolbar) + Self.filesToolbarItems
     }
 
     func toolbar(_ toolbar: NSToolbar,
                  itemForItemIdentifier itemIdentifier: NSToolbarItem.Identifier,
                  willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? {
-        // Custom-view items: session identity (badge + name/subtitle) and status.
-        // `flag` (willBeInsertedIntoToolbar) is true for the real item and false
-        // for the customization palette / sizing pass; hand the shared live views
-        // ONLY to the real item so the palette copy can't steal them (which left
+        // Custom-view items. `flag` (willBeInsertedIntoToolbar) is true for the
+        // real item and false for a palette / sizing pass; hand the shared live
+        // views ONLY to the real item so a copy can't steal them (which left
         // the toolbar identity blank — see the identityItemView note).
-        if itemIdentifier == .identity {
-            let item = NSToolbarItem(itemIdentifier: .identity)
-            item.view = flag ? identityItemView : NSTextField(labelWithString: "Session")   // width: see identityItemView
-            item.visibilityPriority = .high
-            // No bezel: on macOS 26+/SDK 27 a bordered item is wrapped in a Liquid
-            // Glass capsule, which is not this app's look (xmas-sandshell-85c).
+        // No bezels anywhere: on macOS 26+/SDK 27 a bordered item is wrapped
+        // in a Liquid Glass capsule, which is not this app's look (xmas-sandshell-85c).
+        func item(_ view: @autoclosure () -> NSView, label: String,
+                  validate: (() -> Void)? = nil) -> SelfValidatingToolbarItem {
+            let item = SelfValidatingToolbarItem(itemIdentifier: itemIdentifier)
+            item.view = flag ? view() : NSTextField(labelWithString: label)
+            item.label = label
+            item.paletteLabel = label
             item.isBordered = false
+            item.onValidate = validate
             return item
         }
-        if itemIdentifier == .sessionStatus {
-            toolbarStatus.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-            let item = NSToolbarItem(itemIdentifier: .sessionStatus)
-            item.view = flag ? toolbarStatus : NSTextField(labelWithString: "Status")
-            item.isBordered = false
-            return item
-        }
-
-        if itemIdentifier == .filesToggle {
-            let item = NSToolbarItem(itemIdentifier: .filesToggle)
-            item.label = "Files"
-            item.paletteLabel = "Show Files"
-            item.toolTip = "Show Files (⌥⌘0)"
-            item.view = Self.plainToolbarButton(symbol: "sidebar.right", label: "Show Files",
-                                                target: self, action: #selector(toggleFilesFromToolbar))
-            return item
-        }
-        if itemIdentifier == .search {
-            let item = NSToolbarItem(itemIdentifier: .search)
-            item.label = "Search"
-            item.paletteLabel = "Search Sessions"
-            item.toolTip = "Search Sessions (⇧⌘F)"
-            item.view = Self.plainToolbarButton(symbol: "magnifyingglass", label: "Search Sessions",
-                                                target: self, action: #selector(showSearchFromToolbar))
-            return item
-        }
-        if itemIdentifier == .sidebarToggle {
-            let item = NSToolbarItem(itemIdentifier: .sidebarToggle)
-            item.label = "Sidebar"
-            item.paletteLabel = "Toggle Sidebar"
-            item.toolTip = "Toggle Sidebar"
-            item.view = Self.plainToolbarButton(symbol: "sidebar.left", label: "Toggle Sidebar",
-                                                target: self, action: #selector(toggleSidebarFromToolbar))
-            item.visibilityPriority = .high
-            return item
-        }
-
-        let spec: (symbol: String, label: String, action: Selector)?
         switch itemIdentifier {
-        case .revealFolder:
-            spec = ("folder", "Reveal Folder", #selector(TerminalStackController.revealInFinderClicked))
-        case .stopSession:
-            spec = ("stop", "Stop", #selector(TerminalStackController.stopClicked))
-        case .restartSession:
-            spec = ("arrow.clockwise", "Restart", #selector(TerminalStackController.headerRestartClicked))
-        case .chatToggle:
-            // Icon/label flip with the active session (see validateToolbarItem).
-            spec = ("bubble.left.and.text.bubble.right", "Show as Chat",
-                    #selector(TerminalStackController.toggleChatClicked))
+        case .sidebarToggle:
+            let item = item(Self.plainToolbarButton(symbol: "sidebar.left", label: "Toggle Sidebar",
+                                                    target: self, action: #selector(toggleSidebarFromToolbar)),
+                            label: "Sidebar")
+            item.toolTip = "Toggle Sidebar"
+            item.visibilityPriority = .high
+            return item
+        case .identity:
+            // Revalidates the Sandbox group too: a hidden item isn't validated.
+            let item = item(identityItemView, label: "Session") { [weak self] in self?.updateSandboxGroup() }
+            item.visibilityPriority = .high
+            return item
+        case .sandbox:
+            let item = item(sandboxActions, label: "Sandbox") { [weak self] in self?.updateSandboxGroup() }
+            item.visibilityPriority = .high
+            return item
+        case .filesToggle:
+            let item = item(filesToggleButton, label: "Files")
+            item.toolTip = "Show or hide Files (⇧⌥⌘0)"
+            item.visibilityPriority = .high
+            return item
+        case .filesHeader:
+            guard let filesPane else { return nil }
+            return item(filesPane.header, label: "Files")
+        case .filesClose:
+            let item = item(filesCloseButton, label: "Hide Files")
+            item.toolTip = "Hide Files (⇧⌥⌘0)"
+            return item
         default:
-            spec = nil
+            return nil
         }
-        guard let spec, let detail else { return nil }
-        let item = NSToolbarItem(itemIdentifier: itemIdentifier)
-        item.image = NSImage(systemSymbolName: spec.symbol, accessibilityDescription: spec.label)
-        item.label = spec.label
-        item.paletteLabel = spec.label
-        item.toolTip = spec.label
-        // Plain glyphs, not bezeled buttons: bordered items get Liquid Glass
-        // capsules (grouped into one pill) on macOS 26+/SDK 27 builds. These
-        // stay image items (no custom view) so NSToolbarItemValidation keeps
-        // enabling/disabling them with the active session.
-        item.isBordered = false
-        // Actions route to the detail controller's active session; it also
-        // supplies enable/disable via NSToolbarItemValidation.
-        item.target = detail
-        item.action = spec.action
-        return item
+    }
+
+    /// The Sandbox group: hidden while no pane shows a session; Stop and
+    /// Restart enabled for what the focused pane shows.
+    private func updateSandboxGroup() {
+        guard let detail else { return }
+        let anySession = detail.panes.contains { $0.shownSession != nil }
+        if let item = window?.toolbar?.items.first(where: { $0.itemIdentifier == .sandbox }), item.isHidden == anySession {
+            item.isHidden = !anySession
+        }
+        sandboxActions.setEnabled(stop: detail.canPerformSessionAction(#selector(TerminalStackController.stopClicked)),
+                                  restart: detail.canPerformSessionAction(#selector(TerminalStackController.headerRestartClicked)))
     }
 
     /// A borderless, non-focusable symbol button for toolbar items — the
@@ -808,8 +865,12 @@ extension MainWindowController: NSToolbarDelegate {
                                            target: AnyObject?, action: Selector) -> NSButton {
         NSButton.symbol(symbol, label: label, pointSize: TypeRole.body.symbolPointSize, size: NSSize(width: 28, height: 24),
                         target: target, action: action)
-
     }
 
     @objc private func toggleSidebarFromToolbar() { toggleSidebar() }
+    /// Sandbox ▸ Stop: the focused session's process in its sandbox.
+    @objc private func stopFromToolbar() { detail?.stopClicked() }
+    /// Sandbox ▸ Restart: the focused session, started again in its sandbox.
+    @objc private func restartFromToolbar() { detail?.headerRestartClicked() }
 }
+

@@ -772,7 +772,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// ⌥⌘B — every session's background tasks in the active window.
     @MainActor @objc func showBackgroundTasks(_ sender: Any?) { activeController?.showBackgroundTasks() }
 
-    /// ⌥⌘0 — the Files pane (tree + editor) for the active session's folder.
+    /// ⇧⌥⌘0 — the window's Files sidebar (tree + editor) for the active session's folder.
     @MainActor @objc func toggleFiles(_ sender: Any?) {
         activeController?.toggleFiles()
     }

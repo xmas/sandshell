@@ -59,6 +59,7 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
     private var wantsChanges: ChangeScope?
     /// The scope's files with +/- counts, by absolute path.
     private var scoped: [String: ScopedFile] = [:]
+    /// The Commits section: the Files sidebar places it (at its foot).
     let commits = CommitsListView()
     /// The changed list's scope changed (the editor diffs against it).
     var onScope: ((ChangeScope, Set<String>) -> Void)?
@@ -114,6 +115,7 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
         branchLabel.font = .role(.code)
         branchLabel.textColor = .secondaryLabelColor
         branchLabel.lineBreakMode = .byTruncatingMiddle
+        branchLabel.isHidden = true
 
         sandboxButton.isBordered = false
         sandboxButton.imagePosition = .imageLeading
@@ -123,8 +125,6 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
         sandboxButton.action = #selector(showSandboxAccess)
         sandboxButton.setAccessibilityIdentifier("files-sandbox-access")
         sandboxButton.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        // "main · 3 changed": click for the changed files.
-        branchLabel.addGestureRecognizer(NSClickGestureRecognizer(target: self, action: #selector(branchClicked)))
         let footer = NSStackView(views: [sandboxButton, branchLabel])
         footer.orientation = .vertical
         footer.alignment = .leading
@@ -147,13 +147,13 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
             if let scope { self.pick(scope) } else if self.changedOnly { self.pick(.uncommitted) }
         }
 
-        for v in [filter, changedButton, scroll, commits, footer] as [NSView] {
+        for v in [filter, changedButton, scroll, footer] as [NSView] {
             v.translatesAutoresizingMaskIntoConstraints = false
             root.addSubview(v)
         }
         NSLayoutConstraint.activate([
-            // Below the window's toolbar (the inspector runs under it), the filter
-            // on a row of its own, the changed-files toggle beneath it.
+            // Below the window's title bar (the sidebar runs under it), the
+            // filter on a row of its own, the changed-files toggle beneath it.
             filter.topAnchor.constraint(equalTo: root.safeAreaLayoutGuide.topAnchor, constant: 8),
             filter.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 8),
             filter.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -8),
@@ -163,16 +163,13 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
             scroll.topAnchor.constraint(equalTo: changedButton.bottomAnchor, constant: 6),
             scroll.leadingAnchor.constraint(equalTo: root.leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: root.trailingAnchor),
-            commits.topAnchor.constraint(equalTo: scroll.bottomAnchor, constant: 4),
             {
-                // The tree keeps a few rows however many commits there are.
+                // The tree keeps a few rows however short the sidebar's top half.
                 let c = scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 90)
                 c.priority = .init(760)
                 return c
             }(),
-            commits.leadingAnchor.constraint(equalTo: root.leadingAnchor),
-            commits.trailingAnchor.constraint(equalTo: root.trailingAnchor),
-            footer.topAnchor.constraint(equalTo: commits.bottomAnchor, constant: 8),
+            footer.topAnchor.constraint(equalTo: scroll.bottomAnchor, constant: 6),
             footer.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 10),
             footer.trailingAnchor.constraint(lessThanOrEqualTo: root.trailingAnchor, constant: -10),
             footer.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -12),
@@ -340,18 +337,14 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
         }
     }
 
-    /// "main · 3 changed" under the tree — while content-search results show,
-    /// their match count is there instead.
+    /// While content-search results show, their match count under the tree
+    /// (the Files sidebar's header says the branch and what changed).
     private func updateBranchLabel() {
-        if let groups = searchGroups, !searchQuery.isEmpty {
-            let total = groups.reduce(0) { $0 + $1.matches.count }
-            branchLabel.stringValue = String(AttributedString(
-                localized: "^[\(total) match](inflect: true) in ^[\(groups.count) file](inflect: true)").characters)
-            return
-        }
-        let changed = git.changes.count
-        branchLabel.stringValue = git.repoRoot == nil ? "Not a git repository"
-            : "\(git.branch ?? "detached")" + (changed > 0 ? " · \(changed) changed" : " · clean")
+        guard let groups = searchGroups, !searchQuery.isEmpty else { branchLabel.isHidden = true; return }
+        branchLabel.isHidden = false
+        let total = groups.reduce(0) { $0 + $1.matches.count }
+        branchLabel.stringValue = String(AttributedString(
+            localized: "^[\(total) match](inflect: true) in ^[\(groups.count) file](inflect: true)").characters)
     }
 
     // MARK: Commits
@@ -412,7 +405,7 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
 
     // MARK: Changed files
 
-    /// Toggle the flat "changed files" list (also from the branch chip / footer).
+    /// Toggle the flat "changed files" list (also from the Files header and the pane strip's branch).
     func showChanges(_ on: Bool) { showChanges(on, scope: .uncommitted) }
 
     private func showChanges(_ on: Bool, scope: ChangeScope) {
@@ -443,7 +436,6 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
     }
 
     @objc private func toggleChanged() { showChanges(changedButton.state == .on) }
-    @objc private func branchClicked() { if !git.changes.isEmpty || changedOnly { showChanges(!changedOnly) } }
 
     /// The repo's changes under this folder (git reports real paths; the
     /// folder may be reached through a symlink like /tmp).
