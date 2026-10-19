@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 
 /// How the app picks its light/dark appearance. This is a single **global**
 /// setting for all of Sandshell, owned by `AppAppearance`.
@@ -223,5 +224,87 @@ extension NSColor {
         c.getHue(&h, saturation: &s, brightness: &b, alpha: &a)
         let newS = min(1.0, s * factor)
         return NSColor(hue: h, saturation: newS, brightness: b, alpha: a)
+    }
+}
+
+// MARK: - Type scale
+
+/// The app's type roles. Every font in the chrome comes from one of these;
+/// this file is the only place that names a point size. Weight means state
+/// (unread, emphasized) and colour means status, so there are two weights.
+enum TypeRole: CaseIterable, Sendable {
+    /// 15 pt semibold: sidebar and window titles, section heads.
+    case title
+    /// 13 pt: names, menu items, buttons, the composer, chat prose.
+    case body
+    /// 13 pt semibold: an unread name, selected emphasis.
+    case bodyEmphasis
+    /// 11.5 pt: sublines, crumbs, timestamps, captions, toolbar labels.
+    case meta
+    /// 11 pt SF Mono: paths, branches, diff counts, timers, token and cost readouts.
+    case code
+
+    var pointSize: CGFloat {
+        switch self {
+        case .title: 15
+        case .body, .bodyEmphasis: 13
+        case .meta: 11.5
+        case .code: 11
+        }
+    }
+
+    var weight: NSFont.Weight {
+        switch self {
+        case .title, .bodyEmphasis: .semibold
+        case .body, .meta, .code: .regular
+        }
+    }
+
+    /// An SF Symbol beside text of this role: 16 pt in body contexts, 12 pt in meta ones.
+    var symbolPointSize: CGFloat {
+        switch self {
+        case .title, .body, .bodyEmphasis: 16
+        case .meta, .code: 12
+        }
+    }
+}
+
+extension NSFont {
+    static func role(_ role: TypeRole) -> NSFont { self.role(role, weight: role.weight) }
+
+    /// A role at another weight — semibold for emphasis, medium only where a
+    /// status word needs it.
+    static func role(_ role: TypeRole, weight: NSFont.Weight) -> NSFont {
+        role == .code ? .monospacedSystemFont(ofSize: role.pointSize, weight: weight)
+            : .systemFont(ofSize: role.pointSize, weight: weight)
+    }
+
+    /// An invisible line's font: only its height counts (the transcript's spacer lines).
+    static func spacer(_ height: CGFloat) -> NSFont { .systemFont(ofSize: height) }
+
+    /// Letters drawn as part of a graphic and scaled with it — a badge's glyph,
+    /// a theme preview's miniature — not type.
+    static func mark(_ size: CGFloat, weight: NSFont.Weight = .regular, monospaced: Bool = false) -> NSFont {
+        monospaced ? .monospacedSystemFont(ofSize: size, weight: weight) : .systemFont(ofSize: size, weight: weight)
+    }
+}
+
+extension Font {
+    static func role(_ role: TypeRole) -> Font { Font(NSFont.role(role) as CTFont) }
+    static func role(_ role: TypeRole, weight: NSFont.Weight) -> Font { Font(NSFont.role(role, weight: weight) as CTFont) }
+    static func mark(_ size: CGFloat, weight: NSFont.Weight = .regular, monospaced: Bool = false) -> Font {
+        Font(NSFont.mark(size, weight: weight, monospaced: monospaced) as CTFont)
+    }
+
+    /// An SF Symbol sized for text of this role.
+    static func symbol(_ role: TypeRole, weight: Font.Weight = .regular) -> Font {
+        .system(size: role.symbolPointSize, weight: weight)
+    }
+}
+
+extension NSImage.SymbolConfiguration {
+    /// An SF Symbol sized for text of this role.
+    static func role(_ role: TypeRole, weight: NSFont.Weight = .regular) -> NSImage.SymbolConfiguration {
+        .init(pointSize: role.symbolPointSize, weight: weight)
     }
 }
