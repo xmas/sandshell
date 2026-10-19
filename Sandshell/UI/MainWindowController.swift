@@ -31,10 +31,10 @@ final class MainWindowController: NSWindowController {
         let stack = NSStackView(views: [toolbarName])
         stack.orientation = .horizontal
         stack.alignment = .centerY
-        // 200–360 pt, as wide as it can be: a long session name truncates
+        // 140–360 pt, as wide as it can be: a long session name truncates
         // instead of blowing the whole toolbar into the overflow menu.
         // Priorities sit under fittingSizeCompression (50), so the toolbar
-        // measures the item at its 200 pt minimum, yet once laid out the label
+        // measures the item at its 140 pt minimum, yet once laid out the label
         // (40) truncates before it spills past the stack's edge (45) over the
         // buttons beside it. Clipping is the last resort.
         stack.setHuggingPriority(.init(1), for: .horizontal)
@@ -42,7 +42,7 @@ final class MainWindowController: NSWindowController {
         stack.setClippingResistancePriority(.init(45), for: .horizontal)
         stack.clipsToBounds = true
         NSLayoutConstraint.activate([
-            stack.widthAnchor.constraint(greaterThanOrEqualToConstant: 200),
+            stack.widthAnchor.constraint(greaterThanOrEqualToConstant: 140),
             stack.widthAnchor.constraint(lessThanOrEqualToConstant: 360),
             stack.heightAnchor.constraint(equalToConstant: 32),
         ])
@@ -53,11 +53,11 @@ final class MainWindowController: NSWindowController {
         target: self, stop: #selector(stopFromToolbar), restart: #selector(restartFromToolbar))
     /// The Files sidebar's toggle (pressed while it shows).
     private lazy var filesToggleButton = ChromeButton(
-        "Files", symbol: "sidebar.right", symbolConfiguration: .role(.body),
+        "Files", symbol: "doc.text", symbolConfiguration: .role(.body),
         toolTip: "Show or hide Files (⇧⌥⌘0)", target: self, action: #selector(toggleFilesFromToolbar), id: "toolbar-files")
-    /// The Files sidebar's own close button, at the end of its header.
+    /// The Files sidebar's own close button (an ×), at the end of its header.
     private lazy var filesCloseButton = NSButton.symbol(
-        "sidebar.right", label: "Hide Files (⇧⌥⌘0)", pointSize: TypeRole.body.symbolPointSize,
+        "xmark", label: "Close Files (⇧⌥⌘0)", pointSize: TypeRole.meta.symbolPointSize,
         size: NSSize(width: 28, height: 24), target: self, action: #selector(toggleFilesFromToolbar), id: "files-close")
     /// Follows the Files sidebar however it collapses (toggle, menu, a drag).
     private var filesCollapseObserver: NSKeyValueObservation?
@@ -413,6 +413,8 @@ final class MainWindowController: NSWindowController {
         return (item.map { !$0.isHidden } ?? false, sandboxActions.stopButton.isEnabled,
                 sandboxActions.restartButton.isEnabled)
     }
+    /// Self-test: what the Sandbox group's label says.
+    var debugSandboxLabel: String { sandboxActions.debugLabel }
     /// Self-test: the Files toggle shows pressed; the sidebar's header shows.
     var debugFilesToggle: (on: Bool, headerShown: Bool) {
         let header = window?.toolbar?.items.first { $0.itemIdentifier == .filesHeader }
@@ -854,6 +856,8 @@ extension MainWindowController: NSToolbarDelegate {
         if let item = window?.toolbar?.items.first(where: { $0.itemIdentifier == .sandbox }), item.isHidden == anySession {
             item.isHidden = !anySession
         }
+        let focused = detail.focused?.shownSession.flatMap { workspace?.session(id: $0) }
+        sandboxActions.setSandboxName(focused.flatMap { workspace?.containerName(for: $0.containerAgentKind) })
         sandboxActions.setEnabled(stop: detail.canPerformSessionAction(#selector(TerminalStackController.stopClicked)),
                                   restart: detail.canPerformSessionAction(#selector(TerminalStackController.headerRestartClicked)))
     }

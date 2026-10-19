@@ -63,7 +63,10 @@ final class ChromeButton: NSButton {
         image = NSImage(systemSymbolName: symbolName, accessibilityDescription: nil)?
             .withSymbolConfiguration(glyphConfiguration)
         contentTintColor = symbol
-        attributedTitle = NSAttributedString(string: word, attributes: [.font: NSFont.role(.body), .foregroundColor: text])
+        // A wider gap between the glyph and the word than the button's own.
+        let title = NSMutableAttributedString(string: " ", attributes: [.font: NSFont.role(.body), .kern: 2])
+        title.append(NSAttributedString(string: word, attributes: [.font: NSFont.role(.body), .foregroundColor: text]))
+        attributedTitle = title
         // A new image renames the button after its symbol ("refresh"): say the word again.
         setAccessibilityLabel(word)
         pressedColor = pressed
@@ -94,8 +97,8 @@ final class ChromeButton: NSButton {
     }
 }
 
-/// The title bar's Sandbox group: one bordered pill, a non-interactive
-/// "Sandbox" label, then Stop and Restart — they act on the session's process
+/// The title bar's Sandbox group: one bordered pill, a non-interactive label
+/// naming the focused session's sandbox, then Stop and Restart — they act on the session's process
 /// in its sandbox (stopping a chat's turn is the composer's).
 @MainActor
 final class SandboxActionsView: NSView {
@@ -129,6 +132,9 @@ final class SandboxActionsView: NSView {
             .withSymbolConfiguration(.role(.meta))
         labelIcon.setAccessibilityElement(false)
         labelText.font = .role(.meta)
+        labelText.lineBreakMode = .byTruncatingMiddle
+        labelText.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        labelText.widthAnchor.constraint(lessThanOrEqualToConstant: 140).isActive = true
         label.setViews([labelIcon, labelText], in: .leading)
         label.orientation = .horizontal
         label.spacing = 5
@@ -175,6 +181,17 @@ final class SandboxActionsView: NSView {
         stopButton.apply(colors)
         restartButton.apply(colors)
     }
+
+    /// The focused session's sandbox ("Sandbox" when no session is focused).
+    func setSandboxName(_ name: String?) {
+        let shown = name ?? "Sandbox"
+        guard labelText.stringValue != shown else { return }
+        labelText.stringValue = shown
+        toolTip = name.map { "Sandbox \($0)" }
+        setAccessibilityLabel(name.map { "Sandbox \($0)" } ?? "Sandbox")
+    }
+
+    var debugLabel: String { labelText.stringValue }
 
     /// Stop / Restart enabled for the focused session (both off without one).
     func setEnabled(stop: Bool, restart: Bool) {

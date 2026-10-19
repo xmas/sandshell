@@ -2908,8 +2908,8 @@ enum SelfTest {
             let t = window.debugToolbarWidths
             log("  toolbar at \(Int(width)): identity \(Int(t.identity)) visible \(t.visible)/\(t.items) missing \(t.missing)")
             snapshotFrame(window, "title-bar-\(Int(width))")
-            check(t.visible == t.items && t.identity >= 199 && t.identity <= 361,
-                  "at \(Int(width)) the toolbar fits every item; the identity flexes within 200–360")
+            check(t.visible == t.items && t.identity >= 139 && t.identity <= 361,
+                  "at \(Int(width)) the toolbar fits every item; the identity flexes within 140–360")
         }
         // A long session name truncates inside the identity item instead of
         // drawing over the Sandbox group beside it.
@@ -3017,12 +3017,15 @@ enum SelfTest {
         var group = window.debugSandboxGroup
         check(group.shown && !group.stop && !group.restart, "no session focused: Sandbox shows, Stop and Restart disabled (\(group))")
         check(window.debugIdentity.isEmpty, "no session focused: no name in the title bar")
+        check(window.debugSandboxLabel == "Sandbox", "no session focused: the group says Sandbox (\(window.debugSandboxLabel))")
         // Back to the session's pane: Restart works on it (and Stop, its terminal running).
         if let sessionPane = tree.panes.first(where: { $0.shownSession == a.id }) { tree.focus(sessionPane) }
         await wait(0.5)
         group = window.debugSandboxGroup
         check(group.shown && group.stop && group.restart, "a running session focused: Stop and Restart enabled (\(group))")
         check(window.debugIdentity == ws.displayName(of: a), "the title bar names the session (\(window.debugIdentity))")
+        check(window.debugSandboxLabel == ws.containerName(for: a.containerAgentKind),
+              "the Sandbox group names the session's sandbox (\(window.debugSandboxLabel))")
         snapshotFrame(window, "title-bar")
 
         // View ▸ Show Files flips the Files button and shows the sidebar's header.
