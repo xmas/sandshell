@@ -15,6 +15,7 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
 
     private let scrollView = NSScrollView()
     private let textView = TranscriptTextView(usingTextLayoutManager: true)
+    private let document = FlippedView()
     private let fragments = BlockFragmentProvider()
     private var segments: [Segment] = []
     private var items: [ChatItem] = []
@@ -42,7 +43,6 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
     override init(frame: NSRect) {
         super.init(frame: frame)
         scrollView.translatesAutoresizingMaskIntoConstraints = false
-        scrollView.contentView = CenteringClipView()
         scrollView.hasVerticalScroller = true
         scrollView.drawsBackground = false
         addSubview(scrollView)
@@ -57,9 +57,17 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
         tv.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: .greatestFiniteMagnitude)
         tv.isVerticallyResizable = true
         tv.isHorizontallyResizable = false
-        tv.autoresizingMask = []   // sized in layout(): the readable column's width at most
+        // The text view sits centered in a full-width document (sized in
+        // layout(): the readable column's width at most). Resizing the pane
+        // moves it as a whole: its own bounds, and so its laid-out text, stay put.
+        tv.autoresizingMask = [.minXMargin, .maxXMargin]
         tv.textContainer?.widthTracksTextView = true
-        scrollView.documentView = tv
+        document.autoresizingMask = [.width]
+        document.addSubview(tv)
+        scrollView.documentView = document
+        tv.postsFrameChangedNotifications = true
+        NotificationCenter.default.addObserver(self, selector: #selector(textHeightChanged),
+                                               name: NSView.frameDidChangeNotification, object: tv)
         tv.isEditable = false
         tv.isSelectable = true
         tv.drawsBackground = false
@@ -113,18 +121,25 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
 
     override func layout() {
         super.layout()
-        // A wide pane centers a column of fixed width (the clip view centers
-        // it), so resizing the pane — the sidebar sliding in or out — moves the
-        // text without laying it out again; a narrower pane reflows it.
-        let width = Self.textViewWidth(forWidth: scrollView.contentSize.width)
+        // A wide pane centers a column of fixed width, so resizing the pane —
+        // the sidebar sliding in or out — moves the text without laying it out
+        // again; a narrower pane reflows it.
+        let clipWidth = scrollView.contentSize.width
+        let width = Self.textViewWidth(forWidth: clipWidth)
+        if document.frame.width != clipWidth { document.setFrameSize(NSSize(width: clipWidth, height: document.frame.height)) }
         if textView.frame.width != width {
             let keep = stickToBottom
             textView.setFrameSize(NSSize(width: width, height: textView.frame.height))
             if keep { scrollToBottomSoon() }
         }
-        let clip = scrollView.contentView
-        let centered = clip.constrainBoundsRect(clip.bounds).origin
-        if clip.bounds.origin != centered { clip.setBoundsOrigin(centered) }
+        let x = ((clipWidth - width) / 2).rounded()
+        if textView.frame.minX != x { textView.setFrameOrigin(NSPoint(x: x, y: 0)) }
+    }
+
+    /// The document is as tall as the text.
+    @objc private func textHeightChanged() {
+        let height = textView.frame.height
+        if document.frame.height != height { document.setFrameSize(NSSize(width: document.frame.width, height: height)) }
     }
 
     /// Once per runloop turn, however many times layout asks.
@@ -145,6 +160,8 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
         convert(textView.frame, from: textView.superview).insetBy(dx: textView.textContainerInset.width, dy: 0)
     }
     var debugTextViewWidth: CGFloat { textView.frame.width }
+    var debugClipOrigin: NSPoint { scrollView.contentView.bounds.origin }
+    var debugDocHeight: CGFloat { textView.frame.height }
     #endif
 
     /// Coalesce bursts of streaming updates into one pass per runloop turn.
@@ -569,14 +586,7 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
     }
 }
 
-/// Keeps a document narrower than the clip centered in it: the transcript's
-/// column, with the scroller still at the pane's edge.
-final class CenteringClipView: NSClipView {
-    override func constrainBoundsRect(_ proposedBounds: NSRect) -> NSRect {
-        var rect = super.constrainBoundsRect(proposedBounds)
-        if let document = documentView, document.frame.width < rect.width {
-            rect.origin.x = ((document.frame.width - rect.width) / 2).rounded()
-        }
-        return rect
-    }
+/// A plain top-down view: the transcript's document, holding its text view.
+final class FlippedView: NSView {
+    override var isFlipped: Bool { true }
 }

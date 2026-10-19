@@ -14,17 +14,13 @@ struct ChatColumnTests {
         #expect(ChatTranscriptView.textViewWidth(forWidth: width) == textView)
     }
 
-    @Test func aDocumentNarrowerThanTheClipIsCentered() {
-        let clip = CenteringClipView(frame: NSRect(x: 0, y: 0, width: 1000, height: 300))
-        clip.documentView = NSView(frame: NSRect(x: 0, y: 0, width: 840, height: 2000))
-        let bounds = clip.constrainBoundsRect(NSRect(x: 0, y: 500, width: 1000, height: 300))
-        #expect(bounds.origin.x == -80, "80 points of margin each side")
-        #expect(bounds.origin.y == 500, "vertical scrolling is untouched")
-    }
-
-    @Test(.tags(.edgeCase)) func aWiderDocumentScrollsAsUsual() {
-        let clip = CenteringClipView(frame: NSRect(x: 0, y: 0, width: 400, height: 300))
-        clip.documentView = NSView(frame: NSRect(x: 0, y: 0, width: 840, height: 2000))
-        #expect(clip.constrainBoundsRect(NSRect(x: 0, y: 0, width: 400, height: 300)).origin.x == 0)
+    @Test func aWideTranscriptCentersItsTextWithoutResizingIt() {
+        let transcript = ChatTranscriptView(frame: NSRect(x: 0, y: 0, width: 1600, height: 400))
+        transcript.layoutSubtreeIfNeeded()
+        let before = transcript.debugTextViewWidth
+        transcript.setFrameSize(NSSize(width: 1300, height: 400))
+        transcript.layoutSubtreeIfNeeded()
+        #expect(before == 840 && transcript.debugTextViewWidth == 840, "the text keeps its width")
+        #expect(abs(transcript.debugTextColumn.midX - transcript.bounds.midX) <= 8, "and stays centered")
     }
 }
