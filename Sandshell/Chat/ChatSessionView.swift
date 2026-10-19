@@ -29,8 +29,6 @@ final class ChatSessionView: NSView {
     private var detailsHost: NSHostingController<ClaudeStatsDetailView>?
     /// A Claude model picked here, until the chat relaunches on it.
     private var pendingModel: String??
-    /// The relaunch for a new model waits until this chat is shown again.
-    private var relaunchWhenShown = false
     private var bag: Set<AnyCancellable> = []
     /// History replayed while resuming, shown in one go when it's done.
     private var heldReplay: [ChatItem]?
@@ -520,44 +518,23 @@ final class ChatSessionView: NSView {
         detailsHost = host
     }
 
-    /// The workspace this chat's window shows (where the model and effort persist).
-    private var workspace: WorkspaceController? {
-        (window?.windowController as? MainWindowController)?.workspaceController
-    }
+    /// A Claude model or effort picked under the composer (the pane wires it:
+    /// the workspace's from now on; a new model relaunches the chat on it,
+    /// keeping the conversation — now, or when the running turn ends).
+    var onClaudeModelPicked: ((String?) -> Void)?
+    var onClaudeEffortPicked: ((String?) -> Void)?
 
-    /// A Claude model, picked under the composer: the workspace's model from
-    /// now on, and this chat relaunches on it (keeping the conversation) —
-    /// now, or when the running turn ends. Claude Code takes its model at launch.
     private func claudeModelPicked(_ id: String?) {
-        workspace?.setClaudeModel(id)
-        defer { showUsage() }
-        guard ClaudePriceBook.normalize(id ?? "") != ClaudePriceBook.normalize(displayedModel ?? "") else { return }
-        pendingModel = .some(id)
-        if case .running = session.phase {
-            session.afterTurn = { [weak self] in self?.relaunchForModel() }
-        } else {
-            relaunchForModel()
+        // Shown as the chat's model until it relaunches on it.
+        if ClaudePriceBook.normalize(id ?? "") != ClaudePriceBook.normalize(session.launchModel ?? "") {
+            pendingModel = .some(id)
         }
+        onClaudeModelPicked?(id)
+        showUsage()
     }
 
-    private func relaunchForModel() {
-        // A chat off screen relaunches when it's next shown (its pane does it).
-        guard window != nil, !isHiddenOrHasHiddenAncestor else { relaunchWhenShown = true; return }
-        onReconnect?()
-    }
-
-    override func viewDidUnhide() {
-        super.viewDidUnhide()
-        if relaunchWhenShown, window != nil {
-            relaunchWhenShown = false
-            onReconnect?()
-        }
-    }
-
-    /// Effort changes live in a chat, and is the workspace's from now on.
     private func claudeEffortPicked(_ level: String?) {
-        workspace?.setClaudeEffort(level)
-        session.setEffort(level)
+        onClaudeEffortPicked?(level)
         showUsage()
     }
 

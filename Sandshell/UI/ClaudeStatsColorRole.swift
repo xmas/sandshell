@@ -1,5 +1,8 @@
-/// Colour roles of the title-strip readout. Each can be overridden in
-/// Settings ▸ Terminal; otherwise it falls back to the terminal theme.
+import AppKit
+
+/// Colour roles of the Claude readout (the Session details gauge). Each can
+/// be overridden in Settings ▸ Terminal; otherwise it falls back to the
+/// terminal theme.
 enum ClaudeStatsColorRole: String, CaseIterable, Identifiable {
     case low, mid, high, track, secondary, model
     var id: String { rawValue }
@@ -11,6 +14,18 @@ enum ClaudeStatsColorRole: String, CaseIterable, Identifiable {
         case .track: "Gauge track"
         case .secondary: "Tokens & cost"
         case .model: "Model name"
+        }
+    }
+
+    /// The terminal palette's colour for this role when it isn't overridden.
+    func themeFallback(_ c: ThemeColors?) -> NSColor {
+        switch self {
+        case .low: c?.termGreen ?? .systemGreen
+        case .mid: c?.termAccent ?? .systemOrange
+        case .high: c?.termRed ?? .systemRed
+        case .track: (c?.termDim ?? .secondaryLabelColor).withAlphaComponent(0.3)
+        case .secondary: c?.termDim ?? .secondaryLabelColor
+        case .model: c?.termText ?? .labelColor
         }
     }
 }

@@ -8,11 +8,10 @@ extension NSPasteboard.PasteboardType {
 
 /// The window's detail area as a tree of split panes. Each leaf is a
 /// `TerminalStackController` showing one session from the shared
-/// `SessionSurfaces`, or a Files surface (tree + editor) for a session's
-/// folder; splits are native NSSplitViews (draggable dividers), nested either
-/// way. The focused pane follows the sidebar selection — a Files pane stays put
-/// and the selection goes to the last session pane instead; the layout
-/// (structure, sessions, Files panes, divider fractions) is saved per window.
+/// `SessionSurfaces` (or nothing yet); splits are native NSSplitViews
+/// (draggable dividers), nested either way. Files is never a pane — it's the
+/// window's trailing sidebar. The focused pane follows the sidebar selection;
+/// the layout (structure, sessions, divider fractions) is saved per window.
 @MainActor
 final class PaneTreeController: NSViewController, NSSplitViewDelegate {
     /// Split orientation: `.horizontal` = side by side (vertical divider).
@@ -33,14 +32,15 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
     // Window API (same as the old single detail pane).
     var onChromeChange: ((TerminalStackController.Chrome?) -> Void)?
     var onStatusChange: ((String, Bool) -> Void)?
+    /// A pane's branch crumb: show the window's Files sidebar (just the changes, or all).
+    var onShowFiles: ((_ changesOnly: Bool) -> Void)?
+    /// A file link in a pane's chat: open it in the window's Files sidebar (at a line).
+    var onOpenFile: ((URL, Int?) -> Void)?
 
     private let controller: WorkspaceController
     let surfaces: SessionSurfaces
     private var root: Node!
     private(set) var focused: TerminalStackController!
-    /// The session pane focused most recently (sidebar picks land there while
-    /// a Files pane has focus).
-    private weak var lastSessionPane: TerminalStackController?
     private var cancellables: Set<AnyCancellable> = []
     private var clickMonitor: Any?
     private let container = PaneDropContainer()
@@ -89,9 +89,6 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
         surfaces.onLaunched = { [weak self] id in
             self?.panes.filter { $0.shownSession == id }.forEach { $0.refresh() }
         }
-        surfaces.onChatStatus = { [weak self] id in
-            self?.panes.filter { $0.shownSession == id }.forEach { $0.updateClaudeStats(id) }
-        }
         surfaces.onChatAgentExit = { [weak self] id in
             self?.panes.first { $0.shownSession == id }?.chatAgentExited(id)
         }
@@ -103,7 +100,6 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
             focused = panes.first
         }
         rebuild()
-        ensureSessionBesideFiles()
     }
 
     override func viewDidLoad() {
@@ -142,42 +138,20 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
         pane.onSplit = { [weak self, weak pane] edge in
             if let self, let pane { self.split(pane, edge: edge, showing: nil) }
         }
-        pane.onOpenFiles = { [weak self, weak pane] changesOnly in
+        // Files is the window's sidebar: the pane's session is selected (it
+        // has focus from the click), so the sidebar shows its folder.
+        pane.onShowFiles = { [weak self, weak pane] changesOnly in
             guard let self, let pane else { return }
-            // Files sits beside a session, never in place of one: an empty pane
-            // first takes the selected (else most recent) session not on screen.
-            if pane.shownSession == nil, pane.shownFiles == nil, let id = self.sessionToShow() {
-                pane.show(id)
-                self.focus(pane)
-            }
-            let target = pane.shownSession.flatMap { id in
-                self.controller.session(id: id).map { FilesTarget(session: id, folder: $0.workdir) }
-            } ?? FilesTarget(session: nil, folder: self.controller.rootURL.path)
-            if let existing = self.panes.first(where: { $0.shownFiles == target }) {
-                self.focus(existing)
-            } else {
-                self.split(pane, edge: .trailing, showing: nil, files: target)
-            }
-            // The branch chip's "Show N Changed Files": just the changes.
-            if changesOnly { self.panes.first { $0.shownFiles == target }?.filesPane?.showChanges() }
+            self.focus(pane)
+            self.onShowFiles?(changesOnly)
         }
         pane.onOpenFileInFiles = { [weak self, weak pane] url, line in
             guard let self, let pane else { return }
             if url.hasDirectoryPath || (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true {
                 return NSWorkspace.shared.activateFileViewerSelecting([url])
             }
-            pane.onOpenFiles?(false)
-            guard let session = pane.shownSession,
-                  let files = self.panes.first(where: { $0.shownFiles?.session == session })?.filesPane else { return }
-            if let line { files.editor.open(url, line: line, highlight: "") } else { files.open(url) }
-        }
-        pane.onFilesAddToChat = { [weak self] urls, target in
-            guard let self else { return }
-            if let id = target.session ?? self.selectedSession { self.dropFiles(urls, on: id) }
-        }
-        pane.onFilesAsk = { [weak self] text, target in
-            guard let self else { return }
-            if let id = target.session ?? self.selectedSession { self.askAgent(text, on: id) } else { NSSound.beep() }
+            self.focus(pane)
+            self.onOpenFile?(url, line)
         }
         addChild(pane)
         return pane
@@ -187,9 +161,6 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
     func focus(_ pane: TerminalStackController) {
         focused = pane
         for p in panes { p.isFocused = p === pane }
-        // A Files pane leaves the sidebar selection and the toolbar alone.
-        guard pane.shownFiles == nil else { toolbarPane?.reemitChrome(); return }
-        lastSessionPane = pane
         if let id = pane.shownSession {
             if controller.selection != .session(id) { controller.selection = .session(id) }
         } else if controller.selection != nil {
@@ -255,8 +226,7 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
     }
 
     /// The keys to what `pane` shows: its chat (the composer, or the agent's
-    /// question), its terminal, or its Files (the file shown, else the list).
-    /// A pane with nothing to type into yet — empty, or its session still
+    /// question), or its terminal. A pane with nothing to type into yet — empty, or its session still
     /// starting, which takes them once it's up — takes them from the pane left.
     private func giveKeyboard(to pane: TerminalStackController) {
         guard let window = view.window else { return }
@@ -265,27 +235,10 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
             chat.focusComposer()
         } else if let id = pane.shownSession, let terminal = surfaces.terminals[id]?.view, isShown(terminal) {
             window.makeFirstResponder(terminal)
-        } else if let files = pane.filesPane, let target = Self.keyView(inFiles: files.view) {
-            window.makeFirstResponder(target)
         } else if let responder = window.firstResponder as? NSView,
                   panes.contains(where: { $0 !== pane && responder.isDescendant(of: $0.view) }) {
             window.makeFirstResponder(nil)
         }
-    }
-
-    /// A Files surface's place for the keys: the file it shows (editor,
-    /// preview or changes), else its list.
-    static func keyView(inFiles view: NSView) -> NSView? {
-        var text: NSTextView?
-        var list: NSOutlineView?
-        func walk(_ v: NSView) {
-            guard !v.isHidden else { return }
-            if text == nil, let t = v as? NSTextView, t.isSelectable { text = t }
-            if list == nil, let o = v as? NSOutlineView { list = o }
-            v.subviews.forEach(walk)
-        }
-        walk(view)
-        return text ?? list
     }
 
     /// Sidebar selection → the focused pane, unless another pane already shows it.
@@ -298,73 +251,9 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
             if other !== focused { focus(other) }
             return
         }
-        if focused.shownFiles != nil {
-            // Keep the Files pane: show the session in the last session pane,
-            // or in a new one beside the Files.
-            if let target = lastSessionPane ?? panes.first(where: { $0.shownFiles == nil }),
-               panes.contains(where: { $0 === target }) {
-                target.show(id)
-                focus(target)
-                scheduleSave()
-            } else {
-                split(focused, edge: .leading, showing: id)
-            }
-            return
-        }
         focused.show(id)
         focused.reemitChrome()
         scheduleSave()
-    }
-
-    private var selectedSession: UUID? {
-        if case .session(let id)? = controller.selection { id } else { nil }
-    }
-
-    /// A session for a pane that needs one: the selected, else the most recent,
-    /// that no pane is showing yet.
-    private func sessionToShow() -> UUID? {
-        let shown = Set(panes.compactMap(\.shownSession))
-        return [selectedSession].compactMap { $0 }.first { !shown.contains($0) }
-            ?? controller.orderedSessions.map(\.id).first { !shown.contains($0) }
-    }
-
-    /// A layout with Files but no session (saved by an earlier build): put a
-    /// session back on the leading side of the first Files pane.
-    private func ensureSessionBesideFiles() {
-        guard !panes.contains(where: { $0.shownSession != nil }),
-              let files = panes.first(where: { $0.shownFiles != nil }),
-              let id = sessionToShow() else { return }
-        if let empty = panes.first(where: { $0.shownSession == nil && $0.shownFiles == nil }) {
-            empty.show(id)
-            focus(empty)
-        } else {
-            split(files, edge: .leading, showing: id)
-        }
-    }
-
-    // MARK: Files panes
-
-    /// The Files surface of the focused pane, if it shows one.
-    var focusedFiles: FilesPaneController? { focused?.filesPane }
-
-    /// Any pane's Files surface (the focused one first).
-    var anyFiles: FilesPaneController? { focusedFiles ?? panes.lazy.compactMap(\.filesPane).first }
-
-    /// What "Open Files in Split" shows: the focused pane's session, else the
-    /// selected one, else the workspace folder.
-    func defaultFilesTarget() -> FilesTarget {
-        if let id = focused?.shownSession ?? selectedSession, let s = controller.session(id: id) {
-            return FilesTarget(session: id, folder: s.workdir)
-        }
-        if let files = focused?.shownFiles { return files }
-        return FilesTarget(session: nil, folder: controller.rootURL.path)
-    }
-
-    /// Open a Files pane to the right of the focused pane (or focus the one
-    /// already showing `target`).
-    func openFiles(_ target: FilesTarget) {
-        if let existing = panes.first(where: { $0.shownFiles == target }) { return focus(existing) }
-        split(focused, edge: .trailing, showing: nil, files: target)
     }
 
     // MARK: Splitting
@@ -377,7 +266,7 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
         split(focused, edge: edge, showing: session)
     }
 
-    func split(_ pane: TerminalStackController, edge: Edge, showing session: UUID?, files: FilesTarget? = nil) {
+    func split(_ pane: TerminalStackController, edge: Edge, showing session: UUID?) {
         guard let leaf = node(for: pane) else { return }
         let axis: Axis = (edge == .leading || edge == .trailing) ? .horizontal : .vertical
         let newPane = makePane()
@@ -397,17 +286,15 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
             leaf.fractions = []
         }
         let keys = rebuild(restoringKeys: false)
-        if let files {
-            newPane.showFiles(files)
-        } else if let session {
+        if let session {
             panes.filter { $0 !== newPane && $0.shownSession == session }.forEach { $0.show(nil) }
             newPane.show(session)
         } else {
             newPane.show(nil)
         }
         focus(newPane)
-        // Keys that were in the panes go with the ring: to the session or
-        // Files it shows (an empty pane has nothing to take them yet).
+        // Keys that were in the panes go with the ring: to the session it
+        // shows (an empty pane has nothing to take them yet).
         if keys != nil { giveKeyboard(to: newPane) }
         scheduleSave()
     }
@@ -415,7 +302,7 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
     /// Close a pane (its session keeps running and can be shown again).
     func close(_ pane: TerminalStackController) {
         guard panes.count > 1, let leaf = node(for: pane), let parent = leaf.parent,
-              case .split(let axis, var kids) = parent.kind, pane.confirmLeavingFiles() else { return }
+              case .split(let axis, var kids) = parent.kind else { return }
         let keys = keysInPanes()   // (before the pane's view, which may hold them, goes)
         pane.paneClosed()
         kids.removeAll { $0 === leaf }
@@ -624,7 +511,6 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
         if let edge {
             split(pane, edge: edge, showing: id)
         } else {
-            guard pane.confirmLeavingFiles() else { return false }
             panes.filter { $0 !== pane && $0.shownSession == id }.forEach { $0.show(nil) }
             pane.show(id)
             focus(pane)
@@ -635,13 +521,7 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
 
     // MARK: Persistence
 
-    private struct Saved: Codable {
-        var axis: Axis?
-        var children: [Saved]?
-        var fractions: [CGFloat]?
-        var session: UUID?
-        var files: FilesTarget?
-    }
+    typealias Saved = SavedPaneLayout
 
     private func scheduleSave() {
         guard saveTask == nil else { return }
@@ -651,7 +531,7 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
             self.saveTask = nil
             @MainActor func encode(_ n: Node) -> Saved {
                 switch n.kind {
-                case .leaf(let p): Saved(session: p.shownSession, files: p.shownFiles)
+                case .leaf(let p): Saved(session: p.shownSession)
                 case .split(let a, let kids): Saved(axis: a, children: kids.map(encode), fractions: n.fractions)
                 }
             }
@@ -670,8 +550,9 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
     }
 
     private func restoreLayout() -> Node? {
+        // An earlier build's Files panes are gone (Files is the sidebar now).
         guard let data = UserDefaults.standard.data(forKey: layoutKey),
-              let saved = try? JSONDecoder().decode(Saved.self, from: data) else { return nil }
+              let saved = (try? JSONDecoder().decode(Saved.self, from: data))?.withoutFiles() else { return nil }
         var seen: Set<UUID> = []
         @MainActor func decode(_ s: Saved) -> Node? {
             if let axis = s.axis, let kids = s.children?.compactMap(decode), !kids.isEmpty {
@@ -682,7 +563,6 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
                 return n
             }
             let pane = makePane()
-            if let files = s.files { pane.showFiles(files); return Node(.leaf(pane)) }
             // Restore only sessions that still exist, each in one pane.
             if let id = s.session, controller.session(id: id) != nil, seen.insert(id).inserted {
                 pane.show(id)
@@ -700,8 +580,7 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
         surfaces.backgroundTasks.stop()
     }
 
-    /// Files opened with the app (Dock, `open -a`): into the toolbar's
-    /// session, which a focused Files pane leaves on the session beside it.
+    /// Files opened with the app (Dock, `open -a`): into the toolbar's session.
     @discardableResult
     func insertExternalItems(_ urls: [URL]) -> Bool { toolbarPane?.insertExternalItems(urls) ?? false }
 
@@ -718,14 +597,8 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
         (panes.first { $0.shownSession == id } ?? focused)?.askAgent(text, on: id)
     }
 
-    /// The pane the toolbar speaks for: the focused pane unless it's a Files
-    /// pane — then the session pane last used, so clicking into Files doesn't
-    /// take the session's toolbar away.
-    var toolbarPane: TerminalStackController? {
-        if let focused, focused.shownFiles == nil { return focused }
-        if let last = lastSessionPane, panes.contains(where: { $0 === last }) { return last }
-        return panes.first { $0.shownSession != nil } ?? focused
-    }
+    /// The pane the toolbar speaks for: the focused one.
+    var toolbarPane: TerminalStackController? { focused }
 
     @objc func revealInFinderClicked() { toolbarPane?.revealInFinderClicked() }
     @objc func stopClicked() { toolbarPane?.stopClicked() }
@@ -772,4 +645,44 @@ final class DropZoneOverlay: NSView {
         layer?.borderColor = NSColor.controlAccentColor.withAlphaComponent(0.6).cgColor
     }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
+/// A window's pane layout as saved: a split (axis, children, their shares) or
+/// a leaf (the session it shows, if any).
+struct SavedPaneLayout: Codable, Equatable {
+    var axis: PaneTreeController.Axis?
+    var children: [SavedPaneLayout]?
+    var fractions: [CGFloat]?
+    var session: UUID?
+    /// A Files leaf an earlier build saved (Files was a pane then). Only read,
+    /// to drop it: `withoutFiles`.
+    var files: LegacyFilesLeaf?
+
+    struct LegacyFilesLeaf: Codable, Equatable {}
+
+    init(axis: PaneTreeController.Axis? = nil, children: [SavedPaneLayout]? = nil, fractions: [CGFloat]? = nil,
+         session: UUID? = nil, files: LegacyFilesLeaf? = nil) {
+        self.axis = axis
+        self.children = children
+        self.fractions = fractions
+        self.session = session
+        self.files = files
+    }
+
+    /// The layout with its Files leaves gone: a split left with one child is
+    /// that child, the survivors keep their shares (rescaled to fill). Nil when
+    /// nothing's left.
+    func withoutFiles() -> SavedPaneLayout? {
+        guard let axis, let children, !children.isEmpty else { return files == nil ? self : nil }
+        let kept = children.indices.compactMap { i in children[i].withoutFiles().map { (i, $0) } }
+        guard !kept.isEmpty else { return nil }
+        if kept.count == 1 { return kept[0].1 }
+        var shares: [CGFloat]?
+        if let fractions, fractions.count == children.count {
+            let survivors = kept.map { fractions[$0.0] }
+            let total = survivors.reduce(0, +)
+            if total > 0 { shares = survivors.map { $0 / total } }
+        }
+        return SavedPaneLayout(axis: axis, children: kept.map(\.1), fractions: shares)
+    }
 }

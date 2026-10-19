@@ -633,24 +633,13 @@ enum SelfTest {
         ws.selection = .session(a)
         check(await until(90) { tree.surfaces.terminals[a] != nil }, "session launches in the only pane")
 
-        window.openFilesInSplit()
-        await wait()
-        check(tree.panes.count == 2 && tree.panes[0].shownSession == a && tree.panes[1].shownFiles?.session == a,
-              "Open Files in Split puts Files for the session beside it")
-        check(tree.focused === tree.panes[1], "the Files pane is focused")
-        guard let files = tree.panes[1].filesPane else { return log("no Files surface") }
-        check(await until(10) { files.tree.git.repoRoot != nil }, "Files pane sees the git repo")
+        // Files is the window's sidebar, never a pane.
+        window.toggleFiles()
+        await wait(0.8)
+        check(tree.panes.count == 1 && tree.panes[0].shownSession == a, "Files opens as the sidebar, the session's pane stays alone")
+        guard let files = window.inspectorFiles else { return log("no Files sidebar") }
+        check(await until(10) { files.tree.git.repoRoot != nil }, "Files sees the git repo")
         check(files.tree.root?.standardizedFileURL.path == repo.standardizedFileURL.path, "Files root is the session's folder")
-
-        window.openFilesInSplit()
-        await wait()
-        check(tree.panes.count == 2, "opening the same Files again focuses it instead of duplicating")
-
-        // Picking a session while Files is focused leaves the Files pane in place.
-        ws.selection = nil
-        ws.selection = .session(a)
-        await wait()
-        check(tree.panes[1].shownFiles != nil && tree.focused === tree.panes[0], "sidebar pick focuses the session pane, Files stays")
 
         // Markdown preview: serif prose, monospaced code.
         files.open(repo.appendingPathComponent("README.md"))
@@ -676,7 +665,7 @@ enum SelfTest {
             check(false, "Markdown preview rendered")
         }
         await wait(0.4)
-        snapshot(window, "files-split")
+        snapshot(window, "files-sidebar")
         snapshot(files.view, "files-markdown")
 
         // Open Quickly finds and opens src/app.py.
@@ -718,17 +707,14 @@ enum SelfTest {
               "revert removed only the second hunk from the file")
         check(await until(5) { files.editor.hunkCounts.map { $0 == (1, 0) } ?? false }, "after revert: 1 unstaged hunk")
 
-        // Equalize, then the layout (with its Files pane) is saved.
+        // The pane layout saved has no Files in it.
         window.equalizePanes()
         await wait(1.2)
-        let key = tree.layoutKey
-        let saved = UserDefaults.standard.data(forKey: key).map { String(decoding: $0, as: UTF8.self) } ?? ""
+        let saved = UserDefaults.standard.data(forKey: tree.layoutKey).map { String(decoding: $0, as: UTF8.self) } ?? ""
         log("saved layout: \(saved)")
-        check(saved.contains("\"files\"") && saved.contains(a.uuidString), "layout saved with the Files pane")
+        check(!saved.contains("\"files\"") && saved.contains(a.uuidString), "the layout saved is the session's pane alone")
 
         // The trailing inspector runs under the toolbar: its filter must sit below it.
-        window.toggleFiles()
-        await wait(0.8)
         if let inspector = window.inspectorFiles, let w = window.window {
             let filter = inspector.tree.debugFilterFrameInWindow
             log("inspector filter \(filter), content layout \(w.contentLayoutRect)")
@@ -739,7 +725,6 @@ enum SelfTest {
             snapshot(window, "files-inspector")
             check(inspector.editor.debugEditorFillsColumn, "the inspector's editor fills its column")
         }
-        window.toggleFiles()
 
         // Content search finds a file with an accented name, by its real path.
         let accented = repo.appendingPathComponent("Café notes.md")
@@ -1296,14 +1281,14 @@ enum SelfTest {
         await wait(0.5)
     }
 
-    /// Second launch after `files`: the Files pane comes back beside the session.
+    /// Second launch after `files` (which left the Files sidebar open): the
+    /// sidebar comes back open beside the session's one pane.
     private static func filesRelaunch(_ window: MainWindowController) async {
         guard let tree = window.paneTree, let ws = window.workspaceController else { return log("no window") }
         await wait(1.0)
-        check(tree.panes.count == 2, "two panes restored (got \(tree.panes.count))")
-        let filesPane = tree.panes.first { $0.shownFiles != nil }
-        check(filesPane != nil && tree.panes.contains { $0.shownSession != nil }, "a session pane and a Files pane restored")
-        if let files = filesPane?.filesPane {
+        check(tree.panes.count == 1 && tree.panes[0].shownSession != nil, "the session's pane restored, alone (got \(tree.panes.count))")
+        check(window.isFilesShown, "the Files sidebar comes back open")
+        if let files = window.inspectorFiles {
             check(files.tree.root?.standardizedFileURL.path == ws.rootURL.standardizedFileURL.path, "restored Files shows the session's folder")
         }
         await wait(1.5)
@@ -1646,11 +1631,14 @@ enum SelfTest {
 
     // MARK: Pane buttons
 
-    /// The title strip's Split Right / Split Down / Files / Close buttons and an
-    /// empty pane's Show Files / Close Pane, pressed like a user would.
+    /// The title strip's Split Right / Split Down / Close and an empty pane's
+    /// New Session / Close Pane, pressed like a user would. Files is never a
+    /// pane: no button makes one, and an empty pane doesn't offer it.
     private static func paneButtons(_ window: MainWindowController) async {
         guard let tree = window.paneTree, let ws = window.workspaceController else { return log("no window") }
-        guard let a = ws.orderedSessions.first(where: { $0.agent == .shell })?.id else { return log("need a shell session") }
+        let shells = ws.orderedSessions.filter { $0.agent == .shell }.map(\.id)
+        guard shells.count >= 2 else { return log("need two shell sessions") }
+        let a = shells[0], b = shells[1]
         func button(_ id: String, in pane: TerminalStackController) -> NSButton? {
             func find(_ v: NSView) -> NSButton? {
                 if let b = v as? NSButton, b.accessibilityIdentifier() == id { return b }
@@ -1659,102 +1647,105 @@ enum SelfTest {
             }
             return find(pane.view)
         }
+        func shown(_ id: String, in pane: TerminalStackController) -> Bool {
+            button(id, in: pane).map { !$0.isHiddenOrHasHiddenAncestor } ?? false
+        }
         func press(_ id: String, _ pane: TerminalStackController) -> Bool {
-            guard let b = button(id, in: pane), !b.isHiddenOrHasHiddenAncestor else { return false }
+            guard let b = button(id, in: pane), !b.isHiddenOrHasHiddenAncestor, b.isEnabled else { return false }
             b.performClick(nil)
             return true
         }
         ws.selection = .session(a)
         check(await until(90) { tree.surfaces.terminals[a] != nil }, "session launches")
         let first = tree.panes[0]
-        check(button("pane-files", in: first).map { !$0.isHiddenOrHasHiddenAncestor } ?? false
-              && button("pane-split-right", in: first) != nil && button("pane-split-down", in: first) != nil,
-              "title strip shows Files / Split Right / Split Down")
-        check(button("pane-close", in: first)?.isHidden ?? false, "Close is hidden with a single pane")
+        check(shown("pane-split-right", in: first) && shown("pane-split-down", in: first) && shown("pane-close", in: first),
+              "the strip shows Split Right / Split Down / Close")
+        check(button("pane-close", in: first)?.isEnabled == false, "Close does nothing with a single pane")
+        check(button("pane-files", in: first) == nil, "the strip has no Files button")
         await wait(0.6)
         snapshot(window, "pane-buttons-single")
 
         check(press("pane-split-right", first), "Split Right pressed")
         await wait()
         check(tree.panes.count == 2 && tree.panes[1].shownSession == nil, "an empty pane opens on the right")
-        guard tree.panes.count == 2 else {
-            return log("panes after Split Right: \(tree.panes.map { ($0.shownSession != nil, $0.shownFiles != nil) })")
-        }
+        guard tree.panes.count == 2 else { return log("panes after Split Right: \(tree.panes.map { $0.shownSession != nil })") }
         let empty = tree.panes[1]
-        check(button("empty-pane-files", in: empty).map { !$0.isHiddenOrHasHiddenAncestor } ?? false,
-              "the empty pane offers Show Files")
-        check(button("empty-pane-close", in: empty).map { !$0.isHiddenOrHasHiddenAncestor } ?? false,
-              "the empty pane offers Close Pane")
-        check(button("empty-pane-new", in: empty).map { !$0.isHiddenOrHasHiddenAncestor } ?? false,
-              "the empty pane offers New Session")
+        check(button("empty-pane-files", in: empty) == nil, "the empty pane doesn't offer Files")
+        check(shown("empty-pane-close", in: empty), "the empty pane offers Close Pane")
+        check(shown("empty-pane-new", in: empty), "the empty pane offers New Session")
+        check(button("pane-close", in: first)?.isEnabled == true, "with two panes, Close works")
         await wait(0.4)
         snapshot(window, "pane-buttons-empty")
 
-        check(press("empty-pane-files", empty), "Show Files pressed in the empty pane")
-        await wait(0.6)
-        let b = empty.shownSession
-        check(b != nil && b != a, "the empty pane takes a session first")
-        check(tree.panes.count == 3 && tree.panes.contains { $0.shownFiles?.session == b },
-              "Files opens beside it instead of replacing it")
-        snapshot(window, "pane-buttons-empty-files")
-
         check(press("pane-split-down", first), "Split Down pressed")
         await wait()
-        check(tree.panes.count == 4, "Split Down adds a pane")
-        if let added = tree.panes.first(where: { $0.shownSession == nil && $0.shownFiles == nil }) {
+        check(tree.panes.count == 3, "Split Down adds a pane")
+        if let added = tree.panes.first(where: { $0.shownSession == nil && $0 !== empty }) {
             check(press("empty-pane-close", added), "Close Pane pressed")
             await wait()
         }
-        check(tree.panes.count == 3, "the empty pane closes")
-
-        // The workspace Files pane isn't this session's: Files opens one beside it.
-        check(press("pane-files", first), "Files pressed on the session's pane")
-        await wait(0.6)
-        check(tree.panes.contains { $0.shownFiles?.session == a }, "Files for the session opens beside it")
-        let count = tree.panes.count
-        _ = press("pane-files", first)
-        await wait(0.4)
-        check(tree.panes.count == count, "pressing Files again focuses it instead of opening another")
-        await wait(0.6)
-        snapshot(window, "pane-buttons-final")
+        check(tree.panes.count == 2, "the empty pane closes")
 
         // New Session is the sidebar's + menu; what's picked opens in that pane.
-        tree.split(first, edge: .bottom, showing: nil)
-        await wait()
-        if let fresh = tree.panes.first(where: { $0.shownSession == nil && $0.shownFiles == nil }),
-           let menu = fresh.newSessionMenu?() {
+        if let menu = empty.newSessionMenu?() {
             let titles = menu.items.map(\.title)
             log("empty pane New Session menu: \(titles)")
             check(titles == window.sidebarList?.newSessionMenu().items.map(\.title), "the same menu as the sidebar's +")
             if let i = menu.items.firstIndex(where: { $0.title == "New Shell" }) {
-                tree.focus(fresh)
+                tree.focus(empty)
                 let before = Set(ws.orderedSessions.map(\.id))
                 menu.performActionForItem(at: i)
                 await wait(0.6)
                 let added = ws.orderedSessions.first { !before.contains($0.id) }
-                check(added != nil && fresh.shownSession == added?.id, "picking New Shell opens it in the empty pane")
+                check(added != nil && empty.shownSession == added?.id, "picking New Shell opens it in the empty pane")
                 if let added { ws.closeSession(added.id) }
             } else { check(false, "the menu has New Shell") }
         } else { check(false, "the empty pane has the New Session menu") }
+        await wait(0.4)
+        if tree.panes.contains(where: { $0 === empty }) { tree.close(empty) }
+        await wait()
 
-        // Leave only a Files pane (what an earlier build could save) for `files-alone`.
-        while let session = tree.panes.first(where: { $0.shownFiles == nil }), tree.panes.count > 1 {
-            tree.close(session)
-            await wait(0.2)
-        }
-        while tree.panes.count > 1, let extra = tree.panes.last { tree.close(extra); await wait(0.2) }
-        await wait(1.0)
-        log("left \(tree.panes.count) pane(s): files=\(tree.panes.first?.shownFiles != nil)")
+        // The strip's ✕ closes its pane; the session goes on running.
+        tree.split(first, edge: .trailing, showing: b)
+        check(await until(90) { tree.surfaces.terminals[b] != nil }, "B opens beside A")
+        await wait(0.6)
+        snapshot(window, "pane-buttons-two")
+        if let paneB = tree.panes.first(where: { $0.shownSession == b }) {
+            check(press("pane-close", paneB), "Close pressed in B's strip")
+            await wait()
+            check(tree.panes.count == 1 && tree.panes[0].shownSession == a && tree.surfaces.terminals[b] != nil,
+                  "B's pane closes, B keeps running")
+        } else { check(false, "a pane shows B") }
+
+        // An earlier build's layout with Files panes in it, for `files-alone`
+        // (the next launch) to restore without them.
+        await wait(1.0)   // after this layout's own save
+        let folder = ws.rootURL.path
+        let legacy = #"{"axis":"horizontal","fractions":[0.3,0.3,0.4],"children":["#
+            + #"{"session":"\#(a.uuidString)"},"#
+            + #"{"files":{"session":"\#(a.uuidString)","folder":"\#(folder)"}},"#
+            + #"{"axis":"vertical","fractions":[0.5,0.5],"children":[{"files":{"folder":"\#(folder)"}},{}]}]}"#
+        UserDefaults.standard.set(Data(legacy.utf8), forKey: tree.layoutKey)
+        log("left a legacy layout: \(legacy)")
     }
 
-    /// Relaunch after `pane-buttons`: a saved Files-only layout gets a session
-    /// pane back on its leading side.
+    /// Relaunch after `pane-buttons`, which left a layout an earlier build
+    /// saved — a session, a Files pane, and a split of Files over an empty
+    /// pane: it restores as the session beside the empty pane, Files gone and
+    /// the splits collapsed, the survivors keeping their shares.
     private static func filesAlone(_ window: MainWindowController) async {
-        guard let tree = window.paneTree else { return log("no window") }
-        await wait(0.8)
-        check(tree.panes.count == 2, "two panes after restoring a Files-only layout (got \(tree.panes.count))")
-        check(tree.panes.first?.shownSession != nil && tree.panes.last?.shownFiles != nil,
-              "a session on the left, Files on the right")
+        guard let tree = window.paneTree, let ws = window.workspaceController else { return log("no window") }
+        guard let a = ws.orderedSessions.first(where: { $0.agent == .shell })?.id else { return log("need a shell session") }
+        await wait(1.0)
+        check(tree.panes.count == 2, "two panes restored from a layout with Files leaves (got \(tree.panes.count))")
+        check(tree.panes.first?.shownSession == a && tree.panes.last?.shownSession == nil,
+              "the session on the left, the empty pane on the right")
+        if tree.panes.count == 2 {
+            let widths = tree.panes.map(\.view.frame.width)
+            let share = widths[0] / (widths[0] + widths[1])
+            log("pane widths \(widths.map { Int($0) }) → left share \(String(format: "%.2f", share))")
+            check(abs(share - 0.3 / 0.7) < 0.05, "the survivors keep their shares (0.43 / 0.57)")
+        }
         await wait(0.6)
         snapshot(window, "files-alone")
     }
@@ -1767,9 +1758,9 @@ enum SelfTest {
               let a = ws.orderedSessions.first else { return log("need a session") }
         ws.selection = .session(a.id)
         check(await until(90) { tree.surfaces.terminals[a.id] != nil }, "session launches")
-        window.openFilesInSplit()
+        if !window.isFilesShown { window.toggleFiles() }
         await wait(0.8)
-        guard let files = tree.panes.compactMap(\.filesPane).first else { return check(false, "Files pane opens") }
+        guard let files = window.inspectorFiles else { return check(false, "Files sidebar opens") }
         let access = files.tree.sandboxAccess
         log("sandbox line: \(access?.summary ?? "none"); mount=\(access?.mount?.path ?? "-"); fs=\(access?.hostFileSystem ?? "-") volume=\(access?.volumeName ?? "-")")
         log("mounts: \(access?.mounts.map { "\($0.path)\($0.readOnly ? ":ro" : "")" } ?? [])")
@@ -1850,7 +1841,7 @@ enum SelfTest {
         let first = c.items.compactMap { if case .agentText(_, let t) = $0 { t } else { nil } }.first { $0.contains("ALPHA-ONE") } ?? "ALPHA-ONE"
         guard let forked = ws.forkChat(s.id, upTo: first) else { return check(false, "fork created") }
         check(forked.forkedFrom == s.id && forked.forkedAt != nil && forked.firstPrompt == nil
-                && ws.displayName(of: forked) == "Fork of \(ws.displayName(of: s))",
+                && ws.displayName(of: forked) == "Fork of \(ws.displayName(s.id) ?? "")",
               "fork created (\(ws.displayName(of: forked)))")
         check(ws.sessionOrder.first { $0.id == forked.id }?.nestedUnder == s.id, "the fork lists under its source")
         check(await until(300) { chat(forked.id)?.phase == .ready }, "the fork resumes as a chat")
@@ -2010,7 +2001,8 @@ enum SelfTest {
         guard let view = tree.surfaces.chats[s.id] else { return check(false, "the chat's view") }
         check(view.debugBarShown.contains("chat-model"), "the composer has the model chooser")
         check(view.debugModelTitle == "Sonnet 5.5", "showing the chat's model (“\(view.debugModelTitle)”)")
-        log("readout “\(view.debugReadoutText)”")
+        check(view.debugBarShown.contains("chat-details") && view.debugReadoutText.contains("%"),
+              "and the Claude readout (“\(view.debugReadoutText)”)")
         snapshot(window, "chat-model-sonnet")
         view.debugPickClaudeEffort("low")
         check(ws.claudeEffort == "low" && first.launchEffort == "low" && view.debugEffortTitle == "Low",
@@ -2684,39 +2676,51 @@ enum SelfTest {
 
     // MARK: Title strip
 
-    /// A Claude readout beside the context chips: as the window narrows the
-    /// readout drops its optional pieces before the folder chip loses its name.
-    /// (Uses a shell session with a fake status; the strip doesn't care.)
+    /// The pane strip: one 34 pt line whose crumbs condense by the strip's own
+    /// width (the sandbox's label, then the folder's, then all three fold into
+    /// ⋯) while its controls stay put inside the pane; the name crumb only with
+    /// more than one pane; the view switch shows the current view. (A shell
+    /// session; the fixture's branch has a long name.)
     private static func titleStrip(_ window: MainWindowController) async {
         guard let tree = window.paneTree, let ws = window.workspaceController,
               let a = ws.orderedSessions.first(where: { $0.agent == .shell }), let w = window.window else { return log("need a shell session") }
         ws.selection = .session(a.id)
         check(await until(300) { tree.surfaces.terminals[a.id] != nil }, "session launches")
-        await wait(1.0)
-        let json = #"""
-            {"model":{"id":"claude-opus-5-5","display_name":"Opus 5.5"},"effort":{"level":"high"},
-             "context_window":{"total_input_tokens":1234567,"total_output_tokens":456789,
-                               "context_window_size":1000000,"used_percentage":42},
-             "cost":{"total_cost_usd":12.34}}
-            """#
-        let status = try? JSONDecoder().decode(ClaudeSessionStatus.self, from: Data(json.utf8))
-        check(status?.model != nil, "fake status decodes")
         guard let pane = tree.panes.first else { return check(false, "a pane") }
-        pane.debugShowClaudeReadout(status)
-        func measure(_ name: String, folderAtLeast: CGFloat? = nil) async {
-            await wait(0.6)
-            let m = pane.debugTitleStripWidths
-            log("\(name): strip \(Int(m.strip)) folder \(Int(m.folder))/\(Int(m.folderWanted)) readout \(Int(m.readout)) budget \(m.budget > 99999 ? "∞" : "\(Int(m.budget))")")
-            log(pane.debugReadoutFitting)
-            check(m.readout <= max(m.budget, 16) + 1, "\(name): the readout stays within its budget")
-            check(m.folderWanted > 60 && m.folder >= (folderAtLeast ?? m.folderWanted - 1), "\(name): the folder chip keeps its name")
-            snapshot(window, "title-strip-\(name)")
+        check(await until(15) { pane.debugStrip.branchShown }, "the branch crumb arrives")
+        func describe(_ s: PaneStripView.DebugState) -> String {
+            "pane \(Int(pane.view.frame.width)) strip: sandbox \(s.sandboxShown)/\(s.sandboxLabelShown) folder \(s.folderShown)/\(s.folderLabelShown) "
+                + "branch \(s.branchShown) ⋯ \(s.moreShown) name \(s.nameShown) (\(Int(s.nameWidth))) view \(String(describing: s.viewMode)) dimmed \(s.dimmed)"
         }
-        for width in [1400.0, 1100, 900] {
+        /// Every control inside the pane, the strip 34 pt high.
+        func fits(_ s: PaneStripView.DebugState, _ name: String) {
+            let bounds = pane.view.bounds
+            check(s.height == PaneStripView.height, "\(name): the strip is 34 pt high (\(s.height))")
+            check(!s.controlFrames.isEmpty && s.controlFrames.allSatisfy { bounds.contains($0) },
+                  "\(name): every control is inside the pane (right edges \(s.controlFrames.map { Int($0.maxX) }) of \(Int(bounds.width)))")
+        }
+        func setWindowWidth(_ width: CGFloat) {
             var frame = w.frame
             frame.size.width = width
             w.setFrame(frame, display: true)
-            await measure("window-\(Int(width))")
+        }
+
+        // Wide: everything spelled out; one pane, so no name; a shell has no view switch.
+        for width in [1400.0, 1100] {
+            setWindowWidth(width)
+            await wait(0.6)
+            let s = pane.debugStrip
+            log("window \(Int(width)): \(describe(s))")
+            check(s.sandboxLabelShown && s.folderLabelShown && s.branchShown && !s.moreShown,
+                  "at \(Int(width)) every crumb shows with its label")
+            check(!s.nameShown, "at \(Int(width)), with one pane, there's no name crumb")
+            check(s.viewMode == nil, "a shell session has no Chat | Terminal switch")
+            fits(s, "window \(Int(width))")
+            snapshot(window, "title-strip-window-\(Int(width))")
+        }
+        for width in [1400.0, 1100, 900] {
+            setWindowWidth(width)
+            await wait(0.6)
             let t = window.debugToolbarWidths
             log("  toolbar at \(Int(width)): identity \(Int(t.identity)) status \(Int(t.status)) visible \(t.visible)/\(t.items)")
             check(t.visible == t.items && t.identity >= 199 && t.identity <= 361,
@@ -2725,9 +2729,7 @@ enum SelfTest {
         // A long session name truncates inside the identity item instead of
         // drawing over the status and buttons beside it.
         for width in [1000.0, 1300] {
-            var frame = w.frame
-            frame.size.width = width
-            w.setFrame(frame, display: true)
+            setWindowWidth(width)
             _ = window.debugToolbarName("New Claude Session with a long name, longer than the toolbar has room for")
             await wait(0.8)
             let long = window.debugToolbarName("New Claude Session with a long name, longer than the toolbar has room for")
@@ -2741,10 +2743,71 @@ enum SelfTest {
             _ = window.debugToolbarName("New Claude Session", subtitle: "msdgc · ~/Code/msdgc")
             check(window.debugToolbarNameFits, "at \(Int(width)) “New Claude Session” shows whole")
         }
-        // A narrow split pane: the readout is down to its model chooser.
+        setWindowWidth(1400)
+        pane.reemitChrome()
+        await wait(0.6)
+
+        // The view switch shows the view a session is in now (not the one it'd switch to).
+        var chat = a
+        chat.agent = .claude
+        chat.isChat = true
+        pane.debugConfigureStrip(for: chat)
+        check(pane.debugStrip.viewMode == .chat, "a chat's switch shows Chat selected")
+        await wait(0.3)
+        snapshot(pane.debugStripView, "title-strip-chat")
+        chat.isChat = false
+        pane.debugConfigureStrip(for: chat)
+        check(pane.debugStrip.viewMode == .terminal, "a Claude terminal's switch shows Terminal selected")
+        chat.containerAgent = .codex
+        pane.debugConfigureStrip(for: chat)
+        check(pane.debugStrip.viewMode == nil, "a terminal-only session (another agent's sandbox) has no switch")
+        chat.containerAgent = nil
+        chat.isChat = true
+        pane.debugConfigureStrip(for: chat)   // the widest controls, for the narrow checks below
+
+        // Two panes: the name crumb shows; the pane without focus dims its strip.
         tree.split(pane, edge: .trailing, showing: nil)
-        await measure("split", folderAtLeast: 80)
-        check(pane.debugTitleStripWidths.readout < 24, "split: the readout is down to ⓘ")
+        await wait(0.6)
+        pane.debugConfigureStrip(for: chat)
+        var s = pane.debugStrip
+        log("split: \(describe(s))")
+        check(s.nameShown, "with two panes the name crumb shows")
+        check(s.dimmed, "the unfocused pane's strip is dimmed")
+        snapshot(window, "title-strip-split-unfocused")
+        tree.focus(pane)
+        await wait(0.3)
+        pane.debugConfigureStrip(for: chat)
+        check(!pane.debugStrip.dimmed, "focused, its strip is at full strength")
+
+        // Narrower and narrower: the crumbs give way by the rule; the controls don't.
+        guard let split = pane.view.superview as? NSSplitView else { return check(false, "the pane is in a split") }
+        for (width, expect) in [(600.0, "all labels"), (540, "sandbox icon only"), (470, "sandbox and folder icons only"),
+                                (380, "folded into ⋯")] {
+            split.setPosition(width, ofDividerAt: 0)
+            split.layoutSubtreeIfNeeded()
+            await wait(0.5)
+            pane.debugConfigureStrip(for: chat)
+            s = pane.debugStrip
+            log("\(Int(width)): \(describe(s))")
+            check(abs(pane.view.frame.width - width) <= 2, "the pane is \(Int(width)) pt wide (\(Int(pane.view.frame.width)))")
+            let rule = PaneStripCondensing(width: pane.view.frame.width - 32)
+            switch width {
+            case 600: check(s.sandboxLabelShown && s.folderLabelShown && s.branchShown && !s.moreShown, "\(Int(width)): \(expect)")
+            case 540: check(s.sandboxShown && !s.sandboxLabelShown && s.folderLabelShown && s.branchShown && !s.moreShown, "\(Int(width)): \(expect)")
+            case 470: check(s.sandboxShown && !s.sandboxLabelShown && s.folderShown && !s.folderLabelShown && s.branchShown && !s.moreShown,
+                            "\(Int(width)): \(expect)")
+            default: check(s.moreShown && !s.sandboxShown && !s.folderShown && !s.branchShown, "\(Int(width)): \(expect)")
+            }
+            check(s.condensing == rule, "\(Int(width)): the strip follows the rule for its own width")
+            check(s.nameShown && s.nameWidth >= PaneStripView.nameMinWidth, "\(Int(width)): the name keeps at least 72 pt (\(Int(s.nameWidth)))")
+            fits(s, "\(Int(width)) pt pane")
+            snapshot(pane.debugStripView, "title-strip-\(Int(width))")
+        }
+        let menu = pane.debugStripMoreMenu
+        log("⋯ menu: \(menu)")
+        check(menu.count == 3 && menu[0].contains("Sandbox") && menu[1].contains("Finder"), "⋯ lists the sandbox, the folder and the branch")
+        snapshot(window, "title-strip-380-window")
+        pane.reemitChrome()
     }
 
     // MARK: Links

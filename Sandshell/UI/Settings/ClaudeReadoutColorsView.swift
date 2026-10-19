@@ -28,6 +28,6 @@ struct ClaudeReadoutColorsView: View {
     }
 
     private func fallback(_ role: ClaudeStatsColorRole) -> NSColor {
-        ClaudeStatsView.themeFallback(role, theme)
+        role.themeFallback(theme)
     }
 }

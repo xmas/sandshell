@@ -51,12 +51,7 @@ struct ClaudeStatsDetailView: View {
     /// line's thresholds); each level can be overridden.
     private func levelColor(_ fraction: Double) -> Color {
         let role: ClaudeStatsColorRole = fraction >= 0.8 ? .high : fraction >= 0.5 ? .mid : .low
-        let fallback: NSColor = switch role {
-        case .high: .systemRed
-        case .mid: .systemOrange
-        default: .systemGreen
-        }
-        return Color(nsColor: appearance.color(role, fallback: fallback))
+        return Color(nsColor: appearance.color(role, fallback: role.themeFallback(nil)))
     }
 
     private func gaugeBar(_ fraction: Double) -> some View {

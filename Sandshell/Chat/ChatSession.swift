@@ -131,14 +131,12 @@ final class ChatSession: ObservableObject {
     @Published private(set) var models: [Choice] = []
     @Published private(set) var currentModel: String?
     /// Context window fill and session cost, from `usage_update`.
-    @Published private(set) var usage: Usage? { didSet { onUsage?() } }
+    @Published private(set) var usage: Usage?
     /// The model the agent last answered with (the adapter's `_claude/model`).
     private(set) var liveModel: String?
     /// The workspace's model and effort this agent was launched with (Claude).
     let launchModel: String?
     private(set) var launchEffort: String?
-    /// Usage or the live model changed (the pane's Claude readout follows).
-    var onUsage: (() -> Void)?
     /// Run once when the current turn ends (a model change waiting to relaunch).
     var afterTurn: (() -> Void)?
     /// Slash commands and skills the agent advertises (`available_commands_update`).
@@ -479,7 +477,7 @@ final class ChatSession: ObservableObject {
         SbxClient.launchSettled(ownSessionID)
         // Nothing it does from here on is news to anyone (a send or a start
         // still finishing would otherwise report "finished" or "stopped").
-        onUsage = nil; onSessionID = nil; onWorkingChange = nil; onPrompt = nil
+        onSessionID = nil; onWorkingChange = nil; onPrompt = nil
         onClosed = nil; onUnexpectedExit = nil; onOtherAppIdle = nil; onNeedsInput = nil; onWaitingChange = nil
         queued = nil
         stopFollowing()
@@ -756,7 +754,6 @@ final class ChatSession: ObservableObject {
     /// Claude's effort level, live (`nil` = Claude's default).
     func setEffort(_ level: String?) {
         launchEffort = level
-        onUsage?()
         guard let conn = connection, let sid = sessionID else { return }
         Task {
             do {
