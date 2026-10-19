@@ -1501,6 +1501,9 @@ struct SessionRuntime: Equatable {
     var isLive: Bool = false
     /// The agent is waiting on the person (a question or a permission prompt).
     var isWaiting: Bool = false
+    /// What it's waiting for, in the sidebar row's words ("permission to run
+    /// swift test", "a question"; `WaitingFor`). Nil when not waiting.
+    var waitingFor: String?
     /// The session's agent stopped and can't go on (a chat that isn't signed
     /// in, or whose agent exited): why, shown instead of "Ready".
     var stoppedReason: String?
@@ -1638,12 +1641,21 @@ extension WorkspaceController {
 
     /// Whether a session has a live terminal (set by the detail pane).
     func isLive(_ id: UUID) -> Bool { runtimes[id]?.isLive ?? false }
-    func setWaiting(_ id: UUID, _ waiting: Bool) {
+    func setWaiting(_ id: UUID, _ waiting: Bool, for what: String? = nil) {
         var rt = runtimes[id] ?? SessionRuntime()
-        guard rt.isWaiting != waiting else { return }
+        let what = waiting ? what : nil
+        guard rt.isWaiting != waiting || rt.waitingFor != what else { return }
         rt.isWaiting = waiting
+        rt.waitingFor = what
         runtimes[id] = rt
     }
+
+    #if DEBUG
+    /// Self-tests: put a session's row in a state without running anything.
+    func debugSetRuntime(_ id: UUID, _ runtime: SessionRuntime?) {
+        runtimes[id] = runtime
+    }
+    #endif
 
     func setStopped(_ id: UUID, _ reason: String?) {
         var rt = runtimes[id] ?? SessionRuntime()
@@ -1724,7 +1736,9 @@ extension WorkspaceController {
     /// `orderedSessions` as ids, with which of them are forks nested under
     /// their group's top session.
     var sessionOrder: [SessionOrder.Entry] {
-        SessionOrder.arrange(state.sessions, lastActivity: sortKey)
+        // Whatever needs the person first, then what's working, then by activity.
+        SessionOrder.arrange(state.sessions, lastActivity: sortKey,
+                             rank: { [runtimes] in SessionRowStatus.rank(runtimes[$0.id]) })
     }
 
     private func sortKey(_ session: Session) -> Date {

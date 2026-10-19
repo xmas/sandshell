@@ -111,14 +111,19 @@ final class ChatSession: ObservableObject {
     /// A question the agent is waiting on (AskUserQuestion, Codex's
     /// request_user_input, an MCP server's form or sign-in link).
     @Published private(set) var question: AgentQuestion? { didSet { reportWaiting() } }
-    /// Waiting on the person (a question or a permission is up), or not.
+    /// Waiting on the person (a question or a permission is up), or not —
+    /// also called when what it waits for changes (`waitingFor`).
     var onWaitingChange: ((Bool) -> Void)?
-    private var wasWaiting = false
+    /// What it's waiting for, in the sidebar row's words; nil when not waiting.
+    var waitingFor: String? {
+        permission.map { WaitingFor.permission($0.title) } ?? question.map(WaitingFor.question)
+    }
+    private var wasWaitingFor: String?
     private func reportWaiting() {
-        let waiting = question != nil || permission != nil
-        guard waiting != wasWaiting else { return }
-        wasWaiting = waiting
-        onWaitingChange?(waiting)
+        let now = waitingFor
+        guard now != wasWaitingFor else { return }
+        wasWaitingFor = now
+        onWaitingChange?(now != nil)
     }
     private var waitingQuestions: [AgentQuestion] = []
     /// The agent needs the person (a question or a permission): for a notification.

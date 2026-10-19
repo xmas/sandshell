@@ -181,6 +181,8 @@ enum MainMenu {
         // Titled Show/Hide by AppDelegate's validation.
         viewMenu.addItem(NSMenuItem("Hide Sidebar", action: #selector(AppDelegate.toggleSessionSidebar(_:)),
                                     key: "s", modifiers: [.command, .control]))
+        // The sidebar's one setting: its rows' density (checked: the current one).
+        for item in SidebarDensityMenu.shared.items() { viewMenu.addItem(item) }
         viewMenu.addItem(NSMenuItem("Show Session Details", action: #selector(AppDelegate.toggleSessionDetails(_:)),
                                     key: "i", modifiers: [.command, .option]))
         // NSWindow names and validates these (Show/Hide Toolbar).
@@ -217,8 +219,6 @@ enum MainMenu {
             hidden.allowsKeyEquivalentWhenHidden = true
             sessionMenu.addItem(hidden)
         }
-        sessionMenu.addItem(.separator())
-        sessionMenu.addItem(NSMenuItem("Open Terminal on This Mac", action: #selector(AppDelegate.openHostTerminal(_:))))
 
         // MARK: Window menu
         let windowItem = NSMenuItem()
@@ -253,16 +253,15 @@ enum MainMenu {
                                     key: "/", modifiers: [.command, .option]))
         helpMenu.addItem(NSMenuItem("Release Notes", action: #selector(AppDelegate.showReleaseNotes(_:))))
         helpMenu.addItem(.separator())
+        // Diagnostics (the sidebar footer's old terminal and bug buttons live here now).
         helpMenu.addItem(NSMenuItem("Show Sandshell Log", action: #selector(AppDelegate.showSandshellLog(_:))))
-        // Hold ⌥ / ⌃ for the other logs.
-        let status = NSMenuItem("Show Status Debug Window", action: #selector(AppDelegate.showStatusDebug(_:)))
-        status.keyEquivalentModifierMask = [.option]
-        status.isAlternate = true
-        helpMenu.addItem(status)
+        // Hold ⌃ for the sbx daemon's.
         let daemon = NSMenuItem("Show sbx Daemon Log", action: #selector(AppDelegate.showDaemonLog(_:)))
         daemon.keyEquivalentModifierMask = [.control]
         daemon.isAlternate = true
         helpMenu.addItem(daemon)
+        helpMenu.addItem(NSMenuItem("Show Status Debug Window", action: #selector(AppDelegate.showStatusDebug(_:))))
+        helpMenu.addItem(NSMenuItem("Open Terminal on This Mac", action: #selector(AppDelegate.openHostTerminal(_:))))
         helpMenu.addItem(withTitle: "Check sbx Daemon Health…",
                          action: #selector(AppDelegate.checkDaemonHealth(_:)), keyEquivalent: "")
 

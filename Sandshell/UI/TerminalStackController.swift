@@ -1741,8 +1741,8 @@ final class TerminalStackController: NSViewController {
             chat.onClosed = { [controller] why in controller.setStopped(id, why) }
             chat.onUnexpectedExit = { [surfaces] in surfaces.onChatAgentExit(id) }
             chat.onUsage = { [surfaces] in surfaces.onChatStatus(id) }
-            chat.onWaitingChange = { [controller] waiting in
-                controller.setWaiting(id, waiting)
+            chat.onWaitingChange = { [controller, weak chat] waiting in
+                controller.setWaiting(id, waiting, for: chat?.waitingFor)
                 // Answered (or cancelled): "needs you" is old news.
                 if !waiting { NotificationManager.shared.withdrawNeedsInput(sessionID: id) }
             }

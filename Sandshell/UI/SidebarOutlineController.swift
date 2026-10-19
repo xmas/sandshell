@@ -101,15 +101,18 @@ final class SidebarListController: NSViewController {
     /// too): they're the indented rows (`SessionOrder`).
     private(set) var nestedForkIDs: Set<UUID> = []
 
-    /// What each row shows: a session, or one of its subagents beneath it.
+    /// What each row shows: a session, its one subagents row (the count of
+    /// its subagents, workflows and background tasks), or — opened from that
+    /// row — one of its subagents or workflows.
     enum Row: Equatable, Identifiable {
-        case session(UUID), subagent(SubagentInfo), workflow(UUID, WorkflowRun)
+        case session(UUID), summary(UUID), subagent(SubagentInfo), workflow(UUID, WorkflowRun)
 
         /// Which row it is, whatever it shows now (a subagent's state, a run's progress).
-        enum ID: Hashable { case session(UUID), subagent(UUID, String), workflow(UUID, String) }
+        enum ID: Hashable { case session(UUID), summary(UUID), subagent(UUID, String), workflow(UUID, String) }
         var id: ID {
             switch self {
             case .session(let id): .session(id)
+            case .summary(let id): .summary(id)
             case .subagent(let info): .subagent(info.sessionID, info.id)
             case .workflow(let session, let run): .workflow(session, run.id)
             }
@@ -117,17 +120,15 @@ final class SidebarListController: NSViewController {
         /// The session it is, or sits under.
         var sessionID: UUID {
             switch self {
-            case .session(let id): id
+            case .session(let id), .summary(let id): id
             case .subagent(let info): info.sessionID
             case .workflow(let session, _): session
             }
         }
     }
     private(set) var rows: [Row] = []
-    /// Subagent lists opened / closed by the person (else: open while one runs,
-    /// or for the selected session).
+    /// Sessions whose subagent rows the person opened (from the subagents row).
     private var openedParents: Set<UUID> = []
-    private var closedParents: Set<UUID> = []
 
     func sessionID(atRow row: Int) -> UUID? {
         guard rows.indices.contains(row), case .session(let id) = rows[row] else { return nil }
@@ -141,8 +142,15 @@ final class SidebarListController: NSViewController {
         guard rows.indices.contains(row), case .workflow(let session, let run) = rows[row] else { return nil }
         return (session, run)
     }
-    /// The session a child row (subagent or workflow) sits under; nil for a session row.
-    func parentSession(ofRow row: Int) -> UUID? { subagent(atRow: row)?.sessionID ?? workflow(atRow: row)?.session }
+    /// The session whose subagents row this is.
+    func summarySession(atRow row: Int) -> UUID? {
+        guard rows.indices.contains(row), case .summary(let id) = rows[row] else { return nil }
+        return id
+    }
+    /// The session a child row (subagents row, subagent or workflow) sits under; nil for a session row.
+    func parentSession(ofRow row: Int) -> UUID? {
+        summarySession(atRow: row) ?? subagent(atRow: row)?.sessionID ?? workflow(atRow: row)?.session
+    }
 
     private func openWorkflow(_ run: WorkflowRun, in session: UUID) {
         controller.selection = .session(session)
@@ -156,20 +164,25 @@ final class SidebarListController: NSViewController {
 
     /// Whether a session's subagent and workflow rows are in the list now.
     private func childRowsShown(of id: UUID) -> Bool {
-        row(of: id).map { parentSession(ofRow: $0 + 1) == id } ?? false
-    }
-    /// A listed session whose child rows should show, or go, by now (they follow the selection).
-    private func childRowsStale(_ id: UUID?) -> Bool {
-        guard let id, row(of: id) != nil else { return false }
-        return showsSubagents(of: id) != childRowsShown(of: id)
+        rows.contains { row in
+            switch row {
+            case .subagent(let info): info.sessionID == id
+            case .workflow(let session, _): session == id
+            default: false
+            }
+        }
     }
 
+    /// Its subagent and workflow rows show: the person opened them (they're
+    /// summed up in one row otherwise).
     func showsSubagents(of id: UUID) -> Bool {
-        let list = controller.subagents[id] ?? [], runs = controller.workflows[id] ?? []
-        guard !list.isEmpty || !runs.isEmpty else { return false }
-        if closedParents.contains(id) { return false }
-        if openedParents.contains(id) { return true }
-        return list.contains(where: \.isRunning) || runs.contains { !$0.agentsSettled } || controller.selection == .session(id)
+        openedParents.contains(id) && childCount(of: id) > 0
+    }
+
+    /// What a session's subagents row says (empty: no row).
+    func summary(of id: UUID) -> SubagentSummary {
+        SubagentSummary(subagents: controller.subagents[id] ?? [], workflows: controller.workflows[id] ?? [],
+                        tasks: controller.backgroundTasks[id] ?? [])
     }
 
     /// A session's child rows: its subagents and workflows, oldest first.
@@ -181,15 +194,29 @@ final class SidebarListController: NSViewController {
     private func childCount(of id: UUID) -> Int { (controller.subagents[id]?.count ?? 0) + (controller.workflows[id]?.count ?? 0) }
 
     func setShowsSubagents(_ show: Bool, of id: UUID) {
-        if show { openedParents.insert(id); closedParents.remove(id) } else { closedParents.insert(id); openedParents.remove(id) }
+        if show { openedParents.insert(id) } else { openedParents.remove(id) }
         reload()
+    }
+
+    /// The subagents row was clicked: show or hide its rows — or, with only
+    /// background tasks to count, open Background Tasks.
+    private func summaryClicked(_ id: UUID) {
+        if childCount(of: id) > 0 {
+            setShowsSubagents(!childRowsShown(of: id), of: id)
+        } else {
+            controller.selection = .session(id)
+            (view.window?.windowController as? MainWindowController)?.showBackgroundTasks()
+        }
     }
     /// Live filter over `displayedSessionIDs` (session name / agent / folder).
     private var searchQuery: String = ""
 
-    private let searchField = SidebarSearchField()
+    /// The shortcut that focuses the search field (Edit ▸ Find ▸ Filter
+    /// Sessions), shown at its end. ⌘F stays Find in a pane.
+    static let filterShortcut = "⌥⌘F"
+    private let searchField = SidebarSearchField(shortcutHint: SidebarListController.filterShortcut)
     private let newSessionButton = SidebarIconButton(
-        symbolName: "plus", pointSize: TypeRole.body.symbolPointSize, accessibilityDescription: "New Session")
+        symbolName: "plus", configuration: .role(.meta, weight: .semibold), accessibilityDescription: "New Session")
 
     /// Overlay shown in place of the (empty) list: the container's build
     /// status while one is coming up, else "No sessions yet"/"No matches".
@@ -204,21 +231,13 @@ final class SidebarListController: NSViewController {
     private let titleLabel = NSTextField(labelWithString: "Sandshell")
     private let headerChevron = NSImageView()
     private let rightBorder = NSView()
-    private let footer = NSView()
+    /// `● Sandbox · read-write  main`: opens the sandbox access popover.
+    private let footer = SidebarFooterButton()
     private let footerBorder = NSView()
-    private let searchButton = HoverButton()
-    private let settingsButton = SidebarIconButton(
-        symbolName: "gearshape",
-        pointSize: TypeRole.body.symbolPointSize,
-        accessibilityDescription: "Folder settings")
-    private let terminalButton = SidebarIconButton(
-        symbolName: "terminal",
-        pointSize: TypeRole.body.symbolPointSize,
-        accessibilityDescription: "Open a terminal to the Mac host")
-    private let consoleButton = SidebarIconButton(
-        symbolName: "ladybug",
-        pointSize: TypeRole.body.symbolPointSize,
-        accessibilityDescription: "Open the Sandshell log in Console")
+    private var footerPopover: NSPopover?
+    /// The workspace folder's branch, for the footer (nil: not a repo, or not read yet).
+    private var footerBranch: String?
+    private var footerGitTask: Task<Void, Never>?
     /// A host (Mac) shell terminal window, kept open across re-clicks.
     private var hostTerminal: HostTerminalWindowController?
     /// Terminal opened to the most-recent changed-drops staging directory.
@@ -231,8 +250,8 @@ final class SidebarListController: NSViewController {
     var onDropFiles: ((UUID, [URL]) -> Void)?
     /// "Open Files in Split" from a session row's context menu.
     var onOpenFilesInSplit: ((UUID) -> Void)?
-    /// Open the window's Search (footer button / "Search…" menu item); the
-    /// folder is where a restored conversation lands if its cwd has none.
+    /// Open the window's Search. (The sidebar's own search is its field;
+    /// Search Sessions… lives in the File menu.)
     var onShowSearch: ((UUID?) -> Void)?
 
     /// True while a container is building/rebuilding (drives the empty-state
@@ -279,7 +298,9 @@ final class SidebarListController: NSViewController {
         column.resizingMask = .autoresizingMask
         outline.addTableColumn(column)
         outline.headerView = nil
-        outline.style = .sourceList
+        // Full width: the rows draw their own 6 pt inset and fills (SidebarRows.swift).
+        outline.style = .fullWidth
+        outline.columnAutoresizingStyle = .firstColumnOnlyAutoresizingStyle
         outline.selectionHighlightStyle = .none
         outline.backgroundColor = .clear   // let the explicit container color show
         outline.rowSizeStyle = .default
@@ -328,40 +349,45 @@ final class SidebarListController: NSViewController {
             .store(in: &cancellables)
         scroll.documentView = outline
 
-        // ── Header: the folder's chosen icon/color + its name (last path
-        //    component), on its own line below the window's traffic lights.
+        // ── Header, row 1: the folder's mark and name with a ▾ (the workspace
+        //    switcher), then the one + (New Session). Below the traffic lights.
         brandBox.translatesAutoresizingMaskIntoConstraints = false
         brandBox.wantsLayer = true
-        brandBox.layer?.cornerRadius = 7
+        brandBox.layer?.cornerRadius = 5
         appMark.translatesAutoresizingMaskIntoConstraints = false
-        appMark.image?.isTemplate = true
-        appMark.contentTintColor = .white
         appMark.imageScaling = .scaleProportionallyUpOrDown
-        appMark.symbolConfiguration = .init(pointSize: 14, weight: .semibold)
+        appMark.symbolConfiguration = .init(pointSize: 11, weight: .semibold)
         brandBox.addSubview(appMark)
 
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
         titleLabel.font = .role(.title)
         titleLabel.lineBreakMode = .byTruncatingTail
-        titleLabel.setContentHuggingPriority(.required, for: .horizontal)
+        titleLabel.maximumNumberOfLines = 1
+        titleLabel.cell?.usesSingleLineMode = true
+        titleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         updateHeaderIdentity()   // icon/color/title from the folder profile
 
-        // Disclosure affordance: clicking the header pops a menu to switch or
-        // duplicate the workspace.
         headerChevron.translatesAutoresizingMaskIntoConstraints = false
-        headerChevron.image = NSImage(systemSymbolName: "chevron.down",
-                                      accessibilityDescription: "Workspace")
-        headerChevron.symbolConfiguration = .role(.meta, weight: .semibold)
+        headerChevron.image = NSImage(systemSymbolName: "chevron.down", accessibilityDescription: "Workspace")
+        headerChevron.symbolConfiguration = .init(pointSize: 11, weight: .semibold)
         headerChevron.setContentHuggingPriority(.required, for: .horizontal)
+        headerChevron.setContentCompressionResistancePriority(.required, for: .horizontal)
 
         let header = SidebarHeaderView(views: [brandBox, titleLabel, headerChevron])
         header.orientation = .horizontal
         header.alignment = .centerY
         header.spacing = 8
+        header.setCustomSpacing(5, after: titleLabel)
         header.setHuggingPriority(.defaultLow, for: .horizontal)
         header.translatesAutoresizingMaskIntoConstraints = false
         header.onClick = { [weak self] in self?.headerClicked() }
 
+        newSessionButton.translatesAutoresizingMaskIntoConstraints = false
+        newSessionButton.target = self
+        newSessionButton.action = #selector(newSessionButtonClicked)
+        newSessionButton.toolTip = "New Session"
+
+        // ── Row 2: the search field — the sidebar's one search.
         searchField.translatesAutoresizingMaskIntoConstraints = false
         searchField.onChange = { [weak self] text in
             self?.searchQuery = text
@@ -372,48 +398,15 @@ final class SidebarListController: NSViewController {
             self.view.window?.makeFirstResponder(self.outline)
             if self.outline.selectedRow < 0 { self.controller.selection = .session(self.displayedSessionIDs[0]) }
         }
-        newSessionButton.translatesAutoresizingMaskIntoConstraints = false
-        newSessionButton.target = self
-        newSessionButton.action = #selector(newSessionButtonClicked)
-
-        searchButton.title = "Search"
-        searchButton.translatesAutoresizingMaskIntoConstraints = false
-        searchButton.isBordered = false
-        searchButton.wantsLayer = true
-        searchButton.layer?.cornerRadius = 9
-        searchButton.layer?.masksToBounds = true
-        searchButton.image = NSImage(systemSymbolName: "magnifyingglass", accessibilityDescription: nil)
-        searchButton.imagePosition = .imageLeading
-        searchButton.imageHugsTitle = true        // keep icon + text together, centered
-        searchButton.alignment = .center
-        searchButton.font = .role(.meta)
-        searchButton.target = self
-        searchButton.action = #selector(searchClicked)
-        searchButton.toolTip = "Search sessions and past conversations (⇧⌘F)"
-
-        // Per-root settings inspector lives behind a square gear next to Search.
-        // This custom control avoids NSButtonCell's image-only metrics so the
-        // visible background and centered glyph stay optically square.
-        settingsButton.translatesAutoresizingMaskIntoConstraints = false
-        settingsButton.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        settingsButton.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
-        settingsButton.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        settingsButton.setContentHuggingPriority(.defaultLow, for: .vertical)
-        settingsButton.target = self
-        settingsButton.action = #selector(presentInspector as () -> Void)
-
-        terminalButton.translatesAutoresizingMaskIntoConstraints = false
-        terminalButton.target = self
-        terminalButton.action = #selector(openHostTerminal)
-
-        consoleButton.translatesAutoresizingMaskIntoConstraints = false
-        consoleButton.target = self
-        consoleButton.action = #selector(openConsole)
+        searchField.toolTip = "Search sessions (\(Self.filterShortcut))"
 
         rightBorder.translatesAutoresizingMaskIntoConstraints = false
         rightBorder.wantsLayer = true
+        // ── Footer: one button, the sandbox's access to the folder + its branch.
         footer.translatesAutoresizingMaskIntoConstraints = false
-        footer.wantsLayer = true
+        footer.target = self
+        footer.action = #selector(footerClicked)
+        footer.setAccessibilityIdentifier("sidebar-footer")
         footerBorder.translatesAutoresizingMaskIntoConstraints = false
         footerBorder.wantsLayer = true
 
@@ -430,45 +423,34 @@ final class SidebarListController: NSViewController {
         emptyStateStack.addArrangedSubview(emptyStateSpinner)
         emptyStateStack.addArrangedSubview(emptyStateLabel)
 
-        container.addSubview(header)
-        container.addSubview(searchField)
-        container.addSubview(newSessionButton)
-        container.addSubview(scroll)
-        container.addSubview(emptyStateStack)
-        container.addSubview(footer)
-        container.addSubview(rightBorder)
-        footer.addSubview(footerBorder)
-        footer.addSubview(settingsButton)
-        footer.addSubview(terminalButton)
-        footer.addSubview(consoleButton)
-        footer.addSubview(searchButton)
+        for v in [header, newSessionButton, searchField, scroll, emptyStateStack, footer, footerBorder, rightBorder] as [NSView] {
+            container.addSubview(v)
+        }
         NSLayoutConstraint.activate([
-            brandBox.widthAnchor.constraint(equalToConstant: 28),
-            brandBox.heightAnchor.constraint(equalToConstant: 28),
-            appMark.leadingAnchor.constraint(equalTo: brandBox.leadingAnchor, constant: 6),
-            appMark.trailingAnchor.constraint(equalTo: brandBox.trailingAnchor, constant: -6),
-            appMark.topAnchor.constraint(equalTo: brandBox.topAnchor, constant: 6),
-            appMark.bottomAnchor.constraint(equalTo: brandBox.bottomAnchor, constant: -6),
+            brandBox.widthAnchor.constraint(equalToConstant: 20),
+            brandBox.heightAnchor.constraint(equalToConstant: 20),
+            appMark.centerXAnchor.constraint(equalTo: brandBox.centerXAnchor),
+            appMark.centerYAnchor.constraint(equalTo: brandBox.centerYAnchor),
+            appMark.widthAnchor.constraint(equalToConstant: 12),
+            appMark.heightAnchor.constraint(equalToConstant: 12),
 
-            // Sits on its own line below the window's traffic-light controls.
-            header.topAnchor.constraint(equalTo: container.topAnchor, constant: 40),
-            header.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 16),
-            header.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -14),
+            // Its own line below the window's traffic-light controls.
+            newSessionButton.topAnchor.constraint(equalTo: container.topAnchor, constant: 38),
+            newSessionButton.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -12),
+            newSessionButton.widthAnchor.constraint(equalToConstant: 26),
+            newSessionButton.heightAnchor.constraint(equalToConstant: 26),
+            header.centerYAnchor.constraint(equalTo: newSessionButton.centerYAnchor),
+            header.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 14),
+            header.trailingAnchor.constraint(lessThanOrEqualTo: newSessionButton.leadingAnchor, constant: -8),
 
-            // Search field + persistent "New Session" button, replacing the old
-            // per-folder trailing row now that there are no folder rows.
-            searchField.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 12),
-            searchField.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 14),
-            searchField.trailingAnchor.constraint(equalTo: newSessionButton.leadingAnchor, constant: -8),
-            newSessionButton.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -14),
-            newSessionButton.centerYAnchor.constraint(equalTo: searchField.centerYAnchor),
-            newSessionButton.widthAnchor.constraint(equalToConstant: 32),
-            newSessionButton.heightAnchor.constraint(equalToConstant: 32),
+            searchField.topAnchor.constraint(equalTo: newSessionButton.bottomAnchor, constant: 8),
+            searchField.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 12),
+            searchField.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -12),
 
-            scroll.topAnchor.constraint(equalTo: searchField.bottomAnchor, constant: 10),
+            scroll.topAnchor.constraint(equalTo: searchField.bottomAnchor, constant: 8),
             scroll.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            scroll.bottomAnchor.constraint(equalTo: footer.topAnchor),
+            scroll.bottomAnchor.constraint(equalTo: footerBorder.topAnchor),
 
             emptyStateStack.centerXAnchor.constraint(equalTo: scroll.centerXAnchor),
             emptyStateStack.centerYAnchor.constraint(equalTo: scroll.centerYAnchor, constant: -20),
@@ -476,33 +458,14 @@ final class SidebarListController: NSViewController {
             emptyStateStack.trailingAnchor.constraint(lessThanOrEqualTo: scroll.trailingAnchor, constant: -20),
             emptyStateLabel.widthAnchor.constraint(lessThanOrEqualToConstant: 170),
 
+            footerBorder.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            footerBorder.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            footerBorder.bottomAnchor.constraint(equalTo: footer.topAnchor),
+            footerBorder.heightAnchor.constraint(equalToConstant: 1),
             footer.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             footer.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             footer.bottomAnchor.constraint(equalTo: container.bottomAnchor),
-            footer.heightAnchor.constraint(equalToConstant: 54),
-            footerBorder.topAnchor.constraint(equalTo: footer.topAnchor),
-            footerBorder.leadingAnchor.constraint(equalTo: footer.leadingAnchor),
-            footerBorder.trailingAnchor.constraint(equalTo: footer.trailingAnchor),
-            footerBorder.heightAnchor.constraint(equalToConstant: 1),
-            // Footer: a square gear (per-root settings) + a Search button that
-            // fills the remaining width to the right edge. Both 34pt tall,
-            // vertically centered in the footer.
-            settingsButton.leadingAnchor.constraint(equalTo: footer.leadingAnchor, constant: 14),
-            settingsButton.centerYAnchor.constraint(equalTo: footer.centerYAnchor),
-            settingsButton.widthAnchor.constraint(equalToConstant: 34),
-            settingsButton.heightAnchor.constraint(equalToConstant: 34),
-            terminalButton.leadingAnchor.constraint(equalTo: settingsButton.trailingAnchor, constant: 8),
-            terminalButton.centerYAnchor.constraint(equalTo: settingsButton.centerYAnchor),
-            terminalButton.widthAnchor.constraint(equalToConstant: 34),
-            terminalButton.heightAnchor.constraint(equalToConstant: 34),
-            consoleButton.leadingAnchor.constraint(equalTo: terminalButton.trailingAnchor, constant: 8),
-            consoleButton.centerYAnchor.constraint(equalTo: settingsButton.centerYAnchor),
-            consoleButton.widthAnchor.constraint(equalToConstant: 34),
-            consoleButton.heightAnchor.constraint(equalToConstant: 34),
-            searchButton.leadingAnchor.constraint(equalTo: consoleButton.trailingAnchor, constant: 8),
-            searchButton.trailingAnchor.constraint(equalTo: footer.trailingAnchor, constant: -14),
-            searchButton.centerYAnchor.constraint(equalTo: settingsButton.centerYAnchor),
-            searchButton.heightAnchor.constraint(equalToConstant: 34),
+            footer.heightAnchor.constraint(equalToConstant: 38),
 
             rightBorder.topAnchor.constraint(equalTo: container.topAnchor),
             rightBorder.trailingAnchor.constraint(equalTo: container.trailingAnchor),
@@ -523,40 +486,75 @@ final class SidebarListController: NSViewController {
         appMark.contentTintColor = .white
     }
 
+    /// The sidebar's colours (derived from its theme's background and foreground).
+    private var palette: SidebarPalette { SidebarPalette(sidebarTheme) }
+
     private func applyTheme(_ c: ThemeColors) {
-        // Force the sidebar's own appearance so its native source-list material,
-        // text and selection render in the chosen scheme regardless of the app's
-        // overall mode (enables "Sidebar always dark"), then paint the explicit
-        // background and brand mark on top.
+        // Force the sidebar's own appearance so its text and controls render
+        // in the chosen scheme regardless of the app's overall mode (enables
+        // "Sidebar always dark"), then paint the explicit background on top.
+        let p = SidebarPalette(c)
         view.appearance = NSAppearance(named: c.isDark ? .darkAqua : .aqua)
         view.layer?.backgroundColor = c.sidebar.cgColor
         rightBorder.layer?.backgroundColor = c.border.cgColor
-        footer.layer?.backgroundColor = c.sidebar.cgColor
-        footerBorder.layer?.backgroundColor = c.border.cgColor
-        titleLabel.textColor = c.sidebarFg
-        headerChevron.contentTintColor = c.sidebarMuted
-        searchField.style(bg: c.sidebarHover, fg: c.sidebarFg, muted: c.sidebarMuted)
-        emptyStateLabel.textColor = c.sidebarMuted
+        footerBorder.layer?.backgroundColor = p.separator.cgColor
+        footer.applyPalette(p)
+        titleLabel.textColor = p.foreground
+        headerChevron.contentTintColor = p.muted
+        searchField.style(p)
+        emptyStateLabel.textColor = p.muted
+        newSessionButton.contentTintColor = p.foreground
+        newSessionButton.restingBackgroundColor = p.selectedFill
+        newSessionButton.hoverBackgroundColor = p.background.mixed(with: p.foreground, 0.16)
+        updateFooter()
+    }
 
-        // Footer buttons + the new-session button: a subtle resting fill that
-        // brightens on hover.
-        let resting = c.sidebarHover
-        let hover = c.sidebarFg.withAlphaComponent(c.isDark ? 0.16 : 0.10)
-        for b in [settingsButton, terminalButton, consoleButton, newSessionButton] {
-            b.contentTintColor = c.sidebarFg
-            b.restingBackgroundColor = resting
-            b.hoverBackgroundColor = hover
+    // MARK: Footer
+
+    /// The sandbox the footer speaks for: the shown session's, else the workspace's agent's.
+    private var footerAgent: AgentKind {
+        shownSession.flatMap { controller.session(id: $0)?.containerAgentKind } ?? controller.primaryAgent
+    }
+
+    private func updateFooter() {
+        let agent = footerAgent
+        let access = controller.sandboxAccess(for: controller.workspace.rootURL, agent: agent)
+        let p = palette
+        let (color, dimmed, state): (NSColor, Bool, String) = switch controller.containerPhases[agent] {
+        case .running: (p.color(for: .fresh), false, "running")
+        case .creating, .rebuilding: (p.color(for: .working), false, "being built")
+        case .failed: (p.color(for: .error), false, "failed")
+        case .stopped: (p.muted, true, "stopped")
+        case .absent, nil: (p.muted, true, "not created yet")
         }
-        searchButton.contentTintColor = c.sidebarFg
-        searchButton.restingBackgroundColor = resting
-        searchButton.hoverBackgroundColor = hover
-        // Leading space widens the gap between the magnifying-glass icon and the label.
-        searchButton.attributedTitle = NSAttributedString(
-            string: "  Search",
-            attributes: [
-                .foregroundColor: c.sidebarFg,
-                .font: NSFont.role(.meta),
-            ])
+        footer.update(text: access.summary, branch: footerBranch, dot: color, dimmed: dimmed,
+                      tip: "Sandbox “\(access.sandbox)” (\(state)) — click for what it can access")
+    }
+
+    /// Re-read the workspace folder's branch (cheap; on load and a slow tick).
+    private func refreshFooterBranch() {
+        guard footerGitTask == nil else { return }
+        let root = controller.workspace.rootURL
+        footerGitTask = Task(priority: .utility) { [weak self] in
+            let status = await GitStatus.load(for: root)
+            guard let self else { return }
+            self.footerGitTask = nil
+            let branch = status.repoRoot == nil ? nil : (status.branch ?? "detached")
+            guard branch != self.footerBranch else { return }
+            self.footerBranch = branch
+            self.updateFooter()
+        }
+    }
+
+    /// The footer: the same sandbox access popover as a pane's sandbox crumb, above it.
+    @objc private func footerClicked() {
+        if let open = footerPopover, open.isShown { open.close(); footerPopover = nil; return }
+        let access = controller.sandboxAccess(for: controller.workspace.rootURL, agent: footerAgent)
+        let popover = NSPopover()
+        popover.behavior = .transient
+        popover.contentViewController = .hosting(SandboxAccessPopover(access: access))
+        popover.show(relativeTo: footer.bounds, of: footer, preferredEdge: footer.isFlipped ? .minY : .maxY)
+        footerPopover = popover
     }
 
     override func viewDidLoad() {
@@ -592,29 +590,30 @@ final class SidebarListController: NSViewController {
             let previous = self.lastActiveSession
             self.lastActiveSession = if case let .session(id) = sel { id } else { nil }
             self.syncSelection(sel)
-            // Bold the newly-active session immediately (and un-bold the previous
-            // unless it's still live) — no wait for the terminal to launch.
+            // The newly-shown title at full strength at once (and the previous
+            // one dimmed unless it's live) — no wait for the terminal to launch.
             self.refreshActive(previous)
             self.refreshActive(self.lastActiveSession)
-            // Subagents show for the selected session: list (or unlist) them —
-            // once the click (or key) that changed it is handled, and once for
-            // the selectionDidChange + rowClicked pair. Rows above it may go,
-            // so bring it back into view.
-            if [previous, self.lastActiveSession].contains(where: { self.childRowsStale($0) }) {
-                self.reloadAfterEvent(revealingShown: true)
-            }
+            // Which rows are open in another pane follows the focused pane.
+            self.refreshRowFills()
+            self.updateFooter()
         }.store(in: &cancellables)
-        // Update only the affected session rows (status dot + work-time + live-ness
-        // + unread) — all session state is now in one `runtimes` publisher. A
-        // working↔ready transition (session started/finished work) is the one
-        // case that re-sorts the list; every other tick updates rows in place so
-        // nothing jumps around while it's just ticking a timer or clearing a dot.
-        // Rows say how many background tasks their session has running.
-        controller.$backgroundTasks.dropFirst().sink { [weak self] tasks in
-            guard let self else { return }
-            for id in Set(tasks.keys).union(self.backgroundCounts.keys) { self.updateSessionRow(id) }
-            self.backgroundCounts = tasks.mapValues { $0.count(where: \.isRunning) }
-        }.store(in: &cancellables)
+        // The subagents row counts running background tasks: reload when that
+        // count changes (not on every write their output gets).
+        controller.$backgroundTasks.dropFirst()
+            .map { $0.mapValues { $0.count { $0.isRunning && ($0.kind == .shell || $0.kind == .monitor) } } }
+            .removeDuplicates()
+            .sink { [weak self] _ in self?.reloadAfterEvent() }
+            .store(in: &cancellables)
+        // View ▸ Comfortable / Compact.
+        NotificationCenter.default.publisher(for: SidebarDensity.didChange)
+            .sink { [weak self] _ in self?.reload() }
+            .store(in: &cancellables)
+        // The footer's dot is the sandbox's state.
+        controller.$containerPhases.dropFirst().removeDuplicates()
+            .sink { [weak self] _ in self?.updateFooter() }
+            .store(in: &cancellables)
+        refreshFooterBranch()
         // Only when a row would change: a running subagent's or workflow's
         // transcripts are written all the time, and every poll would rebuild
         // the list. (One reload for a poll that changes both.)
@@ -631,9 +630,13 @@ final class SidebarListController: NSViewController {
         controller.clockTick.dropFirst()
             .sink { [weak self] _ in self?.tickWorkingTimers() }
             .store(in: &cancellables)
-        // Tick the relative "Xm ago" labels on idle rows. Cheap and low-frequency.
+        // Tick the relative "3m" labels on idle rows, and re-read the footer's
+        // branch. Cheap and low-frequency.
         Timer.publish(every: 30, on: .main, in: .common).autoconnect()
-            .sink { [weak self] _ in self?.refreshRelativeTimes() }
+            .sink { [weak self] _ in
+                self?.refreshRelativeTimes()
+                self?.refreshFooterBranch()
+            }
             .store(in: &cancellables)
         // The build-status placeholder tracks activity text directly — it must
         // update the moment a build starts/finishes, not wait for a `revision`
@@ -669,10 +672,13 @@ final class SidebarListController: NSViewController {
         }
     }
 
+    /// Working rows' elapsed time, every second (the workspace clock).
     private func tickWorkingTimers() {
         guard !reloading else { return }
-        for id in displayedSessionIDs where controller.runtime(id)?.status == .working {
-            updateSessionRow(id)
+        for id in displayedSessionIDs where SessionRowStatus.state(of: controller.runtime(id)) == .working {
+            guard let row = row(of: id),
+                  let cell = outline.view(atColumn: 0, row: row, makeIfNecessary: false) as? SessionCellView else { continue }
+            cell.setTime(timeText(id))
         }
     }
 
@@ -693,22 +699,13 @@ final class SidebarListController: NSViewController {
     private func runtimesChanged(_ new: [UUID: SessionRuntime]) {
         var needsReorder = false
         for id in Set(new.keys).union(lastRuntimes.keys) where new[id] != lastRuntimes[id] {
-            if new[id]?.isLive != lastRuntimes[id]?.isLive {
-                // isLive drives name weight — needs a full cell reconfigure
-                // (once a rename in it ends: that would throw its editor away).
-                if id == renamingID {
-                    pendingReload = true
-                    updateSessionRow(id)
-                } else if !reloading, let row = row(of: id) {
-                    outline.reloadData(forRowIndexes: IndexSet([row]), columnIndexes: IndexSet([0]))
-                }
-            } else {
-                updateSessionRow(id)
-            }
-            // A working↔ready transition is a structural event: resort so the
-            // list reflects recency. Every other field (timer, lastActivityAt
-            // while still working, etc.) updates the row in place, above.
-            if new[id]?.status != lastRuntimes[id]?.status { needsReorder = true }
+            updateSessionRow(id)
+            // Rank changes (it needs you, starts or stops working) and finished
+            // turns are structural: resort. Every other field (the timer,
+            // activity while it works) updates the row in place, above, so
+            // nothing jumps around while a timer ticks.
+            if SessionRowStatus.rank(new[id]) != SessionRowStatus.rank(lastRuntimes[id])
+                || new[id]?.status != lastRuntimes[id]?.status { needsReorder = true }
         }
         lastRuntimes = new
         if needsReorder { reload() }
@@ -716,9 +713,10 @@ final class SidebarListController: NSViewController {
 
     private var lastActiveSession: UUID?
 
-    /// A session is emphasized when it's selected (active) or has a live terminal.
-    private func isActive(_ id: UUID) -> Bool {
-        controller.runtime(id)?.isLive == true || controller.selection == .session(id)
+    /// The row stands out (its title at full strength) while it's shown in the
+    /// focused pane — or picked in the list.
+    private func isSelected(_ id: UUID) -> Bool {
+        controller.selection == .session(id)
     }
 
     /// Update a session row's emphasis in place (no rebuild).
@@ -726,19 +724,43 @@ final class SidebarListController: NSViewController {
         guard let id, let row = row(of: id),
               let cell = outline.view(atColumn: 0, row: row, makeIfNecessary: false) as? SessionCellView
         else { return }
-        cell.setActive(isActive(id))
+        cell.setSelected(isSelected(id))
     }
 
-    /// Update a session row's runtime bits *in place* (no cell rebuild), so the
-    /// working sweep animates continuously instead of restarting each poll.
-    private var backgroundCounts: [UUID: Int] = [:]
+    /// A session row's status line, as its runtime says now.
+    private func status(_ id: UUID) -> SessionRowStatus {
+        SessionRowStatus.of(controller.runtime(id), agent: controller.session(id: id)?.agent ?? .claude)
+    }
 
+    private func timeText(_ id: UUID) -> String? {
+        SessionRowStatus.time(controller.runtime(id), lastActivity: controller.lastActivity(id))
+    }
+
+    /// Update a session row's state-driven bits *in place* (no cell rebuild),
+    /// so its spinner turns on instead of restarting each poll.
     private func updateSessionRow(_ id: UUID) {
         guard !reloading, let row = row(of: id),
               let cell = outline.view(atColumn: 0, row: row, makeIfNecessary: false) as? SessionCellView
         else { return }   // off-screen rows reconfigure fresh when they reappear
-        cell.backgroundRunning = controller.runningBackgroundTasks(id)
-        cell.updateRuntime(controller.runtime(id), unread: controller.runtime(id)?.isUnread ?? false)
+        cell.update(status: status(id), time: timeText(id), selected: isSelected(id),
+                    live: controller.runtime(id)?.isLive == true)
+    }
+
+    /// The sessions shown in panes other than the focused one, when the window has more than one.
+    private var sessionsOpenElsewhere: Set<UUID> {
+        guard let tree = (view.window?.windowController as? MainWindowController)?.paneTree, tree.panes.count > 1
+        else { return [] }
+        return Set(tree.panes.filter { $0 !== tree.focused }.compactMap(\.shownSession))
+    }
+
+    /// Redraw the rows' fills: the selection, and which sessions another pane shows.
+    private func refreshRowFills() {
+        let elsewhere = sessionsOpenElsewhere
+        outline.enumerateAvailableRowViews { rowView, row in
+            guard let rowView = rowView as? SidebarRowView else { return }
+            rowView.isOpenElsewhere = sessionID(atRow: row).map(elsewhere.contains) ?? false
+            rowView.needsDisplay = true
+        }
     }
 
     /// The folder-name segment for a session's subtitle (nil for the root
@@ -819,11 +841,13 @@ final class SidebarListController: NSViewController {
         let displayed = Set(displayedSessionIDs)
         nestedForkIDs = Set(order.filter { $0.nestedUnder.map(displayed.contains) == true && displayed.contains($0.id) }.map(\.id))
         rows = displayedSessionIDs.flatMap { id -> [Row] in
-            [.session(id)] + (showsSubagents(of: id) ? childRows(of: id) : [])
+            [.session(id)] + (summary(of: id).isEmpty ? [] : [.summary(id)])
+                + (showsSubagents(of: id) ? childRows(of: id) : [])
         }
         outline.reloadData()
         applySelectionToOutline(keeping: picked)
         updateEmptyState()
+        refreshRowFills()
     }
 
     /// The session the detail shows (the controller's selection).
@@ -886,6 +910,11 @@ final class SidebarListController: NSViewController {
     @objc private func rowClicked() {
         let row = outline.clickedRow
         let modifiers = NSApp.currentEvent?.modifierFlags ?? []
+        // The subagents row isn't picked: a click shows or hides its rows.
+        if let id = summarySession(atRow: row) {
+            guard modifiers.isDisjoint(with: [.command, .shift]) else { return }
+            return Self.afterEvent { [weak self] in self?.summaryClicked(id) }
+        }
         guard modifiers.isDisjoint(with: [.command, .shift]), outline.selectedRowIndexes.contains(row) else { return }
         if let info = subagent(atRow: row) {
             controller.selection = .session(info.sessionID)
@@ -997,14 +1026,7 @@ final class SidebarListController: NSViewController {
         host.focus()
     }
 
-    /// Open the Sandshell log in Console.app (normal click), the sbx daemon log
-    /// in Console.app (⌃ click), or the live status debug window (⌥ click).
-    @objc func openConsole() {
-        let flags = NSApp.currentEvent?.modifierFlags ?? []
-        if flags.contains(.option) { openStatusDebugWindow(); return }
-        if flags.contains(.control) { openDaemonLog(); return }
-        openSandshellLog()
-    }
+    // Help ▸ Show Sandshell Log / Show sbx Daemon Log / Status Debug Window.
 
     func openSandshellLog() { openInConsole(Log.fileURL) }
 
@@ -1047,7 +1069,7 @@ final class SidebarListController: NSViewController {
         statusDebugWindow = nil
     }
 
-    /// Present the per-root settings inspector (gear next to Search, and ⌘,) as a
+    /// Present the per-root settings inspector (⌘, and the app menu) as a
     /// native macOS sheet — a fixed-size SwiftUI view; Close or Esc dismisses it.
     /// No-op if a sheet is already up (so ⌘, doesn't stack inspectors).
     @objc func presentInspector() { presentInspector(pane: nil) }
@@ -1085,7 +1107,7 @@ final class SidebarListController: NSViewController {
     /// Shared "+ New Session" menu content. The top items are actions —
     /// New Claude / New Codex / New Shell in the current context's folder,
     /// plus shells joining an agent's sandbox — then "In Folder ▸" for picking
-    /// (or adding) another working directory, then Search.
+    /// (or adding) another working directory. (Search is the sidebar's field.)
     private func newSessionMenuItems() -> [NSMenuItem] {
         var items: [NSMenuItem] = []
         let defaultFolder = currentContextFolderID()
@@ -1098,9 +1120,6 @@ final class SidebarListController: NSViewController {
             items.append(.separator())
         }
         items.append(NSMenuItem("In Folder", symbol: "folder", submenu: folderSubmenuItems()))
-        items.append(.separator())
-        items.append(NSMenuItem("Search Sessions…", action: #selector(showSearchFromMenu(_:)), target: self,
-                                symbol: "magnifyingglass", object: defaultFolder))
         return items
     }
 
@@ -1177,14 +1196,6 @@ final class SidebarListController: NSViewController {
             applySelectionToOutline()
         }
     }
-
-    /// Open the Search window (open sessions + restorable past conversations).
-    @objc private func showSearchFromMenu(_ sender: NSMenuItem) {
-        onShowSearch?(sender.representedObject as? UUID)
-    }
-
-    /// Search from the footer button (restores route purely by the conversation's cwd).
-    @objc private func searchClicked() { onShowSearch?(nil) }
 
     /// Delete in the list closes the session rows picked there, and only those.
     /// Nothing picked (the filter hides the shown session) or only subagent
@@ -1274,6 +1285,24 @@ final class SidebarListController: NSViewController {
     func debugCell(_ id: UUID) -> SessionCellView? {
         row(of: id).flatMap { outline.view(atColumn: 0, row: $0, makeIfNecessary: true) as? SessionCellView }
     }
+    /// A session's subagents row, when it has one.
+    func debugSummaryCell(_ id: UUID) -> SubagentSummaryCellView? {
+        rows.firstIndex(of: .summary(id)).flatMap { outline.view(atColumn: 0, row: $0, makeIfNecessary: true) as? SubagentSummaryCellView }
+    }
+    func debugRowView(_ id: UUID) -> SidebarRowView? {
+        row(of: id).flatMap { outline.rowView(atRow: $0, makeIfNecessary: true) as? SidebarRowView }
+    }
+    func debugRowHeight(_ id: UUID) -> CGFloat? { row(of: id).map { outline.rect(ofRow: $0).height } }
+    /// Click the subagents row (as a click would, once the event is over).
+    func debugClickSummary(_ id: UUID) { summaryClicked(id) }
+    var debugPalette: SidebarPalette { palette }
+    var debugSearchHint: String? { searchField.hintText }
+    var debugFooterText: String { footer.text }
+    func debugOpenFooterPopover() -> Bool {
+        footerClicked()
+        return footerPopover?.isShown == true
+    }
+    func debugCloseFooterPopover() { footerPopover?.close(); footerPopover = nil }
     #endif
 
     private func pasteboardText(_ ids: [UUID]) -> String {
@@ -1441,7 +1470,8 @@ final class SidebarListController: NSViewController {
         NSPasteboard.general.setString(pasteboardText(ids), forType: .string)
     }
 
-    fileprivate func closeSessionFromRow(_ id: UUID) { controller.closeSession(id) }
+    /// A row's close button.
+    func closeSessionFromRow(_ id: UUID) { controller.closeSession(id) }
 }
 
 // MARK: - Data source
@@ -1504,41 +1534,56 @@ extension SidebarListController: NSTableViewDataSource {
 
 extension SidebarListController: NSTableViewDelegate {
     func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
-        SidebarRowView(theme: sidebarTheme, drawsSelection: true)
+        let view = SidebarRowView(palette: palette)
+        let id = rows.indices.contains(row) ? rows[row].sessionID : nil
+        if sessionID(atRow: row) != nil {
+            // A fork listed under its source: on the rail, indented.
+            let nested = id.map(nestedForkIDs.contains) ?? false
+            view.indent = nested ? SidebarMetrics.childIndent : 0
+            view.drawsRail = nested
+            view.isOpenElsewhere = id.map(sessionsOpenElsewhere.contains) ?? false
+        } else {
+            // The subagents row and the rows it opens hang from the rail too.
+            view.indent = SidebarMetrics.childIndent
+            view.drawsRail = true
+        }
+        return view
     }
 
-    func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat { parentSession(ofRow: row) == nil ? 50 : 34 }
+    /// The density, read once per reload's worth of rows.
+    private var density: SidebarDensity { SidebarDensity.current }
+
+    func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
+        if summarySession(atRow: row) != nil { return SidebarMetrics.summaryRowHeight }
+        guard let id = sessionID(atRow: row) else { return SidebarMetrics.childRowHeight }
+        return density.sessionRowHeight(showsInstruction: instruction(id) != nil && density == .comfortable)
+    }
+
+    /// A row's first instruction, when its title isn't it.
+    private func instruction(_ id: UUID) -> String? {
+        guard let s = controller.session(id: id) else { return nil }
+        return SessionRowStatus.instruction(displayName: controller.displayName(of: s), firstPrompt: s.firstPrompt)
+    }
+
+    /// The subagents row isn't picked (a click toggles what it sums up).
+    func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool { summarySession(atRow: row) == nil }
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
-        if let parent = parentSession(ofRow: row) {
-            let last = parentSession(ofRow: row + 1) != parent
-            if let info = subagent(atRow: row) { return SubagentCellView(info, isLast: last, theme: sidebarTheme) }
-            if let wf = workflow(atRow: row) {
-                let task = controller.backgroundTasks[wf.session]?.first { $0.runID == wf.run.id }
-                return SubagentCellView(workflow: wf.run, task: task, isLast: last, theme: sidebarTheme)
-            }
+        let palette = self.palette
+        if let id = summarySession(atRow: row) {
+            return SubagentSummaryCellView(summary(of: id), expanded: childRowsShown(of: id), palette: palette)
         }
-        guard let id = sessionID(atRow: row) else { return nil }
-        let cell = SessionCellView(owner: self)
+        if let info = subagent(atRow: row) { return SubagentCellView(info, palette: palette) }
+        if let wf = workflow(atRow: row) {
+            let task = controller.backgroundTasks[wf.session]?.first { $0.runID == wf.run.id }
+            return SubagentCellView(workflow: wf.run, task: task, palette: palette)
+        }
+        guard let id = sessionID(atRow: row), let session = controller.session(id: id) else { return nil }
+        let cell = SessionCellView(owner: self, palette: palette)
         cell.sessionID = id
-        if let session = controller.session(id: id) {
-            cell.configure(
-                session,
-                name: controller.displayName(of: session),
-                runtime: controller.runtime(id),
-                unread: controller.runtime(id)?.isUnread ?? false,
-                active: isActive(id),
-                theme: sidebarTheme,
-                workdirName: workdirName(for: session),
-                backgroundCount: controller.runningBackgroundTasks(id))
-            if childCount(of: id) > 0 {
-                // What the list shows now (whether they should show changes with the selection).
-                cell.showDisclosure(expanded: childRowsShown(of: id), count: childCount(of: id)) { [weak self] in
-                    guard let self else { return }
-                    self.setShowsSubagents(!self.childRowsShown(of: id), of: id)
-                }
-            }
-        }
+        cell.configure(session, name: controller.displayName(of: session), instruction: instruction(id),
+                       density: density, nested: nestedForkIDs.contains(id), status: status(id), time: timeText(id),
+                       selected: isSelected(id), live: controller.runtime(id)?.isLive == true)
         return cell
     }
 
@@ -1586,656 +1631,12 @@ extension SidebarListController: NSTableViewDelegate {
     }
 }
 
-extension SidebarSearchField: NSTextFieldDelegate {
-    func controlTextDidChange(_ obj: Notification) { onChange?(field.stringValue) }
-
-    func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
-        switch selector {
-        case #selector(NSResponder.cancelOperation(_:)):
-            if field.stringValue.isEmpty { onMoveDown?() } else { clear() }
-            return true
-        case #selector(NSResponder.moveDown(_:)), #selector(NSResponder.insertNewline(_:)):
-            onMoveDown?()
-            return true
-        default: return false
-        }
-    }
-}
-
-// MARK: - Cell views
-
-final class SidebarRowView: NSTableRowView {
-    private var theme: ThemeColors
-    private let drawsSelection: Bool
-    private var tracking: NSTrackingArea?
-
-    init(theme: ThemeColors, drawsSelection: Bool) {
-        self.theme = theme
-        self.drawsSelection = drawsSelection
-        super.init(frame: .zero)
-    }
-    @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
-
-    // All row fills are drawn here so a hover tint can layer on top of the
-    // selection. Hover is computed live from the real pointer location (state
-    // tracked via enter/exit goes stale across the frequent in-place row
-    // updates, which left several rows looking hovered at once).
-    override func drawSelection(in dirtyRect: NSRect) {}
-
-    private var isHovered: Bool {
-        guard let window, window.isKeyWindow else { return false }
-        return bounds.contains(convert(window.mouseLocationOutsideOfEventStream, from: nil))
-    }
-
-    override func drawBackground(in dirtyRect: NSRect) {
-        super.drawBackground(in: dirtyRect)
-        let path = NSBezierPath(roundedRect: bounds.insetBy(dx: 8, dy: 2), xRadius: 9, yRadius: 9)
-        let selected = drawsSelection && isSelected
-        if selected {
-            // Vivid in the focused list of the key window, muted otherwise.
-            let focused = window?.isKeyWindow == true && (superview as? NSTableView).map { window?.firstResponder === $0 } ?? false
-            let fill = theme.isDark ? NSColor.white(focused ? 0.10 : 0.06) : theme.selection
-            (focused || theme.isDark ? fill : fill.withAlphaComponent(0.55)).setFill()
-            path.fill()
-        }
-        if isHovered {
-            if selected {
-                (theme.isDark ? NSColor.white(0.06) : NSColor.black.withAlphaComponent(0.045)).setFill()
-            } else {
-                theme.sidebarHover.setFill()
-            }
-            path.fill()
-        }
-    }
-
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        if let tracking { removeTrackingArea(tracking) }
-        let area = NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .mouseMoved,
-                                                          .activeInActiveApp, .inVisibleRect],
-                                  owner: self, userInfo: nil)
-        addTrackingArea(area)
-        tracking = area
-        needsDisplay = true
-    }
-
-    // Enter/exit/move just trigger a redraw; drawBackground decides hover live.
-    override func mouseEntered(with event: NSEvent) { needsDisplay = true }
-    override func mouseExited(with event: NSEvent) { needsDisplay = true }
-    override func mouseMoved(with event: NSEvent) { needsDisplay = true }
-}
-
-/// A rounded search field with a leading magnifier, built from a borderless
-/// text field so its padding and vertical centering are fully under our control
-/// (NSSearchField's bezel renders inconsistently when unstyled).
-final class SidebarSearchField: NSView {
-    private let field = NSTextField()
-    private let icon = NSImageView()
-    var onChange: ((String) -> Void)?
-
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        wantsLayer = true
-        layer?.cornerRadius = 9
-
-        icon.translatesAutoresizingMaskIntoConstraints = false
-        icon.image = NSImage(systemSymbolName: "magnifyingglass", accessibilityDescription: nil)
-        icon.imageScaling = .scaleProportionallyUpOrDown
-        icon.symbolConfiguration = .role(.meta)
-
-        field.translatesAutoresizingMaskIntoConstraints = false
-        field.isBordered = false
-        field.drawsBackground = false
-        field.focusRingType = .none
-        field.font = .role(.body)
-        field.lineBreakMode = .byTruncatingTail
-        field.usesSingleLineMode = true
-        field.cell?.usesSingleLineMode = true
-        field.delegate = self
-        field.setAccessibilityLabel("Filter sessions")
-
-        addSubview(icon)
-        addSubview(field)
-        NSLayoutConstraint.activate([
-            heightAnchor.constraint(equalToConstant: 32),
-            icon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 11),
-            icon.centerYAnchor.constraint(equalTo: centerYAnchor),
-            icon.widthAnchor.constraint(equalToConstant: 14),
-            icon.heightAnchor.constraint(equalToConstant: 14),
-            field.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 7),
-            field.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
-            field.centerYAnchor.constraint(equalTo: centerYAnchor),
-        ])
-    }
-    @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
-
-    /// ↓ / Return from the field: into the list.
-    var onMoveDown: (() -> Void)?
-
-    func focus() { window?.makeFirstResponder(field) }
-
-    /// Empty it: every session shows again.
-    func clear() {
-        field.stringValue = ""
-        onChange?("")
-    }
-
-    #if DEBUG
-    /// As if typed (one keystroke's change).
-    func debugSetText(_ text: String) {
-        field.stringValue = text
-        controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: field))
-    }
-    #endif
-
-    func style(bg: NSColor, fg: NSColor, muted: NSColor) {
-        layer?.backgroundColor = bg.cgColor
-        icon.contentTintColor = muted
-        field.textColor = fg
-        field.placeholderAttributedString = NSAttributedString(
-            string: "Search sessions",
-            attributes: [.foregroundColor: muted, .font: NSFont.role(.body)])
-    }
-}
-
-final class WorkingSweepView: NSView {
-    private let trackLayer = CALayer()
-    private let pillLayer = CALayer()
-    private static let green = NSColor.sessionWorking
-
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        translatesAutoresizingMaskIntoConstraints = false
-        wantsLayer = true
-        layer?.addSublayer(trackLayer)
-        trackLayer.addSublayer(pillLayer)
-        applyColors()
-    }
-    @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
-
-    override func layout() {
-        super.layout()
-        trackLayer.frame = bounds
-        trackLayer.cornerRadius = bounds.height / 2
-        pillLayer.frame = CGRect(x: 0, y: 0, width: 7, height: bounds.height)
-        pillLayer.cornerRadius = bounds.height / 2
-        if !isHidden { startAnimating() }
-    }
-
-    // Re-color layers and restart the animation when the sidebar switches
-    // between light and dark. Without this the 22%-alpha green track becomes
-    // invisible on a white sidebar background (light mode), and any in-flight
-    // CABasicAnimation that was paused during the appearance transition stays dead.
-    override func viewDidChangeEffectiveAppearance() {
-        super.viewDidChangeEffectiveAppearance()
-        applyColors()
-        if !isHidden {
-            pillLayer.removeAnimation(forKey: "sweep")
-            startAnimating()
-        }
-    }
-
-    private func applyColors() {
-        let dark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        effectiveAppearance.performAsCurrentDrawingAppearance {
-            self.trackLayer.backgroundColor = Self.green.withAlphaComponent(dark ? 0.22 : 0.35).cgColor
-            self.pillLayer.backgroundColor = Self.green.cgColor
-        }
-    }
-
-    func startAnimating() {
-        guard window != nil, bounds.width > 7 else { return }
-        // Reduce Motion: a still pill in the middle of the track.
-        if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
-            pillLayer.removeAnimation(forKey: "sweep")
-            pillLayer.position = CGPoint(x: bounds.midX, y: bounds.midY)
-            return
-        }
-        if pillLayer.animation(forKey: "sweep") != nil { return }
-        let animation = CABasicAnimation(keyPath: "position.x")
-        animation.fromValue = 3.5
-        animation.toValue = bounds.width - 3.5
-        animation.duration = 0.85
-        animation.autoreverses = true
-        animation.repeatCount = .infinity
-        animation.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-        pillLayer.position = CGPoint(x: 3.5, y: bounds.midY)
-        pillLayer.add(animation, forKey: "sweep")
-    }
-
-    func stopAnimating() {
-        pillLayer.removeAnimation(forKey: "sweep")
-    }
-
-    override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        window == nil ? stopAnimating() : startAnimating()
-    }
-}
-
-final class SessionCellView: NSTableCellView {
-    var sessionID: UUID?
-    private weak var owner: SidebarListController?
-    // Smaller icon and no separate leading rail — reclaims width for text
-    // (title on its own line, metadata line below it). The working/ready
-    // indicator lives inline at the start of that metadata line instead of a
-    // dedicated column, so it reads as "below the title" rather than beside it.
-    private let badge = AgentBadgeView(side: 22, fontSize: 10, radius: 6)
-    private let statusSlot = NSView()
-    private let workingView = WorkingSweepView()
-    private let statusDot = NSView()
-    private let timeLabel = NSTextField(labelWithString: "")
-    private let nameLabel = NSTextField(labelWithString: "")
-    private let subLabel = NSTextField(labelWithString: "")
-    private let closeButton = NSButton()
-    private var tracking: NSTrackingArea?
-    private var agentLabel = ""
-    private var workdirName: String?
-    /// The session's last turn before this run (`Session.lastActiveAt`).
-    private var lastActive: Date?
-    private var accent: NSColor = .controlAccentColor
-
-    init(owner: SidebarListController) {
-        self.owner = owner
-        super.init(frame: .zero)
-
-        nameLabel.translatesAutoresizingMaskIntoConstraints = false
-        nameLabel.lineBreakMode = .byTruncatingTail
-        nameLabel.font = .role(.bodyEmphasis)
-        subLabel.translatesAutoresizingMaskIntoConstraints = false
-        subLabel.font = .role(.meta)
-        subLabel.textColor = .secondaryLabelColor
-        subLabel.lineBreakMode = .byTruncatingTail
-
-        // Working sweep OR an accent ready-dot, plus the live work-time —
-        // shown inline before the rest of the metadata, not in their own column.
-        statusSlot.translatesAutoresizingMaskIntoConstraints = false
-        statusDot.translatesAutoresizingMaskIntoConstraints = false
-        statusDot.wantsLayer = true
-        statusDot.layer?.cornerRadius = 3
-        workingView.isHidden = true
-        statusSlot.addSubview(workingView)
-        statusSlot.addSubview(statusDot)
-        timeLabel.translatesAutoresizingMaskIntoConstraints = false
-        timeLabel.font = .role(.code)
-        timeLabel.textColor = .secondaryLabelColor
-
-        disclosure.isBordered = false
-        disclosure.imagePosition = .imageLeading
-        disclosure.font = .role(.code)
-        disclosure.target = self
-        disclosure.action = #selector(disclosureClicked)
-        disclosure.isHidden = true
-        disclosure.setContentHuggingPriority(.required, for: .horizontal)
-        disclosure.setContentCompressionResistancePriority(.required, for: .horizontal)
-        subLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        let metaRow = NSStackView(views: [statusSlot, timeLabel, subLabel, disclosure])
-        metaRow.orientation = .horizontal
-        metaRow.alignment = .centerY
-        metaRow.spacing = 5
-        metaRow.translatesAutoresizingMaskIntoConstraints = false
-
-        let text = NSStackView(views: [nameLabel, metaRow])
-        text.orientation = .vertical
-        text.alignment = .leading
-        text.spacing = 3
-        text.translatesAutoresizingMaskIntoConstraints = false
-
-        closeButton.translatesAutoresizingMaskIntoConstraints = false
-        closeButton.isBordered = false
-        closeButton.image = NSImage(systemSymbolName: "xmark.circle.fill", accessibilityDescription: "Close")
-        closeButton.imagePosition = .imageOnly
-        closeButton.contentTintColor = .tertiaryLabelColor
-        closeButton.target = self
-        closeButton.action = #selector(closeClicked)
-        closeButton.isHidden = true
-
-        addSubview(badge)
-        addSubview(text)
-        addSubview(closeButton)
-        NSLayoutConstraint.activate([
-            statusSlot.widthAnchor.constraint(equalToConstant: 12),
-            statusSlot.heightAnchor.constraint(equalToConstant: 10),
-            workingView.centerXAnchor.constraint(equalTo: statusSlot.centerXAnchor),
-            workingView.centerYAnchor.constraint(equalTo: statusSlot.centerYAnchor),
-            workingView.widthAnchor.constraint(equalToConstant: 12),
-            workingView.heightAnchor.constraint(equalToConstant: 4),
-            statusDot.centerXAnchor.constraint(equalTo: statusSlot.centerXAnchor),
-            statusDot.centerYAnchor.constraint(equalTo: statusSlot.centerYAnchor),
-            statusDot.widthAnchor.constraint(equalToConstant: 6),
-            statusDot.heightAnchor.constraint(equalToConstant: 6),
-
-            badge.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
-            badge.centerYAnchor.constraint(equalTo: centerYAnchor),
-            // Name/meta span the full width (just a little trailing padding).
-            text.leadingAnchor.constraint(equalTo: badge.trailingAnchor, constant: 9),
-            text.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
-            text.centerYAnchor.constraint(equalTo: centerYAnchor),
-            closeButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
-            closeButton.centerYAnchor.constraint(equalTo: centerYAnchor),
-            closeButton.widthAnchor.constraint(equalToConstant: 16),
-        ])
-    }
-    @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
-
-    private var fg: NSColor = .labelColor
-
-    /// Full (re)configure — identity + colors + active-ness, then the runtime bits.
-    /// `active` (selected or has a running terminal) drives the emphasized name.
-    /// `workdirName` (nil for the root folder) shows as a subtitle segment so
-    /// sessions still read their working directory now that there are no
-    /// folder rows to group them under.
-    /// Background tasks (subagents, background commands) the session has running.
-    var backgroundRunning = 0
-
-    func configure(_ session: Session, name: String, runtime: SessionRuntime?, unread: Bool, active: Bool,
-                   theme: ThemeColors, workdirName: String?, backgroundCount: Int = 0) {
-        agentLabel = session.agent.displayName
-        self.workdirName = workdirName
-        lastActive = session.lastActiveAt
-        accent = theme.accent
-        fg = theme.sidebarFg
-        badge.configure(session.agent)
-        nameLabel.stringValue = name
-        backgroundRunning = backgroundCount
-        setActive(active)
-        subLabel.textColor = theme.sidebarMuted
-        timeLabel.textColor = theme.sidebarMuted
-        closeButton.contentTintColor = theme.sidebarMuted.withAlphaComponent(0.75)
-        updateRuntime(runtime, unread: unread)
-    }
-
-    /// Active (selected/live) sessions are emphasized; inactive ones are regular
-    /// weight and dimmed so they clearly read as not-running. Applied in place so
-    /// clicking a session bolds it immediately (before its terminal launches).
-    func setActive(_ active: Bool) {
-        nameLabel.font = .role(active ? .bodyEmphasis : .body)
-        let contrast = NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
-        nameLabel.textColor = active || contrast ? fg : fg.withAlphaComponent(0.55)
-    }
-
-    /// Update the runtime-driven bits (left-rail sweep/dot + time, subline) in
-    /// place — no cell rebuild, so frequent polls don't churn the row.
-    func updateRuntime(_ runtime: SessionRuntime?, unread: Bool) {
-        var parts = [agentLabel]
-        if let workdirName { parts.append(workdirName) }
-        let work = runtime.flatMap { compactWorkTime($0.liveWorkSeconds()) }
-        switch runtime?.stoppedReason == nil ? runtime?.status : nil {
-        case .working where runtime?.isWaiting == true:
-            // Waiting on you (a question or a permission): no sweep, an orange dot.
-            workingView.stopAnimating()
-            workingView.isHidden = true
-            statusDot.layer?.backgroundColor = NSColor.systemOrange.cgColor
-            statusDot.isHidden = false
-            timeLabel.isHidden = true
-            parts.append("Waiting for you")
-        case .working:
-            workingView.isHidden = false
-            workingView.startAnimating()
-            statusDot.isHidden = true
-            timeLabel.stringValue = work ?? ""
-            timeLabel.isHidden = (work == nil)
-            parts.append("Working")
-        case .ready:
-            workingView.stopAnimating()
-            workingView.isHidden = true
-            statusDot.layer?.backgroundColor = accent.cgColor
-            statusDot.isHidden = !unread       // accent dot only when ready + unseen
-            timeLabel.isHidden = true
-            parts.append((runtime?.lastActivityAt ?? lastActive).map { relativeActivity($0) } ?? "Ready")
-            if unread { parts.append("New") }   // not just the dot's colour
-        default:
-            workingView.stopAnimating()
-            workingView.isHidden = true
-            statusDot.isHidden = true
-            timeLabel.isHidden = true
-            // Not run since the app opened: when it last was.
-            if runtime == nil, let lastActive { parts.append(relativeActivity(lastActive)) }
-        }
-        if runtime?.stoppedReason != nil { parts.append("Stopped") }
-        if backgroundRunning > 0 { parts.append("\(backgroundRunning) in background") }
-        subLabel.stringValue = parts.joined(separator: " · ")
-        subLabel.toolTip = runtime?.stoppedReason
-    }
-
-    private func syncHover() {
-        guard let window, window.isKeyWindow else { closeButton.isHidden = true; return }
-        closeButton.isHidden = !bounds.contains(convert(window.mouseLocationOutsideOfEventStream, from: nil))
-    }
-
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        if let tracking { removeTrackingArea(tracking) }
-        let area = NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .mouseMoved,
-                                                          .activeInActiveApp, .inVisibleRect],
-                                  owner: self, userInfo: nil)
-        addTrackingArea(area)
-        tracking = area
-        syncHover()   // recompute from the real pointer; never leaves it stale
-    }
-    override func mouseEntered(with event: NSEvent) { syncHover() }
-    override func mouseExited(with event: NSEvent) { syncHover() }
-    override func mouseMoved(with event: NSEvent) { syncHover() }
-
-    @objc private func closeClicked() { if let sessionID { owner?.closeSessionFromRow(sessionID) } }
-
-    // MARK: Subagents
-
-    private let disclosure = NSButton()
-    private var onDisclosure: (() -> Void)?
-
-    /// "▸ 3 subagents": shows or hides them under the row.
-    func showDisclosure(expanded: Bool, count: Int, toggle: @escaping () -> Void) {
-        onDisclosure = toggle
-        disclosure.isHidden = false
-        disclosure.image = NSImage(systemSymbolName: expanded ? "chevron.down" : "chevron.right", accessibilityDescription: nil)?
-            .withSymbolConfiguration(.role(.meta, weight: .semibold))
-        // Just the count: the status beside it keeps its room.
-        let words = "\(count) subagent\(count == 1 ? "" : "s")"
-        disclosure.contentTintColor = subLabel.textColor
-        disclosure.attributedTitle = NSAttributedString(string: "\(count)", attributes: [
-            .font: NSFont.role(.code), .foregroundColor: subLabel.textColor ?? .secondaryLabelColor])
-        disclosure.toolTip = "\(expanded ? "Hide" : "Show") \(words)"
-        disclosure.setAccessibilityLabel(disclosure.toolTip)
-    }
-
-    @objc private func disclosureClicked() { onDisclosure?() }
-
-    // MARK: Inline rename
-
-    private var renameDone: ((String?) -> Void)?
-    private var nameBeforeRename = ""
-
-    /// Its name is being edited.
-    var isRenaming: Bool { renameDone != nil && nameLabel.currentEditor() != nil }
-
-    /// Edit the name in place: Return keeps it, Esc puts the old one back.
-    /// False when it can't take focus (not on screen): nothing is left editable.
-    func beginRenaming(_ done: @escaping (String?) -> Void) -> Bool {
-        renameDone = done
-        nameBeforeRename = nameLabel.stringValue
-        nameLabel.isEditable = true
-        nameLabel.isSelectable = true
-        nameLabel.delegate = self
-        guard window?.makeFirstResponder(nameLabel) == true else {
-            renameDone = nil
-            nameLabel.isEditable = false
-            nameLabel.isSelectable = false
-            return false
-        }
-        nameLabel.currentEditor()?.selectAll(nil)
-        return true
-    }
-
-    /// `name` nil: cancelled. Committing it unchanged counts as cancelling (it
-    /// would pin the automatic name and add an Undo step).
-    private func finishRenaming(_ name: String?) {
-        guard let done = renameDone else { return }
-        renameDone = nil
-        nameLabel.isEditable = false
-        nameLabel.isSelectable = false
-        if name == nil { nameLabel.stringValue = nameBeforeRename }
-        done(name == nameBeforeRename ? nil : name)
-    }
-
-    #if DEBUG
-    var debugName: String { nameLabel.stringValue }
-    func debugFinishRenaming(_ name: String?) {
-        if let name { nameLabel.stringValue = name }
-        finishRenaming(name)
-    }
-    #endif
-}
-
-extension SessionCellView: NSTextFieldDelegate {
-    func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
-        guard selector == #selector(NSResponder.cancelOperation(_:)) else { return false }
-        finishRenaming(nil)
-        return true
-    }
-
-    func controlTextDidEndEditing(_ obj: Notification) { finishRenaming(nameLabel.stringValue) }
-}
 
 /// Coarse relative time for the session subline: "just now" → "2m ago" → "3h ago".
 func relativeActivity(_ date: Date, now: Date = .now) -> String { Format.ago(date, now: now) }
 func compactWorkTime(_ seconds: TimeInterval) -> String? { Format.compactWorkTime(seconds) }
 func formatWorkTime(_ seconds: TimeInterval) -> String { Format.workTime(seconds) }
 
-final class SidebarIconButton: NSControl {
-    private let imageView = NSImageView()
-
-    var contentTintColor: NSColor = .labelColor {
-        didSet { imageView.contentTintColor = contentTintColor }
-    }
-
-    /// Resting + hover fills, set by the theme. Swapped on mouse enter/exit.
-    var restingBackgroundColor: NSColor = .clear {
-        didSet { if !hovering { layer?.backgroundColor = restingBackgroundColor.cgColor } }
-    }
-    var hoverBackgroundColor: NSColor = .clear {
-        didSet { if hovering { layer?.backgroundColor = hoverBackgroundColor.cgColor } }
-    }
-    private var hovering = false
-
-    init(symbolName: String, pointSize: CGFloat, accessibilityDescription: String) {
-        super.init(frame: .zero)
-        wantsLayer = true
-        layer?.cornerRadius = 9
-        layer?.masksToBounds = true
-        setAccessibilityElement(true)   // a custom NSControl isn't one by default
-        setAccessibilityRole(.button)
-        setAccessibilityLabel(accessibilityDescription)
-
-        imageView.translatesAutoresizingMaskIntoConstraints = false
-        imageView.image = NSImage(systemSymbolName: symbolName, accessibilityDescription: accessibilityDescription)?
-            .withSymbolConfiguration(.init(pointSize: pointSize, weight: .regular))
-        imageView.image?.isTemplate = true
-        imageView.imageScaling = .scaleNone
-        imageView.contentTintColor = contentTintColor
-        addSubview(imageView)
-
-        NSLayoutConstraint.activate([
-            imageView.centerXAnchor.constraint(equalTo: centerXAnchor),
-            imageView.centerYAnchor.constraint(equalTo: centerYAnchor),
-            imageView.widthAnchor.constraint(equalToConstant: 16),
-            imageView.heightAnchor.constraint(equalToConstant: 16),
-        ])
-    }
-
-    @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
-
-    override var isEnabled: Bool {
-        didSet { alphaValue = isEnabled ? 1.0 : 0.4 }
-    }
-
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        trackingAreas.forEach(removeTrackingArea)
-        addTrackingArea(NSTrackingArea(
-            rect: bounds, options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
-            owner: self))
-    }
-
-    override func mouseEntered(with event: NSEvent) {
-        guard isEnabled else { return }
-        hovering = true
-        layer?.backgroundColor = hoverBackgroundColor.cgColor
-    }
-
-    override func mouseExited(with event: NSEvent) {
-        hovering = false
-        layer?.backgroundColor = restingBackgroundColor.cgColor
-    }
-
-    override func mouseDown(with event: NSEvent) {
-        guard isEnabled else { return }
-        sendAction(action, to: target)
-    }
-
-    override func resetCursorRects() {
-        addCursorRect(bounds, cursor: .pointingHand)
-    }
-
-    override func accessibilityPerformPress() -> Bool {
-        sendAction(action, to: target)
-    }
-}
-
-/// An `NSButton` with a resting/hover background swap (the footer Search pill).
-final class HoverButton: NSButton {
-    var restingBackgroundColor: NSColor = .clear {
-        didSet { if !hovering { layer?.backgroundColor = restingBackgroundColor.cgColor } }
-    }
-    var hoverBackgroundColor: NSColor = .clear {
-        didSet { if hovering { layer?.backgroundColor = hoverBackgroundColor.cgColor } }
-    }
-    private var hovering = false
-
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        trackingAreas.forEach(removeTrackingArea)
-        addTrackingArea(NSTrackingArea(
-            rect: bounds, options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
-            owner: self))
-    }
-
-    override func mouseEntered(with event: NSEvent) {
-        guard isEnabled else { return }
-        hovering = true
-        layer?.backgroundColor = hoverBackgroundColor.cgColor
-    }
-
-    override func mouseExited(with event: NSEvent) {
-        hovering = false
-        layer?.backgroundColor = restingBackgroundColor.cgColor
-    }
-
-    override func resetCursorRects() {
-        addCursorRect(bounds, cursor: .pointingHand)
-    }
-}
-
-/// The sidebar header (app mark + workspace identity + chevron). A click
-/// anywhere pops the workspace-folder switcher menu.
-final class SidebarHeaderView: NSStackView {
-    var onClick: (() -> Void)?
-
-    override func mouseDown(with event: NSEvent) { onClick?() }
-
-    // A button to VoiceOver and Full Keyboard Access: it opens the workspace menu.
-    override func isAccessibilityElement() -> Bool { true }
-    override func accessibilityRole() -> NSAccessibility.Role? { .popUpButton }
-    override func accessibilityLabel() -> String? {
-        "Workspace: " + (arrangedSubviews.compactMap { ($0 as? NSTextField)?.stringValue }.first ?? "")
-    }
-    override func accessibilityPerformPress() -> Bool { onClick?(); return true }
-    override func accessibilityPerformShowMenu() -> Bool { onClick?(); return true }
-
-    override func resetCursorRects() {
-        addCursorRect(bounds, cursor: .pointingHand)
-    }
-}
 
 extension SidebarListController: NSMenuItemValidation {
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
@@ -2272,106 +1673,4 @@ extension WorkflowRun {
     }
 }
 
-/// A subagent under its session: tree line, what it's doing, its state.
-final class SubagentCellView: NSTableCellView {
-    private let isLast: Bool
-    private let lineColor: NSColor
-
-    convenience init(_ info: SubagentInfo, isLast: Bool, theme: ThemeColors) {
-        let state = switch info.state {
-        case .running: "Working"
-        case .done: Format.ago(info.lastWrite)
-        case .failed: "Failed"
-        case .stopped: "Stopped"
-        }
-        self.init(title: info.title, subtitle: [info.agentType, state].compactMap { $0 }.joined(separator: " · "),
-                  running: info.isRunning, failed: info.state == .failed, isLast: isLast, theme: theme,
-                  accessibility: "Subagent: \(info.title), \(state)")
-    }
-
-    /// A workflow under its session: its name, and where it's got to.
-    convenience init(workflow run: WorkflowRun, task: BackgroundTask?, isLast: Bool, theme: ThemeColors) {
-        let running = task.map(\.isRunning) ?? !run.agentsSettled
-        var parts = ["Workflow"]
-        if running, let phase = run.phases.last(where: { run.progress(of: $0).total > 0 }) {
-            let p = run.progress(of: phase)
-            parts.append("\(phase.title) \(p.done)/\(p.total)")
-        } else if let last = run.lastWrite {
-            parts.append(task?.state == .failed ? "Failed" : Format.ago(last))
-        }
-        parts.append("\(run.agents.count) agents")
-        self.init(title: run.name, subtitle: parts.joined(separator: " · "), running: running,
-                  failed: task?.state == .failed, isLast: isLast, theme: theme,
-                  accessibility: "Workflow: \(run.name), \(parts.dropFirst().joined(separator: ", "))",
-                  symbol: "point.3.connected.trianglepath.dotted")
-        toolTip = run.summary ?? run.name
-    }
-
-    init(title: String, subtitle: String, running: Bool, failed: Bool, isLast: Bool, theme: ThemeColors,
-         accessibility: String, symbol: String? = nil) {
-        self.isLast = isLast
-        lineColor = theme.sidebarMuted.withAlphaComponent(0.45)
-        super.init(frame: .zero)
-        let titleLabel = NSTextField(labelWithString: title)
-        titleLabel.font = .role(.body)
-        titleLabel.textColor = theme.sidebarFg.withAlphaComponent(running ? 1 : 0.8)
-        titleLabel.lineBreakMode = .byTruncatingTail
-        let sub = NSTextField(labelWithString: subtitle)
-        sub.font = .role(.meta)
-        sub.textColor = theme.sidebarMuted
-        sub.lineBreakMode = .byTruncatingTail
-        let mark: NSView
-        if let symbol {
-            let image = NSImageView(image: NSImage(systemSymbolName: symbol, accessibilityDescription: nil) ?? NSImage())
-            image.symbolConfiguration = .role(.meta, weight: .semibold)
-
-            image.contentTintColor = running ? .sessionWorking : failed ? .systemRed : theme.sidebarMuted
-            mark = image
-        } else {
-            let dot = NSView()
-            dot.wantsLayer = true
-            dot.layer?.cornerRadius = 3
-            dot.layer?.backgroundColor = (running ? NSColor.sessionWorking
-                : failed ? .systemRed : theme.sidebarMuted.withAlphaComponent(0.5)).cgColor
-            mark = dot
-        }
-        let text = NSStackView(views: [titleLabel, sub])
-        text.orientation = .vertical
-        text.alignment = .leading
-        text.spacing = 1
-        for v in [mark, text] as [NSView] {
-            v.translatesAutoresizingMaskIntoConstraints = false
-            addSubview(v)
-        }
-        let markSize: CGFloat = symbol == nil ? 6 : 12
-        NSLayoutConstraint.activate([
-            mark.centerXAnchor.constraint(equalTo: leadingAnchor, constant: 43),
-            mark.centerYAnchor.constraint(equalTo: titleLabel.centerYAnchor),
-            mark.widthAnchor.constraint(equalToConstant: markSize),
-            mark.heightAnchor.constraint(equalToConstant: markSize),
-            text.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 53),
-            text.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -10),
-            text.centerYAnchor.constraint(equalTo: centerYAnchor),
-        ])
-        setAccessibilityElement(true)
-        setAccessibilityRole(.row)
-        setAccessibilityLabel(accessibility)
-        toolTip = title
-    }
-
-    @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
-
-    /// The tree: a line down from the session, an elbow into this row.
-    override func draw(_ dirtyRect: NSRect) {
-        lineColor.setStroke()
-        let x: CGFloat = 19, mid = bounds.midY
-        let path = NSBezierPath()
-        path.lineWidth = 1
-        path.move(to: NSPoint(x: x, y: isFlipped ? 0 : bounds.maxY))
-        path.line(to: NSPoint(x: x, y: isLast ? mid : (isFlipped ? bounds.maxY : 0)))
-        path.move(to: NSPoint(x: x, y: mid))
-        path.line(to: NSPoint(x: 34, y: mid))
-        path.stroke()
-    }
-}
 
