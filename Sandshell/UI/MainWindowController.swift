@@ -14,6 +14,8 @@ final class MainWindowController: NSWindowController {
     private var filesPane: FilesPaneController?
     private var filesItem: NSSplitViewItem?
     private var selectionObserver: AnyCancellable?
+    /// The Sandbox group follows its sandbox (running, stopped, busy).
+    private var sandboxObserver: AnyCancellable?
     /// Whether this window's Files inspector is open (per folder and window).
     private var filesVisibleKey = "filesPaneVisible"
     private var detail: PaneTreeController?
@@ -216,6 +218,11 @@ final class MainWindowController: NSWindowController {
         selectionObserver = controller.$selection.sink { [weak self] _ in
             Task { @MainActor [weak self] in self?.syncFilesRoot() }
         }
+        sandboxObserver = controller.$containerPhases.map { _ in () }
+            .merge(with: controller.$sandboxBusy.map { _ in () })
+            .sink { [weak self] in
+                Task { @MainActor [weak self] in self?.updateSandboxGroup() }
+            }
 
         window.contentViewController = split
         // Native window toolbar (identity, Sandbox group, Files); and, in
@@ -856,10 +863,14 @@ extension MainWindowController: NSToolbarDelegate {
         if let item = window?.toolbar?.items.first(where: { $0.itemIdentifier == .sandbox }), item.isHidden == anySession {
             item.isHidden = !anySession
         }
-        let focused = detail.focused?.shownSession.flatMap { workspace?.session(id: $0) }
-        sandboxActions.setSandboxName(focused.flatMap { workspace?.containerName(for: $0.containerAgentKind) })
-        sandboxActions.setEnabled(stop: detail.canPerformSessionAction(#selector(TerminalStackController.stopClicked)),
-                                  restart: detail.canPerformSessionAction(#selector(TerminalStackController.headerRestartClicked)))
+        let box = focusedSandbox
+        sandboxActions.setSandboxName(box?.name)
+        let phase = box.flatMap { workspace?.containerPhases[$0.agent] }
+        sandboxActions.setSandboxRunning(phase != .stopped)
+        // Not while it's being made or acted on, or before it exists.
+        let busy = box.map { workspace?.sandboxBusy.contains($0.name) ?? false } ?? true
+        let ready = (phase == .running || phase == .stopped) && !busy
+        sandboxActions.setEnabled(stop: ready, restart: ready)
     }
 
     /// A borderless, non-focusable symbol button for toolbar items — the
@@ -872,8 +883,42 @@ extension MainWindowController: NSToolbarDelegate {
 
     @objc private func toggleSidebarFromToolbar() { toggleSidebar() }
     /// Sandbox ▸ Stop: the focused session's process in its sandbox.
-    @objc private func stopFromToolbar() { detail?.stopClicked() }
-    /// Sandbox ▸ Restart: the focused session, started again in its sandbox.
-    @objc private func restartFromToolbar() { detail?.headerRestartClicked() }
+    @objc private func stopFromToolbar() {
+        guard let workspace, let box = focusedSandbox else { return }
+        if workspace.containerPhases[box.agent] == .stopped {
+            return workspace.startSandbox(box.name) { [weak self] in self?.restartSessions(inSandboxOf: box.agent) }
+        }
+        let live = workspace.liveSessionCount(inSandboxOf: box.agent)
+        guard live == 0 || Alerts.confirm("Stop the sandbox “\(box.name)”?",
+                                          "\(live == 1 ? "The session" : "All \(live) sessions") running in it will stop.",
+                                          confirm: "Stop Sandbox", destructive: true) else { return }
+        workspace.stopSandbox(box.name)
+    }
+    /// Sandbox ▸ Restart: the sandbox stopped and started again, then the
+    /// sessions this window shows in it.
+    @objc private func restartFromToolbar() {
+        guard let workspace, let box = focusedSandbox else { return }
+        let live = workspace.liveSessionCount(inSandboxOf: box.agent)
+        guard live == 0 || Alerts.confirm("Restart the sandbox “\(box.name)”?",
+                                          "\(live == 1 ? "The session" : "All \(live) sessions") running in it will stop; "
+                                          + "the ones in this window start again.",
+                                          confirm: "Restart Sandbox") else { return }
+        workspace.restartSandbox(box.name) { [weak self] in self?.restartSessions(inSandboxOf: box.agent) }
+    }
+
+    /// The focused session's sandbox (its container name and agent).
+    private var focusedSandbox: (name: String, agent: AgentKind)? {
+        guard let workspace, let id = detail?.focused?.shownSession, let session = workspace.session(id: id) else { return nil }
+        return (workspace.containerName(for: session.containerAgentKind), session.containerAgentKind)
+    }
+
+    /// Start again the sessions this window's panes show in `agent`'s sandbox.
+    private func restartSessions(inSandboxOf agent: AgentKind) {
+        guard let workspace, let detail else { return }
+        for pane in detail.panes {
+            guard let id = pane.shownSession, workspace.session(id: id)?.containerAgentKind == agent else { continue }
+            pane.headerRestartClicked()
+        }
+    }
 }
 

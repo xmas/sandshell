@@ -14,9 +14,10 @@ final class ChromeButton: NSButton {
         }
     }
 
-    private let symbolName: String
+    private var symbolName: String
     private let glyphConfiguration: NSImage.SymbolConfiguration
-    private let word: String
+    private var word: String
+    private var textColor = NSColor.labelColor, symbolColor = NSColor.secondaryLabelColor
     private var hovering = false { didSet { updateFill() } }
     private var hoverArea: NSTrackingArea?
     private var pressedColor = NSColor.clear
@@ -59,7 +60,20 @@ final class ChromeButton: NSButton {
     /// Square corners: a segment inside a pill (the pill rounds them).
     var isSegment = false { didSet { layer?.cornerRadius = isSegment ? 0 : 7 } }
 
+    /// Say something else (Stop ⇄ Start).
+    func set(word: String, symbol: String, toolTip: String) {
+        guard word != self.word || symbol != symbolName else { return }
+        self.word = word
+        symbolName = symbol
+        self.toolTip = toolTip
+        setAccessibilityHelp(toolTip)
+        apply(text: textColor, symbol: symbolColor, pressed: pressedColor, hover: hoverColor)
+        invalidateIntrinsicContentSize()
+    }
+
     private func apply(text: NSColor, symbol: NSColor, pressed: NSColor, hover: NSColor) {
+        textColor = text
+        symbolColor = symbol
         image = NSImage(systemSymbolName: symbolName, accessibilityDescription: nil)?
             .withSymbolConfiguration(glyphConfiguration)
         contentTintColor = symbol
@@ -98,8 +112,9 @@ final class ChromeButton: NSButton {
 }
 
 /// The title bar's Sandbox group: one bordered pill, a non-interactive label
-/// naming the focused session's sandbox, then Stop and Restart — they act on the session's process
-/// in its sandbox (stopping a chat's turn is the composer's).
+/// naming the focused session's sandbox, then Stop (Start while it's stopped)
+/// and Restart for the sandbox itself. A session's own Stop / Restart are in
+/// its pane's strip; a chat's turn stops in its composer.
 @MainActor
 final class SandboxActionsView: NSView {
     let stopButton: ChromeButton
@@ -110,11 +125,10 @@ final class SandboxActionsView: NSView {
     private let dividers = [NSView(), NSView()]
 
     init(target: AnyObject?, stop: Selector, restart: Selector) {
-        stopButton = ChromeButton("Stop", symbol: "stop.fill",
-                                  toolTip: "Stop the session’s process in the sandbox (⌘.)",
+        stopButton = ChromeButton("Stop", symbol: "stop.fill", toolTip: Self.stopTip,
                                   target: target, action: stop, id: "toolbar-sandbox-stop")
         restartButton = ChromeButton("Restart", symbol: "arrow.clockwise",
-                                     toolTip: "Restart the session in the sandbox (⌘R)",
+                                     toolTip: "Restart the sandbox (its sessions stop and start again)",
                                      target: target, action: restart, id: "toolbar-sandbox-restart")
         super.init(frame: .zero)
         stopButton.isSegment = true
@@ -193,7 +207,15 @@ final class SandboxActionsView: NSView {
 
     var debugLabel: String { labelText.stringValue }
 
-    /// Stop / Restart enabled for the focused session (both off without one).
+    private static let stopTip = "Stop the sandbox (every session in it stops)"
+
+    /// Stop while the sandbox runs, Start while it's stopped.
+    func setSandboxRunning(_ running: Bool) {
+        if running { stopButton.set(word: "Stop", symbol: "stop.fill", toolTip: Self.stopTip) }
+        else { stopButton.set(word: "Start", symbol: "play.fill", toolTip: "Start the sandbox and its sessions in this window") }
+    }
+
+    /// Stop / Restart enabled for the focused session's sandbox (both off without one).
     func setEnabled(stop: Bool, restart: Bool) {
         if stopButton.isEnabled != stop { stopButton.isEnabled = stop }
         if restartButton.isEnabled != restart { restartButton.isEnabled = restart }

@@ -585,16 +585,36 @@ final class WorkspaceController: ObservableObject {
 
     /// `sbx run` is detached: stay busy until `sbx ls` says it's running (or 30 s
     /// pass), so the row flips to Stop instead of waiting for a manual refresh.
-    func startSandbox(_ name: String) {
+    func startSandbox(_ name: String, then: (@MainActor () -> Void)? = nil) {
         sandboxAction(name) {
-            try await SbxClient.shared.start(name)
-            for _ in 0..<30 {
-                let list = (try? await SbxClient.shared.list()) ?? []
-                if list.contains(where: { $0.name == name && $0.isRunning }) { return }
-                try? await Task.sleep(for: .seconds(1))
-            }
-            throw SbxError.command("“\(name)” didn’t report running within 30 seconds — check `sbx ls`.")
+            try await Self.startAndWait(name)
+            then?()
         }
+    }
+
+    /// Stop the sandbox and start it again (the title bar's Restart); `then`
+    /// runs once it's back up — the window restarts its sessions there.
+    func restartSandbox(_ name: String, then: (@MainActor () -> Void)? = nil) {
+        sandboxAction(name) {
+            _ = try await SbxClient.shared.stop(name)
+            try await Self.startAndWait(name)
+            then?()
+        }
+    }
+
+    private static func startAndWait(_ name: String) async throws {
+        try await SbxClient.shared.start(name)
+        for _ in 0..<30 {
+            let list = (try? await SbxClient.shared.list()) ?? []
+            if list.contains(where: { $0.name == name && $0.isRunning }) { return }
+            try? await Task.sleep(for: .seconds(1))
+        }
+        throw SbxError.command("“\(name)” didn’t report running within 30 seconds — check `sbx ls`.")
+    }
+
+    /// How many sessions run in `agent`'s sandbox right now.
+    func liveSessionCount(inSandboxOf agent: AgentKind) -> Int {
+        state.sessions.filter { $0.containerAgentKind == agent && runtimes[$0.id]?.isLive == true }.count
     }
     func stopSandbox(_ name: String) { sandboxAction(name) { _ = try await SbxClient.shared.stop(name) } }
     func deleteSandbox(_ name: String) { sandboxAction(name) { _ = try await SbxClient.shared.remove(name) } }

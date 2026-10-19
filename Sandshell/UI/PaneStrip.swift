@@ -92,6 +92,9 @@ final class PaneStripView: NSView {
     var onSplitRight: (() -> Void)?
     var onSplitDown: (() -> Void)?
     var onClose: (() -> Void)?
+    /// The session's own controls: stop its process, start it again.
+    var onStopSession: (() -> Void)?
+    var onRestartSession: (() -> Void)?
 
     private let content = NSView()
     private let crumbs = NSView()
@@ -105,6 +108,9 @@ final class PaneStripView: NSView {
     private let splitRightButton = StripIconButton()
     private let splitDownButton = StripIconButton()
     private let closeButton = StripIconButton()
+    /// The session's process (a chat's turn stops in its composer).
+    private let stopSessionButton = StripIconButton()
+    private let restartSessionButton = StripIconButton()
 
     private var colors = ThemeColors.lightBase
     private var access: SandboxAccess?
@@ -153,11 +159,16 @@ final class PaneStripView: NSView {
             (splitRightButton, "rectangle.split.2x1", "Split Right (⌘D)", #selector(splitRightClicked), "pane-split-right"),
             (splitDownButton, "rectangle.split.1x2", "Split Down (⇧⌘D)", #selector(splitDownClicked), "pane-split-down"),
             (closeButton, "xmark", "Close Pane (⌥⌘W)", #selector(closeClicked), "pane-close"),
+            (stopSessionButton, "stop.fill", "Stop the Session (⌘.)", #selector(stopSessionClicked), "pane-stop-session"),
+            (restartSessionButton, "arrow.clockwise", "Restart the Session (⌘R)", #selector(restartSessionClicked),
+             "pane-restart-session"),
         ] {
             button.configureSymbol(symbol, label: tip, pointSize: Self.controlSymbol, weight: .regular, tint: nil,
                                    target: self, action: action, id: id)
             content.addSubview(button)
         }
+        stopSessionButton.isHidden = true
+        restartSessionButton.isHidden = true
         // Commits and edits happen behind our back: re-read the branch now and then.
         gitTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
@@ -270,7 +281,7 @@ final class PaneStripView: NSView {
             crumb.hoverColor = c.stripHover
         }
         for sep in separators { sep.textColor = c.stripSeparator }
-        for b in [splitRightButton, splitDownButton, closeButton] {
+        for b in [splitRightButton, splitDownButton, closeButton, stopSessionButton, restartSessionButton] {
             b.contentTintColor = c.stripCrumb
             b.hoverColor = c.stripHover
         }
@@ -312,6 +323,15 @@ final class PaneStripView: NSView {
             x -= Self.controlGap
         }
         x += Self.controlGap
+        // The session's Stop / Restart, set off from the pane's own buttons.
+        let session = [restartSessionButton, stopSessionButton].filter { !$0.isHidden }
+        if !session.isEmpty { x -= 6 }
+        for button in session {
+            x -= Self.controlSize
+            button.frame = NSRect(x: x, y: y, width: Self.controlSize, height: Self.controlSize)
+            x -= Self.controlGap
+        }
+        if !session.isEmpty { x += Self.controlGap }
         if !viewSwitch.isHidden {
             x -= 6 + ViewModeSwitch.size.width
             viewSwitch.frame = NSRect(origin: NSPoint(x: x, y: ((height - ViewModeSwitch.size.height) / 2).rounded()),
@@ -393,6 +413,19 @@ final class PaneStripView: NSView {
     @objc private func splitRightClicked() { onSplitRight?() }
     @objc private func splitDownClicked() { onSplitDown?() }
     @objc private func closeClicked() { onClose?() }
+    @objc private func stopSessionClicked() { onStopSession?() }
+    @objc private func restartSessionClicked() { onRestartSession?() }
+
+    /// The session's controls: nil hides one (no session; a chat's Stop is its
+    /// composer's), else enabled or not.
+    func setSessionControls(stop: Bool?, restart: Bool?) {
+        var changed = false
+        for (button, state) in [(stopSessionButton, stop), (restartSessionButton, restart)] {
+            if button.isHidden != (state == nil) { button.isHidden = state == nil; changed = true }
+            if let state, button.isEnabled != state { button.isEnabled = state }
+        }
+        if changed { needsLayout = true }
+    }
 
     private func showSandbox(below anchor: NSView) {
         guard let access else { return }
@@ -711,12 +744,17 @@ extension PaneStripView {
         var dimmed: Bool
         /// The controls' frames in `view`'s coordinates.
         var controlFrames: [NSRect]
+        /// The session's Stop / Restart: shown (and enabled), or nil.
+        var stopSession: Bool?, restartSession: Bool?
     }
 
     func debugState(in view: NSView) -> DebugState {
         layoutSubtreeIfNeeded()
         func shown(_ v: NSView) -> Bool { !v.isHiddenOrHasHiddenAncestor && v.frame.maxX <= crumbs.bounds.maxX + 0.5 }
-        let controls = [viewSwitch.isHidden ? nil : viewSwitch as NSView, splitRightButton, splitDownButton, closeButton]
+        let controls = [viewSwitch.isHidden ? nil : viewSwitch as NSView,
+                        stopSessionButton.isHidden ? nil : stopSessionButton,
+                        restartSessionButton.isHidden ? nil : restartSessionButton,
+                        splitRightButton, splitDownButton, closeButton]
             .compactMap { $0 }
         return DebugState(
             height: bounds.height, condensing: condensing,
@@ -725,7 +763,9 @@ extension PaneStripView {
             branchShown: shown(branchCrumb), moreShown: !moreCrumb.isHiddenOrHasHiddenAncestor,
             nameShown: !nameCrumb.isHiddenOrHasHiddenAncestor, nameWidth: nameCrumb.isHidden ? 0 : nameCrumb.frame.width,
             viewMode: viewSwitch.isHidden ? nil : viewSwitch.mode, dimmed: content.alphaValue < 1,
-            controlFrames: controls.map { $0.convert($0.bounds, to: view) })
+            controlFrames: controls.map { $0.convert($0.bounds, to: view) },
+            stopSession: stopSessionButton.isHidden ? nil : stopSessionButton.isEnabled,
+            restartSession: restartSessionButton.isHidden ? nil : restartSessionButton.isEnabled)
     }
 
     /// Self-test: the folded crumbs' menu, as ⋯ would open it.

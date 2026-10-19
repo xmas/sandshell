@@ -3025,6 +3025,8 @@ enum SelfTest {
         check(group.shown && !group.stop && !group.restart, "no session focused: Sandbox shows, Stop and Restart disabled (\(group))")
         check(window.debugIdentity.isEmpty, "no session focused: no name in the title bar")
         check(window.debugSandboxLabel == "Sandbox", "no session focused: the group says Sandbox (\(window.debugSandboxLabel))")
+        let emptyStrip = tree.focused.debugStrip
+        check(emptyStrip.stopSession == nil && emptyStrip.restartSession == nil, "an empty pane's strip has no session controls")
         // Back to the session's pane: Restart works on it (and Stop, its terminal running).
         if let sessionPane = tree.panes.first(where: { $0.shownSession == a.id }) { tree.focus(sessionPane) }
         await wait(0.5)
@@ -3033,6 +3035,9 @@ enum SelfTest {
         check(window.debugIdentity == ws.displayName(of: a), "the title bar names the session (\(window.debugIdentity))")
         check(window.debugSandboxLabel == ws.containerName(for: a.containerAgentKind),
               "the Sandbox group names the session's sandbox (\(window.debugSandboxLabel))")
+        let shellStrip = tree.focused.debugStrip
+        check(shellStrip.stopSession == true && shellStrip.restartSession == true,
+              "a running shell's strip has its own Stop and Restart (\(String(describing: shellStrip.stopSession)), \(String(describing: shellStrip.restartSession)))")
         snapshotFrame(window, "title-bar")
 
         // View ▸ Show Files flips the Files button and shows the sidebar's header.

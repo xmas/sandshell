@@ -518,7 +518,7 @@ final class TerminalStackController: NSViewController {
     /// Live status for the toolbar: text ("Working  ◷ 39m 16s" / "Ready") and
     /// whether the agent is currently working (drives the green tint).
     var onStatusChange: ((String, Bool) -> Void)?
-    private var activeSessionID: UUID?
+    private var activeSessionID: UUID? { didSet { if activeSessionID != oldValue { updateSessionControls() } } }
     // Framed terminal
     private let frameView = NSView()
     /// Sandbox › folder › branch › name, and the pane's controls.
@@ -715,6 +715,8 @@ final class TerminalStackController: NSViewController {
         titleStrip.onSplitRight = { [weak self] in self?.onSplit?(.trailing) }
         titleStrip.onSplitDown = { [weak self] in self?.onSplit?(.bottom) }
         titleStrip.onClose = { [weak self] in self?.onClosePane?() }
+        titleStrip.onStopSession = { [weak self] in self?.stopClicked() }
+        titleStrip.onRestartSession = { [weak self] in self?.headerRestartClicked() }
         frameView.addSubview(titleStrip)
         frameView.addSubview(titleLine)
         frameView.addSubview(host)
@@ -1104,6 +1106,7 @@ final class TerminalStackController: NSViewController {
         terminals[id] = nil
         runtime.terminalRemoved(id)
         runtime.terminalDidExit(id)
+        updateSessionControls()
     }
 
     /// Restart the active session from the header/toolbar.
@@ -1220,7 +1223,15 @@ final class TerminalStackController: NSViewController {
         restartClicked()
     }
 
+    /// The strip's session controls: Stop while a terminal runs (a chat's turn
+    /// stops in its composer), Restart for any session; none in an empty pane.
+    private func updateSessionControls() {
+        guard let id = activeSessionID else { return titleStrip.setSessionControls(stop: nil, restart: nil) }
+        titleStrip.setSessionControls(stop: chats[id] != nil ? nil : terminals[id] != nil, restart: true)
+    }
+
     private func updateHeaderStatus(_ id: UUID) {
+        updateSessionControls()
         guard let rt = controller.runtime(id) else {
             onStatusChange?("", false)
             return

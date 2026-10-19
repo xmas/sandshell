@@ -31,10 +31,12 @@ Left to right: sidebar toggle · the focused pane's session name (title role,
 truncating; no status, timer or subtitle) · flexible space · the **Sandbox**
 group · **Files**.
 
-- **Sandbox group** — one bordered pill: a non-interactive `Sandbox` label,
-  then **Stop** (kills the session's process in the sandbox) and **Restart**.
-  Disabled when the focused pane shows no session; hidden when no pane does.
-  Stopping a chat *turn* is the composer's job, not this one.
+- **Sandbox group** — one bordered pill: the focused session's sandbox by
+  name, then **Stop** (**Start** while it's stopped) and **Restart** for the
+  sandbox itself — every session in it stops; Restart and Start bring this
+  window's sessions in it back. Disabled when no pane shows a session. A
+  session's own Stop / Restart are in its pane strip; a chat's turn stops in
+  its composer.
 - **Files** — toggles the Files sidebar (⇧⌥⌘0, View ▸ Show Files); pressed
   while it's shown.
 
@@ -70,7 +72,7 @@ terminal. Files is never a pane.
 
 One 34 pt line that never wraps: crumbs on the left (sandbox › folder ›
 branch, plus the session name when the window has more than one pane),
-controls on the right (Chat | Terminal, split right, split down, close).
+controls on the right (Chat | Terminal; the session's Stop — terminals only — and Restart; split right, split down, close).
 As the pane narrows: under 560 pt the sandbox label goes (icon stays), under
 480 the folder label, under 410 sandbox/folder/branch fold into a ⋯ menu.
 The controls never move or clip. Unfocused panes draw the strip at 40 %.
