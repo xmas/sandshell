@@ -13,11 +13,14 @@
 # Sandshell and its settings are untouched. Fixtures live under
 # $SANDSHELL_SELFTEST_ROOT (default /tmp/sandshell-selftests); results under
 # <root>/results/<timestamp>/<scenario>/ (selftest.log, run.log, snapshots).
+# Two runs at once (e.g. from separate worktrees) need their own root and
+# bundle id: SANDSHELL_SELFTEST_ROOT=/tmp/st-a SANDSHELL_SELFTEST_BUNDLE_ID=com.xmas.sandshell.dev-a
 # Never puts up a dialog (Diagnostics/AutomatedRun.swift).
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 FIX="${SANDSHELL_SELFTEST_ROOT:-/tmp/sandshell-selftests}"
+BUNDLE_ID="${SANDSHELL_SELFTEST_BUNDLE_ID:-com.xmas.sandshell.dev}"
 APP="$ROOT/build-dev/Build/Products/Debug/Sandshell.app/Contents/MacOS/Sandshell"
 HELP="$ROOT/scripts/selftest_fixtures.py"
 QUICK=0 SKIP_BUILD=0 ONLY=""
@@ -42,7 +45,7 @@ if [[ $SKIP_BUILD == 0 ]]; then
   BUILD_LOG="$RESULTS/build.log"
   if ! (cd "$ROOT" && xcodegen generate >/dev/null && xcodebuild -project Sandshell.xcodeproj -scheme Sandshell \
      -configuration Debug -derivedDataPath build-dev -destination 'platform=macOS,arch=arm64' \
-     PRODUCT_BUNDLE_IDENTIFIER=com.xmas.sandshell.dev build > "$BUILD_LOG" 2>&1); then
+     PRODUCT_BUNDLE_IDENTIFIER="$BUNDLE_ID" build > "$BUILD_LOG" 2>&1); then
     grep -E " error:" "$BUILD_LOG" | head -20
     echo "build failed (log: $BUILD_LOG)" >&2; exit 1
   fi
