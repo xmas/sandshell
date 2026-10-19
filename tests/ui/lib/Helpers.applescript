@@ -76,6 +76,11 @@ on axPressLabel(windowTitle, label, timeoutSeconds)
 	return my axPress("press-label", windowTitle, label, timeoutSeconds)
 end axPressLabel
 
+-- Open the workspace window's Settings window (as ⌘, does).
+on axOpenSettings(windowTitle)
+	return my axCommand("open-settings", windowTitle, "")
+end axOpenSettings
+
 -- Close the workspace window's Settings window.
 on axCloseSettings(windowTitle)
 	return my axCommand("close-settings", windowTitle, "")

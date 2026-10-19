@@ -213,6 +213,10 @@ final class KitStartupBannerView: NSView {
         row.alignment = .centerY
         row.spacing = 10
         row.translatesAutoresizingMaskIntoConstraints = false
+        // A narrow pane clips the row rather than being held wide by it.
+        row.setClippingResistancePriority(NSLayoutConstraint.Priority(NSLayoutConstraint.Priority.windowSizeStayPut.rawValue - 10),
+                                          for: .horizontal)
+        text.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         addSubview(row)
 
         NSLayoutConstraint.activate([

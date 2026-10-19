@@ -2469,6 +2469,13 @@ enum SelfTest {
                 w.setFrame(frame, display: true)
                 await wait(0.3)
                 check(abs(w.frame.height - 560) < 2, "the window shrinks to 560 pt (got \(Int(w.frame.height)))")
+                // Nor wide: the sidebar plus a pane of a few hundred points.
+                let wide = w.frame
+                frame.size.width = 700
+                w.setFrame(frame, display: true)
+                await wait(0.3)
+                check(abs(w.frame.width - 700) < 2, "the window narrows to 700 pt (got \(Int(w.frame.width)))")
+                w.setFrame(wide, display: true)
             }
             ws.closeSession(s.id)   // leave the fixture as it was
         }

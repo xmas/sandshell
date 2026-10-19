@@ -10,7 +10,7 @@ on run argv
 	set thisDir to do shell script "dirname " & quoted form of (POSIX path of (path to me))
 	set Helpers to load script POSIX file (thisDir & "/lib/Helpers.scpt")
 
-	Helpers's axPressLabel(windowTitle, "Folder settings", 15)
+	Helpers's axOpenSettings(windowTitle)
 	Helpers's axWaitForSheet(windowTitle, 10)
 	try
 		Helpers's axPressIdentifier(windowTitle, "inspector-tab-folders", 15)

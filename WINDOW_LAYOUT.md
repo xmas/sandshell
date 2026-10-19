@@ -1,98 +1,97 @@
 # Sandshell Window Layout
 
+The chrome as of the redesign in `CHROME-REDESIGN.md`: two sidebars, one per
+side, and between them a content area that splits into panes.
+
 ## Structure
 
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                          Sandshell Window                            │
-├──────────────────────┬──────────────────────────────────────────────┤
-│      SIDEBAR         │          DETAIL PANE                          │
-├──────────────────────┼──────────────────────────────────────────────┤
-│                      │                                               │
-│   ┌──────────────┐   │  ┌──────────────────────────────────────┐   │
-│   │    Header    │   │  │         HEADER BAR                   │   │
-│   │ (icon+name)  │   │  ├──────────────────────────────────────┤   │
-│   └──────────────┘   │  │ ☰│🔵│Session Name  Ready  |📁|⏹|↻│   │
-│                      │  │ sidebar toggle, badge, name,          │   │
-│   ┌──────────────┐   │  │ status, action buttons                │   │
-│   │   Folder 1   │   │  └──────────────────────────────────────┘   │
-│   │ ┌─ Session A │   │                                               │
-│   │ ┌─ Session B │   │  ┌──────────────────────────────────────┐   │
-│   │                  │  │         FRAME VIEW                   │   │
-│   │   Folder 2   │   │  │  (terminal with rounded border)      │   │
-│   │ ┌─ Session C │   │  │                                       │   │
-│   │ ┌─ Session D │   │  │  ┌─ Title Strip ──────────────────┐ │   │
-│   │                  │  │  │ bash — 80×24                    │ │   │
-│   │   + New Folder   │  │  ├─────────────────────────────────┤ │   │
-│   │                  │  │  │                                 │ │   │
-│   └──────────────┘   │  │  │    HOST / TERMINAL              │ │   │
-│                      │  │  │    (libghostty surface)         │ │   │
-│   ┌──────────────┐   │  │  │                                 │ │   │
-│   │    Footer    │   │  │  └─────────────────────────────────┘ │   │
-│   │ ⚙️ 🖥️ 🐛 📚 │   │  └──────────────────────────────────────┘   │
-│   │ settings    │   │                                               │
-│   └──────────────┘   │  (or STATUS STACK when no session selected)  │
-│                      │                                               │
-└──────────────────────┴──────────────────────────────────────────────┘
+┌────────────────────┬───────────────────────────────────┬──────────────────┐
+│ ☰                  │ Session name      [Sandbox|Stop|Restart] [Files]     │
+├────────────────────┼───────────────────────────────────┼──────────────────┤
+│ ▣ workspace ▾    + │ sandbox › folder › main +9 −2     │ Files  main · 6  │
+│ [Search sessions ] │          [Chat|Terminal] ⊞ ⊟ ✕    │ [filter        ] │
+│                    ├───────────────────────────────────┤ tree             │
+│ ▣ Title       4:12 │                                   │                  │
+│   ◌ Working · Opus │   transcript (chat) or terminal   │                  │
+│   “instruction”    │                                   ├──────────────────┤
+│   ⑂ Fork row       │                                   │ editor           │
+│   ▸ 4 subagents    │ ╭───────────────────────────────╮ │                  │
+│ ▣ Title         3m │ │ Message…                  (↑) │ │                  │
+│   ● Finished · 12m │ ╰───────────────────────────────╯ ├──────────────────┤
+│                    │ + MCP     model · effort · Auto ⓘ │ Commits          │
+├────────────────────┤                                   │                  │
+│ ● Sandbox · rw main│                                   │                  │
+└────────────────────┴───────────────────────────────────┴──────────────────┘
 ```
 
-## Sidebar
+## Title bar (`UI/MainWindowController.swift`, `UI/TitleBarViews.swift`)
 
-- **Header** — Folder icon, workspace name, dropdown chevron for workspace menu
-- **Folder/Session List** — Hierarchical outline of folders and their sessions
-  - Folders are expandable/collapsible
-  - Sessions shown as children of folders
-  - Each session shows agent badge, name, and status
-- **Footer** — Four icon buttons
-  - ⚙️ Settings (inspector)
-  - 🖥️ Terminal (host shell)
-  - 🐛 Console (logs)
-  - 📚 History (conversation browser)
+Left to right: sidebar toggle · the focused pane's session name (title role,
+truncating; no status, timer or subtitle) · flexible space · the **Sandbox**
+group · **Files**.
 
-## Split Divider
+- **Sandbox group** — one bordered pill: a non-interactive `Sandbox` label,
+  then **Stop** (kills the session's process in the sandbox) and **Restart**.
+  Disabled when the focused pane shows no session; hidden when no pane does.
+  Stopping a chat *turn* is the composer's job, not this one.
+- **Files** — toggles the Files sidebar (⇧⌥⌘0, View ▸ Show Files); pressed
+  while it's shown.
 
-- Vertical separator line between sidebar and detail pane
-- Draggable to resize both panes
+The toolbar is a fixed set (no customization).
 
-## Detail Pane
+## Session sidebar (`UI/SidebarOutlineController.swift`, `UI/SidebarRows.swift`)
 
-### Header Bar
-The top bar showing the currently selected session's information and actions.
+- **Header** — workspace mark · workspace name with ▾ (workspace switcher) ·
+  **+** (new session menu); below it the search field, the sidebar's only
+  search (⌥⌘F focuses it).
+- **Rows** — `[badge] Title …… time` / `<glyph> StatusWord · detail` /
+  `“first instruction”` (comfortable density only, when the title isn't it).
+  The badge is the only place the agent is named. Six states, one grammar
+  (`UI/SidebarRowStatus.swift`): Needs you, Working (the only spinner),
+  Finished (unread: blue dot, semibold title), Finished (seen), Stopped, Idle.
+- **Order** — needs-you first, then working, then by last activity; forks nest
+  under their parent on a rail; subagents and background tasks collapse into
+  one `▸ N subagents · M running` child row.
+- **Selection** — the focused pane's row has the selected fill; sessions open
+  in other panes a quieter fill. Background fills only.
+- **Density** — View ▸ Comfortable / Compact (the only sidebar setting).
+- **Footer** — one button, `● Sandbox · read-write  main`: opens the sandbox
+  access popover. Settings is ⌘,; Status Debug and the host terminal live in
+  the Help menu.
 
-- **Sidebar Toggle** — ☰ icon to hide/show the sidebar
-- **Agent Badge** — Colored circle (30×30) with agent icon
-  - Claude: sparkles
-  - Codex: code brackets
-  - Shell: terminal
-  - Others: appropriate symbols
-- **Header Text** (vertical stack)
-  - Session name (bold, 14.5pt)
-  - Folder path (monospace, 11pt, secondary color)
-- **Header Status** — Status indicator (Ready, Working, etc.) in secondary color
-- **Header Actions** (right side) — Three icon buttons
-  - 📁 Reveal in Finder
-  - ⏹ Stop the session
-  - ↻ Restart the session
+## Content area (`UI/PaneTreeController.swift`)
 
-### Frame View
-The terminal container with rounded border (12pt radius) and border stroke.
+Splits into panes (⌘D right, ⇧⌘D down, ⌥⌘W close; drag a session onto a pane
+edge). Each pane is a `TerminalStackController` showing one session's chat or
+terminal. Files is never a pane.
 
-- **Title Strip** — Dark bar at the top showing:
-  - Terminal title (typically "bash" or shell name)
-  - Dimensions (e.g., "80×24")
-  - Monospace font, 10.5pt
-- **Host** — The actual terminal content area
-  - libghostty surface
-  - Shows live output from the running session
-  - Handles all terminal input/output
+### Pane strip (`UI/PaneStrip.swift`)
 
-### Status Stack
-Shown when no session is selected or a container is building.
+One 34 pt line that never wraps: crumbs on the left (sandbox › folder ›
+branch, plus the session name when the window has more than one pane),
+controls on the right (Chat | Terminal, split right, split down, close).
+As the pane narrows: under 560 pt the sandbox label goes (icon stays), under
+480 the folder label, under 410 sandbox/folder/branch fold into a ⋯ menu.
+The controls never move or clip. Unfocused panes draw the strip at 40 %.
 
-- **Spinner** — Rotating indicator (hidden when not building)
-- **Status Label** — Centered text
-  - "Select a session" when idle
-  - "Building…" when container is being created
-  - "Rebuilding…" when container is being updated
-- **Restart Button** — Shown only when session has exited
-  - Allows user to restart a crashed/exited session
+### Chat pane (`Chat/ChatSessionView.swift`, `Chat/ChatComposerView.swift`)
+
+The transcript (centered, at most 800 pt wide), then the composer: a pill
+input with one round button — Send, or Stop while a turn runs (the only
+chat-turn stop). Below the pill: `+` (attach / @ files) and MCP on the left;
+model · effort · approval mode · the cost/context readout (opens Session
+details) on the right. A terminal pane has none of these.
+
+### Status stack
+
+Shown in a pane with nothing running yet: spinner and status ("Building…"),
+the sandbox build log while a sandbox is made, Restart after a failure; an
+empty pane offers New Session / Close.
+
+## Files sidebar (`Files/FilesPaneController.swift`, `Files/FilesHeaderView.swift`)
+
+The window's trailing split item: full height, 300–480 pt, one per window,
+its visibility saved per window. Header `Files · main · 6 changed` and a
+close button; then the filter, the tree, the editor (tabs) under the tree,
+and Commits at the bottom.

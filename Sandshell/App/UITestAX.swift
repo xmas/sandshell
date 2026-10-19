@@ -13,6 +13,7 @@ import AppKit
 ///   exists-id               `yes` / `no`
 ///   ids                     every identifier, one per line
 ///   sheets                  how many sheets are open on the window
+///   open-settings           open the workspace's Settings, as ⌘, does → `ok`
 @MainActor
 enum UITestAX {
     static func handle(_ command: String) -> String {
@@ -31,6 +32,10 @@ enum UITestAX {
             var n = SettingsWindowController.window(for: window)?.isVisible == true ? 1 : 0, sheet = window.attachedSheet
             while let s = sheet { n += 1; sheet = s.attachedSheet }
             return "\(n)"
+        case "open-settings":
+            guard let controller = window.windowController as? MainWindowController else { return "missing" }
+            controller.showSettings()
+            return "ok"
         case "close-settings":
             guard let settings = SettingsWindowController.window(for: window) else { return "missing" }
             settings.performClose(nil)

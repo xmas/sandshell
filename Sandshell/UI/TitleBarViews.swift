@@ -64,6 +64,8 @@ final class ChromeButton: NSButton {
             .withSymbolConfiguration(glyphConfiguration)
         contentTintColor = symbol
         attributedTitle = NSAttributedString(string: word, attributes: [.font: NSFont.role(.body), .foregroundColor: text])
+        // A new image renames the button after its symbol ("refresh"): say the word again.
+        setAccessibilityLabel(word)
         pressedColor = pressed
         hoverColor = hover
         updateFill()
@@ -125,6 +127,7 @@ final class SandboxActionsView: NSView {
 
         labelIcon.image = NSImage(systemSymbolName: "cube", accessibilityDescription: nil)?
             .withSymbolConfiguration(.role(.meta))
+        labelIcon.setAccessibilityElement(false)
         labelText.font = .role(.meta)
         label.setViews([labelIcon, labelText], in: .leading)
         label.orientation = .horizontal

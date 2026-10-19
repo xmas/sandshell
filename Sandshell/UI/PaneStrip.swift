@@ -495,6 +495,7 @@ final class StripCrumb: NSView {
         super.init(frame: .zero)
         wantsLayer = true
         layer?.cornerRadius = 6
+        icon?.setAccessibilityElement(false)   // the crumb says what it is
         if let icon { addSubview(icon) }
         label.font = .role(role)
         label.lineBreakMode = .byTruncatingTail

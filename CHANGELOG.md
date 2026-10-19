@@ -2,6 +2,19 @@
 
 A running log of what changed, newest first. Yes, we actually write these.
 
+## Unreleased
+- **Less chrome, one place for everything.** The window was redesigned around one rule: each action lives in one place.
+- **Type:** the whole interface uses four text styles — title, body, small and code — instead of fourteen sizes. Weight means unread; colour means status. Chat text is 13 pt.
+- **Sessions keep their names.** A session is named by your first message (no longer by your latest), then by Claude's own title for the conversation once it has one; a rename still wins, and clearing it goes back. Forks remember where they came from, read "Fork of …" until you write in them, and sit under their source in the sidebar.
+- **Sidebar:** every row reads the same way — the agent's badge, the title, the time (a live timer while it works), and one status line: *Needs you* (and what for), *Working* (the only spinner), *Finished* (blue until you look), *Stopped* (and why) or *Idle* — plus your first instruction under it when the title isn't that. Sessions that need you sort first, then working ones. Subagents and background tasks fold into one row under their session. The header has the workspace (▾ to switch), one + and the search field; the footer is one line saying what the sandbox sees of the folder (click for details). View ▸ Comfortable / Compact sets the row size; Status Debug and the Mac terminal moved to the Help menu.
+- **Title bar:** the focused session's name, a *Sandbox* group with Stop and Restart (for the session's process in its sandbox), and Files. Nothing else — search is the sidebar's field, the Finder folder is in the pane's breadcrumb, Chat/Terminal is in the pane.
+- **Pane strip:** one line that never wraps — sandbox › folder › branch (and the session's name when there's more than one pane) on the left, Chat | Terminal and split/close on the right. As a pane narrows the breadcrumb shrinks to icons, then folds into a ⋯ menu; the buttons never move.
+- **Files is the right sidebar,** full height with its own header (branch · changed files), toggled with the Files button or ⇧⌥⌘0 — no longer something a pane can show.
+- **Composer:** the message field is a pill with one round button — Send, or Stop while Claude is working (the only place a turn stops). Model, effort, approval mode, MCP and the cost/context readout sit under it, so everything about the next turn is in one place.
+- **Chats and sessions start faster.** A chat's agent is up in about 3.3 s instead of 4.6 s on a running sandbox (launch to ready 0.4–0.75 s, was 1.0–1.3 s), and three windows restored together are ready in about 2 s instead of 5–6 s: launches go first and the window's other sandbox reads wait for them, and windows share `sbx ls` / `sbx secret ls` calls.
+- **Watch a sandbox being made.** While a sandbox is built, its pane shows what sbx prints — settings, the image pulled layer by layer, kit installs — and keeps it beside a failure.
+- **Fixes:** hidden pieces of a pane (the build log, the kit banner) no longer stop the window from getting smaller.
+
 ## v0.2.29 — "Steady"
 - **The message field grows** with what you type, up to about half the chat's height (it had stopped at one line), then scrolls.
 - **Copy your own messages** from the hover bar or the right-click menu, like replies. Hovering shows just the Copy / Fork buttons; what you copy briefly lights up.

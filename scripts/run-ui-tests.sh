@@ -190,6 +190,7 @@ run_test "$TESTS_DIR/00_launch_and_status.applescript" "$BUNDLE_ID" "$WINDOW_TIT
 run_test "$TESTS_DIR/02_new_session_while_building.applescript" "$BUNDLE_ID" "$WINDOW_TITLE"
 run_test "$TESTS_DIR/01_menu_structure.applescript" "$BUNDLE_ID"
 run_test "$TESTS_DIR/03_flat_session_order.applescript" "$BUNDLE_ID" "$WINDOW_TITLE"
+run_test "$TESTS_DIR/06_window_chrome.applescript" "$BUNDLE_ID" "$WINDOW_TITLE"
 # 04/05 drive window contents through the in-app `ax` bridge, so they run
 # with the screen locked too (System Events would see no windows then).
 run_test "$TESTS_DIR/05_folders_pane.applescript" "$BUNDLE_ID" "$WINDOW_TITLE"
