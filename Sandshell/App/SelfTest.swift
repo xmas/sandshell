@@ -301,12 +301,27 @@ enum SelfTest {
         check(FileManager.default.fileExists(atPath: marker.path), "the command ran in the sandbox (file on the host mount)")
         try? FileManager.default.removeItem(at: marker)
 
-        chat.send(text: "Count from 1 to 400, one number per line, no other text.", attachments: [])
-        check(await until(60) { chat.phase == .running }, "long turn starts")
+        // The composer: its controls, and Send turning into Stop for the turn.
+        guard let view = tree.surfaces.chats[s.id] else { return check(false, "the chat's view") }
+        log("composer controls: \(view.debugBarShown); model “\(view.debugModelTitle)”, effort “\(view.debugEffortTitle)”, "
+            + "mode “\(view.debugModeTitle)”, readout “\(view.debugReadoutText)”")
+        check(["chat-attach", "chat-model", "chat-effort", "chat-details"].allSatisfy(view.debugBarShown.contains),
+              "under the composer: attach, model, effort and the readout")
+        check(chat.modes.isEmpty || view.debugBarShown.contains("chat-mode"), "and the approval mode")
+        check(view.debugSendMode == .send && view.debugSendEnabled, "idle: the round button is Send")
+        let send = view.debugSendButtonFrame, pill = view.debugComposer.convert(view.debugComposer.bounds, to: view)
+        check(pill.contains(send) && send.width == 24, "it sits inside the pill (\(send) in \(pill))")
+        check(view.debugBarFrame.minY >= 0 && view.debugBarFrame.maxY <= pill.minY, "the controls sit below the pill")
+        view.debugSetDraft("Count from 1 to 400, one number per line, no other text.")
+        view.debugClickSendButton()
+        check(await until(60) { chat.phase == .running }, "Send starts the long turn")
+        check(view.debugSendMode == .stop, "while it runs the round button is Stop")
+        snapshot(window, "chat-stop")
         await wait(3)
         let stopAt = Date()
-        chat.cancel()
-        check(await until(20) { chat.phase == .ready }, "Stop returns to ready")
+        view.debugClickSendButton()
+        check(await until(20) { chat.phase == .ready }, "Stop stops the turn")
+        check(await until(2) { view.debugSendMode == .send }, "and turns back into Send")
         log(String(format: "stopped in %.1fs", Date().timeIntervalSince(stopAt)))
         let countAtStop = chat.items.count
         await wait(3)
@@ -817,6 +832,14 @@ enum SelfTest {
         check(v.isInspectorShown, "Session Details shows beside the chat")
         v.session.send(text: "Reply with exactly the word PONG and nothing else.", attachments: [])
         check(await until(180) { v.session.phase == .ready && v.session.usage != nil }, "a turn gives it usage to show")
+        // The composer's readout: cost and context, opening Session details.
+        check(await until(5) { v.debugReadoutText.contains("%") }, "the readout shows the context (“\(v.debugReadoutText)”)")
+        v.debugClickReadout()
+        check(await until(3) { v.debugDetailsShown }, "clicking the readout opens Session details")
+        await wait(0.5)
+        snapshot(window, "details-popover")
+        v.debugClickReadout()
+        check(await until(3) { !v.debugDetailsShown }, "and a second click closes them")
         // A long conversation, at its end: the text there is laid out (drawn), not blank until a resize.
         let long: [ChatItem] = (0..<120).flatMap { i -> [ChatItem] in
             [.user(id: UUID(), text: "Question \(i)?", attachments: []),
@@ -1984,21 +2007,30 @@ enum SelfTest {
         log("live model: \(first.liveModel ?? "-"), usage \(String(describing: first.usage))")
         check(first.liveModel.map { ClaudePriceBook.normalize($0) } == "claude-sonnet-5-5",
               "it answers on the workspace's model, Sonnet 5.5")
-        guard let pane = tree.panes.first(where: { $0.shownSession == s.id }) else { return check(false, "a pane shows the chat") }
-        check(pane.debugReadoutShown, "the title strip shows the Claude readout for the chat")
-        log(pane.debugReadoutFitting)
+        guard let view = tree.surfaces.chats[s.id] else { return check(false, "the chat's view") }
+        check(view.debugBarShown.contains("chat-model"), "the composer has the model chooser")
+        check(view.debugModelTitle == "Sonnet 5.5", "showing the chat's model (“\(view.debugModelTitle)”)")
+        log("readout “\(view.debugReadoutText)”")
         snapshot(window, "chat-model-sonnet")
+        view.debugPickClaudeEffort("low")
+        check(ws.claudeEffort == "low" && first.launchEffort == "low" && view.debugEffortTitle == "Low",
+              "the effort chooser sets the chat's effort and the workspace's (“\(view.debugEffortTitle)”)")
+        view.debugPickClaudeEffort(nil)
+        check(ws.claudeEffort == nil && view.debugEffortTitle == "Default effort", "and back to the default")
 
-        pane.debugPickModel("claude-haiku-4-5")
+        view.debugPickClaudeModel("claude-haiku-4-5")
         check(ws.claudeModel == "claude-haiku-4-5", "the pick is the workspace's model")
         check(await until(180) { chat() !== first && chat()?.phase == .ready }, "the chat relaunches")
         guard let second = chat() else { return }
+        check(tree.surfaces.chats[s.id]?.debugModelTitle == "Haiku 4.5",
+              "its composer shows the new model (“\(tree.surfaces.chats[s.id]?.debugModelTitle ?? "-")”)")
         second.send(text: "What word did I ask you to remember? Reply with just the word.", attachments: [])
         check(await until(180) { second.phase == .ready && said(second).contains("HERON") }, "with its conversation")
         check(await until(10) { second.liveModel.map { ClaudePriceBook.normalize($0).hasPrefix("claude-haiku-4-5") } ?? false },
               "and answers on Haiku 4.5 (\(second.liveModel ?? "-"))")
         snapshot(window, "chat-model-haiku")
         ws.setClaudeModel(nil)
+        ws.setClaudeEffort(nil)
     }
 
     // MARK: Reconnect
@@ -2395,6 +2427,10 @@ enum SelfTest {
             log("mcp: \((c.mcpServers ?? []).map { "\($0.name)=\($0.status) tools \($0.tools.count)" })")
             check(c.mcpServers != nil, "MCP status comes back")
         } catch { check(false, "MCP status: \(error.localizedDescription)") }
+        if let v = tree.surfaces.chats[s.id] {
+            check(!c.hasExtras || v.debugBarShown.contains("chat-mcp"), "the composer shows MCP with the wrapper (\(v.debugBarShown))")
+            check(v.debugMCPTitle == "\(c.mcpServers?.count ?? 0)", "with the server count (“\(v.debugMCPTitle)”)")
+        }
 
         // A background command, stopped from here.
         c.send(text: "Run the shell command `sleep 300` with the Bash tool's run_in_background option, then reply STARTED. Don't wait for it.", attachments: [])
@@ -2421,13 +2457,20 @@ enum SelfTest {
         check(await until(600) { chat()?.phase == .ready }, "chat starts")
         guard let c = chat() else { return }
         func said() -> String { c.items.compactMap { if case .agentText(_, let t) = $0 { t } else { nil } }.joined(separator: "\n") }
+        guard let v = tree.surfaces.chats[s.id] else { return check(false, "the chat's view") }
         c.send(text: "Count from 1 to 40, one number per line, nothing else.", attachments: [])
         check(await until(60) { c.phase == .running }, "a turn is running")
-        check(c.submit(text: "Now reply with exactly the word QUEUED and nothing else.", attachments: []),
-              "a message sent mid-turn is taken")
-        check(c.hasQueued, "and waits its turn")
+        check(v.debugSendMode == .stop, "the round button is Stop while it runs")
+        // Typed and sent from the composer as Return does: it queues.
+        v.debugSetDraft("Now reply with exactly the word QUEUED and nothing else.")
+        v.debugComposer.submitFromButton()
+        check(c.hasQueued, "a message sent mid-turn waits its turn")
+        check(v.debugComposer.debugDraftIsEmpty, "and leaves the composer")
+        check(v.debugSendMode == .stop, "Stop stays Stop (the turn is still running)")
+        snapshot(window, "queue-waiting")
         check(await until(240) { c.phase == .ready && said().contains("QUEUED") }, "then goes when the turn ends")
         check(!c.hasQueued, "and nothing is left waiting")
+        check(await until(2) { v.debugSendMode == .send }, "and the round button is Send again")
         ws.closeSession(s.id)
     }
 

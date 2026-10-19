@@ -2,8 +2,9 @@ import Combine
 import SwiftUI
 
 /// A native chat surface for one session, hosted in the detail pane in place
-/// of the terminal: transcript, permission prompt bar, composer, and a footer
-/// with mode/model pickers, context/cost readout and Send/Stop.
+/// of the terminal: transcript, permission prompt bar, the composer (a pill
+/// with Send/Stop inside), and under it every per-turn setting — attach, MCP,
+/// model, effort, approval mode, and the readout that opens Session details.
 @MainActor
 final class ChatSessionView: NSView {
     let session: ChatSession
@@ -16,14 +17,20 @@ final class ChatSessionView: NSView {
     private let permissionBar = NSStackView()
     private let permissionLabel = NSTextField(wrappingLabelWithString: "")
     private let permissionButtons = NSStackView()
-    private let statusLabel = NSTextField(labelWithString: "")
-    private let usageLabel = NSTextField(labelWithString: "")
-    private let modePopup = ChoicePopUp(tip: "Permission mode")
-    private let modelPopup = ChoicePopUp(tip: "Model")
-    private let sendButton = NSButton()
-    /// "MCP 3" (a red dot when one's failing): opens the servers popover.
-    private let mcpButton = NSButton()
+    /// The controls under the composer.
+    private let bar = ComposerBar()
+    private var statusLabel: NSTextField { bar.statusLabel }
+    private var modePopup: ChoicePopUp { bar.modePopup }
+    private var modelPopup: ChoicePopUp { bar.modelPopup }
+    private var mcpButton: NSButton { bar.mcpButton }
+    private var sendButton: ComposerSendButton { composer.sendButton }
     private var mcpPopover: NSPopover?
+    private var detailsPopover: NSPopover?
+    private var detailsHost: NSHostingController<ClaudeStatsDetailView>?
+    /// A Claude model picked here, until the chat relaunches on it.
+    private var pendingModel: String??
+    /// The relaunch for a new model waits until this chat is shown again.
+    private var relaunchWhenShown = false
     private var bag: Set<AnyCancellable> = []
     /// History replayed while resuming, shown in one go when it's done.
     private var heldReplay: [ChatItem]?
@@ -69,6 +76,25 @@ final class ChatSessionView: NSView {
     var debugComposer: ChatComposerView { composer }
     var debugComposerEnabled: Bool { composer.isEnabled }
     func debugSetDraft(_ text: String) { composer.setDraft(text) }
+    /// The round button in the pill: its mode, and a click on it.
+    var debugSendMode: ComposerSendButton.Mode { sendButton.mode }
+    var debugSendEnabled: Bool { sendButton.isEnabled }
+    func debugClickSendButton() { sendButton.performClick(nil) }
+    var debugSendButtonFrame: NSRect { sendButton.convert(sendButton.bounds, to: self) }
+    /// The controls under the composer (accessibility ids), and their parts.
+    var debugBarShown: [String] { bar.debugShown }
+    var debugBarFrame: NSRect { bar.convert(bar.bounds, to: self) }
+    var debugReadoutText: String { bar.readoutText }
+    var debugMCPTitle: String { mcpButton.attributedTitle.string }
+    var debugModelTitle: String { bar.claude.modelButton.item(at: 0)?.attributedTitle?.string ?? "" }
+    var debugEffortTitle: String { bar.claude.effortButton.item(at: 0)?.attributedTitle?.string ?? "" }
+    var debugModeTitle: String { modePopup.item(at: 0)?.attributedTitle?.string ?? "" }
+    /// Pick a Claude model as the chooser under the composer does.
+    func debugPickClaudeModel(_ id: String?) { claudeModelPicked(id) }
+    func debugPickClaudeEffort(_ level: String?) { claudeEffortPicked(level) }
+    /// The readout's click: Session details.
+    func debugClickReadout() { bar.readoutButton.performClick(nil) }
+    var debugDetailsShown: Bool { detailsPopover?.isShown == true }
     #endif
 
     /// A file path in the conversation was clicked.
@@ -147,38 +173,21 @@ final class ChatSessionView: NSView {
             return true
         }
 
-        for label in [statusLabel, usageLabel] {
-            label.font = .role(.meta)
-            label.textColor = .secondaryLabelColor
-            label.lineBreakMode = .byTruncatingTail
-        }
-        usageLabel.font = .role(.code)
-
-        statusLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         modePopup.onPick = { [weak self] id in if let id { self?.session.setMode(id) } }
         modelPopup.onPick = { [weak self] id in if let id { self?.session.setModel(id) } }
-        sendButton.bezelStyle = .rounded
-        sendButton.controlSize = .small
-        sendButton.target = self
-        sendButton.action = #selector(sendOrStop)
-        sendButton.setAccessibilityIdentifier("chat-send-stop")
-
-        let spacer = NSView()
-        spacer.setContentHuggingPriority(.init(1), for: .horizontal)
-        mcpButton.bezelStyle = .accessoryBarAction
-        mcpButton.controlSize = .small
-        mcpButton.image = NSImage(systemSymbolName: "point.3.connected.trianglepath.dotted", accessibilityDescription: "MCP servers")
-        mcpButton.imagePosition = .imageLeading
-        mcpButton.title = "MCP"
-        mcpButton.toolTip = "MCP servers in this session"
+        bar.claude.onModelPicked = { [weak self] id in self?.claudeModelPicked(id) }
+        bar.claude.onEffortPicked = { [weak self] level in self?.claudeEffortPicked(level) }
+        bar.claude.currentModelID = { [weak self] in self.flatMap { $0.displayedModel } }
+        composer.onSendButton = { [weak self] in self?.sendOrStop() }
+        bar.attachButton.target = self
+        bar.attachButton.action = #selector(showAttachMenu(_:))
         mcpButton.target = self
         mcpButton.action = #selector(showMCP)
-        mcpButton.setAccessibilityIdentifier("chat-mcp")
-        mcpButton.isHidden = true   // until the kit's wrapper says it's there
+        bar.readoutButton.target = self
+        bar.readoutButton.action = #selector(showDetails)
         transcript.onUndo = { [weak self] turn in self?.undo(turn) }
-        let footer = NSStackView(views: [modePopup, modelPopup, mcpButton, statusLabel, spacer, usageLabel, sendButton])
-        footer.orientation = .horizontal
-        footer.spacing = 8
+        let footer = bar
+        updatePieces()
 
         // Permission bar + composer stack: a hidden bar collapses (no blank band).
         let bottom = NSStackView(views: [permissionBar, composer])
@@ -236,10 +245,11 @@ final class ChatSessionView: NSView {
             bottom.leadingAnchor.constraint(equalTo: readable.leadingAnchor, constant: 16),
             bottom.trailingAnchor.constraint(equalTo: readable.trailingAnchor, constant: -16),
 
-            footer.topAnchor.constraint(equalTo: bottom.bottomAnchor, constant: 6),
-            footer.leadingAnchor.constraint(equalTo: readable.leadingAnchor, constant: 12),
-            footer.trailingAnchor.constraint(equalTo: readable.trailingAnchor, constant: -16),
-            footer.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -10),
+            // The controls: plain text under the pill, 10 pt in from its sides.
+            footer.topAnchor.constraint(equalTo: bottom.bottomAnchor, constant: 8),
+            footer.leadingAnchor.constraint(equalTo: bottom.leadingAnchor, constant: 10),
+            footer.trailingAnchor.constraint(equalTo: bottom.trailingAnchor, constant: -10),
+            footer.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -12),
         ])
     }
 
@@ -272,8 +282,9 @@ final class ChatSessionView: NSView {
                 self.showPhase(self.session.phase)
             }
         }.store(in: &bag)
-        session.$hasExtras.sink { [weak self] on in
-            self?.mcpButton.isHidden = !on
+        session.$hasExtras.dropFirst().sink { [weak self] on in
+            // Published before it's stored: the pieces read it next turn.
+            Task { [weak self] in self?.updatePieces() }
             if on { self?.refreshMCPQuietly() }
         }.store(in: &bag)
         session.$phase.sink { [weak self] phase in
@@ -289,19 +300,36 @@ final class ChatSessionView: NSView {
             }
             self.showPhase(phase)
         }.store(in: &bag)
-        // A Claude chat's usage and model live in the pane's title-strip readout.
-        session.$usage.sink { [weak self] in
-            guard let self, self.session.agent != .claude else { return }
-            self.showUsage($0)
+        // Usage (and, for Claude, the model it answered with) → the readout.
+        session.$usage.dropFirst().sink { [weak self] _ in
+            Task { [weak self] in self?.showUsage() }
         }.store(in: &bag)
         session.$modes.combineLatest(session.$currentMode).sink { [weak self] modes, current in
-            self?.fill(self?.modePopup, modes, current)
+            guard let self else { return }
+            self.fill(self.modePopup, modes, current)
+            self.updatePieces()
         }.store(in: &bag)
         session.$models.combineLatest(session.$currentModel).sink { [weak self] models, current in
             guard let self else { return }
             self.fill(self.modelPopup, models, current)
-            if self.session.agent == .claude { self.modelPopup.isHidden = true }
+            self.updatePieces()
         }.store(in: &bag)
+        if session.agent == .claude {
+            // The conversation's priced total (the readout's cost), and the
+            // price feed behind the model chooser (both throttled).
+            ClaudeUsageStore.shared.refresh()
+            ClaudeUsageStore.shared.$sessionTotals.dropFirst()
+                .sink { [weak self] _ in Task { [weak self] in self?.showUsage() } }
+                .store(in: &bag)
+        }
+        showUsage()
+    }
+
+    /// Which controls apply to this chat now.
+    private func updatePieces() {
+        bar.pieces = .for(agent: session.agent, hasModels: !session.models.isEmpty, hasModes: !session.modes.isEmpty,
+                          hasExtras: session.hasExtras, hasUsage: session.usage != nil)
+        bar.needsLayout = true
     }
 
     private func showEmptyState(_ show: Bool) {
@@ -310,41 +338,39 @@ final class ChatSessionView: NSView {
 
     private func showPhase(_ phase: ChatSession.Phase) {
         switch phase {
+        // The status line under the pill says only what's out of the ordinary.
         case .starting:
             statusLabel.stringValue = session.isCatchingUp
                 ? "Catching up with \(session.otherWriterName)…" : "Starting \(session.title)…"
-            sendButton.title = "Send"; sendButton.isEnabled = false
+            sendButton.mode = .send; sendButton.isEnabled = false
             // Nothing to type into until the agent is up.
             composer.setEnabled(false)
         case .ready:
             refreshMCPQuietly()
-            statusLabel.stringValue = "↩ send · ⇧↩ new line"
-            sendButton.title = "Send"; sendButton.isEnabled = true
+            statusLabel.stringValue = ""
+            sendButton.mode = .send; sendButton.isEnabled = true
             composer.setEnabled(true)
             if window?.firstResponder === window { composer.focus() }
         case .running:
-            statusLabel.stringValue = session.hasQueued ? "Working… your message sends when it’s done  ⎋ to stop"
-                : "Working…  ⎋ to stop"
-            sendButton.title = "Stop"; sendButton.isEnabled = true
+            // Return still sends: the message waits for the turn.
+            statusLabel.stringValue = session.hasQueued ? "Your message sends when this turn ends" : ""
+            sendButton.mode = .stop; sendButton.isEnabled = true
         case .closed(let why):
             statusLabel.stringValue = why
             // An agent that died on its own (e.g. over sleep) can come back.
             let reconnect = session.canReconnect && onReconnect != nil
-            sendButton.title = reconnect ? "Reconnect" : "Send"
+            sendButton.mode = reconnect ? .reconnect : .send
             sendButton.isEnabled = reconnect
             composer.setEnabled(false)
         }
+        statusLabel.toolTip = statusLabel.stringValue.isEmpty ? nil : statusLabel.stringValue
     }
 
     // MARK: MCP
 
     private func showMCPSummary(_ servers: [ChatSession.MCPServer]?) {
-        guard let servers else { mcpButton.title = "MCP"; mcpButton.contentTintColor = nil; return }
-        let failing = servers.filter { $0.status == "failed" || $0.status == "needs-auth" }
-        mcpButton.title = servers.isEmpty ? "MCP" : "MCP \(servers.count { $0.status == "connected" })/\(servers.count)"
-        mcpButton.contentTintColor = failing.isEmpty ? nil : .systemRed
-        mcpButton.toolTip = failing.isEmpty ? "MCP servers in this session"
-            : "\(failing.map(\.name).formatted()) \(failing.count == 1 ? "isn’t" : "aren’t") working"
+        let failing = (servers ?? []).filter { $0.status == "failed" || $0.status == "needs-auth" }
+        bar.showMCP(count: servers?.count, failing: failing.map(\.name))
     }
 
     // MARK: Inspector (beside the conversation)
@@ -444,12 +470,120 @@ final class ChatSessionView: NSView {
     }
 
 
-    private func showUsage(_ usage: ChatSession.Usage?) {
-        guard let usage else { usageLabel.stringValue = ""; return }
-        var parts = ["\(Format.tokens(usage.used)) / \(Format.tokens(usage.size)) ctx"]
-        if let cost = usage.cost { parts.append(cost.formatted(.currency(code: "USD"))) }
-        usageLabel.stringValue = parts.joined(separator: " · ")
-        usageLabel.toolTip = "Context: \(usage.used.formatted()) of \(usage.size.formatted()) tokens"
+    // MARK: Model, effort, readout
+
+    /// The Claude model the chooser shows: one just picked (until the chat
+    /// relaunches on it), else the one it answered with, else its launch model.
+    private var displayedModel: String? {
+        if let pendingModel { return pendingModel }
+        return session.liveModel ?? session.launchModel
+    }
+
+    /// The readout (`$0.47 · 38%`) and, for Claude, the model and effort
+    /// choosers' titles; an open Session details follows along.
+    private func showUsage() {
+        updatePieces()
+        let usage = session.usage
+        let percent = usage.flatMap { ClaudeReadout.percent(used: $0.used, size: $0.size) }
+        var tip = usage.map { "Context: \($0.used.formatted()) of \($0.size.formatted()) tokens" }
+        if session.agent == .claude {
+            let status = session.claudeStatus
+            if let id = status.sessionID { ClaudeUsageStore.shared.refreshSession(id) }
+            let cost = ClaudeReadout.cost(of: status)
+            bar.readoutText = ClaudeReadout.text(cost: cost, percent: percent)
+            bar.claude.showModel(title: ClaudeReadout.modelTitle(displayedModel), id: displayedModel, color: .labelColor)
+            bar.claude.showEffort(title: ClaudeReadout.effortTitle(session.launchEffort), id: session.launchEffort,
+                                  color: .secondaryLabelColor)
+            tip = [tip, cost.map { "Estimated cost: \(ClaudeStatsFormat.usd($0, fractionDigits: 4))" }, "Session details"]
+                .compactMap { $0 }.joined(separator: "\n")
+            detailsHost?.rootView = detailView()
+        } else {
+            bar.readoutText = ClaudeReadout.text(cost: usage?.cost, percent: percent)
+        }
+        bar.readoutButton.toolTip = tip
+    }
+
+    private func detailView() -> ClaudeStatsDetailView {
+        ClaudeStatsDetailView(status: session.claudeStatus, defaultModel: session.launchModel,
+                              defaultEffort: session.launchEffort)
+    }
+
+    /// The readout's ⓘ: Session details, with the context gauge.
+    @objc private func showDetails() {
+        guard bar.pieces.readoutOpensDetails else { return }
+        if detailsPopover?.isShown != true { ClaudeUsageStore.shared.refresh() }
+        let host = NSHostingController(rootView: detailView())
+        guard NSPopover.toggle(&detailsPopover, below: bar.readoutButton, content: { host }) != nil else {
+            detailsHost = nil
+            return
+        }
+        detailsHost = host
+    }
+
+    /// The workspace this chat's window shows (where the model and effort persist).
+    private var workspace: WorkspaceController? {
+        (window?.windowController as? MainWindowController)?.workspaceController
+    }
+
+    /// A Claude model, picked under the composer: the workspace's model from
+    /// now on, and this chat relaunches on it (keeping the conversation) —
+    /// now, or when the running turn ends. Claude Code takes its model at launch.
+    private func claudeModelPicked(_ id: String?) {
+        workspace?.setClaudeModel(id)
+        defer { showUsage() }
+        guard ClaudePriceBook.normalize(id ?? "") != ClaudePriceBook.normalize(displayedModel ?? "") else { return }
+        pendingModel = .some(id)
+        if case .running = session.phase {
+            session.afterTurn = { [weak self] in self?.relaunchForModel() }
+        } else {
+            relaunchForModel()
+        }
+    }
+
+    private func relaunchForModel() {
+        // A chat off screen relaunches when it's next shown (its pane does it).
+        guard window != nil, !isHiddenOrHasHiddenAncestor else { relaunchWhenShown = true; return }
+        onReconnect?()
+    }
+
+    override func viewDidUnhide() {
+        super.viewDidUnhide()
+        if relaunchWhenShown, window != nil {
+            relaunchWhenShown = false
+            onReconnect?()
+        }
+    }
+
+    /// Effort changes live in a chat, and is the workspace's from now on.
+    private func claudeEffortPicked(_ level: String?) {
+        workspace?.setClaudeEffort(level)
+        session.setEffort(level)
+        showUsage()
+    }
+
+    // MARK: Attach
+
+    @objc private func showAttachMenu(_ sender: NSButton) {
+        let menu = NSMenu()
+        menu.addItem(NSMenuItem("Attach Files…") { [weak self] in self?.chooseAttachments() })
+        let mention = NSMenuItem("Mention a Workspace File") { [weak self] in self?.composer.startMention() }
+        mention.isEnabled = composer.isEnabled
+        menu.addItem(mention)
+        menu.autoenablesItems = false
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: sender.bounds.height + 4), in: sender)
+    }
+
+    private func chooseAttachments() {
+        guard let window else { return }
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = true
+        panel.canChooseDirectories = true
+        panel.directoryURL = URL(filePath: session.workdir, directoryHint: .isDirectory)
+        panel.prompt = "Attach"
+        Task { [weak self] in
+            guard await panel.beginSheetModal(for: window) == .OK, let self else { return }
+            self.addAttachments(urls: panel.urls)
+        }
     }
 
 

@@ -1,8 +1,8 @@
 import AppKit
 
-/// A borderless pull-down chooser — the title strip's model / effort and the
-/// chat footer's mode / model: item 0 is the visible title, the rest are the
-/// choices, the current one checked. One look and one way to fill it.
+/// A borderless pull-down chooser — the composer's model / effort / approval
+/// mode: item 0 is the visible title, the rest are the choices, the current
+/// one checked. One look and one way to fill it.
 final class ChoicePopUp: NSPopUpButton {
     struct Choice { var id: String?; var title: String }
     static let titleFont = NSFont.role(.meta)
@@ -10,10 +10,14 @@ final class ChoicePopUp: NSPopUpButton {
     /// The user picked a choice (its id).
     var onPick: ((String?) -> Void)?
     private(set) var choices: [Choice] = []
+    /// The visible title's font and colour.
+    let titleFont: NSFont
+    var titleColor: NSColor = .labelColor
 
-    init(tip: String) {
+    init(tip: String, font: NSFont = ChoicePopUp.titleFont) {
+        titleFont = font
         super.init(frame: .zero, pullsDown: true)
-        Self.style(self)
+        Self.style(self, font: font)
         toolTip = tip
         setAccessibilityLabel(tip)   // VoiceOver: "Model, Opus, pop-up button"
         target = self
@@ -23,10 +27,10 @@ final class ChoicePopUp: NSPopUpButton {
     required init?(coder: NSCoder) { fatalError() }
 
     /// The shared look, for pull-downs built elsewhere.
-    static func style(_ button: NSPopUpButton) {
+    static func style(_ button: NSPopUpButton, font: NSFont = titleFont) {
         button.isBordered = false
         button.controlSize = .small
-        button.font = titleFont
+        button.font = font
         button.setContentCompressionResistancePriority(.required, for: .horizontal)
     }
 
@@ -43,9 +47,9 @@ final class ChoicePopUp: NSPopUpButton {
     /// The visible title, and the checkmark on the choice whose id is
     /// `current` (compared through `normalize`), submenus included.
     static func show(_ button: NSPopUpButton, title: String, current: String?, color: NSColor = .labelColor,
-                     skipTag: Int? = nil, normalize: (String) -> String = { $0 }) {
+                     font: NSFont = titleFont, skipTag: Int? = nil, normalize: (String) -> String = { $0 }) {
         button.item(at: 0)?.attributedTitle = NSAttributedString(
-            string: title, attributes: [.foregroundColor: color, .font: titleFont])
+            string: title, attributes: [.foregroundColor: color, .font: font])
         let current = current.map(normalize)
         func mark(_ items: [NSMenuItem]) {
             for item in items {
@@ -59,11 +63,11 @@ final class ChoicePopUp: NSPopUpButton {
 
     /// Fill with `choices` and show `current` (its title, checked); hidden
     /// when there's nothing to choose.
-    func set(_ choices: [Choice], current: String?, color: NSColor = .labelColor) {
+    func set(_ choices: [Choice], current: String?) {
         self.choices = choices
         Self.fill(self, with: choices)
         let title = choices.first { $0.id == current }?.title ?? choices.first?.title ?? ""
-        Self.show(self, title: title, current: current, color: color)
+        Self.show(self, title: title, current: current, color: titleColor, font: titleFont)
         isHidden = choices.isEmpty
     }
 

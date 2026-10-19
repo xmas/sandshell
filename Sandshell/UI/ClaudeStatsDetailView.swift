@@ -1,31 +1,26 @@
 import SwiftUI
 
-/// Popover content behind the title-strip readout: everything the status feed
-/// knows (the full "status bar"), the visibility toggles, and Claude usage on
-/// this Mac.
+/// Session details, behind the composer's readout (`ⓘ $0.47 · 38%`):
+/// everything the status feed knows (the full "status bar"), the context
+/// gauge, and Claude usage on this Mac.
 struct ClaudeStatsDetailView: View {
     var status: ClaudeSessionStatus?
     var defaultModel: String?
     var defaultEffort: String?
-    @ObservedObject private var visibility = ClaudeStatsVisibility.shared
     /// The conversation's priced totals (the Cost row).
     @ObservedObject private var usage = ClaudeUsageStore.shared
+    /// The context levels' colours (Settings ▸ Terminal can override them).
+    @ObservedObject private var appearance = ClaudeStatsAppearance.shared
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
+            Text("Session Details").font(.role(.title))
             if let status {
                 rows(for: status)
             } else {
                 Text("Waiting for Claude Code's first status report…")
                     .font(.role(.body))
                     .foregroundStyle(.secondary)
-            }
-            Divider()
-            Text("Show in title strip").font(.role(.title)).foregroundStyle(.secondary)
-            ForEach(ClaudeStatsSegment.allCases) { seg in
-                Toggle(seg.title, isOn: $visibility[visible: seg])
-                    .toggleStyle(.checkbox)
-                    .font(.role(.body))
             }
             Divider()
             ClaudeUsageSummaryView()
@@ -38,6 +33,8 @@ struct ClaudeStatsDetailView: View {
         let label: String
         let value: String
         var detail: String? = nil
+        /// A context gauge under the value (0…1).
+        var gauge: Double? = nil
         var id: String { label }
     }
 
@@ -45,9 +42,36 @@ struct ClaudeStatsDetailView: View {
         Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 12, verticalSpacing: 6) {
             ForEach(Self.rowData(for: s, conversation: s.sessionID.flatMap { usage.sessionTotals[$0] },
                                  defaultModel: defaultModel, defaultEffort: defaultEffort)) { r in
-                row(r.label, r.value, detail: r.detail)
+                row(r.label, r.value, detail: r.detail, gauge: r.gauge)
             }
         }
+    }
+
+    /// Green → orange → red as the context window fills (the kit status
+    /// line's thresholds); each level can be overridden.
+    private func levelColor(_ fraction: Double) -> Color {
+        let role: ClaudeStatsColorRole = fraction >= 0.8 ? .high : fraction >= 0.5 ? .mid : .low
+        let fallback: NSColor = switch role {
+        case .high: .systemRed
+        case .mid: .systemOrange
+        default: .systemGreen
+        }
+        return Color(nsColor: appearance.color(role, fallback: fallback))
+    }
+
+    private func gaugeBar(_ fraction: Double) -> some View {
+        let f = min(max(fraction, 0), 1)
+        return Capsule().fill(.quaternary)
+            .frame(height: 6)
+            .overlay(alignment: .leading) {
+                GeometryReader { geo in
+                    Capsule().fill(levelColor(f)).frame(width: max(6, geo.size.width * f))
+                }
+            }
+            .frame(maxWidth: 220)
+            .accessibilityElement()
+            .accessibilityLabel("Context used")
+            .accessibilityValue("\(Int((f * 100).rounded())) percent")
     }
 
     /// Plain data for the grid — assembled outside the result builder so the
@@ -78,7 +102,7 @@ struct ClaudeStatsDetailView: View {
                     .compactMap { name, v in v.map { "\(name) \(f.compact($0))" } }
                 if !parts.isEmpty { detail = parts.joined(separator: " · ") }
             }
-            rows.append(Row(label: "Context", value: line, detail: detail))
+            rows.append(Row(label: "Context", value: line, detail: detail, gauge: pct / 100))
         }
         if let cw = s.contextWindow, cw.totalInputTokens != nil || cw.totalOutputTokens != nil {
             rows.append(Row(label: "Tokens",
@@ -142,7 +166,7 @@ struct ClaudeStatsDetailView: View {
         return rows
     }
 
-    private func row(_ label: String, _ value: String, detail: String? = nil) -> some View {
+    private func row(_ label: String, _ value: String, detail: String? = nil, gauge: Double? = nil) -> some View {
         GridRow {
             Text(label).font(.role(.meta)).foregroundStyle(.secondary)
                 .gridColumnAlignment(.trailing)
@@ -151,6 +175,7 @@ struct ClaudeStatsDetailView: View {
                 Text(value).font(.role(.code))
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
+                if let gauge { gaugeBar(gauge).padding(.vertical, 3) }
                 if let detail {
                     Text(detail).font(.role(.meta)).foregroundStyle(.secondary)
                         .textSelection(.enabled)

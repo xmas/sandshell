@@ -51,7 +51,8 @@ final class ChatComposerView: NSView, NSTextViewDelegate {
         textView.importsGraphics = false
         textView.allowsUndo = true
         textView.font = .role(.body)
-        textView.textContainerInset = NSSize(width: 6, height: 8)
+        // One line sits centered in the 40 pt field (48 with the pill's own padding).
+        textView.textContainerInset = NSSize(width: 0, height: 12)
         textView.isContinuousSpellCheckingEnabled = true
         textView.isAutomaticQuoteSubstitutionEnabled = false   // prompts are often code
         textView.isAutomaticDashSubstitutionEnabled = false
@@ -72,42 +73,83 @@ final class ChatComposerView: NSView, NSTextViewDelegate {
         scrollView.drawsBackground = false
         scrollView.translatesAutoresizingMaskIntoConstraints = false
 
+        // A pill: white, a 1 pt border, fully rounded at its one-line height. No shadow.
         wantsLayer = true
-        layer?.cornerRadius = 10
+        layer?.cornerRadius = Self.minHeight / 2
         layer?.borderWidth = 1
-        // Lifted off the transcript: a near-white field with a soft shadow.
-        layer?.masksToBounds = false
-        layer?.shadowColor = NSColor.black.cgColor
-        layer?.shadowOpacity = 0.06
-        layer?.shadowRadius = 6
-        layer?.shadowOffset = CGSize(width: 0, height: -1)
+
+        sendButton.target = self
+        sendButton.action = #selector(sendButtonClicked)
 
         addSubview(chipRow)
         addSubview(scrollView)
-        heightConstraint = scrollView.heightAnchor.constraint(equalToConstant: 40)
+        addSubview(sendButton)
+        heightConstraint = scrollView.heightAnchor.constraint(equalToConstant: Self.minFieldHeight)
+        // Text starts 20 pt in (the line fragment pads 5 of it); the round
+        // button sits 14 pt from the right edge, centred on a one-line pill and
+        // at the bottom as it grows.
+        let padding = textView.textContainer?.lineFragmentPadding ?? 5
+        scrollTopToPill = scrollView.topAnchor.constraint(equalTo: topAnchor, constant: Self.fieldInset)
+        scrollTopToChips = scrollView.topAnchor.constraint(equalTo: chipRow.bottomAnchor, constant: 2)
+        let buttonInset = (Self.minHeight - ComposerSendButton.diameter) / 2
         NSLayoutConstraint.activate([
-            chipRow.topAnchor.constraint(equalTo: topAnchor, constant: 6),
-            chipRow.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
-            chipRow.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -8),
-            scrollView.topAnchor.constraint(equalTo: chipRow.bottomAnchor, constant: 2),
-            scrollView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4),
-            scrollView.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
-            scrollView.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -4),
+            chipRow.topAnchor.constraint(equalTo: topAnchor, constant: 10),
+            chipRow.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
+            chipRow.trailingAnchor.constraint(lessThanOrEqualTo: sendButton.leadingAnchor, constant: -8),
+            scrollTopToPill,
+            scrollView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 20 - padding),
+            scrollView.trailingAnchor.constraint(equalTo: sendButton.leadingAnchor, constant: -(10 - padding)),
+            scrollView.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -Self.fieldInset),
             heightConstraint,
+            sendButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -(14 - 1)),
+            sendButton.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -buttonInset),
+            sendButton.widthAnchor.constraint(equalToConstant: ComposerSendButton.diameter),
+            sendButton.heightAnchor.constraint(equalToConstant: ComposerSendButton.diameter),
         ])
+        rebuildChips()
     }
 
     required init?(coder: NSCoder) { fatalError() }
 
+    /// The pill's height with one line: 48 pt.
+    static let minHeight: CGFloat = 48
+    /// The field inside it: the pill less its padding above and below.
+    private static let fieldInset: CGFloat = 4
+    private static let minFieldHeight = minHeight - 2 * fieldInset
+    private var scrollTopToPill: NSLayoutConstraint!
+    private var scrollTopToChips: NSLayoutConstraint!
+
+    /// Send while idle, Stop while a turn runs (the chat sets its mode).
+    let sendButton = ComposerSendButton()
+    /// The round button was clicked (Send, Stop or Reconnect: the chat decides).
+    var onSendButton: (() -> Void)?
+    @objc private func sendButtonClicked() { onSendButton?() }
+
     // Layer colors don't follow light/dark on their own; resolve them here.
     override var wantsUpdateLayer: Bool { true }
     override func updateLayer() {
-        let dark = effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-        layer?.backgroundColor = (dark ? NSColor(white: 1, alpha: 0.07) : NSColor(white: 1, alpha: 0.96)).cgColor
-        layer?.borderColor = NSColor.separatorColor.cgColor
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            layer?.backgroundColor = NSColor.composerFill.cgColor
+            layer?.borderColor = NSColor.composerBorder.cgColor
+        }
     }
 
+    /// A click in the pill's padding puts the caret in the field.
+    override func mouseDown(with event: NSEvent) { focus() }
+
     func focus() { window?.makeFirstResponder(textView) }
+
+    /// The `+` control's "Mention a File": an `@` at the caret, which opens
+    /// the workspace's files (a space first if it would join a word).
+    func startMention() {
+        guard textView.isEditable else { return }
+        focus()
+        let caret = textView.selectedRange()
+        let ns = textView.string as NSString
+        let joins = caret.location > 0 && caret.location <= ns.length
+            && !CharacterSet.whitespacesAndNewlines.contains(UnicodeScalar(ns.character(at: caret.location - 1)) ?? " ")
+        textView.insertText(joins ? " @" : "@", replacementRange: caret)
+    }
 
     func addAttachments(urls: [URL]) { attach(urls.map(ComposerTextView.attachment(for:))) }
 
@@ -124,7 +166,8 @@ final class ChatComposerView: NSView, NSTextViewDelegate {
 
     func setEnabled(_ enabled: Bool) {
         textView.isEditable = enabled
-        alphaValue = enabled ? 1 : 0.55
+        // The field dims; the round button keeps its own state (Reconnect).
+        for v in [scrollView, chipRow] as [NSView] { v.alphaValue = enabled ? 1 : 0.55 }
     }
     var isEnabled: Bool { textView.isEditable }
 
@@ -281,6 +324,7 @@ final class ChatComposerView: NSView, NSTextViewDelegate {
     /// Self-test: type `text` (replacing what's there) and the field's height.
     func debugType(_ text: String) { textView.string = text; resize() }
     var debugFieldHeight: CGFloat { heightConstraint.constant }
+    var debugDraftIsEmpty: Bool { textView.string.isEmpty && attachments.isEmpty }
     #endif
 
     /// How tall the field may grow before it scrolls (the chat sets it to about
@@ -303,7 +347,8 @@ final class ChatComposerView: NSView, NSTextViewDelegate {
         } else {
             return
         }
-        let h = min(max(used + textView.textContainerInset.height * 2, 40), max(maximumHeight, 40))
+        let floor = Self.minFieldHeight
+        let h = min(max(used + textView.textContainerInset.height * 2, floor), max(maximumHeight, floor))
         if abs(heightConstraint.constant - h) > 0.5 { heightConstraint.constant = h }
     }
 
@@ -331,6 +376,10 @@ final class ChatComposerView: NSView, NSTextViewDelegate {
             chipRow.addArrangedSubview(chip)
         }
         chipRow.isHidden = attachments.isEmpty
+        // No chips: the field takes the pill's top too.
+        let (on, off) = attachments.isEmpty ? (scrollTopToPill, scrollTopToChips) : (scrollTopToChips, scrollTopToPill)
+        off?.isActive = false
+        on?.isActive = true
     }
 
     @objc private func previewChip(_ sender: NSButton) {
