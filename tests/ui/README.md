@@ -102,7 +102,8 @@ reads) once, like any UI automation.
 | `02_new_session_while_building.applescript` | Runs right after the window opens: the sidebar empty state shows the sandbox build progress (or "No sessions yet"), `news` adds a session immediately even mid-build, the session goes live (real `sbx create` + terminal), and the placeholder is gone afterwards. Runs before 01 so it catches the build. |
 | `01_menu_structure.applescript` | Menu bar + File menu have the expected items. Read-only. |
 | `03_flat_session_order.applescript` | A second session lands at the top of the flat list, and the sidebar rows (`sidebarSessionIDs`) match the controller's session order. |
-| `05_folders_pane.applescript` | Settings ▸ Folders lists the workspace's folders with New Folder / Add Existing… (read-only). Runs before 04. |
+| `06_window_chrome.applescript` | The redesigned chrome: the sidebar's one-line footer (no settings gear), the title bar's Sandbox group and Files button, the pane strip's breadcrumb, and none of the old pane buttons. (Pane-strip condensing is the `title-strip` self-test's job.) |
+| `05_folders_pane.applescript` | Settings (opened through the bridge, as ⌘, does) ▸ Folders lists the workspace's folders with New Folder / Add Existing… (read-only). Runs before 04. |
 | `04_settings_sandboxes_lifecycle.applescript` | Settings ▸ Sandboxes: Stop → Run → Delete of the throwaway sandbox, confirming each state change in the UI. Skipped if the runner couldn't create it. |
 
 The `stat` JSON's per-window entries carry `sessions` (in sidebar order),
