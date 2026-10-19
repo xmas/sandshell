@@ -146,13 +146,6 @@ final class MainWindowController: NSWindowController {
         let sidebarVC = SidebarListController(controller: controller)
         self.sidebar = sidebarVC
         sidebarVC.onOpenWorkspace = { [weak self] r in self?.onOpenWorkspace?(r) }
-        // A session's "Files": select it and show the window's Files sidebar,
-        // which follows the selected session's folder.
-        sidebarVC.onOpenFilesInSplit = { [weak self] id in
-            guard let self, self.workspace?.session(id: id) != nil else { return }
-            self.workspace?.selection = .session(id)
-            self.setFilesShown(true)
-        }
         sidebarVC.onShowSearch = { [weak self] folder in self?.showSearch(preferredFolder: folder) }
         sidebarVC.onStopTask = { [weak self] sid, task in await self?.detail?.surfaces.chats[sid]?.session.stopBackgroundTask(task) ?? false }
         sidebarVC.onDropFiles = { [weak self] id, urls in
@@ -172,6 +165,8 @@ final class MainWindowController: NSWindowController {
                                         restoresLayout: restoresLayout)
         self.detail = detail
         detail.newSessionMenu = { [weak self] in self?.sidebar?.newSessionMenu() }
+        detail.onShowFiles = { [weak self] changesOnly in self?.showInFiles(changesOnly: changesOnly) }
+        detail.onOpenFile = { [weak self] url, line in self?.showInFiles(url, line: line) }
         // Drive the toolbar identity (the session's name) from the focused
         // pane; nothing when it shows no session.
         detail.onChromeChange = { [weak self] chrome in
@@ -551,21 +546,21 @@ final class MainWindowController: NSWindowController {
         }
     }
 
-    /// The focused session's folder as a Files pane. No menu or button opens
-    /// one any more (Files is the window's sidebar); the Files-pane self-tests
-    /// still do, until Files panes go.
-    func openFilesInSplit() {
-        guard let detail else { return }
-        detail.openFiles(detail.defaultFilesTarget())
+    /// A pane's branch crumb or a chat's file link: the Files sidebar (shown
+    /// if it isn't) with just the changes, or `url` open (at `line`).
+    func showInFiles(_ url: URL? = nil, line: Int? = nil, changesOnly: Bool = false) {
+        setFilesShown(true)
+        guard let files = filesPane else { return }
+        if changesOnly { files.showChanges() }
+        guard let url else { return }
+        if let line { files.editor.open(url, line: line, highlight: "") } else { files.open(url) }
     }
 
-    /// File ▸ Open Quickly (⇧⌘O) when no Files surface has focus: the focused
-    /// Files pane, else the trailing Files pane (shown if needed), else any.
+    /// File ▸ Open Quickly (⇧⌘O) when no Files surface has focus: the Files
+    /// sidebar, shown if needed.
     func openQuickly() {
-        if let files = detail?.focusedFiles { return files.openQuickly(nil) }
         if let item = filesItem, !item.isCollapsed, let files = filesPane { return files.openQuickly(nil) }
-        if let files = detail?.anyFiles { return files.openQuickly(nil) }
-        toggleFiles()
+        setFilesShown(true)
         // After the inspector's expand animation, so the popover anchors in place.
         Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(300))
@@ -742,10 +737,10 @@ extension MainWindowController: NSWindowDelegate {
 
     func windowDidBecomeKey(_ notification: Notification) { onBecomeKey?() }
 
-    /// Unsaved edits in the Files inspector or a Files pane: Save / Discard /
+    /// Unsaved edits in the Files inspector: Save / Discard /
     /// Cancel for each (false = the person cancelled).
     func confirmUnsavedFiles() -> Bool {
-        ([filesPane] + (detail?.panes.map(\.filesPane) ?? [])).compactMap { $0 }.allSatisfy { $0.confirmClose() }
+        filesPane?.confirmClose() ?? true
     }
 
     /// Tear down this window's terminals (kills their `sbx exec` + removes temp

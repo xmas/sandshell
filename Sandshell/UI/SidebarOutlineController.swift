@@ -229,8 +229,6 @@ final class SidebarListController: NSViewController {
     var onOpenWorkspace: ((URL) -> Void)?
     /// Files dropped on a session row (the window routes them to that session).
     var onDropFiles: ((UUID, [URL]) -> Void)?
-    /// "Open Files in Split" from a session row's context menu.
-    var onOpenFilesInSplit: ((UUID) -> Void)?
     /// Open the window's Search (footer button / "Search…" menu item); the
     /// folder is where a restored conversation lands if its cwd has none.
     var onShowSearch: ((UUID?) -> Void)?
@@ -1361,7 +1359,6 @@ final class SidebarListController: NSViewController {
         menu.addItem(menuItem("Rename…", #selector(contextRename), object: session.id))
         menu.addItem(menuItem("Close Session", #selector(contextCloseSession), object: session.id))
         menu.addItem(.separator())
-        menu.addItem(menuItem("Open Files in Split", #selector(contextOpenFiles), object: session.id))
         if SbxCommand.supportsACP(session.agent) {
             menu.addItem(menuItem(session.isChat ? "Show as Terminal" : "Show as Chat",
                                   #selector(contextToggleChat), object: session.id))
@@ -1410,10 +1407,6 @@ final class SidebarListController: NSViewController {
 
     private func menuItem(_ title: String, _ action: Selector, object: Any? = nil) -> NSMenuItem {
         NSMenuItem(title, action: action, target: self, object: object)
-    }
-
-    @objc private func contextOpenFiles(_ sender: NSMenuItem) {
-        if let id = sender.representedObject as? UUID { onOpenFilesInSplit?(id) }
     }
 
     @objc private func contextCloseSession(_ sender: NSMenuItem) {

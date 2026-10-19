@@ -1,34 +1,12 @@
 import AppKit
 
-/// What a split pane's Files surface shows: a session's folder (following its
-/// working directory) or, once that session is gone, the folder it last had.
-struct FilesTarget: Codable, Equatable {
-    var session: UUID?
-    var folder: String
-
-    /// The folder to show and the pane title ("Files — <session or folder>").
-    @MainActor
-    func resolve(in controller: WorkspaceController) -> (url: URL, title: String) {
-        if let id = session, let s = controller.session(id: id) {
-            return (URL(filePath: s.workdir, directoryHint: .checkFileSystem), controller.displayName(of: s))
-        }
-        let url = URL(filePath: folder, directoryHint: .checkFileSystem)
-        return (url, url.lastPathComponent)
-    }
-}
-
-/// Files: the session folder's tree and an editor. The window's Files sidebar
-/// (trailing, full height, following the active session) stacks the editor
-/// under the tree, with Commits at its foot and its header in the title bar
-/// (`header`); a split pane (`compact`, `FilesTarget`) puts them side by side.
+/// The window's Files sidebar: the session folder's tree with an editor
+/// stacked under it, Commits at its foot, and its header (`header`) in the
+/// title bar above it. Trailing, full height, following the active session.
 @MainActor
 final class FilesPaneController: NSViewController, NSSplitViewDelegate {
     let tree = FileTreeController()
     let editor = FileEditorController()
-    /// A split pane's layout (tree beside the editor, narrower minimums); the
-    /// window's sidebar otherwise.
-    private let compact: Bool
-    private var isSidebar: Bool { !compact }
     /// The sidebar's header — "Files · main · 6 changed" — for the title bar above it.
     let header = FilesHeaderView()
     private var openQuicklyPopover: NSPopover?
@@ -43,44 +21,35 @@ final class FilesPaneController: NSViewController, NSSplitViewDelegate {
         set { tree.onAddToChat = newValue }
     }
 
-    /// A plain, frame-based split: dragging its divider moves only its own two
-    /// sides. (A nested NSSplitViewController's Auto Layout drag pushed every
-    /// split in the window around, the sidebar included.)
+    /// A plain, frame-based split (tree above, editor below): dragging its
+    /// divider moves only its own two sides. (A nested NSSplitViewController's
+    /// Auto Layout drag pushed every split in the window around.)
     private let split = NSSplitView()
     private var placedDivider = false
-    /// The tree's and the editor's least extent along the split (widths side
-    /// by side, heights stacked in the sidebar).
-    private var treeMin: CGFloat { isSidebar ? 120 : 170 }
-    private var editorMin: CGFloat { isSidebar ? 140 : 150 }
-    private static let treeMax: CGFloat = 420
-    /// The last tree width (height, in the sidebar) the user dragged to: where
-    /// new Files surfaces start.
-    private var extentKey: String { isSidebar ? "filesSidebarTreeHeight" : "filesPaneTreeWidth" }
-    /// Where the editor's open tabs are remembered. The window's sidebar has
-    /// its own (its tabs stay as it follows the selected session from folder
-    /// to folder); a split pane's is the first folder it shows.
+    /// The tree's and the editor's least heights.
+    private let treeMin: CGFloat = 120
+    private let editorMin: CGFloat = 140
+    /// The last tree height the user dragged to.
+    private let treeHeightKey = "filesSidebarTreeHeight"
+    /// Where the editor's open tabs are remembered: the window's own, so its
+    /// tabs stay as it follows the selected session from folder to folder.
     private let tabsKey: String?
 
-    init(compact: Bool = false, tabsKey: String? = nil) {
-        self.compact = compact
+    init(tabsKey: String? = nil) {
         self.tabsKey = tabsKey
         super.init(nibName: nil, bundle: nil)
-        // The sidebar shows Commits at its foot and the branch in its header.
-        tree.hostsCommits = compact
-        tree.showsBranchLine = compact
     }
 
     @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
 
     override func loadView() {
-        split.isVertical = compact
+        split.isVertical = false
         split.dividerStyle = .thin
         split.delegate = self
         addChild(tree)
         addChild(editor)
         split.addArrangedSubview(tree.view)
         split.addArrangedSubview(editor.view)
-        guard isSidebar else { view = split; return }
 
         // Full height: the background runs up under the title bar (where the
         // header's toolbar items sit); the content starts below it.
@@ -128,29 +97,19 @@ final class FilesPaneController: NSViewController, NSSplitViewDelegate {
         (view as? FilesSidebarView)?.apply(colors)
     }
 
-    private func extent(_ v: NSView) -> CGFloat { compact ? v.frame.width : v.frame.height }
-    private var splitExtent: CGFloat { compact ? split.bounds.width : split.bounds.height }
-
     override func viewDidLayout() {
         super.viewDidLayout()
-        if isSidebar, view.bounds.width > 0 { header.fit(sidebarWidth: view.bounds.width) }
-        guard !placedDivider, splitExtent >= treeMin + editorMin + split.dividerThickness else { return }
+        if view.bounds.width > 0 { header.fit(sidebarWidth: view.bounds.width) }
+        guard !placedDivider, split.bounds.height >= treeMin + editorMin + split.dividerThickness else { return }
         placedDivider = true
-        let saved = CGFloat(UserDefaults.standard.double(forKey: extentKey))
-        let initial = isSidebar ? (splitExtent * 0.45).rounded() : 220
-        split.setPosition(clampTree(saved > 0 ? saved : initial), ofDividerAt: 0)
+        let saved = CGFloat(UserDefaults.standard.double(forKey: treeHeightKey))
+        split.setPosition(clampTree(saved > 0 ? saved : (split.bounds.height * 0.45).rounded()), ofDividerAt: 0)
     }
 
-    /// Side by side the tree tops out at `treeMax`; stacked it can take all
-    /// but the editor's minimum.
-    private func treeLimit() -> CGFloat {
-        let room = splitExtent - editorMin - split.dividerThickness
-        return compact ? min(Self.treeMax, room) : room
-    }
+    /// The tree can take all but the editor's minimum.
+    private var treeMax: CGFloat { split.bounds.height - editorMin - split.dividerThickness }
 
-    private func clampTree(_ extent: CGFloat) -> CGFloat {
-        max(treeMin, min(extent, treeLimit()))
-    }
+    private func clampTree(_ height: CGFloat) -> CGFloat { max(treeMin, min(height, treeMax)) }
 
     // MARK: NSSplitViewDelegate
 
@@ -159,10 +118,10 @@ final class FilesPaneController: NSViewController, NSSplitViewDelegate {
     }
 
     func splitView(_ splitView: NSSplitView, constrainMaxCoordinate proposed: CGFloat, ofSubviewAt index: Int) -> CGFloat {
-        treeLimit()
+        treeMax
     }
 
-    /// When the surface itself resizes, the editor takes the change; the tree keeps its size.
+    /// When the sidebar itself resizes, the editor takes the change; the tree keeps its height.
     func splitView(_ splitView: NSSplitView, shouldAdjustSizeOfSubview view: NSView) -> Bool {
         view !== tree.view
     }
@@ -170,8 +129,9 @@ final class FilesPaneController: NSViewController, NSSplitViewDelegate {
     func splitViewDidResizeSubviews(_ notification: Notification) {
         // Only the user's drags (AppKit tags them with the divider index) set the default.
         guard placedDivider, notification.userInfo?["NSSplitViewDividerIndex"] != nil else { return }
-        UserDefaults.standard.set(Double(extent(tree.view)), forKey: extentKey)
+        UserDefaults.standard.set(Double(tree.view.frame.height), forKey: treeHeightKey)
     }
+
 
     /// Only the changed files (git), as a flat list.
     func showChanges() { _ = view; tree.showChanges(true) }
@@ -188,7 +148,7 @@ final class FilesPaneController: NSViewController, NSSplitViewDelegate {
         }
     }
 
-    /// A split Files pane's tabs: under the first folder it shows.
+    /// Where tabs were once kept: under the first folder shown.
     static func folderTabsKey(_ folder: URL) -> String { "filesTabs:" + folder.standardizedFileURL.plainPath }
 
     /// The inspector's tabs used to be kept under the first folder it showed:
