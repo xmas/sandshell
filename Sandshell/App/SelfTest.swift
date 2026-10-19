@@ -1827,7 +1827,7 @@ enum SelfTest {
         let first = c.items.compactMap { if case .agentText(_, let t) = $0 { t } else { nil } }.first { $0.contains("ALPHA-ONE") } ?? "ALPHA-ONE"
         guard let forked = ws.forkChat(s.id, upTo: first) else { return check(false, "fork created") }
         check(forked.forkedFrom == s.id && forked.forkedAt != nil && forked.firstPrompt == nil
-                && ws.displayName(of: forked) == "Fork of \(ws.displayName(of: s))",
+                && ws.displayName(of: forked) == "Fork of \(ws.displayName(s.id) ?? "")",
               "fork created (\(ws.displayName(of: forked)))")
         check(ws.sessionOrder.first { $0.id == forked.id }?.nestedUnder == s.id, "the fork lists under its source")
         check(await until(300) { chat(forked.id)?.phase == .ready }, "the fork resumes as a chat")
