@@ -76,11 +76,15 @@ enum SbxCommand {
     /// process whose environment carries `match` (e.g. `SANDSHELL_LAUNCH=<uuid>`).
     /// `immediate`: KILL at once, with no chance to write anything on the way
     /// out (a chat reloading a conversation another app is writing to).
+    /// The graceful reap waits for stragglers only when its TERM reached
+    /// something: most launches find nothing, and shouldn't wait a second for it.
     static func reapScript(match: String, immediate: Bool = false) -> String {
-        let scan = #"for d in /proc/[0-9]*; do { tr '\0' '\n' < "$d/environ"; } 2>/dev/null | grep -qxF "$M" && kill -SIG "${d#/proc/}" 2>/dev/null; done"#
-        if immediate { return "M=\(shellQuote(match)); " + scan.replacing("SIG", with: "KILL") + "; true" }
-        return "M=\(shellQuote(match)); " + scan.replacing("SIG", with: "TERM")
-            + "; sleep 1; " + scan.replacing("SIG", with: "KILL") + "; true"
+        func scan(_ signal: String, then: String = "") -> String {
+            #"for d in /proc/[0-9]*; do { tr '\0' '\n' < "$d/environ"; } 2>/dev/null | grep -qxF "$M" && kill -\#(signal) "${d#/proc/}" 2>/dev/null\#(then); done"#
+        }
+        if immediate { return "M=\(shellQuote(match)); " + scan("KILL") + "; true" }
+        return "M=\(shellQuote(match)); f=; " + scan("TERM", then: " && f=1")
+            + #"; [ -z "$f" ] || { sleep 1; "# + scan("KILL") + "; }; true"
     }
 
     /// Env pairs passed through `sbx exec ... env K=V ...`. Mirrors

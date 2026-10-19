@@ -98,10 +98,11 @@ struct SbxCommandTests {
     // MARK: - reapScript
 
     struct ReapScripts {
-        @Test func gracefulReapTermsThenKills() {
+        @Test func gracefulReapTermsThenKillsOnlyWhatItTermed() {
             let match = "SANDSHELL_LAUNCH=\(UUID().uuidString)"
             #expect(SbxCommand.reapScript(match: match)
-                    == "M=\(match); " + Expected.reapScan("TERM") + "; sleep 1; " + Expected.reapScan("KILL") + "; true")
+                    == "M=\(match); f=; " + Expected.reapScan("TERM", then: " && f=1")
+                    + #"; [ -z "$f" ] || { sleep 1; "# + Expected.reapScan("KILL") + "; }; true")
         }
 
         @Test func immediateReapKillsAtOnce() {
@@ -653,9 +654,9 @@ extension SbxCommandTests {
             [.claude: claudeACP, .codex: codexACP, .gemini: geminiACP]
         }
 
-        /// The `/proc` scan `reapScript` runs once per signal.
-        static func reapScan(_ signal: String) -> String {
-            #"for d in /proc/[0-9]*; do { tr '\0' '\n' < "$d/environ"; } 2>/dev/null | grep -qxF "$M" && kill -\#(signal) "${d#/proc/}" 2>/dev/null; done"#
+        /// The `/proc` scan `reapScript` runs once per signal (`then` runs after each kill).
+        static func reapScan(_ signal: String, then: String = "") -> String {
+            #"for d in /proc/[0-9]*; do { tr '\0' '\n' < "$d/environ"; } 2>/dev/null | grep -qxF "$M" && kill -\#(signal) "${d#/proc/}" 2>/dev/null\#(then); done"#
         }
 
         /// The locale forwarded into the container: the host's `LANG` when it's

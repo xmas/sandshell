@@ -1828,9 +1828,11 @@ final class TerminalStackController: NSViewController {
 
     /// Before (re)launching a session: end anything a crash, kill or earlier
     /// launch of it left running — by its own tag and, for a chat that ran on
-    /// a warm spare, by that spare's.
+    /// a warm spare, by that spare's. A session this run just made has none.
     private func reapLeftovers(_ id: UUID, in container: String) async {
-        await SbxClient.reapSessionProcessesAndWait(container: container, match: "SANDSHELL_SESSION=\(id.uuidString)")
+        if !SbxClient.takeFirstLaunch(id) {
+            await SbxClient.reapSessionProcessesAndWait(container: container, match: "SANDSHELL_SESSION=\(id.uuidString)")
+        }
         if let match = surfaces.leftoverProcesses.removeValue(forKey: id) {
             await SbxClient.reapSessionProcessesAndWait(container: container, match: match)
         }

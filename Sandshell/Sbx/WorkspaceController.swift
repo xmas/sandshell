@@ -1248,6 +1248,8 @@ final class WorkspaceController: ObservableObject {
         // from it would rotate the host's refresh token).
         let name = containerName(for: agent)
         let homeURL = home
+        // Nothing below changes what `sbx ls` says: ask while the rest runs.
+        async let listing = SbxClient.shared.status(name: name)
         let proxied = await SbxClient.shared.hasAnthropicSecret(sandbox: name)
         await Task.detached(priority: .utility) {
             ClaudeConfigSync.syncMCPServers(home: homeURL)
@@ -1258,10 +1260,13 @@ final class WorkspaceController: ObservableObject {
         await learnKitRequirements(resolvedKits())
         let kits = kits(for: agent, from: resolvedKits())
         let signature = configSignature(mounts: mounts, kits: kits, agent: agent)
-        let mcp = await effectiveMCPServers()
 
-        let existing = try await SbxClient.shared.status(name: name)
+        let existing = try await listing
         let built: Sandbox
+        // The servers to load once it's built — asked before the build starts
+        // (an `sbx` call spawned as `sbx create` winds down can wedge), and
+        // only then: attaching to a sandbox loads nothing.
+        let mcp: [String]
         if let existing {
             // A custom agent whose kit is no longer registered can't be
             // recreated: its sandbox is kept as it is — not offered a rebuild,
@@ -1304,6 +1309,7 @@ final class WorkspaceController: ObservableObject {
                 refreshKitDrift(for: agent)
                 throw error
             }
+            mcp = await effectiveMCPServers()
             Log.info(.workspace, "rebuilding container '\(name)' (\(mounts.count) mounts, \(kits.count) kits, force=\(force))")
             beginBuilding(agent, .rebuilding, "Rebuilding \(name)…")
             do {
@@ -1313,6 +1319,7 @@ final class WorkspaceController: ObservableObject {
                 throw error
             }
         } else {
+            mcp = await effectiveMCPServers()
             Log.info(.workspace, "creating container '\(name)' for \(agent.rawValue) (\(mounts.count) mounts, \(kits.count) kits)")
             beginBuilding(agent, .creating, "Building \(name)…")
             do {
@@ -1992,6 +1999,7 @@ extension WorkspaceController {
             workdir: workdir(for: folder),
             containerAgent: override,
             isChat: chat)
+        SbxClient.sessionCreated(session.id)
         state.sessions.append(session)
         saveState()
         return session
@@ -2116,6 +2124,7 @@ extension WorkspaceController {
             // A conversation from a chat (or the Claude app) comes back as one.
             isChat: SbxCommand.supportsACP(record.agent)
                 && TranscriptReader.startedAsChat(at: record.url, agent: record.agent))
+        SbxClient.sessionCreated(session.id)
         state.sessions.append(session)
         saveState()
         return session

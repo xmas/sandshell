@@ -507,6 +507,15 @@ actor SbxClient {
 
     private static let reaps = Mutex<[Process]>([])
 
+    /// Sessions this app run made that haven't launched yet: no process in a
+    /// sandbox can carry their tag, so their first launch has nothing to reap.
+    private static let unlaunched = Mutex<Set<UUID>>([])
+
+    nonisolated static func sessionCreated(_ id: UUID) { unlaunched.withLock { _ = $0.insert(id) } }
+
+    /// Whether this is `id`'s first launch since this run made it (it isn't, from now on).
+    nonisolated static func takeFirstLaunch(_ id: UUID) -> Bool { unlaunched.withLock { $0.remove(id) != nil } }
+
     /// Whether sbx holds an Anthropic credential (API key or OAuth) for this
     /// sandbox — global or scoped to it. When it does, sbx's proxy attaches the
     /// real credential to the agent's API requests and refreshes OAuth on the
