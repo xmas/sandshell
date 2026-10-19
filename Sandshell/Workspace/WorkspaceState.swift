@@ -81,6 +81,17 @@ struct Session: Identifiable, Codable, Hashable {
     /// cwd it started in (Claude: `~/.claude/projects/<encoded cwd>`). Its next
     /// launch takes the conversation to `workdir` and clears this.
     var transcriptWorkdir: String?
+    /// The session this one was forked from (`WorkspaceController.forkChat`),
+    /// kept even once that one is closed (it then lists as a session of its own).
+    var forkedFrom: UUID?
+    /// When it was forked: orders a parent's forks oldest-first.
+    var forkedAt: Date?
+    /// The first thing asked here (a fork's: the first after the fork), set
+    /// once: what it's called until the agent titles it.
+    var firstPrompt: String?
+    /// The agent's own title for the conversation (Claude's `ai-title`), set
+    /// once, after its first turn.
+    var generatedName: String?
 
     /// The agent whose container this session runs in: the override when present,
     /// otherwise the session's own agent.
@@ -88,6 +99,89 @@ struct Session: Identifiable, Codable, Hashable {
 
     /// Where to look for its conversation (see `transcriptWorkdir`).
     var conversationWorkdir: String { transcriptWorkdir ?? workdir }
+
+    var isFork: Bool { forkedFrom != nil }
+
+    /// What it's called: the person's name, else the agent's title for it,
+    /// else its first prompt, else "Fork of <its source>" / "New session".
+    /// Without its source at hand (see `displayName(parent:)`) a fork reads as
+    /// it was named when it was made. `name` is only the person's name (and
+    /// that fallback): automatic naming never shows it.
+    var displayName: String { displayName(parent: { _ in nil }) }
+
+    /// `displayName`, looking a fork's source up with `parent` (nil: it's gone).
+    func displayName(parent: (UUID) -> Session?) -> String {
+        Self.resolveName(self, parent: parent, depth: 0)
+    }
+
+    private static func resolveName(_ s: Session, parent: (UUID) -> Session?, depth: Int) -> String {
+        if s.isNamedByUser, !s.name.isEmpty { return s.name }
+        if let name = s.generatedName, !name.isEmpty { return name }
+        if let prompt = s.firstPrompt, !prompt.isEmpty { return prompt }
+        if let source = s.forkedFrom {
+            // (Fork chains are short: the cap only guards a corrupt loop.)
+            if depth < 16, let p = parent(source), p.id != s.id {
+                return "Fork of \(resolveName(p, parent: parent, depth: depth + 1))"
+            }
+            return s.name.isEmpty ? "Fork" : s.name
+        }
+        // A shell is never asked anything: it keeps reading as what it is.
+        return s.agent == .shell ? defaultName(for: s.agent, containerAgent: s.containerAgent) : "New session"
+    }
+
+    /// Default name for a fresh session, e.g. "New Claude Session". A shell
+    /// attached to another agent's sandbox reads "Shell in Claude", etc.
+    static func defaultName(for agent: AgentKind, containerAgent: AgentKind? = nil) -> String {
+        if let containerAgent, containerAgent != agent {
+            return "\(agent.displayName) in \(containerAgent.displayName)"
+        }
+        return "New \(agent.displayName) Session"
+    }
+
+    /// The default names before agents had brand spellings (the raw id,
+    /// capitalized: "New Docker-Agent Session", "New Opencode Session").
+    static func legacyDefaultName(for agent: AgentKind, containerAgent: AgentKind? = nil) -> String {
+        if let containerAgent, containerAgent != agent {
+            return "\(agent.rawValue.capitalized) in \(containerAgent.rawValue.capitalized)"
+        }
+        return "New \(agent.rawValue.capitalized) Session"
+    }
+
+    /// Whether `name` is one a session has before anything's asked in it.
+    var hasDefaultName: Bool {
+        name == Self.defaultName(for: agent, containerAgent: containerAgent)
+            || name == Self.legacyDefaultName(for: agent, containerAgent: containerAgent)
+            || (name.hasPrefix("New ") && name.hasSuffix(" Session"))
+    }
+
+    /// Something was asked here: the first time, that's its first prompt,
+    /// which then never changes. Whether it changed anything.
+    mutating func recordPrompt(_ prompt: String) -> Bool {
+        let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard firstPrompt == nil, !trimmed.isEmpty else { return false }
+        firstPrompt = trimmed
+        return true
+    }
+
+    /// The agent titled the conversation: the first title sticks. Whether it
+    /// changed anything.
+    mutating func adoptGeneratedName(_ title: String) -> Bool {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard generatedName == nil, !trimmed.isEmpty else { return false }
+        generatedName = trimmed
+        return true
+    }
+
+    /// A chat forked from `source` at `date`: its folder and agent, nothing
+    /// asked in it yet (it's named by its own first prompt, not the source's).
+    /// `name` is what it reads as once `source` is gone.
+    static func fork(of source: Session, name: String, order: Int, workdir: String, at date: Date) -> Session {
+        var fork = Session(folderID: source.folderID, agent: source.agent, name: name, order: order,
+                           workdir: workdir, createdAt: date, isChat: true)
+        fork.forkedFrom = source.id
+        fork.forkedAt = date
+        return fork
+    }
 
     /// Renamed by the person: their name sticks (prompts no longer rename it);
     /// empty puts automatic naming back. Nil when that changes nothing.
@@ -123,7 +217,7 @@ struct Session: Identifiable, Codable, Hashable {
 
     enum CodingKeys: String, CodingKey {
         case id, folderID, agent, name, order, workdir, transcriptID, createdAt, lastActiveAt, containerAgent
-        case transcriptWorkdir
+        case transcriptWorkdir, forkedFrom, forkedAt, firstPrompt, generatedName
         case isChat = "chat"
         case isNamedByUser = "namedByUser"
         case projectID   // legacy key (pre-folders model)
@@ -146,6 +240,10 @@ struct Session: Identifiable, Codable, Hashable {
         isChat = try c.decodeIfPresent(Bool.self, forKey: .isChat) ?? false
         isNamedByUser = try c.decodeIfPresent(Bool.self, forKey: .isNamedByUser) ?? false
         transcriptWorkdir = try c.decodeIfPresent(String.self, forKey: .transcriptWorkdir)
+        forkedFrom = try c.decodeIfPresent(UUID.self, forKey: .forkedFrom)
+        forkedAt = try c.decodeIfPresent(Date.self, forKey: .forkedAt)
+        firstPrompt = try c.decodeIfPresent(String.self, forKey: .firstPrompt)
+        generatedName = try c.decodeIfPresent(String.self, forKey: .generatedName)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -163,6 +261,10 @@ struct Session: Identifiable, Codable, Hashable {
         if isChat { try c.encode(true, forKey: .isChat) }
         if isNamedByUser { try c.encode(true, forKey: .isNamedByUser) }
         try c.encodeIfPresent(transcriptWorkdir, forKey: .transcriptWorkdir)
+        try c.encodeIfPresent(forkedFrom, forKey: .forkedFrom)
+        try c.encodeIfPresent(forkedAt, forKey: .forkedAt)
+        try c.encodeIfPresent(firstPrompt, forKey: .firstPrompt)
+        try c.encodeIfPresent(generatedName, forKey: .generatedName)
     }
 
     /// A workdir once the directory at `from` has moved to `to`: nil unless
@@ -206,7 +308,11 @@ struct WorkspaceState: Codable {
         return true
     }
 
-    init(schemaVersion: Int = 2,
+    /// The schema new states are made with (older ones migrate in
+    /// `WorkspaceBootstrap.openReportingProblems`).
+    static let currentSchemaVersion = 3
+
+    init(schemaVersion: Int = WorkspaceState.currentSchemaVersion,
          folders: [Folder] = [],
          sessions: [Session] = [],
          expandedFolderIDs: [UUID] = [],
@@ -255,6 +361,20 @@ struct WorkspaceState: Codable {
         try c.encode(appliedMountSignatures, forKey: .appliedMountSignatures)
         if !ignoredKitDrift.isEmpty { try c.encode(ignoredKitDrift, forKey: .ignoredKitDrift) }
         try c.encodeIfPresent(slugAgent, forKey: .slugAgent)
+    }
+
+    /// Schema 3 names a session by its first prompt (`Session.firstPrompt`)
+    /// where `name` used to follow its latest one: a session named that way
+    /// keeps the name it shows, as its first prompt. Default names, the
+    /// person's names and forks (named apart) are left as they are.
+    mutating func migrateLegacyNames() {
+        for i in sessions.indices {
+            let s = sessions[i]
+            let name = s.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !s.isNamedByUser, s.firstPrompt == nil, !s.isFork,
+                  !name.isEmpty, !s.hasDefaultName else { continue }
+            sessions[i].firstPrompt = name
+        }
     }
 
     // MARK: - Folder moves
@@ -476,6 +596,13 @@ enum WorkspaceBootstrap {
                 state.sessions[idx].createdAt = base.addingTimeInterval(-Double(index))
             }
             state.schemaVersion = 2
+        }
+
+        // 5c. Migrate to schemaVersion 3: sessions are named by their first
+        // prompt, not their latest (`WorkspaceState.migrateLegacyNames`).
+        if state.schemaVersion < 3 {
+            state.migrateLegacyNames()
+            state.schemaVersion = 3
         }
 
         // 6. Persist (creates state.json on first run; idempotent thereafter).

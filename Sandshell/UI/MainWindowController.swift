@@ -590,7 +590,7 @@ final class MainWindowController: NSWindowController {
             let rt = workspace?.runtime(session.id)
             return SessionScriptStatus(
                 id: session.id.uuidString,
-                name: session.name,
+                name: workspace?.displayName(of: session) ?? session.displayName,
                 agent: session.agent.rawValue,
                 workdir: session.workdir,
                 status: rt?.status == .working ? "working" : "ready",

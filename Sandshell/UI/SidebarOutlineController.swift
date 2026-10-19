@@ -97,6 +97,9 @@ final class SidebarListController: NSViewController {
     /// workflow rows, so an index here is not a row index: use `row(of:)` /
     /// `sessionID(atRow:)`.
     private(set) var displayedSessionIDs: [UUID] = []
+    /// The displayed forks listed under their group's top session (shown
+    /// too): they're the indented rows (`SessionOrder`).
+    private(set) var nestedForkIDs: Set<UUID> = []
 
     /// What each row shows: a session, or one of its subagents beneath it.
     enum Row: Equatable, Identifiable {
@@ -747,7 +750,7 @@ final class SidebarListController: NSViewController {
 
     /// Whether `session` matches the live search filter (name / agent / folder).
     private func matchesSearch(_ session: Session) -> Bool {
-        Self.matches(searchQuery, in: [session.name, session.agent.displayName, workdirName(for: session)])
+        Self.matches(searchQuery, in: [controller.displayName(of: session), session.agent.displayName, workdirName(for: session)])
     }
 
     /// Whether any of `fields` contains `query`, as Finder matches (ignoring
@@ -811,7 +814,10 @@ final class SidebarListController: NSViewController {
 
         // What's picked, by identity: rows come, go and move with every reload.
         let picked = Set(outline.selectedRowIndexes.compactMap { rows.indices.contains($0) ? rows[$0].id : nil })
-        displayedSessionIDs = controller.orderedSessions.filter(matchesSearch).map(\.id)
+        let order = controller.sessionOrder
+        displayedSessionIDs = order.compactMap { controller.session(id: $0.id) }.filter(matchesSearch).map(\.id)
+        let displayed = Set(displayedSessionIDs)
+        nestedForkIDs = Set(order.filter { $0.nestedUnder.map(displayed.contains) == true && displayed.contains($0.id) }.map(\.id))
         rows = displayedSessionIDs.flatMap { id -> [Row] in
             [.session(id)] + (showsSubagents(of: id) ? childRows(of: id) : [])
         }
@@ -1272,7 +1278,7 @@ final class SidebarListController: NSViewController {
 
     private func pasteboardText(_ ids: [UUID]) -> String {
         ids.compactMap { controller.session(id: $0) }
-            .map { "\($0.name) — \($0.workdir)" }
+            .map { "\(controller.displayName(of: $0)) — \($0.workdir)" }
             .joined(separator: "\n")
     }
 
@@ -1457,7 +1463,7 @@ extension SidebarListController: NSTableViewDataSource {
     }
 
     func tableView(_ tableView: NSTableView, typeSelectStringFor tableColumn: NSTableColumn?, row: Int) -> String? {
-        subagent(atRow: row)?.title ?? workflow(atRow: row)?.run.name ?? sessionID(atRow: row).flatMap { controller.session(id: $0)?.name }
+        subagent(atRow: row)?.title ?? workflow(atRow: row)?.run.name ?? sessionID(atRow: row).flatMap { controller.displayName($0) }
     }
 
     /// Files dragged onto a session row attach to that session (chat: as
@@ -1518,6 +1524,7 @@ extension SidebarListController: NSTableViewDelegate {
         if let session = controller.session(id: id) {
             cell.configure(
                 session,
+                name: controller.displayName(of: session),
                 runtime: controller.runtime(id),
                 unread: controller.runtime(id)?.isUnread ?? false,
                 active: isActive(id),
@@ -1921,7 +1928,7 @@ final class SessionCellView: NSTableCellView {
     /// Background tasks (subagents, background commands) the session has running.
     var backgroundRunning = 0
 
-    func configure(_ session: Session, runtime: SessionRuntime?, unread: Bool, active: Bool,
+    func configure(_ session: Session, name: String, runtime: SessionRuntime?, unread: Bool, active: Bool,
                    theme: ThemeColors, workdirName: String?, backgroundCount: Int = 0) {
         agentLabel = session.agent.displayName
         self.workdirName = workdirName
@@ -1929,7 +1936,7 @@ final class SessionCellView: NSTableCellView {
         accent = theme.accent
         fg = theme.sidebarFg
         badge.configure(session.agent)
-        nameLabel.stringValue = session.name
+        nameLabel.stringValue = name
         backgroundRunning = backgroundCount
         setActive(active)
         subLabel.textColor = theme.sidebarMuted

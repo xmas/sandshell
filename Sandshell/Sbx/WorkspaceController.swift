@@ -1700,6 +1700,7 @@ extension WorkspaceController {
             if wasWorking, let idx = state.sessions.firstIndex(where: { $0.id == id }) {
                 state.sessions[idx].lastActiveAt = rt.lastActivityAt ?? now
                 writeState()
+                adoptGeneratedName(id)
             }
         }
         if runtimes[id] != rt { runtimes[id] = rt }   // publish only on change
@@ -1707,15 +1708,23 @@ extension WorkspaceController {
                                          workSeconds: rt.workSeconds)
     }
 
-    /// All sessions, most-recently-active first — the sidebar's flat peer list.
-    /// Falls back to `createdAt` until a session has any real activity (the
-    /// last turn's time persists in `Session.lastActiveAt`). Not
+    /// All sessions, most-recently-active first, each followed by its forks —
+    /// the sidebar's list (`SessionOrder`). Falls back to `createdAt` until a
+    /// session has any real activity (the last turn's time persists in
+    /// `Session.lastActiveAt`). Not
     /// re-derived on every runtime tick from the caller's side (see
     /// `SidebarListController.runtimesChanged`) — only when a session is
     /// created/closed or transitions working↔ready — so rows don't jump around
     /// while a timer or "Xm ago" label is merely ticking in place.
     var orderedSessions: [Session] {
-        state.sessions.sorted { sortKey($0) > sortKey($1) }
+        let byID = Dictionary(state.sessions.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        return sessionOrder.compactMap { byID[$0.id] }
+    }
+
+    /// `orderedSessions` as ids, with which of them are forks nested under
+    /// their group's top session.
+    var sessionOrder: [SessionOrder.Entry] {
+        SessionOrder.arrange(state.sessions, lastActivity: sortKey)
     }
 
     private func sortKey(_ session: Session) -> Date {
@@ -1970,19 +1979,13 @@ extension WorkspaceController {
     /// Default name for a fresh session, e.g. "New Claude Session". A shell
     /// attached to another agent's sandbox reads "Shell in Claude", etc.
     static func defaultSessionName(for agent: AgentKind, containerAgent: AgentKind? = nil) -> String {
-        if let containerAgent, containerAgent != agent {
-            return "\(agent.displayName) in \(containerAgent.displayName)"
-        }
-        return "New \(agent.displayName) Session"
+        Session.defaultName(for: agent, containerAgent: containerAgent)
     }
 
     /// The default names before agents had brand spellings (the raw id,
     /// capitalized: "New Docker-Agent Session", "New Opencode Session").
     private static func legacyDefaultSessionName(for agent: AgentKind, containerAgent: AgentKind? = nil) -> String {
-        if let containerAgent, containerAgent != agent {
-            return "\(agent.rawValue.capitalized) in \(containerAgent.rawValue.capitalized)"
-        }
-        return "New \(agent.rawValue.capitalized) Session"
+        Session.legacyDefaultName(for: agent, containerAgent: containerAgent)
     }
 
     /// Add a session, or reuse an existing **pristine** one (same project +
@@ -2003,6 +2006,8 @@ extension WorkspaceController {
            let index = state.sessions.firstIndex(where: {
                $0.folderID == folderID && $0.agent == agent
                    && $0.containerAgent == override && defaultNames.contains($0.name) && $0.isChat == chat
+                   // (Prompts no longer rename it: nothing asked, not a fork.)
+                   && $0.firstPrompt == nil && $0.generatedName == nil && !$0.isFork
                    // Never launched, here or in another window on the folder
                    // (shells keep their default name).
                    && runtimes[$0.id] == nil && !store.launched.contains($0.id)
@@ -2059,26 +2064,8 @@ extension WorkspaceController {
               let url = TranscriptReader.transcriptURL(agent: .claude, workdir: source.conversationWorkdir,
                                                        home: home, id: tid),
               let text = try? String(contentsOf: url, encoding: .utf8) else { return nil }
-        let lines = text.split(separator: "\n", omittingEmptySubsequences: true)
-        // The reply's last words identify its transcript line (streamed text == stored text).
-        let trimmed = replyText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let needle = String(trimmed.suffix(80))
-        guard !needle.isEmpty, let cut = lines.lastIndex(where: { line in
-            guard line.contains("\"assistant\""),
-                  let obj = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
-                  obj["type"] as? String == "assistant",
-                  let blocks = (obj["message"] as? [String: Any])?["content"] as? [[String: Any]] else { return false }
-            return blocks.contains { ($0["text"] as? String)?.contains(needle) == true }
-        }) else { return nil }
-
         let newID = UUID().uuidString.lowercased()
-        var out = ""
-        for line in lines[...cut] {
-            guard var obj = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any] else { continue }
-            if obj["sessionId"] != nil { obj["sessionId"] = newID }
-            if let data = try? JSONSerialization.data(withJSONObject: obj, options: [.withoutEscapingSlashes]),
-               let json = String(data: data, encoding: .utf8) { out += json + "\n" }
-        }
+        guard let copy = ClaudeTranscriptTail.fork(text, upTo: replyText, newID: newID) else { return nil }
         // Filed under the cwd the fork runs in (its folder's), which needn't be
         // where the source's conversation is (a session in a subdirectory, or
         // one that ran on while its folder moved).
@@ -2086,12 +2073,17 @@ extension WorkspaceController {
         let forkFolder = TranscriptReader.claudeProjectFolder(for: workdir(for: folder), home: home)
         let forkURL = forkFolder.appending(path: "\(newID).jsonl")
         guard (try? FileManager.default.createDirectory(at: forkFolder, withIntermediateDirectories: true)) != nil,
-              (try? out.write(to: forkURL, atomically: true, encoding: .utf8)) != nil,
-              let fork = addSession(folderID: source.folderID, agent: source.agent,
-                                    name: "Fork of \(source.name)", chat: true) else { return nil }
-        setTranscriptID(fork.id, newID)
+              (try? copy.text.write(to: forkURL, atomically: true, encoding: .utf8)) != nil else { return nil }
+        // Named by its own first prompt; until then "Fork of <source>" (this
+        // spelling once the source is gone).
+        let sourceName = displayName(of: source)
+        var fork = Session.fork(of: source, name: "Fork of \(sourceName)", order: nextSessionOrder(in: source.folderID),
+                                workdir: workdir(for: folder), at: .now)
+        fork.transcriptID = newID
+        state.sessions.append(fork)
+        saveState()
         selection = .session(fork.id)
-        Log.info(.workspace, "forked chat “\(source.name)” at \(cut + 1) of \(lines.count) transcript lines → \(newID)")
+        Log.info(.workspace, "forked chat “\(sourceName)” at \(copy.cut + 1) of \(copy.lines) transcript lines → \(newID)")
         return fork
     }
 
@@ -2114,17 +2106,42 @@ extension WorkspaceController {
         return s
     }
 
-    /// Update a session's name to its latest prompt (detected from the agent
-    /// transcript). Sessions are auto-named only — there is no manual rename.
-    /// Called repeatedly, so it no-ops when the name is unchanged.
+    /// A prompt was sent in a session (seen in its chat or its agent's
+    /// transcript): the first one names it (`Session.firstPrompt`), until the
+    /// agent titles it or the person renames it. Called with every prompt; only
+    /// the first changes anything.
     func autoName(_ id: UUID, from prompt: String) {
-        let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty,
-              let idx = state.sessions.firstIndex(where: { $0.id == id }),
-              !state.sessions[idx].isNamedByUser,
-              state.sessions[idx].name != trimmed else { return }
-        state.sessions[idx].name = trimmed
+        guard let idx = state.sessions.firstIndex(where: { $0.id == id }),
+              state.sessions[idx].recordPrompt(prompt) else { return }
         saveState()
+    }
+
+    /// What a session is called (`Session.displayName`; a fork's source looked
+    /// up here).
+    func displayName(of session: Session) -> String {
+        session.displayName { self.session(id: $0) }
+    }
+
+    /// `displayName(of:)` by id; nil when there's no such session.
+    func displayName(_ id: UUID) -> String? {
+        session(id: id).map(displayName(of:))
+    }
+
+    /// Claude titles a conversation during its first turn (an `ai-title` line
+    /// in its transcript): once a turn has finished, take that title, once.
+    /// Other agents have none: their first prompt stands.
+    func adoptGeneratedName(_ id: UUID) {
+        guard let s = session(id: id), s.generatedName == nil, s.agent == .claude, let tid = s.transcriptID,
+              let url = TranscriptReader.transcriptURL(agent: .claude, workdir: s.conversationWorkdir,
+                                                       home: home, id: tid) else { return }
+        Task { [weak self] in
+            let title = await Task.detached(priority: .utility) { ClaudeTranscriptTail.title(at: url) }.value
+            guard let self, let title,
+                  let idx = self.state.sessions.firstIndex(where: { $0.id == id }),
+                  self.state.sessions[idx].transcriptID == tid,
+                  self.state.sessions[idx].adoptGeneratedName(title) else { return }
+            self.saveState()
+        }
     }
 
     /// Create a session that resumes a past conversation (from the History
@@ -2137,7 +2154,7 @@ extension WorkspaceController {
         // from; fall back to the preferred/first folder.
         let target = folderForCwd(record.cwd) ?? preferredFolder ?? folders.first?.id
         guard let target, let folder = folder(id: target) else { return nil }
-        let session = Session(
+        var session = Session(
             folderID: target,
             agent: record.agent,
             name: record.title,
@@ -2148,8 +2165,11 @@ extension WorkspaceController {
             isChat: SbxCommand.supportsACP(record.agent)
                 && TranscriptReader.startedAsChat(at: record.url, agent: record.agent))
         SbxClient.sessionCreated(session.id)
+        // Its title is its first prompt; Claude's own title for it, if it has one, wins.
+        session.firstPrompt = record.title
         state.sessions.append(session)
         saveState()
+        adoptGeneratedName(session.id)
         return session
     }
 

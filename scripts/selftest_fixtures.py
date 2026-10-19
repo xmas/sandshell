@@ -72,6 +72,8 @@ def set_sessions(d, specs):
         s = {"id": str(uuid.uuid4()).upper(), "folderID": root["id"], "agent": spec["agent"],
              "name": spec["name"], "order": i, "workdir": real,
              "createdAt": (now - timedelta(minutes=i + 1)).strftime("%Y-%m-%dT%H:%M:%SZ")}
+        # Shown by its first prompt (Session.displayName), whatever the schema.
+        s["firstPrompt"] = spec["name"]
         if spec.get("chat"): s["chat"] = True   # Session.isChat's key
         if spec.get("transcript"): s["transcriptID"] = spec["transcript"]
         sessions.append(s)

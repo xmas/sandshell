@@ -1047,10 +1047,14 @@ enum SelfTest {
         // Rename: it sticks (prompts no longer rename it) and undoes.
         ws.renameSession(a.id, to: "Release checklist")
         ws.autoName(a.id, from: "some later prompt")
-        check(ws.session(id: a.id)?.name == "Release checklist" && ws.session(id: a.id)?.isNamedByUser == true,
+        check(ws.session(id: a.id)?.name == "Release checklist" && ws.session(id: a.id)?.isNamedByUser == true
+                && ws.displayName(a.id) == "Release checklist",
               "a renamed session keeps its name")
+        // What it's called without the person's name (its first prompt, or the title).
+        let automatic = ws.session(id: a.id).map { s in var s = s; s.isNamedByUser = false; return ws.displayName(of: s) }
         undo.undo()
-        check(ws.session(id: a.id)?.name == a.name && ws.session(id: a.id)?.isNamedByUser == false, "Undo Rename")
+        check(ws.session(id: a.id)?.name == a.name && ws.session(id: a.id)?.isNamedByUser == false
+                && ws.displayName(a.id) == automatic, "Undo Rename (\(ws.displayName(a.id) ?? "-"))")
         // Inline, from the row.
         await wait(0.3)
         sidebar.beginRename(a.id)
@@ -1059,6 +1063,7 @@ enum SelfTest {
             check(ws.session(id: a.id)?.name == "Renamed inline", "renaming in the row")
         } else { check(false, "the row's cell") }
         ws.renameSession(a.id, to: "")   // back to automatic naming
+        check(ws.displayName(a.id) == automatic, "clearing the name goes back to the automatic one")
 
         // The sidebar: two selected → copy has both, one undo closes and restores both.
         await wait(0.3)
@@ -1073,7 +1078,7 @@ enum SelfTest {
         undo.undo()
         check(ws.session(id: a.id) != nil && ws.session(id: b.id) != nil, "one Undo brings both back")
         // Live filter.
-        sidebar.debugFilter(String(b.name.prefix(7)))
+        sidebar.debugFilter(String(ws.displayName(of: b).prefix(7)))
         await wait(0.3)
         check(sidebar.displayedSessionIDs == [b.id] || sidebar.displayedSessionIDs.contains(b.id) && !sidebar.displayedSessionIDs.contains(a.id),
               "the filter narrows as you type (\(sidebar.displayedSessionIDs.count))")
@@ -1237,7 +1242,7 @@ enum SelfTest {
         let added = b.addSession(folderID: folder.id, agent: .shell, name: "From window B \(UUID().uuidString.prefix(4))")
         check(added != nil, "window B adds a session")
         check(await until(3) { a.orderedSessions.contains { $0.id == added?.id } }, "window A lists it")
-        a.autoName(first.id, from: "Renamed in window A")
+        a.renameSession(first.id, to: "Renamed in window A")
         await wait(0.5)
         let saved = (try? String(contentsOf: WorkspaceState.controlDir(root: a.rootURL).appendingPathComponent("state.json"),
                                  encoding: .utf8)) ?? ""
@@ -1821,7 +1826,10 @@ enum SelfTest {
         }
         let first = c.items.compactMap { if case .agentText(_, let t) = $0 { t } else { nil } }.first { $0.contains("ALPHA-ONE") } ?? "ALPHA-ONE"
         guard let forked = ws.forkChat(s.id, upTo: first) else { return check(false, "fork created") }
-        check(forked.name.hasPrefix("Fork of"), "fork created (\(forked.name))")
+        check(forked.forkedFrom == s.id && forked.forkedAt != nil && forked.firstPrompt == nil
+                && ws.displayName(of: forked) == "Fork of \(ws.displayName(of: s))",
+              "fork created (\(ws.displayName(of: forked)))")
+        check(ws.sessionOrder.first { $0.id == forked.id }?.nestedUnder == s.id, "the fork lists under its source")
         check(await until(300) { chat(forked.id)?.phase == .ready }, "the fork resumes as a chat")
         await wait(1.0)
         if let f = chat(forked.id) {

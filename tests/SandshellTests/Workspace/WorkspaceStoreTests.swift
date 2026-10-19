@@ -121,7 +121,7 @@ struct WorkspaceStoreSharingTests {
         #expect(rootFolder.isRoot)
         #expect(store.state.expandedFolderIDs == [rootFolder.id])
         #expect(store.state.sessions.isEmpty)
-        #expect(store.state.schemaVersion == 2)
+        #expect(store.state.schemaVersion == WorkspaceState.currentSchemaVersion)
     }
 
     @Test func theStoreHoldsTheStateItSaved() throws {

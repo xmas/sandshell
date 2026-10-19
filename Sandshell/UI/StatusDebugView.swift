@@ -260,7 +260,7 @@ private struct SessionRuntimeRow: View {
     var body: some View {
         TimelineView(.periodic(from: .now, by: 1)) { context in
             HStack(spacing: 0) {
-                Text(session.name.isEmpty ? "—" : session.name)
+                Text(session.displayName)
                     .lineLimit(1)
                     .truncationMode(.tail)
                     .frame(width: 150, alignment: .leading)

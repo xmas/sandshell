@@ -10,7 +10,7 @@ struct FilesTarget: Codable, Equatable {
     @MainActor
     func resolve(in controller: WorkspaceController) -> (url: URL, title: String) {
         if let id = session, let s = controller.session(id: id) {
-            return (URL(filePath: s.workdir, directoryHint: .checkFileSystem), s.name)
+            return (URL(filePath: s.workdir, directoryHint: .checkFileSystem), controller.displayName(of: s))
         }
         let url = URL(filePath: folder, directoryHint: .checkFileSystem)
         return (url, url.lastPathComponent)
