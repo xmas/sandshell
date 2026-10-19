@@ -237,7 +237,8 @@ actor SbxClient {
            FileManager.default.fileExists(atPath: workspace.rootURL.appending(path: ".git").path(percentEncoded: false)) {
             args.append("--clone")
         }
-        args += kits.flatMap { ["--kit", KitStore.resolve($0)] }
+        // (Never the agent's own kit as a --kit too: sbx refuses a sandbox kit there.)
+        args += kits.filter { $0 != agent.createReference }.flatMap { ["--kit", KitStore.resolve($0)] }
         args.append(agent.createReference)   // a custom agent is created from its kit
         args += mounts.map(\.spec)
         return try await createAndPoll(args, cwd: workspace.rootURL.path(percentEncoded: false),

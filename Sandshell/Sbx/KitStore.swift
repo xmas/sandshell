@@ -122,17 +122,32 @@ enum KitStore {
         for key in staleRequirementsKeys { UserDefaults.standard.removeObject(forKey: key) }
     }()
 
-    /// Remember what `sbx kit inspect` said a kit requires.
+    /// Remember what `sbx kit inspect` said a kit requires (and whether it
+    /// defines an agent).
     static func learn(_ ref: String, from info: KitInspection) {
         var cache = UserDefaults.standard.dictionary(forKey: requirementsKey) as? [String: String] ?? [:]
         cache[ref] = info.kind == "sandbox" ? (info.name ?? "") : (info.requires?.agent ?? "")
         UserDefaults.standard.set(cache, forKey: requirementsKey)
+        var agentKits = Set(UserDefaults.standard.stringArray(forKey: agentKitsKey) ?? [])
+        if info.kind == "sandbox" { agentKits.insert(ref) } else { agentKits.remove(ref) }
+        UserDefaults.standard.set(agentKits.sorted(), forKey: agentKitsKey)
     }
 
-    /// Which of `refs` a sandbox for `agent` can take: a kit made for another
-    /// agent is left out (sbx refuses to compose it). Unknown ones stay in.
+    private static let agentKitsKey = "kitDefinesAgent"
+
+    /// A `kind: sandbox` kit: it defines an agent, so it's only ever the create
+    /// positional (`createReference`), never anyone's `--kit` — not even its own agent's.
+    static func definesAgent(_ ref: String) -> Bool {
+        AgentProfileStore.all.contains { $0.kitRef == ref }
+            || (UserDefaults.standard.stringArray(forKey: agentKitsKey) ?? []).contains(ref)
+    }
+
+    /// Which of `refs` a sandbox for `agent` can take as `--kit`: a kit made for
+    /// another agent is left out (sbx refuses to compose it), and so is any
+    /// agent kit, its own included. Unknown ones stay in.
     static func kits(_ refs: [String], for agent: AgentKind) -> [String] {
         refs.filter { ref in
+            guard ref != agent.createReference, !definesAgent(ref) else { return false }
             guard let required = requiredAgent(ref), let agentName = required else { return true }
             return agentName == agent.rawValue
         }

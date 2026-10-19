@@ -346,6 +346,11 @@ struct KitStoreAgentRequirementTests {
         #expect(KitStore.kits([], for: .claude).isEmpty)
     }
 
+    @Test("An agent's own create reference is never also a --kit")
+    func ownCreateReferenceDropped() {
+        #expect(KitStore.kits(["claude", "sandshell-claude"], for: .claude) == ["sandshell-claude"])
+    }
+
     @Test("Duplicate refs are kept, not collapsed", .tags(.kitStoreEdgeCase))
     func duplicatesKept() {
         let refs = ["sandshell-claude", "sandshell-codex", "sandshell-claude"]
