@@ -158,12 +158,10 @@ enum MainMenu {
         mainMenu.addItem(viewItem)
         let viewMenu = NSMenu(title: "View")
         viewItem.submenu = viewMenu
+        // The window's Files sidebar (validation names it Show / Hide Files).
         let showFiles = viewMenu.addItem(withTitle: "Show Files", action: #selector(AppDelegate.toggleFiles(_:)),
                                          keyEquivalent: "0")
-        showFiles.keyEquivalentModifierMask = [.command, .option]
-        let filesSplit = viewMenu.addItem(withTitle: "Open Files in Split", action: #selector(AppDelegate.openFilesInSplit(_:)),
-                                          keyEquivalent: "0")
-        filesSplit.keyEquivalentModifierMask = [.command, .option, .shift]
+        showFiles.keyEquivalentModifierMask = [.command, .option, .shift]
         viewMenu.addItem(.separator())
         viewMenu.addItem(withTitle: "Split Right", action: #selector(AppDelegate.splitRight(_:)), keyEquivalent: "d")
         let splitDown = viewMenu.addItem(withTitle: "Split Down", action: #selector(AppDelegate.splitDown(_:)), keyEquivalent: "d")

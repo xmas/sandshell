@@ -60,6 +60,13 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
     /// The scope's files with +/- counts, by absolute path.
     private var scoped: [String: ScopedFile] = [:]
     let commits = CommitsListView()
+    /// Whether the Commits section sits under the tree here (a split Files
+    /// pane) or the host places it (the Files sidebar: at its foot). Set
+    /// before the view loads.
+    var hostsCommits = true
+    /// Whether "main · 3 changed" shows under the tree. The Files sidebar
+    /// says it in its header instead (content-search counts still show here).
+    var showsBranchLine = true
     /// The changed list's scope changed (the editor diffs against it).
     var onScope: ((ChangeScope, Set<String>) -> Void)?
     /// "Sandbox “x” · read-write": these are the sandbox's files too.
@@ -114,6 +121,7 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
         branchLabel.font = .role(.code)
         branchLabel.textColor = .secondaryLabelColor
         branchLabel.lineBreakMode = .byTruncatingMiddle
+        branchLabel.isHidden = !showsBranchLine
 
         sandboxButton.isBordered = false
         sandboxButton.imagePosition = .imageLeading
@@ -147,10 +155,18 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
             if let scope { self.pick(scope) } else if self.changedOnly { self.pick(.uncommitted) }
         }
 
-        for v in [filter, changedButton, scroll, commits, footer] as [NSView] {
+        for v in [filter, changedButton, scroll, footer] + (hostsCommits ? [commits] : []) as [NSView] {
             v.translatesAutoresizingMaskIntoConstraints = false
             root.addSubview(v)
         }
+        // The tree's foot: the Commits section, or the footer right under the tree.
+        let treeFoot: [NSLayoutConstraint] = hostsCommits ? [
+            commits.topAnchor.constraint(equalTo: scroll.bottomAnchor, constant: 4),
+            commits.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            commits.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+            footer.topAnchor.constraint(equalTo: commits.bottomAnchor, constant: 8),
+        ] : [footer.topAnchor.constraint(equalTo: scroll.bottomAnchor, constant: 6)]
+        NSLayoutConstraint.activate(treeFoot)
         NSLayoutConstraint.activate([
             // Below the window's toolbar (the inspector runs under it), the filter
             // on a row of its own, the changed-files toggle beneath it.
@@ -163,16 +179,12 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
             scroll.topAnchor.constraint(equalTo: changedButton.bottomAnchor, constant: 6),
             scroll.leadingAnchor.constraint(equalTo: root.leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: root.trailingAnchor),
-            commits.topAnchor.constraint(equalTo: scroll.bottomAnchor, constant: 4),
             {
                 // The tree keeps a few rows however many commits there are.
                 let c = scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 90)
                 c.priority = .init(760)
                 return c
             }(),
-            commits.leadingAnchor.constraint(equalTo: root.leadingAnchor),
-            commits.trailingAnchor.constraint(equalTo: root.trailingAnchor),
-            footer.topAnchor.constraint(equalTo: commits.bottomAnchor, constant: 8),
             footer.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 10),
             footer.trailingAnchor.constraint(lessThanOrEqualTo: root.trailingAnchor, constant: -10),
             footer.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -12),
@@ -344,11 +356,13 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
     /// their match count is there instead.
     private func updateBranchLabel() {
         if let groups = searchGroups, !searchQuery.isEmpty {
+            branchLabel.isHidden = false
             let total = groups.reduce(0) { $0 + $1.matches.count }
             branchLabel.stringValue = String(AttributedString(
                 localized: "^[\(total) match](inflect: true) in ^[\(groups.count) file](inflect: true)").characters)
             return
         }
+        branchLabel.isHidden = !showsBranchLine
         let changed = git.changes.count
         branchLabel.stringValue = git.repoRoot == nil ? "Not a git repository"
             : "\(git.branch ?? "detached")" + (changed > 0 ? " · \(changed) changed" : " · clean")
