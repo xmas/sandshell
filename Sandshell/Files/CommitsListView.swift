@@ -39,12 +39,12 @@ final class CommitsListView: NSView, NSTableViewDataSource, NSTableViewDelegate 
         header.isBordered = false
         header.imagePosition = .imageLeading
         header.alignment = .left
-        header.font = .systemFont(ofSize: 12, weight: .semibold)
+        header.font = .role(.title)
         header.contentTintColor = .secondaryLabelColor
         header.target = self
         header.action = #selector(toggle)
         header.setAccessibilityIdentifier("files-commits-header")
-        count.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
+        count.font = .role(.code)
         count.textColor = .tertiaryLabelColor
 
         let column = NSTableColumn(identifier: .init("commit"))
@@ -131,7 +131,7 @@ final class CommitsListView: NSView, NSTableViewDataSource, NSTableViewDelegate 
         header.title = "Commits"
         header.image = NSImage(systemSymbolName: isExpanded ? "chevron.down" : "chevron.right",
                                accessibilityDescription: nil)?
-            .withSymbolConfiguration(.init(pointSize: 9, weight: .semibold))
+            .withSymbolConfiguration(.role(.meta, weight: .semibold))
     }
 
     /// Up to about seven rows; the list scrolls beyond that.
@@ -188,9 +188,10 @@ private final class CommitCell: NSTableCellView {
         super.init(frame: .zero)
         identifier = Self.id
         textField = title
-        title.font = .systemFont(ofSize: 12.5)
+        title.font = .role(.body)
         title.lineBreakMode = .byTruncatingTail
-        detail.font = .systemFont(ofSize: 10.5)
+        detail.font = .role(.meta)
+
         detail.textColor = .secondaryLabelColor
         detail.lineBreakMode = .byTruncatingTail
         let stack = NSStackView(views: [title, detail])

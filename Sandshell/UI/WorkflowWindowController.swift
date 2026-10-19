@@ -101,7 +101,7 @@ struct WorkflowRunView: View {
                 if let summary = run.summary {
                     Text(summary).foregroundStyle(.secondary).textSelection(.enabled)
                 }
-                Text("Phases").font(.headline)
+                Text("Phases").font(.role(.title))
                 ForEach(run.phases) { phase in phaseSection(phase, in: run) }
             }
             .padding(18)
@@ -112,15 +112,14 @@ struct WorkflowRunView: View {
     private func header(_ run: WorkflowRun) -> some View {
         HStack(alignment: .top) {
             VStack(alignment: .leading, spacing: 4) {
-                Text(run.name).font(.title2.weight(.semibold))
+                Text(run.name).font(.role(.title))
                 HStack(spacing: 12) {
                     Label(Format.compactWorkTime(model.elapsed) ?? "—", systemImage: model.isRunning ? "clock" : "checkmark.circle")
                     Label("\(run.agents.count) agents", systemImage: "person.2")
                     Label("\(Format.tokens(run.totalTokens)) tokens", systemImage: "text.word.spacing")
                 }
-                .font(.callout)
+                .font(.role(.code))
                 .foregroundStyle(.secondary)
-                .monospacedDigit()
             }
             Spacer()
             if model.isRunning, let stop = model.stop {
@@ -142,11 +141,11 @@ struct WorkflowRunView: View {
             } label: {
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(phase.title).font(.body.weight(.medium))
-                        if let detail = phase.detail { Text(detail).font(.caption).foregroundStyle(.secondary) }
+                        Text(phase.title).font(.role(.body))
+                        if let detail = phase.detail { Text(detail).font(.role(.meta)).foregroundStyle(.secondary) }
                     }
                     Spacer()
-                    Text("\(progress.done)/\(progress.total)").foregroundStyle(.secondary).monospacedDigit()
+                    Text("\(progress.done)/\(progress.total)").foregroundStyle(.secondary).font(.role(.code))
                     Image(systemName: "chevron.down")
                         .rotationEffect(.degrees(isOpen ? 0 : -90))
                         .foregroundStyle(.secondary)
@@ -169,7 +168,7 @@ struct WorkflowRunView: View {
             GridRow {
                 Text("Agent"); Text("Model"); Text("Tokens").gridColumnAlignment(.trailing); Text("Time").gridColumnAlignment(.trailing)
             }
-            .font(.caption)
+            .font(.role(.meta))
             .foregroundStyle(.secondary)
             ForEach(agents) { agent in
                 GridRow {
@@ -185,10 +184,10 @@ struct WorkflowRunView: View {
                     .buttonStyle(.plain)
                     .help("Open \(agent.label)’s conversation")
                     Text(Self.modelName(agent.model)).foregroundStyle(.secondary).lineLimit(1)
-                    Text(agent.tokens > 0 ? Format.tokens(agent.tokens) : "—").monospacedDigit()
-                    Text(Format.compactWorkTime(agent.duration(at: model.now)) ?? "—").monospacedDigit().foregroundStyle(.secondary)
+                    Text(agent.tokens > 0 ? Format.tokens(agent.tokens) : "—").font(.role(.code))
+                    Text(Format.compactWorkTime(agent.duration(at: model.now)) ?? "—").font(.role(.code)).foregroundStyle(.secondary)
                 }
-                .font(.callout)
+                .font(.role(.body))
             }
         }
     }

@@ -22,7 +22,7 @@ final class ClaudeStatsView: NSView {
     private let effortButton = NSPopUpButton(frame: .zero, pullsDown: true)
     private let infoButton = NSButton()
     private let stack = NSStackView()
-    private let font = NSFont.monospacedSystemFont(ofSize: 10.5, weight: .regular)
+    private let font = NSFont.role(.code)
     private var colors: ThemeColors?
     private var status: ClaudeSessionStatus?
     private var defaultModel: String?

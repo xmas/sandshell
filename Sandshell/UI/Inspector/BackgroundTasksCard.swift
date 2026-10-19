@@ -10,7 +10,7 @@ struct BackgroundTasksCard: View {
         let running = model.runningTasks, finished = model.finishedTasks
         VStack(alignment: .leading, spacing: 6) {
             if running.isEmpty && finished.isEmpty {
-                Text("Nothing running in the background.").font(.callout).foregroundStyle(.secondary)
+                Text("Nothing running in the background.").font(.role(.body)).foregroundStyle(.secondary)
             }
             ForEach(running) { task in row(task) }
             if !finished.isEmpty {
@@ -27,7 +27,7 @@ struct BackgroundTasksCard: View {
                 }
             }
         }
-        .font(.callout)
+        .font(.role(.body))
     }
 
     private func row(_ task: BackgroundTask) -> some View {
@@ -43,12 +43,12 @@ struct BackgroundTasksCard: View {
                     VStack(alignment: .leading, spacing: 1) {
                         Text(task.title).lineLimit(1).truncationMode(.tail)
                         if let line = detailLine(task) {
-                            Text(line).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                            Text(line).font(.role(.meta)).foregroundStyle(.secondary).lineLimit(1)
                         }
                     }
                     Spacer(minLength: 4)
                     Text(Format.compactWorkTime(task.duration(at: model.now)) ?? "")
-                        .foregroundStyle(.secondary).monospacedDigit()
+                        .foregroundStyle(.secondary).font(.role(.code))
                 }
                 .contentShape(.rect)
             }

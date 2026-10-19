@@ -7,7 +7,7 @@ struct SandboxAccessView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Label {
-                Text("Shared with sandbox “\(access.sandbox)”").font(.headline)
+                Text("Shared with sandbox “\(access.sandbox)”").font(.role(.title))
             } icon: {
                 Image(systemName: "shippingbox")
             }
@@ -37,17 +37,17 @@ struct SandboxAccessView: View {
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(access.created ? "EVERYTHING THIS SANDBOX CAN SEE" : "WHAT THIS SANDBOX WILL SEE")
-                    .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                    .font(.role(.meta, weight: .semibold)).foregroundStyle(.secondary)
                 ForEach(access.mounts, id: \.self) { m in
                     HStack(spacing: 6) {
                         Image(systemName: m.readOnly ? "lock" : "lock.open")
                             .foregroundStyle(m.readOnly ? Color.green : Color.orange)
                             .frame(width: 14)
                             .accessibilityHidden(true)
-                        Text(m.path.tildeAbbreviated).font(.subheadline.monospaced())
+                        Text(m.path.tildeAbbreviated).font(.role(.code))
                             .lineLimit(1).truncationMode(.middle)
                         Spacer(minLength: 8)
-                        Text(m.readOnly ? "read-only" : "read-write").font(.caption).foregroundStyle(.secondary)
+                        Text(m.readOnly ? "read-only" : "read-write").font(.role(.meta)).foregroundStyle(.secondary)
                     }
                     .bold(m == access.mount)
                 }
@@ -78,8 +78,9 @@ private struct SandboxAccessRow: View {
             Image(systemName: symbol).foregroundStyle(tint).frame(width: 16)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
-                Text(title).bold()
-                Text(text).font(.callout).foregroundStyle(.secondary)
+                Text(title).font(.role(.bodyEmphasis))
+
+                Text(text).font(.role(.body)).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }

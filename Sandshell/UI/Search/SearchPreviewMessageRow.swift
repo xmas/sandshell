@@ -9,10 +9,10 @@ struct SearchPreviewMessageRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(message.role == "user" ? "You" : "Assistant")
-                .font(.caption2.weight(.semibold))
+                .font(.role(.meta, weight: .semibold))
                 .foregroundStyle(message.role == "user" ? Color.accentColor : .secondary)
             Text(AttributedString(message.text, highlighting: query))
-                .font(.callout)
+                .font(.role(.body))
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }

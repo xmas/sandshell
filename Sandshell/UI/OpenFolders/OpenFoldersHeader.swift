@@ -12,7 +12,7 @@ struct OpenFoldersHeader: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline) {
-                Text("Open Workspace").font(.title3.bold())
+                Text("Open Workspace").font(.role(.title))
                 Spacer()
                 Picker("Sort", selection: $sort) {
                     ForEach(OpenFoldersView.Sort.allCases) { Text($0.rawValue).tag($0) }

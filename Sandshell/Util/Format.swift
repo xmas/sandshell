@@ -130,8 +130,8 @@ import AppKit
 extension NSAttributedString {
     /// "+12 −3" in green and red, the same wherever line counts show (the
     /// branch chip, Files' changed list).
-    static func diffCounts(added: Int, removed: Int, size: CGFloat = 11) -> NSAttributedString {
-        let font = NSFont.monospacedDigitSystemFont(ofSize: size, weight: .semibold)
+    static func diffCounts(added: Int, removed: Int) -> NSAttributedString {
+        let font = NSFont.role(.code)
         let out = NSMutableAttributedString(string: "+\(added)", attributes: [.font: font, .foregroundColor: NSColor.systemGreen])
         out.append(NSAttributedString(string: " −\(removed)", attributes: [.font: font, .foregroundColor: NSColor.systemRed]))
         return out

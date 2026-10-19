@@ -13,11 +13,11 @@ struct SearchView: View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass")
-                    .font(.title3)
+                    .font(.symbol(.body))
                     .foregroundStyle(.secondary)
                 TextField("Search sessions and past conversations", text: $store.query)
                     .textFieldStyle(.plain)
-                    .font(.title2)
+                    .font(.role(.body))
                     .focused($fieldFocused)
                     .onSubmit(openSelected)
                     .onKeyPress(.downArrow) { store.moveSelection(1); return .handled }

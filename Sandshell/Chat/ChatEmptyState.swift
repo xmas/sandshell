@@ -9,10 +9,10 @@ struct ChatEmptyState: View {
         SeaBackdrop {
             VStack(spacing: 14) {
                 Text("What should \(agent) work on?")
-                    .font(.title3.weight(.medium))
+                    .font(.role(.title))
                     .foregroundStyle(.secondary)
                 Text("It works in \(folder), inside its sandbox. Type / for commands, @ to mention a file, or drop files here.")
-                    .font(.callout)
+                    .font(.role(.body))
                     .foregroundStyle(.tertiary)
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: 360)

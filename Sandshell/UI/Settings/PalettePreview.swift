@@ -12,7 +12,8 @@ struct PalettePreview: View {
                     Text("sandshell").foregroundStyle(Color(palette.dimColor))
                     Text("session").foregroundStyle(Color(palette.greenColor))
                 }
-                .font(.system(size: 12, design: .monospaced))
+                .font(.mark(12, monospaced: true))
+
                 HStack(spacing: 5) {
                     ForEach(0..<16, id: \.self) { i in
                         Circle().fill(Color(NSColor.hex(palette.ansi[i]))).frame(width: 11, height: 11)

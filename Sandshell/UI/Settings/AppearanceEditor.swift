@@ -31,7 +31,7 @@ struct AppearanceEditor: View {
             // Global appearance toggle
             VStack(alignment: .leading, spacing: 6) {
                 Text("Appearance — applies to all of Sandshell")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.role(.meta)).foregroundStyle(.secondary)
                 Picker("Appearance", selection: $appearance.mode) {
                     ForEach(AppearanceMode.allCases) { Text($0.label).tag($0) }
                 }
@@ -54,7 +54,7 @@ struct AppearanceEditor: View {
                     }
                 }
             } trailing: {
-                Button("See more…") { showAllSymbols = true }.font(.caption)
+                Button("See more…") { showAllSymbols = true }.font(.role(.meta))
             }
 
             // Searchable color dropdowns
@@ -70,19 +70,19 @@ struct AppearanceEditor: View {
                                           selected: $theme.prefs.mainColorHex)
                 } trailing: {
                     Toggle("Match terminal", isOn: $theme.prefs.mainMatchTerminal)
-                        .toggleStyle(.checkbox).font(.caption2)
+                        .toggleStyle(.checkbox).font(.role(.meta))
                 }
             }
 
             Text(theme.prefs.mainMatchTerminal
                  ? "The detail background follows the terminal theme; only the top bar uses the Main color."
                  : "Main always renders light in Light mode and dark in Dark mode.")
-                .font(.caption2).foregroundStyle(.tertiary)
+                .font(.role(.meta)).foregroundStyle(.tertiary)
 
             // Theme browser — fixedSize forces the grid to report its full height
             // to the Form row so it doesn't overflow the window footer.
             VStack(alignment: .leading, spacing: 8) {
-                Text("Themes").font(.caption).foregroundStyle(.secondary)
+                Text("Themes").font(.role(.meta)).foregroundStyle(.secondary)
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 100), spacing: 8)], spacing: 8) {
                     ForEach(SidebarTheme.all) { t in
                         ThemeBrowserCard(t: t, isSelected: selectedThemeID == t.id) { applyTheme(t) }
@@ -132,7 +132,7 @@ private struct LabeledField<Content: View, Trailing: View>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Text(title).font(.caption).foregroundStyle(.secondary)
+                Text(title).font(.role(.meta)).foregroundStyle(.secondary)
                 Spacer()
                 trailing
             }
@@ -157,7 +157,7 @@ private struct ColorDropdownBox<Content: View, Trailing: View>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 4) {
-                Text(label).font(.caption).foregroundStyle(.secondary)
+                Text(label).font(.role(.meta)).foregroundStyle(.secondary)
                 Spacer()
                 trailing
             }

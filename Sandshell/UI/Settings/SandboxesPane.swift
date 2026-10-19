@@ -34,7 +34,7 @@ struct SandboxesPaneView: View {
             Section {
                 if let error = controller.sandboxesError {
                     Text("Couldn’t list sandboxes: \(error)")
-                        .font(.caption).foregroundStyle(.red).textSelection(.enabled)
+                        .font(.role(.meta)).foregroundStyle(.red).textSelection(.enabled)
                         .accessibilityIdentifier("sandboxes-error")
                 }
                 if controller.sandboxesLoading && controller.allSandboxes.isEmpty {

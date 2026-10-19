@@ -142,11 +142,13 @@ struct SeaField: View {
                 var gray = g
                 gray.addFilter(.grayscale(1))
                 gray.opacity = (dark ? 0.42 : 0.32) * (1 - color)
-                gray.draw(gray.resolve(Text(c.glyph).font(.system(size: c.size))), at: .zero)
+                gray.draw(gray.resolve(Text(c.glyph).font(.mark(c.size))
+), at: .zero)
             }
             if color > 0 {
                 g.opacity = color
-                g.draw(g.resolve(Text(c.glyph).font(.system(size: c.size))), at: .zero)
+                g.draw(g.resolve(Text(c.glyph).font(.mark(c.size))
+), at: .zero)
             }
         }
     }

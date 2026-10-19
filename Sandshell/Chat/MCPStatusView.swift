@@ -12,7 +12,7 @@ struct MCPStatusView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
-                Text("MCP Servers").font(.headline)
+                Text("MCP Servers").font(.role(.title))
                 Spacer()
                 if busy == "*" { ProgressView().controlSize(.small) }
                 Button("Check Again", systemImage: "arrow.clockwise", action: refresh)
@@ -44,7 +44,7 @@ struct MCPStatusView: View {
                     .padding(14)
             }
             if let error {
-                Text(error).font(.caption).foregroundStyle(.red).padding(.horizontal, 14).padding(.vertical, 8)
+                Text(error).font(.role(.meta)).foregroundStyle(.red).padding(.horizontal, 14).padding(.vertical, 8)
             }
         }
         .frame(width: 400)

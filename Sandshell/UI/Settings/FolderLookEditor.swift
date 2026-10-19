@@ -41,9 +41,9 @@ struct FolderLookEditor: View {
 
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Text("Icon").font(.caption).foregroundStyle(.secondary)
+                Text("Icon").font(.role(.meta)).foregroundStyle(.secondary)
                 Spacer()
-                Button("See more…") { showAllSymbols = true }.font(.caption)
+                Button("See more…") { showAllSymbols = true }.font(.role(.meta))
             }
             LazyVGrid(columns: cols, spacing: 6) {
                 ForEach(quickSymbols, id: \.self) { s in
@@ -54,7 +54,7 @@ struct FolderLookEditor: View {
         .sheet(isPresented: $showAllSymbols) { SymbolPickerView(selection: $icon) }
 
         VStack(alignment: .leading, spacing: 6) {
-            Text("Color").font(.caption).foregroundStyle(.secondary)
+            Text("Color").font(.role(.meta)).foregroundStyle(.secondary)
             LazyVGrid(columns: cols, spacing: 8) {
                 ForEach(RootProfile.colors, id: \.self) { c in
                     ColorSwatch(hex: c, isSelected: colorHex == c) { colorHex = c }
@@ -62,7 +62,7 @@ struct FolderLookEditor: View {
             }
         }
         VStack(alignment: .leading, spacing: 6) {
-            Text("Sidebar").font(.caption).foregroundStyle(.secondary)
+            Text("Sidebar").font(.role(.meta)).foregroundStyle(.secondary)
             LazyVGrid(columns: cols, spacing: 8) {
                 ForEach(RootProfile.colors, id: \.self) { c in
                     DotSwatch(hex: c, isSelected: sidebarHex == RootProfile.sidebarTone(forIcon: c)) {

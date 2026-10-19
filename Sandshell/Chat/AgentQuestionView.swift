@@ -11,7 +11,7 @@ struct AgentQuestionView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Label {
-                Text(question.message).font(.body.weight(.semibold)).textSelection(.enabled)
+                Text(question.message).font(.role(.bodyEmphasis)).textSelection(.enabled)
             } icon: {
                 Image(systemName: question.mode == .form ? "questionmark.bubble" : "link")
                     .foregroundStyle(Color.accentColor)
@@ -20,7 +20,7 @@ struct AgentQuestionView: View {
             case .form:
                 ForEach(question.questions) { field in AgentQuestionFieldView(form: form, field: field) }
             case .url(let url, _):
-                Text(url.absoluteString).font(.subheadline).foregroundStyle(.secondary)
+                Text(url.absoluteString).font(.role(.meta)).foregroundStyle(.secondary)
                     .lineLimit(2).truncationMode(.middle).textSelection(.enabled)
             }
             HStack {

@@ -15,25 +15,25 @@ struct SandboxDetailView: View {
             LabeledContent("Agent", value: sb.agent)
             LabeledContent("Status", value: sb.status)
             LabeledContent("ID") {
-                Text(sb.id).font(.caption.monospaced())
+                Text(sb.id).font(.role(.code))
                     .foregroundStyle(.secondary).textSelection(.enabled)
             }
             Text("Mounts (\(sb.workspaces.count))")
-                .font(.caption).foregroundStyle(.secondary).padding(.top, 4)
+                .font(.role(.meta)).foregroundStyle(.secondary).padding(.top, 4)
             ForEach(sb.workspaces, id: \.self) { spec in
                 let ro = spec.hasSuffix(":ro")
                 HStack(spacing: 6) {
                     Image(systemName: ro ? "lock.fill" : "externaldrive.fill")
-                        .font(.caption2)
+                        .font(.symbol(.meta))
                         .foregroundStyle(ro ? Color.secondary : Color.accentColor)
                     Text((ro ? String(spec.dropLast(3)) : spec).tildeAbbreviated)
-                        .font(.subheadline.monospaced())
+                        .font(.role(.code))
                         .lineLimit(1).truncationMode(.middle)
-                    if ro { Text("ro").font(.caption2).foregroundStyle(.secondary) }
+                    if ro { Text("ro").font(.role(.meta)).foregroundStyle(.secondary) }
                 }
             }
 
-            Text("Commands").font(.caption).foregroundStyle(.secondary).padding(.top, 6)
+            Text("Commands").font(.role(.meta)).foregroundStyle(.secondary).padding(.top, 6)
             CommandBlock(label: "Create", command: controller.createCommandDisplay(for: sb))
             CommandBlock(label: "Launch", command: controller.launchCommandDisplay(for: sb))
 
@@ -54,7 +54,7 @@ struct SandboxDetailView: View {
             .disabled(busy)
             .padding(.top, 8)
             if let error = controller.sandboxErrors[sb.name] {
-                Text(error).font(.caption).foregroundStyle(.red).textSelection(.enabled)
+                Text(error).font(.role(.meta)).foregroundStyle(.red).textSelection(.enabled)
                     .accessibilityIdentifier("sandbox-error-\(sb.name)")
             }
         }
@@ -75,16 +75,16 @@ private struct CommandBlock: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             HStack {
-                Text(label).font(.caption2).foregroundStyle(.secondary)
+                Text(label).font(.role(.meta)).foregroundStyle(.secondary)
                 Spacer()
                 Button("Copy \(label) Command", systemImage: "doc.on.doc", action: copy)
                     .labelStyle(.iconOnly)
-                    .font(.caption2)
+                    .font(.role(.meta))
                     .buttonStyle(.borderless).foregroundStyle(.secondary)
                     .help("Copy")
             }
             Text(command)
-                .font(.caption.monospaced())
+                .font(.role(.code))
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(6)

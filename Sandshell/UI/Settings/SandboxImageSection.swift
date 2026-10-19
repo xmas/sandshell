@@ -30,24 +30,24 @@ struct SandboxImageSection: View {
                 TextField("Custom Image", text: $customImage,
                           prompt: Text("docker/sandbox-templates:claude-code-docker-0.5.0 or any image"))
                     .textFieldStyle(.roundedBorder)
-                    .font(.subheadline.monospaced())
+                    .font(.role(.code))
                     .onSubmit(commitCustomImage)
                     // Also commit when Settings closes without Return being pressed.
                     .onDisappear(perform: commitCustomImage)
             }
             if let t = controller.workspace.templateImage(for: controller.primaryAgent) {
-                Text("sbx create -t \(t)").font(.caption.monospaced()).foregroundStyle(.tertiary)
+                Text("sbx create -t \(t)").font(.role(.code)).foregroundStyle(.tertiary)
                     .lineLimit(1).truncationMode(.middle)
             }
             if !controller.customAgents.isEmpty {
                 // `-t` would replace a kit agent's own image (see ImageChannel.templateImage).
                 let names = controller.customAgents.map(\.displayName)
                 Text("Built-in agents only — kit agents (\(names, format: .list(type: .and))) always run the image from their own kit.")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.role(.meta)).foregroundStyle(.secondary)
             }
             HStack {
                 Text(controller.isBuilding ? "Rebuilding…" : "Changes apply when a sandbox is (re)built.")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.role(.meta)).foregroundStyle(.secondary)
                 Spacer()
                 Button("Rebuild Sandboxes Now") { controller.rebuildAll() }
                     .disabled(controller.isBuilding)
@@ -59,7 +59,7 @@ struct SandboxImageSection: View {
             Text("Stable is Docker’s released template (updated every few weeks — the Claude Code baked into it goes "
                  + "stale, and new models refuse old versions). Nightly is rebuilt every day from Docker’s main branch with "
                  + "the current Claude Code; less tested. Either way the tag is re-pulled on every rebuild.")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.role(.meta)).foregroundStyle(.secondary)
         }
     }
 

@@ -26,17 +26,17 @@ struct SandboxRow: View {
         } label: {
             HStack(spacing: 8) {
                 Image(systemName: "chevron.right")
-                    .font(.caption.weight(.semibold))
+                    .font(.symbol(.meta, weight: .semibold))
                     .foregroundStyle(.secondary)
                     .rotationEffect(.degrees(expanded ? 90 : 0))
                     .frame(width: 12)
                 Circle().fill(sb.isRunning ? AnyShapeStyle(.green) : AnyShapeStyle(.tertiary))
                     .frame(width: 7, height: 7)
                 Text(sb.name)
-                Text(sb.agent).font(.caption).foregroundStyle(.secondary)
+                Text(sb.agent).font(.role(.meta)).foregroundStyle(.secondary)
                 Spacer()
                 if busy { ProgressView().controlSize(.small) }
-                else { Text(sb.status).font(.caption).foregroundStyle(.secondary) }
+                else { Text(sb.status).font(.role(.meta)).foregroundStyle(.secondary) }
             }
             // The gap the Spacer leaves is part of the button too.
             .contentShape(.rect)

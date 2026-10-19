@@ -49,7 +49,7 @@ struct EnvironmentCard: View {
                 if let branch = env.branch {
                     InspectorRow(symbol: "arrow.triangle.branch", title: branch) {
                         if let ahead = env.ahead, let behind = env.behind, ahead + behind > 0 {
-                            Text("↑\(ahead) ↓\(behind)").foregroundStyle(.secondary).monospacedDigit()
+                            Text("↑\(ahead) ↓\(behind)").foregroundStyle(.secondary).font(.role(.code))
                                 .help("\(ahead) ahead, \(behind) behind \(env.upstream ?? "upstream")")
                         }
                     }
@@ -74,7 +74,7 @@ struct EnvironmentCard: View {
                     }
                 }
             }
-            .font(.callout)
+            .font(.role(.body))
         } else {
             ProgressView().controlSize(.small)
         }

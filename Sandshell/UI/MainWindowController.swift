@@ -291,12 +291,12 @@ final class MainWindowController: NSWindowController {
     /// Attach the native, user-customizable window toolbar (its items are built by
     /// the `NSToolbarDelegate` conformance below).
     private func installMainToolbar() {
-        toolbarName.font = .systemFont(ofSize: 13.5, weight: .semibold)
+        toolbarName.font = .role(.title)
         toolbarName.lineBreakMode = .byTruncatingTail
-        toolbarSubtitle.font = .monospacedSystemFont(ofSize: 10.5, weight: .regular)
+        toolbarSubtitle.font = .role(.code)
         toolbarSubtitle.textColor = .secondaryLabelColor
         toolbarSubtitle.lineBreakMode = .byTruncatingMiddle
-        toolbarStatus.font = .systemFont(ofSize: 12, weight: .medium)
+        toolbarStatus.font = .role(.code)
         toolbarStatus.textColor = .secondaryLabelColor
         toolbarStatus.setContentHuggingPriority(.init(1), for: .horizontal)
         NSLayoutConstraint.activate([
@@ -809,7 +809,9 @@ extension MainWindowController: NSToolbarDelegate {
     /// Sequoia-style glyph, with no bezel, glass capsule, or focus ring.
     private static func plainToolbarButton(symbol: String, label: String,
                                            target: AnyObject?, action: Selector) -> NSButton {
-        NSButton.symbol(symbol, label: label, pointSize: 15, size: NSSize(width: 28, height: 24), target: target, action: action)
+        NSButton.symbol(symbol, label: label, pointSize: TypeRole.body.symbolPointSize, size: NSSize(width: 28, height: 24),
+                        target: target, action: action)
+
     }
 
     @objc private func toggleSidebarFromToolbar() { toggleSidebar() }

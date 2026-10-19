@@ -25,10 +25,10 @@ struct StatusDebugView: View {
     private var workspaceHeader: some View {
         VStack(alignment: .leading, spacing: 3) {
             Text("WORKSPACE")
-                .font(.system(.caption2, design: .monospaced))
+                .font(.role(.code))
                 .foregroundStyle(.secondary)
             Text(FilePath(controller.rootURL)?.string ?? "")
-                .font(.system(.caption, design: .monospaced))
+                .font(.role(.code))
                 .textSelection(.enabled)
         }
     }
@@ -66,7 +66,7 @@ struct StatusDebugView: View {
             Text("Container").frame(width: 160, alignment: .leading)
             Text("sbx status").frame(width: 80, alignment: .leading)
         }
-        .font(.system(.caption2, design: .monospaced))
+        .font(.role(.code))
         .foregroundStyle(.secondary)
         .padding(.bottom, 2)
     }
@@ -102,7 +102,7 @@ struct StatusDebugView: View {
             Spacer()
             Text("Last active").frame(width: 84, alignment: .trailing)
         }
-        .font(.system(.caption2, design: .monospaced))
+        .font(.role(.code))
         .foregroundStyle(.secondary)
         .padding(.bottom, 2)
     }
@@ -117,10 +117,10 @@ private struct DebugSectionHeader: View {
     var body: some View {
         HStack(spacing: 6) {
             Text(title.uppercased())
-                .font(.system(.caption2, design: .monospaced).weight(.semibold))
+                .font(.role(.code, weight: .semibold))
                 .foregroundStyle(.secondary)
             Text("(\(count))")
-                .font(.system(.caption2, design: .monospaced))
+                .font(.role(.code))
                 .foregroundStyle(.tertiary)
         }
     }
@@ -131,7 +131,7 @@ private struct DebugEmptyLabel: View {
 
     var body: some View {
         Text(text)
-            .font(.system(.caption, design: .monospaced))
+            .font(.role(.code))
             .foregroundStyle(.tertiary)
             .padding(.leading, 4)
     }
@@ -156,7 +156,7 @@ private struct KitStartupSection: View {
                         Text("Outcome").frame(width: 130, alignment: .leading)
                         Text("Detail").frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .font(.system(.caption2, design: .monospaced))
+                    .font(.role(.code))
                     .foregroundStyle(.secondary)
                     .padding(.bottom, 2)
                     Divider()
@@ -185,7 +185,7 @@ private struct KitStartupRows: View {
                 Text(agent.rawValue).frame(width: 70, alignment: .leading)
                 Text("log unavailable: \(err)").foregroundStyle(.tertiary).lineLimit(1)
             }
-            .font(.system(.caption, design: .monospaced)).padding(.vertical, 2)
+            .font(.role(.code)).padding(.vertical, 2)
         } else {
             HStack(spacing: 0) {
                 Text(agent.rawValue).frame(width: 70, alignment: .leading)
@@ -196,7 +196,7 @@ private struct KitStartupRows: View {
                 Button("Show Log", action: openLog)
                     .controlSize(.mini)
             }
-            .font(.system(.caption, design: .monospaced)).padding(.vertical, 2)
+            .font(.role(.code)).padding(.vertical, 2)
             ForEach(status.entries) { entry in
                 HStack(alignment: .top, spacing: 0) {
                     Text("").frame(width: 70)
@@ -208,7 +208,7 @@ private struct KitStartupRows: View {
                         .foregroundStyle(.tertiary).lineLimit(1).truncationMode(.tail)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .font(.system(.caption, design: .monospaced)).padding(.vertical, 2)
+                .font(.role(.code)).padding(.vertical, 2)
             }
         }
     }
@@ -244,7 +244,7 @@ private struct ContainerPhaseRow: View {
                 .foregroundStyle(.tertiary)
                 .frame(width: 80, alignment: .leading)
         }
-        .font(.system(.caption, design: .monospaced))
+        .font(.role(.code))
         .padding(.vertical, 2)
     }
 }
@@ -285,7 +285,7 @@ private struct SessionRuntimeRow: View {
                     .foregroundStyle(.tertiary)
                     .frame(width: 84, alignment: .trailing)
             }
-            .font(.system(.caption, design: .monospaced))
+            .font(.role(.code))
             .padding(.vertical, 2)
         }
     }

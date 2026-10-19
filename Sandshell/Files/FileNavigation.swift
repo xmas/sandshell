@@ -23,7 +23,7 @@ final class OpenQuicklyController: NSViewController, NSSearchFieldDelegate, NSTa
     override func loadView() {
         let root = NSView(frame: NSRect(x: 0, y: 0, width: 520, height: 360))
         field.placeholderString = "Open Quickly"
-        field.font = .systemFont(ofSize: 16)
+        field.font = .role(.body)
         field.delegate = self
         field.sendsSearchStringImmediately = true
         field.setAccessibilityIdentifier("open-quickly-field")
@@ -45,7 +45,7 @@ final class OpenQuicklyController: NSViewController, NSSearchFieldDelegate, NSTa
         scroll.drawsBackground = false
 
         empty.textColor = .tertiaryLabelColor
-        empty.font = .systemFont(ofSize: 13)
+        empty.font = .role(.body)
         empty.isHidden = true
 
         for v in [field, scroll, empty] as [NSView] {
@@ -157,7 +157,7 @@ final class OpenQuicklyCell: NSTableCellView {
         super.init(frame: .zero)
         identifier = Self.id
         icon.setAccessibilityElement(false)   // the name and folder say it all
-        folder.font = .systemFont(ofSize: 11)
+        folder.font = .role(.meta)
         folder.textColor = .secondaryLabelColor
         folder.lineBreakMode = .byTruncatingHead
         name.lineBreakMode = .byTruncatingMiddle
@@ -204,9 +204,9 @@ final class OpenQuicklyCell: NSTableCellView {
         folder.textColor = emphasized ? .alternateSelectedControlTextColor.withAlphaComponent(0.75) : .secondaryLabelColor
         // Emphasise the query's characters, in order, within the name.
         let s = NSMutableAttributedString(string: file, attributes: [
-            .font: NSFont.systemFont(ofSize: 13),
+            .font: NSFont.role(.body),
             .foregroundColor: emphasized ? NSColor.alternateSelectedControlTextColor : .labelColor])
-        let bold = NSFont.systemFont(ofSize: 13, weight: .bold)
+        let bold = NSFont.role(.bodyEmphasis)
         // Character by character in the name itself: lowercasing the whole
         // name can change its length (İ → i̇) and shift every range after it.
         var i = file.startIndex
@@ -241,9 +241,10 @@ final class GoToLineController: NSViewController, NSTextFieldDelegate {
     override func loadView() {
         let root = NSView()
         let label = NSTextField(labelWithString: "Line")
-        label.font = .systemFont(ofSize: 13, weight: .medium)
+        label.font = .role(.body)
         field.placeholderString = "\(currentLine)  (1–\(lineCount), or line:column)"
-        field.font = .monospacedDigitSystemFont(ofSize: 13, weight: .regular)
+        field.font = .role(.body)
+
         field.delegate = self
         field.setAccessibilityIdentifier("go-to-line-field")
         let stack = NSStackView(views: [label, field])

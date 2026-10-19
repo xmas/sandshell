@@ -350,15 +350,9 @@ struct FormatTests {
             #expect(range == expectedRun, "Green covers exactly \"+12\", red exactly \" \u{2212}3\"")
         }
 
-        @Test func defaultFontIsElevenPointSemiboldMonospacedDigits() {
+        @Test func bothCountsAreInTheCodeRole() {
             let counts = NSAttributedString.diffCounts(added: 12, removed: 3)
-            verifyFont(of: counts, size: 11)
-        }
-
-        @Test(arguments: [9, 14, 20] as [CGFloat])
-        func sizeAppliesToBothCounts(size: CGFloat) {
-            let counts = NSAttributedString.diffCounts(added: 7, removed: 8, size: size)
-            verifyFont(of: counts, size: size)
+            verifyFont(of: counts)
         }
     }
 }
@@ -396,12 +390,10 @@ fileprivate func fileURL(in root: URL, _ relative: String) -> URL {
 }
 
 /// Both counts use the monospaced-digit semibold system font at `size`.
-fileprivate func verifyFont(of counts: NSAttributedString, size: CGFloat,
-                            sourceLocation: SourceLocation = #_sourceLocation) {
-    let expected = NSFont.monospacedDigitSystemFont(ofSize: size, weight: .semibold)
+fileprivate func verifyFont(of counts: NSAttributedString, sourceLocation: SourceLocation = #_sourceLocation) {
+    let expected = NSFont.role(.code)
     for index in [0, counts.length - 1] {
         let font = counts.attribute(.font, at: index, effectiveRange: nil) as? NSFont
         #expect(font == expected, "Font at \(index)", sourceLocation: sourceLocation)
-        #expect(font?.pointSize == size, "Point size at \(index)", sourceLocation: sourceLocation)
     }
 }

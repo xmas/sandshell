@@ -115,7 +115,7 @@ final class ChatSessionView: NSView {
     // MARK: Layout
 
     private func buildLayout() {
-        permissionLabel.font = .systemFont(ofSize: 12.5, weight: .medium)
+        permissionLabel.font = .role(.body)
         permissionButtons.orientation = .horizontal
         permissionButtons.spacing = 8
         permissionBar.orientation = .vertical
@@ -148,11 +148,12 @@ final class ChatSessionView: NSView {
         }
 
         for label in [statusLabel, usageLabel] {
-            label.font = .systemFont(ofSize: 11)
+            label.font = .role(.meta)
             label.textColor = .secondaryLabelColor
             label.lineBreakMode = .byTruncatingTail
         }
-        usageLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
+        usageLabel.font = .role(.code)
+
         statusLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         modePopup.onPick = { [weak self] id in if let id { self?.session.setMode(id) } }
         modelPopup.onPick = { [weak self] id in if let id { self?.session.setModel(id) } }

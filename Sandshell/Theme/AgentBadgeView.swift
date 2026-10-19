@@ -12,7 +12,8 @@ final class AgentBadgeView: NSView {
         wantsLayer = true
         layer?.cornerRadius = radius
         label.translatesAutoresizingMaskIntoConstraints = false
-        label.font = .monospacedSystemFont(ofSize: fontSize, weight: .bold)
+        label.font = .mark(fontSize, weight: .bold, monospaced: true)
+
         label.textColor = .white
         label.alignment = .center
         icon.translatesAutoresizingMaskIntoConstraints = false
