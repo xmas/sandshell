@@ -146,7 +146,6 @@ final class MainWindowController: NSWindowController {
         let sidebarVC = SidebarListController(controller: controller)
         self.sidebar = sidebarVC
         sidebarVC.onOpenWorkspace = { [weak self] r in self?.onOpenWorkspace?(r) }
-        sidebarVC.onShowSearch = { [weak self] folder in self?.showSearch(preferredFolder: folder) }
         sidebarVC.onStopTask = { [weak self] sid, task in await self?.detail?.surfaces.chats[sid]?.session.stopBackgroundTask(task) ?? false }
         sidebarVC.onDropFiles = { [weak self] id, urls in
             self?.workspace?.selection = .session(id)
@@ -155,7 +154,7 @@ final class MainWindowController: NSWindowController {
         let sidebarItem = NSSplitViewItem(sidebarWithViewController: sidebarVC)
         // Resizable within a range; collapses (auto-collapses when dragged below
         // the minimum, since it's a sidebar item with canCollapse).
-        sidebarItem.minimumThickness = 240
+        sidebarItem.minimumThickness = 220
         sidebarItem.maximumThickness = 460
         sidebarItem.canCollapse = true
         self.sidebarItem = sidebarItem

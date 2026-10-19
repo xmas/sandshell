@@ -248,9 +248,6 @@ final class SidebarListController: NSViewController {
     var onOpenWorkspace: ((URL) -> Void)?
     /// Files dropped on a session row (the window routes them to that session).
     var onDropFiles: ((UUID, [URL]) -> Void)?
-    /// Open the window's Search. (The sidebar's own search is its field;
-    /// Search Sessions… lives in the File menu.)
-    var onShowSearch: ((UUID?) -> Void)?
 
     /// True while a container is building/rebuilding (drives the empty-state
     /// placeholder — session creation itself is never gated on this).
