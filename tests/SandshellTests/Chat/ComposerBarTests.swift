@@ -99,6 +99,55 @@ struct ComposerBarTests {
         #expect(abs(composer.bounds.maxX - button.maxX - 13) <= 0.5, "14 pt in from the right, less the border")
     }
 
+    /// The composer and its controls never hold a pane wide: a chat goes
+    /// down to 380 pt, the controls giving way in turn.
+    @Test(arguments: [CGFloat(380), 300])
+    func aChatGoesNarrow(width: CGFloat) {
+        let session = ChatSession(title: "Claude", containerName: "test-sandbox", workdir: "/nonexistent/work",
+                                  home: "/nonexistent/home", mcpURL: nil)
+        let view = ChatSessionView(session: session)
+        view.debugTranscript.debugApplyNow([
+            .user(id: UUID(), text: "A question with a_very_long_unbreakable_identifier_in_it_that_goes_on_and_on", attachments: []),
+            .agentText(id: "a", text: "An answer.\n\n```\nlet code = \"a long line of code that would like to be wide\"\n```"),
+        ])
+        // Held to the width only as firmly as a split view holds its panes.
+        let pane = NSView(frame: NSRect(x: 0, y: 0, width: width, height: 600))
+        view.translatesAutoresizingMaskIntoConstraints = false
+        pane.addSubview(view)
+        let held = view.widthAnchor.constraint(equalToConstant: width)
+        held.priority = .init(250)
+        NSLayoutConstraint.activate([
+            held,
+            view.leadingAnchor.constraint(equalTo: pane.leadingAnchor),
+            view.topAnchor.constraint(equalTo: pane.topAnchor),
+            view.heightAnchor.constraint(equalToConstant: 600),
+        ])
+        pane.layoutSubtreeIfNeeded()
+        #expect(view.frame.width == width, "nothing in it insists on more")
+        let bar = view.debugBarFrame
+        #expect(bar.minX >= 0 && bar.maxX <= width, "the controls stay inside (\(bar))")
+        #expect(view.debugComposer.frame.maxX <= width)
+    }
+
+    /// Every control, at a width: what still shows fits, in the shedding order.
+    @Test(arguments: [
+        (700, ["chat-attach", "chat-mcp", "chat-model", "chat-effort", "chat-mode", "chat-details"]),
+        (260, ["chat-attach", "chat-mcp", "chat-model", "chat-details"]),
+        (120, ["chat-attach", "chat-details"]),
+    ] as [(CGFloat, [String])])
+    func theControlsGiveWayInTurn(width: CGFloat, shown: [String]) {
+        let bar = ComposerBar(frame: NSRect(x: 0, y: 0, width: width, height: 24))
+        bar.modePopup.set([.init(id: "default", title: "Ask"), .init(id: "auto", title: "Auto")], current: "auto")
+        bar.showMCP(count: 3, failing: [])
+        bar.claude.showModel(title: "Opus 5.5", id: "claude-opus-5-5", color: .labelColor)
+        bar.claude.showEffort(title: "Extra High", id: "xhigh", color: .secondaryLabelColor)
+        bar.pieces = ComposerPieces(claudeChoosers: true, mode: true, mcp: true, readout: true, readoutOpensDetails: true)
+        bar.readoutText = "$12.47 · 38%"
+        bar.layoutSubtreeIfNeeded()
+        #expect(bar.debugShown == shown)
+        #expect(bar.debugShownFrames.allSatisfy { $0.maxX <= width + 0.5 }, "\(bar.debugShownFrames)")
+    }
+
     @Test(arguments: [
         (ComposerSendButton.Mode.send, "Send"),
         (.stop, "Stop"),

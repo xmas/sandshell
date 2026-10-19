@@ -408,5 +408,9 @@ final class ComposerBar: NSView {
             return chip.content.accessibilityIdentifier()
         }
     }
+    /// Their frames, in the bar.
+    var debugShownFrames: [NSRect] {
+        stack.arrangedSubviews.filter { !$0.isHidden && $0 is HoverChip }.map { $0.convert($0.bounds, to: self) }
+    }
     #endif
 }
