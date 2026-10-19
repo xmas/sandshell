@@ -194,15 +194,17 @@ final class SearchStore {
 
         var live: [(SearchResult, Int)] = []
         var openTranscripts: Set<String> = []
+        let sessionByID = Dictionary(sessions.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         for (order, s) in sessions.enumerated() {
             let record = s.transcriptID.flatMap { recordByID[$0] }
             if let id = s.transcriptID { openTranscripts.insert(id) }
             let hit = record.flatMap { matches[$0.url.path(percentEncoded: false)] }
-            let t = q.isEmpty ? nil : tier(title: s.name, folder: s.workdir, hit: hit)
+            let title = s.displayName { sessionByID[$0] }
+            let t = q.isEmpty ? nil : tier(title: title, folder: s.workdir, hit: hit)
             if !q.isEmpty, t == nil { continue }
             live.append((SearchResult(
                 id: "live:" + s.id.uuidString, source: .live(s.id), agent: s.agent,
-                title: s.name, folder: s.workdir,
+                title: title, folder: s.workdir,
                 date: max(activity[s.id] ?? .distantPast, s.createdAt),
                 isChat: s.isChat, tier: t, snippet: t == .body ? hit?.snippet : nil,
                 transcriptID: s.transcriptID, transcriptURL: record?.url), order))

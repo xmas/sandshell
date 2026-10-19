@@ -400,6 +400,10 @@ struct WorkspaceStateSessionTests {
         session.isNamedByUser = withOptionalFields
         session.lastActiveAt = withOptionalFields ? WorkspaceStateFixture.referenceDate.addingTimeInterval(60) : nil
         session.transcriptWorkdir = withOptionalFields ? "/workspace/old" : nil
+        session.forkedFrom = withOptionalFields ? UUID() : nil
+        session.forkedAt = withOptionalFields ? WorkspaceStateFixture.referenceDate.addingTimeInterval(30) : nil
+        session.firstPrompt = withOptionalFields ? "fix the build" : nil
+        session.generatedName = withOptionalFields ? "Fix the build" : nil
         let decoded = try WorkspaceStateJSON.roundTrip(session)
         #expect(decoded == session)
     }
@@ -425,9 +429,9 @@ struct WorkspaceStateSessionTests {
 // MARK: - WorkspaceState coding
 
 struct WorkspaceStateCodingTests {
-    @Test func initDefaultsToSchemaTwoWithNothingInIt() {
+    @Test func initDefaultsToTheCurrentSchemaWithNothingInIt() {
         let state = WorkspaceState()
-        #expect(state.schemaVersion == 2)
+        #expect(state.schemaVersion == WorkspaceState.currentSchemaVersion)
         #expect(state.folders.isEmpty)
         #expect(state.sessions.isEmpty)
         #expect(state.expandedFolderIDs.isEmpty)
@@ -479,7 +483,7 @@ struct WorkspaceStateCodingTests {
         let expectedKeys: Set<String> = ["schemaVersion", "folders", "sessions", "expandedFolderIDs",
                                          "archiveWatermarks", "appliedMountSignatures"]
         #expect(Set(object.keys) == expectedKeys, "Empty ignoredKitDrift and the legacy keys are omitted")
-        #expect(object["schemaVersion"] as? Int == 2)
+        #expect(object["schemaVersion"] as? Int == WorkspaceState.currentSchemaVersion)
     }
 
     /// Sandboxes keep their names when the primary agent changes (xmas-sandshell-e7q.44).
@@ -944,7 +948,7 @@ struct WorkspaceBootstrapTests {
 
     @Test func freshRootSeedsOneExpandedRootFolder() throws {
         let state = try WorkspaceBootstrap.openOrCreate(root: root)
-        #expect(state.schemaVersion == 2)
+        #expect(state.schemaVersion == WorkspaceState.currentSchemaVersion)
         #expect(state.sessions.isEmpty)
         #expect(state.folders.count == 1)
         let rootFolder = try #require(state.folders.first)
@@ -971,7 +975,7 @@ struct WorkspaceBootstrapTests {
         let second = try WorkspaceBootstrap.openOrCreate(root: root)
         #expect(second.folders == first.folders, "No second root folder, same id and order")
         #expect(second.expandedFolderIDs == first.expandedFolderIDs)
-        #expect(second.schemaVersion == 2)
+        #expect(second.schemaVersion == WorkspaceState.currentSchemaVersion)
         #expect(try readGitignore() == gitignoreAfterFirst)
     }
 
@@ -1105,7 +1109,7 @@ struct WorkspaceBootstrapTests {
 
         let state = try WorkspaceBootstrap.openOrCreate(root: root)
 
-        #expect(state.schemaVersion == 2)
+        #expect(state.schemaVersion == WorkspaceState.currentSchemaVersion)
         #expect(state.sessions.map(\.id) == [a, b, c, d, e].map(\.id), "Only dates change; the array isn't reordered")
         let allRestamped = state.sessions.allSatisfy { $0.createdAt > WorkspaceStateFixture.referenceDate }
         #expect(allRestamped, "Every session in a known folder gets a synthetic createdAt")
@@ -1116,7 +1120,7 @@ struct WorkspaceBootstrapTests {
         let oneSecondApart = gaps.allSatisfy { abs($0 - 1) < 0.001 }
         #expect(oneSecondApart, "Synthetic timestamps are one second apart: \(gaps)")
         let persisted = try WorkspaceState.load(root: root)
-        #expect(persisted?.schemaVersion == 2, "The migration is saved")
+        #expect(persisted?.schemaVersion == WorkspaceState.currentSchemaVersion, "The migration is saved")
     }
 
     @Test(.tags(.workspaceStateLegacyFormat, .workspaceStateEdgeCase))
@@ -1130,7 +1134,7 @@ struct WorkspaceBootstrapTests {
 
         let migrated = try #require(state.sessions.first)
         #expect(migrated.createdAt == WorkspaceStateFixture.referenceDate)
-        #expect(state.schemaVersion == 2)
+        #expect(state.schemaVersion == WorkspaceState.currentSchemaVersion)
     }
 
     @Test(arguments: [2, 3])
@@ -1142,8 +1146,33 @@ struct WorkspaceBootstrapTests {
 
         let state = try WorkspaceBootstrap.openOrCreate(root: root)
 
-        #expect(state.schemaVersion == schemaVersion)
-        #expect(state.sessions == [session])
+        #expect(state.schemaVersion == WorkspaceState.currentSchemaVersion)
+        #expect(state.sessions.map(\.createdAt) == [session.createdAt])
+    }
+
+    /// Schema 3 names sessions by their first prompt: one a prompt named
+    /// before keeps showing that name; default names, the person's names
+    /// and sessions already at schema 3 are left alone.
+    @Test(.tags(.workspaceStateLegacyFormat), arguments: [
+        (2, "fix the login bug", false, "fix the login bug" as String?),
+        (2, "New Claude Session", false, nil),
+        (2, "Release checklist", true, nil),
+        (3, "fix the login bug", false, nil),
+    ])
+    func schemaThreeKeepsAPromptNamedSessionsName(schemaVersion: Int, name: String, named: Bool,
+                                                   firstPrompt: String?) throws {
+        let rootFolder = Folder(relativePath: "", order: 0)
+        var session = Session(folderID: rootFolder.id, agent: .claude, name: name, order: 0, workdir: "/workspace",
+                              createdAt: WorkspaceStateFixture.referenceDate)
+        session.isNamedByUser = named
+        try WorkspaceState(schemaVersion: schemaVersion, folders: [rootFolder], sessions: [session]).save(root: root)
+
+        let state = try WorkspaceBootstrap.openOrCreate(root: root)
+
+        let migrated = try #require(state.sessions.first)
+        #expect(migrated.firstPrompt == firstPrompt)
+        #expect(migrated.name == name, "The stored name is untouched")
+        #expect(try WorkspaceState.load(root: root)?.sessions.first?.firstPrompt == firstPrompt, "The migration is saved")
     }
 
     @Test(.tags(.workspaceStateLegacyFormat))
@@ -1164,7 +1193,7 @@ struct WorkspaceBootstrapTests {
 
         let state = try WorkspaceBootstrap.openOrCreate(root: root)
 
-        #expect(state.schemaVersion == 2)
+        #expect(state.schemaVersion == WorkspaceState.currentSchemaVersion)
         #expect(state.folders.map(\.relativePath) == ["", "alpha"])
         let rootFolder = try #require(state.folders.first)
         #expect(rootFolder.order == -1)

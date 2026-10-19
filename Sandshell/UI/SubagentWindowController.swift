@@ -34,7 +34,7 @@ final class SubagentWindowController: NSWindowController, NSWindowDelegate {
                               styleMask: [.titled, .closable, .resizable, .miniaturizable], backing: .buffered, defer: true)
         window.title = info.title
         window.subtitle = [info.agentType.map { "\($0) subagent" } ?? "Subagent",
-                           workspace.session(id: info.sessionID)?.name].compactMap { $0 }.joined(separator: " · ")
+                           workspace.displayName(info.sessionID)].compactMap { $0 }.joined(separator: " · ")
         window.isReleasedWhenClosed = false
         // The first opens where one was last left; more cascade from the
         // frontmost (only one open window can hold the frame's name).

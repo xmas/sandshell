@@ -5,8 +5,20 @@ import Testing
 /// `SearchStore.rank` (Workspace/SearchStore.swift): how the Search window
 /// matches what was typed against open sessions' titles and folders.
 struct SearchStoreTests {
+    /// A session that shows as `name` (its first prompt: `Session.displayName`).
     private func session(_ name: String, workdir: String = "/work/project") -> Session {
-        Session(folderID: UUID(), agent: .claude, name: name, order: 0, workdir: workdir)
+        var s = Session(folderID: UUID(), agent: .claude, name: "New Claude Session", order: 0, workdir: workdir)
+        s.firstPrompt = name
+        return s
+    }
+
+    @Test func aRenamedSessionMatchesByItsName() throws {
+        var renamed = session("fix the login bug")
+        renamed.name = "Release checklist"
+        renamed.isNamedByUser = true
+        let result = try #require(rank([renamed], "release").first)
+        #expect(result.title == "Release checklist")
+        #expect(rank([renamed], "login").isEmpty, "Its first prompt isn't its name any more")
     }
 
     private func rank(_ sessions: [Session], _ query: String) -> [SearchResult] {

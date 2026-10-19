@@ -118,6 +118,61 @@ struct ClaudeTranscriptTail {
         return nil
     }
 
+    /// Claude Code's title for the conversation in transcript `text`: the
+    /// latest `{"type":"custom-title","customTitle":…}` (renamed in Claude
+    /// itself), else the latest `{"type":"ai-title","aiTitle":…}` (the title it
+    /// generates during the first turn, what `claude --resume` lists). Nil
+    /// when it has none (yet).
+    static func title(in text: String) -> String? {
+        var custom: String?, generated: String?
+        for line in text.split(separator: "\n", omittingEmptySubsequences: true)
+        where line.contains("-title\"") {
+            guard let obj = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any] else { continue }
+            func value(_ key: String) -> String? {
+                (obj[key] as? String).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.flatMap { $0.isEmpty ? nil : $0 }
+            }
+            switch obj["type"] as? String {
+            case "custom-title": custom = value("customTitle") ?? custom
+            case "ai-title": generated = value("aiTitle") ?? generated
+            default: continue
+            }
+        }
+        return custom ?? generated
+    }
+
+    /// `title(in:)` of the transcript at `url`.
+    static func title(at url: URL) -> String? {
+        (try? String(contentsOf: url, encoding: .utf8)).flatMap(title(in:))
+    }
+
+    /// A fork of transcript `text` at the reply ending in `replyText`: its lines
+    /// up to and including that reply's, filed under session `newID`. The
+    /// source's titles are left behind (the fork's are its own). Nil when no
+    /// reply holds that text. `cut` is the reply's line (0-based) of `lines`.
+    static func fork(_ text: String, upTo replyText: String, newID: String) -> (text: String, cut: Int, lines: Int)? {
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: true)
+        // The reply's last words identify its transcript line (streamed text == stored text).
+        let trimmed = replyText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let needle = String(trimmed.suffix(80))
+        guard !needle.isEmpty, let cut = lines.lastIndex(where: { line in
+            guard line.contains("\"assistant\""),
+                  let obj = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
+                  obj["type"] as? String == "assistant",
+                  let blocks = (obj["message"] as? [String: Any])?["content"] as? [[String: Any]] else { return false }
+            return blocks.contains { ($0["text"] as? String)?.contains(needle) == true }
+        }) else { return nil }
+
+        var out = ""
+        for line in lines[...cut] {
+            guard var obj = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any] else { continue }
+            if let type = obj["type"] as? String, type == "ai-title" || type == "custom-title" { continue }
+            if obj["sessionId"] != nil { obj["sessionId"] = newID }
+            if let data = try? JSONSerialization.data(withJSONObject: obj, options: [.withoutEscapingSlashes]),
+               let json = String(data: data, encoding: .utf8) { out += json + "\n" }
+        }
+        return (out, cut, lines.count)
+    }
+
     /// How to name the writer in "Continued in …".
     static func writerName(_ entrypoint: String?) -> String {
         switch entrypoint {

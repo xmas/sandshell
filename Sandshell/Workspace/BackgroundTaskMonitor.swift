@@ -81,7 +81,7 @@ final class BackgroundTaskMonitor {
                 } else {
                     for finished in watch.parser.justFinished where !isVisible(id) {
                         NotificationManager.shared.sendBackgroundTaskDone(
-                            sessionID: id, sessionName: session.name, task: finished)
+                            sessionID: id, sessionName: controller.displayName(of: session), task: finished)
                         controller.markBackgroundTaskSeenLater(id)
                     }
                 }

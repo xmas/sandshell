@@ -81,7 +81,7 @@ private struct BackgroundTaskSection: View {
             if titled {
                 Button { onSelectSession?(session.id) } label: {
                     HStack(spacing: 6) {
-                        Text(session.name).font(.headline).lineLimit(1)
+                        Text(session.displayName).font(.headline).lineLimit(1)
                         Image(systemName: "arrow.right.circle").foregroundStyle(.secondary)
                     }
                 }

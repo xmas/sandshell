@@ -165,7 +165,7 @@ private final class TerminalRuntimeController {
                             NotificationManager.shared.sendWorkComplete(
                                 sessionID: id,
                                 agentName: s.agent.displayName,
-                                sessionName: s.name,
+                                sessionName: self.controller.displayName(of: s),
                                 lastPrompt: self.activityWatches[id]?.latestPrompt,
                                 workSeconds: transition.workSeconds,
                                 workdir: s.workdir)
@@ -200,7 +200,7 @@ private final class TerminalRuntimeController {
                     NotificationManager.shared.sendWorkComplete(
                         sessionID: id,
                         agentName: s.agent.displayName,
-                        sessionName: s.name,
+                        sessionName: self.controller.displayName(of: s),
                         lastPrompt: self.activityWatches[id]?.latestPrompt,
                         workSeconds: transition.workSeconds,
                         workdir: s.workdir)
@@ -680,7 +680,7 @@ final class TerminalStackController: NSViewController {
             // A Files pane speaks for its session (or just its folder).
             let (url, title) = files.resolve(in: controller)
             if let id = files.session, let session = controller.session(id: id) {
-                onChromeChange?(Chrome(agent: session.agent, title: session.name,
+                onChromeChange?(Chrome(agent: session.agent, title: controller.displayName(of: session),
                                        subtitle: "Files · \(url.path.tildeAbbreviated)"))
                 updateHeaderStatus(id)
             } else {
@@ -1301,7 +1301,7 @@ final class TerminalStackController: NSViewController {
             .withSymbolConfiguration(.init(pointSize: 11, weight: .medium))
         chatModeButton.toolTip = modeTip
         chatModeButton.setAccessibilityLabel(modeTip)
-        onChromeChange?(Chrome(agent: session.agent, title: session.name,
+        onChromeChange?(Chrome(agent: session.agent, title: controller.displayName(of: session),
                                subtitle: "\(container) · \(session.workdir.tildeAbbreviated)"))
     }
 
@@ -1479,7 +1479,7 @@ final class TerminalStackController: NSViewController {
                 // Declined: say so here (not ask on every refresh); Try Again asks again.
                 pending.remove(id)
                 surfaces.declinedRestores.insert(id)
-                showStatus("“\(session.name)”’s \(session.agent.displayName) history is no longer available.", busy: false)
+                showStatus("“\(controller.displayName(of: session))”’s \(session.agent.displayName) history is no longer available.", busy: false)
                 editSettingsButton.isHidden = true
                 failureActions.isHidden = false
                 return
@@ -1542,7 +1542,7 @@ final class TerminalStackController: NSViewController {
     }
 
     private func showOpenElsewhere(_ session: Session) {
-        showStatus("“\(session.name)” is open in another window on this folder.", busy: false)
+        showStatus("“\(controller.displayName(of: session))” is open in another window on this folder.", busy: false)
     }
 
     /// The chat's Session Details (context, background tasks, connectors,
@@ -1567,7 +1567,7 @@ final class TerminalStackController: NSViewController {
 
     /// The session's prior history is gone — ask whether to start fresh.
     private func confirmStartFresh(_ session: Session) -> Bool {
-        Alerts.confirm("Couldn’t restore “\(session.name)”.", "This session’s \(session.agent.displayName) history "
+        Alerts.confirm("Couldn’t restore “\(controller.displayName(of: session))”.", "This session’s \(session.agent.displayName) history "
                        + "is no longer available. Start a new session in its place?",
                        confirm: "New Session", style: .informational)
     }
@@ -1688,7 +1688,7 @@ final class TerminalStackController: NSViewController {
             chat.onNeedsInput = { [controller, surfaces] text in
                 guard !surfaces.isVisible(id), let s = controller.session(id: id) else { return }
                 NotificationManager.shared.sendNeedsInput(sessionID: id, agentName: s.agent.displayName,
-                                                          sessionName: s.name, text: text)
+                                                          sessionName: controller.displayName(of: s), text: text)
             }
             controller.setStopped(id, nil)
             var lastPrompt: String?
@@ -1702,7 +1702,7 @@ final class TerminalStackController: NSViewController {
                 // Same "finished" notification terminals send, when you're elsewhere.
                 if transition.finishedWork, let s = controller.session(id: id), !surfaces.isVisible(id) {
                     NotificationManager.shared.sendWorkComplete(
-                        sessionID: id, agentName: s.agent.displayName, sessionName: s.name,
+                        sessionID: id, agentName: s.agent.displayName, sessionName: controller.displayName(of: s),
                         lastPrompt: lastPrompt, workSeconds: transition.workSeconds, workdir: s.workdir)
                 }
             }
@@ -1716,7 +1716,7 @@ final class TerminalStackController: NSViewController {
             view.onFork = { [controller] reply in
                 if controller.forkChat(id, upTo: reply) == nil { NSSound.beep() }
             }
-            view.sessionName = { [controller] in controller.session(id: id)?.name }
+            view.sessionName = { [controller] in controller.displayName(id) }
             view.resolveFileURLs = { [weak view] urls in
                 Self.materializeDroppedURLs(urls, workdir: current.workdir) { error in
                     Self.reportDropFailure(error, in: view?.window)
@@ -2189,7 +2189,7 @@ extension TerminalStackController {
                 wc.window?.makeKeyAndOrderFront(nil)
                 return
             }
-            let wc = TerminalSearchWindowController(sessionName: session.name)
+            let wc = TerminalSearchWindowController(sessionName: self.controller.displayName(of: session))
             // The session's, not this pane's (which may close first).
             wc.onClose = { [weak surfaces = self.surfaces] in surfaces?.searchWindows[id] = nil }
             if let text { wc.loadText(text) }
