@@ -96,7 +96,11 @@ enum KitStore {
 
     // MARK: Agent requirements
 
-    private static let requirementsKey = "kitRequiredAgents"
+    /// v2: entries learned before agent kits (`kind: sandbox`) counted said
+    /// "any agent" for them, which sent them to other agents as `--kit`
+    /// (sbx refuses); every kit is asked again.
+    private static let requirementsKey = "kitRequiredAgents.v2"
+    private static let staleRequirementsKeys = ["kitRequiredAgents"]
     /// Known up front, so the official default works offline.
     private static let knownRequirements = ["docker.io/sbx/code-server-kit:latest": "claude",
                                             "sandshell-claude": "claude", "sandshell-codex": "codex"]
@@ -105,6 +109,7 @@ enum KitStore {
     /// a `kind: sandbox` kit defines): `.some(nil)` for any agent, `nil` while
     /// not yet known.
     static func requiredAgent(_ ref: String) -> String?? {
+        dropStaleRequirements
         if let known = knownRequirements[ref] { return .some(known) }
         // An agent kit is its own agent's: sbx refuses it as another's --kit.
         if let profile = AgentProfileStore.all.first(where: { $0.kitRef == ref }) { return .some(profile.agent) }
@@ -112,6 +117,10 @@ enum KitStore {
         guard let agent = cache[ref] else { return nil }
         return .some(agent.isEmpty ? nil : agent)
     }
+
+    private static let dropStaleRequirements: Void = {
+        for key in staleRequirementsKeys { UserDefaults.standard.removeObject(forKey: key) }
+    }()
 
     /// Remember what `sbx kit inspect` said a kit requires.
     static func learn(_ ref: String, from info: KitInspection) {
