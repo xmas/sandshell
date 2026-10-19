@@ -827,9 +827,11 @@ final class TerminalStackController: NSViewController {
             // As big as the pane allows, up to 640×260 (the stack keeps it inside).
             buildLogView.heightAnchor.constraint(lessThanOrEqualTo: frameView.heightAnchor, multiplier: 0.5),
         ])
+        // Below windowSizeStayPut: the log fills what the pane has, never
+        // holds the window (or a split) open.
         for size in [buildLogView.widthAnchor.constraint(equalToConstant: 640),
                      buildLogView.heightAnchor.constraint(equalToConstant: 260)] {
-            size.priority = .defaultHigh
+            size.priority = NSLayoutConstraint.Priority(NSLayoutConstraint.Priority.windowSizeStayPut.rawValue - 10)
             size.isActive = true
         }
         // Topmost: dims the pane's content while another one has focus (clicks
