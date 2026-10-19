@@ -5,7 +5,7 @@ import AppKit
 /// from the session's state (its time, its title's weight and colour, whether
 /// the first instruction shows). Pure: the cell only draws it.
 struct SessionRowStatus: Equatable {
-    /// The six states a session row can be in.
+    /// The states a session row can be in.
     enum State: Equatable, CaseIterable, Sendable {
         /// A question or a permission is waiting on the person.
         case needsYou
@@ -16,7 +16,9 @@ struct SessionRowStatus: Equatable {
         case finishedSeen
         /// Its agent exited or was stopped (`SessionRuntime.stoppedReason`).
         case stopped
-        /// Not run since launch.
+        /// Running, waiting for a message: nothing new since it started.
+        case ready
+        /// Not running (not started since launch, or closed).
         case idle
     }
 
@@ -25,7 +27,7 @@ struct SessionRowStatus: Equatable {
     enum Glyph: Equatable, Sendable { case dot, dimDot, spinner }
 
     /// The status colour, by role (`SidebarPalette.color(for:)` resolves it).
-    enum Tone: Equatable, Sendable { case needsYou, working, fresh, muted, error }
+    enum Tone: Equatable, Sendable { case needsYou, working, fresh, live, muted, error }
 
     let state: State
     let word: String
@@ -35,7 +37,7 @@ struct SessionRowStatus: Equatable {
         switch state {
         case .working: .spinner
         case .finishedSeen, .idle: .dimDot
-        case .needsYou, .finishedUnread, .stopped: .dot
+        case .needsYou, .finishedUnread, .stopped, .ready: .dot
         }
     }
 
@@ -45,12 +47,16 @@ struct SessionRowStatus: Equatable {
         case .working: .working
         case .finishedUnread: .fresh
         case .stopped: .error
+        case .ready: .live
         case .finishedSeen, .idle: .muted
         }
     }
 
     /// The row's title is semibold only while it's unread.
     var titleIsEmphasized: Bool { state == .finishedUnread }
+
+    /// Its agent is running: live, or busy with a turn or a question.
+    func isRunning(live: Bool) -> Bool { live || [.needsYou, .working, .ready].contains(state) }
 
     /// The title's full-strength colour: a live, unread or selected row (else 80 %).
     func titleIsFullStrength(selected: Bool, live: Bool) -> Bool {
@@ -64,7 +70,7 @@ struct SessionRowStatus: Equatable {
         case .needsYou: .status(.needsYou)
         case .working: .status(.working)
         case .finishedUnread: .foreground
-        case .finishedSeen, .stopped, .idle: .muted
+        case .finishedSeen, .stopped, .ready, .idle: .muted
         }
     }
     enum TimeTone: Equatable, Sendable { case status(Tone), foreground, muted }
@@ -78,7 +84,7 @@ struct SessionRowStatus: Equatable {
         if rt.status == .working { return .working }
         if rt.isUnread { return .finishedUnread }
         if rt.workSecondsCompleted > 0 { return .finishedSeen }
-        return .idle
+        return rt.isLive ? .ready : .idle
     }
 
     /// The row's status for `runtime` (nil: not run since launch).
@@ -98,9 +104,11 @@ struct SessionRowStatus: Equatable {
         case .stopped:
             let reason = runtime?.stoppedReason?.split(whereSeparator: \.isNewline).first.map(String.init)
             return .init(state: state, word: "Stopped", detail: reason?.nonEmpty)
+        case .ready:
+            return .init(state: state, word: "Ready", detail: agent == .claude ? model : agent.displayName)
         case .idle:
             // The badge says which agent; a non-Claude one says what it is ("Shell").
-            return .init(state: state, word: "Idle", detail: agent == .claude ? nil : agent.displayName)
+            return .init(state: state, word: "Not running", detail: agent == .claude ? nil : agent.displayName)
         }
     }
 
@@ -295,6 +303,7 @@ struct SidebarPalette {
         case .needsYou: Self.needsYou
         case .working: .sessionWorking
         case .fresh: Self.fresh
+        case .live: Self.live
         case .error, .muted: Self.error
         }
         return isDark ? base : base.mixed(with: .black, 0.25)
@@ -310,6 +319,8 @@ struct SidebarPalette {
 
     static let needsYou = NSColor.hex("F2B13A")
     static let fresh = NSColor.hex("7FB3FF")
+    /// Running and ready: green, lighter than the error red, darker than the amber.
+    static let live = NSColor.hex("5CC98B")
     static let error = NSColor.hex("FF6B6B")
 }
 

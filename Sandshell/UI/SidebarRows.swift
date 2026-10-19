@@ -210,7 +210,7 @@ final class SessionCellView: NSTableCellView {
     private var leading: NSLayoutConstraint!
     private var tracking: NSTrackingArea?
     private var palette: SidebarPalette
-    private(set) var status = SessionRowStatus(state: .idle, word: "Idle", detail: nil)
+    private(set) var status = SessionRowStatus(state: .idle, word: "Not running", detail: nil)
     private var selected = false
     private var live = false
     private var agentName = ""
@@ -356,9 +356,12 @@ final class SessionCellView: NSTableCellView {
 
     private func applyTitleStyle() {
         nameLabel.font = .role(status.titleIsEmphasized ? .bodyEmphasis : .body)
-        let full = status.titleIsFullStrength(selected: selected, live: live)
-            || NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
-        nameLabel.textColor = full ? palette.foreground : palette.dimForeground
+        let contrast = NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
+        let full = status.titleIsFullStrength(selected: selected, live: live) || contrast
+        // Not running: the whole row steps back — a muted title and a faded badge.
+        let running = status.isRunning(live: live)
+        nameLabel.textColor = full ? palette.foreground : running ? palette.dimForeground : palette.muted
+        badge.alphaValue = running || contrast ? 1 : 0.45
     }
 
     // MARK: Hover: the close button takes the time's place
@@ -436,6 +439,7 @@ final class SessionCellView: NSTableCellView {
     var debugForkGlyphShown: Bool { !forkGlyph.isHidden }
     var debugSpinning: Bool { !spinner.isHidden && spinner.isAnimating }
     var debugBadgeMinX: CGFloat { badge.frame.minX }
+    var debugBadgeAlpha: CGFloat { badge.alphaValue }
     /// Every label showing, for the no-wrap checks.
     var debugLabels: [NSTextField] {
         [nameLabel, timeLabel, wordLabel, detailLabel, instructionLabel].filter { !$0.isHidden && !$0.stringValue.isEmpty }

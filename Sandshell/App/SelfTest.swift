@@ -1890,6 +1890,10 @@ enum SelfTest {
         ws.debugSetRuntime(stopped.id, rt)
         await wait(1)
 
+        // The shown shell is running (its sandbox may still be coming up).
+        check(await until(240) { ws.runtime(anchor.id)?.isLive == true }, "the shown shell runs")
+        await wait(0.5)
+
         // Order: needs you, then working, then by activity.
         let ids = sidebar.displayedSessionIDs
         check(Array(ids.prefix(2)) == [needs.id, working.id],
@@ -1901,7 +1905,8 @@ enum SelfTest {
         let expected: [(Session, String, String)] = [
             (needs, "Needs you", "· permission to run tests"), (working, "Working", "· Opus 5.5"),
             (fresh, "Finished", "· worked 12m 0s · Opus 5.5"), (seen, "Finished", "· worked 2m 0s · Opus 5.5"),
-            (stopped, "Stopped", "· exit 1"), (idleShell, "Idle", "· Shell"), (idle, "Idle", ""),
+            (stopped, "Stopped", "· exit 1"), (idleShell, "Not running", "· Shell"), (idle, "Not running", ""),
+            (anchor, "Ready", "· Shell"),
         ]
         for (s, word, detail) in expected {
             let cell = sidebar.debugCell(s.id)
@@ -1909,8 +1914,10 @@ enum SelfTest {
                   "\(ws.displayName(of: s).prefix(24)): “\(cell?.debugWord ?? "-") \(cell?.debugDetail ?? "")”")
         }
         let words = Set(ids.compactMap { sidebar.debugCell($0)?.debugWord })
-        check(words.isSuperset(of: ["Needs you", "Working", "Finished", "Stopped", "Idle"])
-              && !words.contains("Ready") && !words.contains("New"), "the rows say \(words.sorted())")
+        check(words.isSuperset(of: ["Needs you", "Working", "Finished", "Stopped", "Ready", "Not running"])
+              && !words.contains("Idle") && !words.contains("New"), "the rows say \(words.sorted())")
+        let badge = { (id: UUID) in sidebar.debugCell(id)?.debugBadgeAlpha ?? -1 }
+        check(badge(anchor.id) == 1 && badge(idle.id) < 1, "a row that isn't running fades (\(badge(anchor.id)) vs \(badge(idle.id)))")
         check(sidebar.debugCell(working.id)?.debugSpinning == true, "the working row's spinner turns")
         check(sidebar.debugCell(needs.id)?.debugSpinning == false, "nothing else spins")
         let workingTime = sidebar.debugCell(working.id)?.debugTime ?? "-", seenTime = sidebar.debugCell(seen.id)?.debugTime ?? "-"

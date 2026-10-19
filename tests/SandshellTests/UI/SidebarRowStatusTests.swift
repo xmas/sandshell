@@ -34,6 +34,8 @@ struct SidebarRowStatusTests {
             rt.workSecondsCompleted = 120
         case .stopped:
             rt.stoppedReason = "exit 1\nmore detail"
+        case .ready:
+            rt.isLive = true
         case .idle:
             return nil
         }
@@ -61,8 +63,10 @@ extension SidebarRowStatusTests {
             Case(state: .finishedUnread, agent: .claude, word: "Finished", detail: "worked 12m 0s · Opus 5.5", glyph: .dot, tone: .fresh),
             Case(state: .finishedSeen, agent: .claude, word: "Finished", detail: "worked 2m 0s · Opus 5.5", glyph: .dimDot, tone: .muted),
             Case(state: .stopped, agent: .claude, word: "Stopped", detail: "exit 1", glyph: .dot, tone: .error),
-            Case(state: .idle, agent: .claude, word: "Idle", detail: nil, glyph: .dimDot, tone: .muted),
-            Case(state: .idle, agent: .shell, word: "Idle", detail: "Shell", glyph: .dimDot, tone: .muted),
+            Case(state: .ready, agent: .claude, word: "Ready", detail: "Opus 5.5", glyph: .dot, tone: .live),
+            Case(state: .ready, agent: .shell, word: "Ready", detail: "Shell", glyph: .dot, tone: .live),
+            Case(state: .idle, agent: .claude, word: "Not running", detail: nil, glyph: .dimDot, tone: .muted),
+            Case(state: .idle, agent: .shell, word: "Not running", detail: "Shell", glyph: .dimDot, tone: .muted),
         ]
 
         @Test(arguments: cases)
@@ -97,11 +101,23 @@ extension SidebarRowStatusTests {
         }
 
         @Test(.tags(.edgeCase))
-        func aRuntimeThatNeverWorkedIsIdle() {
+        func aRunningAgentThatNeverWorkedIsReadyAndAStoppedOneIsNotRunning() {
             var rt = SessionRuntime()
             rt.isLive = true
             rt.lastActivityAt = SidebarRowStatusTests.now
+            #expect(SessionRowStatus.state(of: rt) == .ready)
+            rt.isLive = false
             #expect(SessionRowStatus.state(of: rt) == .idle)
+            #expect(SessionRowStatus.state(of: nil) == .idle)
+        }
+
+        @Test(arguments: [
+            (SessionRowStatus.State.needsYou, false, true), (.working, false, true), (.ready, false, true),
+            (.finishedSeen, true, true), (.finishedSeen, false, false), (.stopped, false, false), (.idle, false, false),
+        ])
+        func aRowIsRunningWhileItsAgentIs(_ state: SessionRowStatus.State, _ live: Bool, _ running: Bool) {
+            let status = SessionRowStatus.of(SidebarRowStatusTests.runtime(state), agent: .claude)
+            #expect(status.isRunning(live: live) == running)
         }
 
         @Test(.tags(.edgeCase))
@@ -119,6 +135,7 @@ extension SidebarRowStatusTests {
             (.finishedUnread, .foreground),
             (.finishedSeen, .muted),
             (.stopped, .muted),
+            (.ready, .muted),
             (.idle, .muted),
         ])
         func theTimeTakesTheStatusColourWhileItWorksOrWaits(_ state: SessionRowStatus.State,
