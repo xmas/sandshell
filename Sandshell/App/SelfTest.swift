@@ -701,7 +701,11 @@ enum SelfTest {
             let filter = inspector.tree.debugFilterFrameInWindow
             log("inspector filter \(filter), content layout \(w.contentLayoutRect)")
             check(filter.maxY <= w.contentLayoutRect.maxY + 1, "the inspector's filter sits below the toolbar")
+            let whole = inspector.view.convert(inspector.view.bounds, to: nil)
+            log("inspector frame \(whole)")
+            check(whole.maxY <= w.contentLayoutRect.maxY + 1, "nothing of the inspector draws in the toolbar strip")
             snapshot(window, "files-inspector")
+            check(inspector.editor.debugEditorFillsColumn, "the inspector's editor fills its column")
         }
         window.toggleFiles()
 
@@ -812,6 +816,15 @@ enum SelfTest {
             check(col.composer.width <= ChatTranscriptView.readableWidth + 1
                   && abs(col.composer.midX - v.bounds.midX) < 2, "a wide pane centers the composer, at most the readable width")
             check(col.textInset == ChatTranscriptView.sideInset(forWidth: col.textWidth), "the transcript's text sits in the same column")
+            // The column mustn't hold the pane to its width: the sidebar still resizes.
+            if let split = w.contentViewController as? NSSplitViewController, let side = split.splitViewItems.first {
+                let sidebar = side.viewController.view
+                log("sidebar \(Int(sidebar.frame.width)), pane \(Int(v.bounds.width)) in a \(Int(w.frame.width))-point window")
+                check(sidebar.frame.width < side.maximumThickness, "a chat doesn't push the sidebar to its widest")
+                split.splitView.setPosition(300, ofDividerAt: 0)
+                split.splitView.layoutSubtreeIfNeeded()
+                check(abs(sidebar.frame.width - 300) < 1, "with a chat showing, the sidebar's divider moves (\(Int(sidebar.frame.width)))")
+            }
             // The window can't outgrow the screen: a transcript on its own, wider.
             let wide = ChatTranscriptView(frame: NSRect(x: 0, y: 0, width: 1600, height: 400))
             wide.layoutSubtreeIfNeeded()

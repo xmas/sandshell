@@ -218,6 +218,9 @@ final class MainWindowController: NSWindowController {
         filesItem.minimumThickness = 480
         filesItem.maximumThickness = 1600
         filesItem.canCollapse = true
+        // Below the toolbar like the panes: the header is one strip in the
+        // window's title-bar color, with nothing of the Files pane drawn in it.
+        filesItem.allowsFullHeightLayout = false
         filesItem.isCollapsed = !UserDefaults.standard.bool(forKey: filesVisibleKey)
         self.filesItem = filesItem
         split.addSplitViewItem(filesItem)

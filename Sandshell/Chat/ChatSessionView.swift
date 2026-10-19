@@ -199,9 +199,11 @@ final class ChatSessionView: NSView {
         columnToEdge = column.trailingAnchor.constraint(equalTo: trailingAnchor)
         // What you type and answer lines up with the transcript's centered
         // column: the column's width, up to the readable width (plus margins).
+        // It only *wants* that width, below the window's split view (260): a
+        // stronger pull shrinks this pane to it and pins the sidebar at its widest.
         addLayoutGuide(readable)
-        let fill = readable.widthAnchor.constraint(equalTo: column.widthAnchor)
-        fill.priority = .defaultHigh
+        let fill = readable.widthAnchor.constraint(equalToConstant: ChatTranscriptView.readableWidth + 32)
+        fill.priority = .init(100)
         NSLayoutConstraint.activate([
             column.leadingAnchor.constraint(equalTo: leadingAnchor),
             column.topAnchor.constraint(equalTo: topAnchor),
@@ -212,6 +214,7 @@ final class ChatSessionView: NSView {
             readable.bottomAnchor.constraint(equalTo: column.bottomAnchor),
             readable.widthAnchor.constraint(lessThanOrEqualToConstant: ChatTranscriptView.readableWidth + 32),
             readable.leadingAnchor.constraint(greaterThanOrEqualTo: column.leadingAnchor),
+            readable.trailingAnchor.constraint(lessThanOrEqualTo: column.trailingAnchor),
             fill,
         ])
         NSLayoutConstraint.activate([

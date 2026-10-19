@@ -314,6 +314,10 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
             stack.bottomAnchor.constraint(equalTo: root.bottomAnchor),
             stack.leadingAnchor.constraint(equalTo: root.leadingAnchor),
             stack.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+            // The stack's .width alignment is only a preference: the empty
+            // label (pinned inside with margins, so a long reason wraps) would
+            // otherwise shrink the editor to its own width.
+            container.widthAnchor.constraint(equalTo: stack.widthAnchor),
             tabScroll.heightAnchor.constraint(equalToConstant: 30),
             tabBar.heightAnchor.constraint(equalTo: tabScroll.heightAnchor),
             header.heightAnchor.constraint(equalToConstant: 30),
@@ -919,6 +923,9 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
     }
 
     #if DEBUG
+    /// Self-test: the editor's text area spans its column.
+    var debugEditorFillsColumn: Bool { abs(container.frame.width - view.bounds.width) < 1 }
+
     /// Self-test: ask about a line as if its number was clicked and submitted.
     func debugAsk(line: Int, _ comment: String) -> Bool {
         let ns = preview.string as NSString
