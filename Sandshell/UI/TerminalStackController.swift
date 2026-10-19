@@ -480,21 +480,16 @@ final class TerminalStackController: NSViewController {
 
     /// The session this pane shows (the pane tree decides; nil = empty pane).
     private(set) var shownSession: UUID?
-    /// Or the Files tree + editor for a session's folder (exclusive with a session).
-    private(set) var shownFiles: FilesTarget?
-    private(set) var filesPane: FilesPaneController?
-    /// "Add to Chat" from this pane's Files tree.
-    var onFilesAddToChat: (([URL], FilesTarget) -> Void)?
-    /// A diff line's "change this" from this pane's Files surface.
-    var onFilesAsk: ((String, FilesTarget) -> Void)?
     /// Focused pane: the one the sidebar selection and toolbar act on.
     var isFocused = true { didSet { updateFocusRing() } }
-    /// Draw the focus ring only when there's more than one pane.
+    /// More than one pane in the window: unfocused ones dim, the strip names
+    /// the session, and Close does something.
     var showsFocusRing = false {
         didSet {
             updateFocusRing()
-            closePaneButton.isHidden = !showsFocusRing
+            titleStrip.canClose = showsFocusRing
             emptyCloseButton.isHidden = !showsFocusRing
+            updateStripName()
         }
     }
     /// Close this pane (title-strip ✕, shown when split).
@@ -503,36 +498,23 @@ final class TerminalStackController: NSViewController {
     var newSessionMenu: (() -> NSMenu?)?
     /// Split this pane (title-strip buttons): a new empty pane on that side.
     var onSplit: ((PaneTreeController.Edge) -> Void)?
-    /// Show this pane's session folder (or the workspace) as Files beside it.
-    var onOpenFiles: ((_ changesOnly: Bool) -> Void)?
-    /// Open a file (from a link in the chat) in the Files pane beside this one.
+    /// Show the window's Files sidebar (the branch crumb's menu), just the changes or all.
+    var onShowFiles: ((_ changesOnly: Bool) -> Void)?
+    /// Open a file (from a link in the chat) in the window's Files sidebar.
     var onOpenFileInFiles: ((URL, Int?) -> Void)?
-    private let closePaneButton = NSButton()
-    private let filesPaneButton = NSButton()
-    /// Chat ⇄ Terminal for this pane's session (agents that can chat).
-    private let chatModeButton = NSButton()
-    private let splitRightButton = NSButton()
-    private let splitDownButton = NSButton()
-    /// Title-strip pane controls: Files, Split Right, Split Down, Close.
-    private let paneControls = NSStackView()
-    /// An empty pane's own way out: Show Files / Close Pane, under its hint.
+    /// An empty pane's own way out: New Session / Close Pane, under its hint.
     private let emptyActions = NSStackView()
     private let emptyNewButton = NSButton(title: "New Session", target: nil, action: nil)
-    private let emptyFilesButton = NSButton(title: "Show Files", target: nil, action: nil)
     private let emptyCloseButton = NSButton(title: "Close Pane", target: nil, action: nil)
     /// A session that couldn't start: Try Again, and the settings that broke it.
     private let failureActions = NSStackView()
     private let retryButton = NSButton(title: "Try Again", target: nil, action: nil)
     private let editSettingsButton = NSButton(title: "Edit Kits…", target: nil, action: nil)
     private var editSettingsPane: InspectorPane = .kits
-    /// Zero-width the Claude readout while it's hidden so it doesn't squeeze
-    /// the title in a narrow pane.
-    private lazy var claudeStatsCollapsed = claudeStats.widthAnchor.constraint(equalToConstant: 0)
 
     private let host = NSView()
     /// The active session's identity, published to the window's native toolbar
     /// (agent badge + title/subtitle). `nil` when no session is shown.
-    /// `agent` is nil for a Files pane that isn't any session's (no badge).
     struct Chrome { let agent: AgentKind?; let title: String; let subtitle: String }
     var onChromeChange: ((Chrome?) -> Void)?
     /// Live status for the toolbar: text ("Working  ◷ 39m 16s" / "Ready") and
@@ -541,17 +523,11 @@ final class TerminalStackController: NSViewController {
     private var activeSessionID: UUID?
     // Framed terminal
     private let frameView = NSView()
-    private let titleStrip = LayoutReportingView()
-    private let titleLabel = NSTextField(labelWithString: "")
+    /// Sandbox › folder › branch › name, and the pane's controls.
+    private let titleStrip = PaneStripView()
     private let titleLine = NSView()
-    /// Claude model/effort choosers + context/tokens/cost, trailing edge of the title strip.
-    private let claudeStats = ClaudeStatsView()
-    /// Over an unfocused pane (when split): a translucent wash of the background.
+    /// Over an unfocused pane's content (when split): a translucent wash of the background.
     private let dimOverlay = PassThroughView()
-    /// Sandbox · folder · branch chips (replaces the plain title for sessions).
-    private let contextBar = SessionContextBar()
-    /// "2 running" — the session's background tasks; opens their list.
-    private let backgroundPill = CollapsingButton()
     private var backgroundPopover: NSPopover?
     // Kit startup banner (failed / warning / still installing), above the frame.
     private let kitBanner = KitStartupBannerView()
@@ -593,88 +569,10 @@ final class TerminalStackController: NSViewController {
 
     // MARK: Pane
 
-    /// Show `id` in this pane (nil = empty). Unsaved Files edits are the
-    /// caller's to confirm first (`confirmLeavingFiles`).
+    /// Show `id` in this pane (nil = empty).
     func show(_ id: UUID?) {
-        dropFilesPane()
         shownSession = id
         refresh()
-    }
-
-    /// Show the Files tree + editor for `target` instead of a session.
-    func showFiles(_ target: FilesTarget) {
-        shownSession = nil
-        shownFiles = target
-        refresh()
-    }
-
-    /// Before replacing or closing a Files pane: save/discard edits (false = cancel).
-    func confirmLeavingFiles() -> Bool { filesPane?.confirmClose() ?? true }
-
-    private func dropFilesPane() {
-        shownFiles = nil
-        guard let filesPane else { return }
-        filesPane.view.superview?.removeFromSuperview()
-        filesPane.removeFromParent()
-        self.filesPane = nil
-    }
-
-    private func presentFiles(_ target: FilesTarget) {
-        let files: FilesPaneController
-        if let existing = filesPane {
-            files = existing
-        } else {
-            files = FilesPaneController(compact: true)
-            files.onAddToChat = { [weak self] urls in
-                guard let self, let target = self.shownFiles else { return }
-                self.onFilesAddToChat?(urls, target)
-            }
-            files.onAskAgent = { [weak self] text in
-                guard let self, let target = self.shownFiles else { return }
-                self.onFilesAsk?(text, target)
-            }
-            addChild(files)
-            // The editor paints the system text background, not the terminal's.
-            let surface = FilesSurfaceView()
-            files.view.translatesAutoresizingMaskIntoConstraints = false
-            surface.addSubview(files.view)
-            NSLayoutConstraint.activate([
-                files.view.topAnchor.constraint(equalTo: surface.topAnchor),
-                files.view.bottomAnchor.constraint(equalTo: surface.bottomAnchor),
-                files.view.leadingAnchor.constraint(equalTo: surface.leadingAnchor),
-                files.view.trailingAnchor.constraint(equalTo: surface.trailingAnchor),
-            ])
-            addTerminalView(surface)
-            filesPane = files
-        }
-        guard let surface = files.view.superview else { return }
-        let (url, _) = target.resolve(in: controller)
-        let agent = target.session.flatMap { controller.session(id: $0)?.containerAgentKind } ?? controller.primaryAgent
-        let access = controller.sandboxAccess(for: url, agent: agent)
-        files.setRoot(url, access: access)
-        hideHostContents(except: surface)
-        surface.isHidden = false
-        activeSessionID = nil
-        // Where these files are and what they're shared with — not the session's name.
-        titleLabel.stringValue = "\(url.path.tildeAbbreviated) — \(access.titleSummary)"
-        titleLabel.isHidden = false
-        contextBar.isHidden = true
-        titleLabel.toolTip = "These files are shared with sandbox “\(access.sandbox)” — see the Sandbox line under the file list"
-        backgroundPill.isHidden = true
-        filesPaneButton.isHidden = true
-        chatModeButton.isHidden = true
-        claudeStats.isHidden = true
-        claudeStatsCollapsed.isActive = true
-        frameView.isHidden = false
-        restartButton.isHidden = true
-        spinner.stopAnimation(nil)
-        statusStack.isHidden = true
-        kitBannerContextActive = false
-        kitBannerFallbackAgent = nil
-        updateKitBanner()
-        updateFocusRing()
-        onChromeChange?(nil)
-        onStatusChange?("", false)
     }
 
     /// Re-send this pane's identity/status to the window (it became focused).
@@ -682,24 +580,14 @@ final class TerminalStackController: NSViewController {
         if let id = activeSessionID, id == shownSession, let session = controller.session(id: id) {
             configureHeader(session)
             updateHeaderStatus(id)
-        } else if let files = shownFiles {
-            // A Files pane speaks for its session (or just its folder).
-            let (url, title) = files.resolve(in: controller)
-            if let id = files.session, let session = controller.session(id: id) {
-                onChromeChange?(Chrome(agent: session.agent, title: controller.displayName(of: session),
-                                       subtitle: "Files · \(url.path.tildeAbbreviated)"))
-                updateHeaderStatus(id)
-            } else {
-                onChromeChange?(Chrome(agent: nil, title: "Files — \(title)", subtitle: url.path.tildeAbbreviated))
-                onStatusChange?("", false)
-            }
         } else {
             onChromeChange?(nil)
             onStatusChange?("", false)
         }
     }
 
-    /// With several panes, the ones not in focus are dimmed slightly (no ring).
+    /// With several panes, the ones not in focus are dimmed: their content
+    /// slightly, their strip to 40 % (until the pointer is over it).
     private func updateFocusRing() {
         guard isViewLoaded else { return }
         let c = controller.theme.colors
@@ -708,6 +596,17 @@ final class TerminalStackController: NSViewController {
         view.layer?.borderWidth = 0
         dimOverlay.layer?.backgroundColor = c.termBg.withAlphaComponent(0.2).cgColor
         dimOverlay.isHidden = !(showsFocusRing && !isFocused)
+        titleStrip.isFocusedPane = isFocused
+        titleStrip.dimsUnfocused = showsFocusRing
+    }
+
+    /// The strip names the session only when the window has more than one pane
+    /// (with one, the title bar already does).
+    private func updateStripName() {
+        guard showsFocusRing, let id = activeSessionID, let session = controller.session(id: id) else {
+            return titleStrip.setName(nil)
+        }
+        titleStrip.setName(controller.displayName(of: session))
     }
 
     /// Hide everything in this pane's host except `keep`.
@@ -779,9 +678,6 @@ final class TerminalStackController: NSViewController {
         NotificationCenter.default.post(name: InspectorView.openRequest, object: controller,
                                         userInfo: ["pane": editSettingsPane.rawValue])
     }
-    @objc private func splitRightClicked() { onSplit?(.trailing) }
-    @objc private func splitDownClicked() { onSplit?(.bottom) }
-    @objc private func openFilesClicked() { onOpenFiles?(false) }
     /// The sidebar's "+ New Session" menu, under the button; what's picked opens
     /// here (this pane has focus from the click).
     @objc private func newSessionClicked() {
@@ -816,58 +712,13 @@ final class TerminalStackController: NSViewController {
         // Framed terminal: rounded border + title strip + the libghostty surface.
         frameView.layer?.cornerRadius = 12
         frameView.layer?.borderWidth = 1
-        titleLabel.translatesAutoresizingMaskIntoConstraints = false
-        titleLabel.font = .role(.code)
-        titleLabel.lineBreakMode = .byTruncatingMiddle
-        titleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        titleStrip.addSubview(titleLabel)
-        titleStrip.addSubview(titleLine)
-        claudeStats.translatesAutoresizingMaskIntoConstraints = false
-        claudeStats.isHidden = true
-        claudeStatsCollapsed.isActive = true
-        claudeStats.onModelPicked = { [weak self] id in self?.modelPicked(id) }
-        claudeStats.onEffortPicked = { [weak self] level in self?.effortPicked(level) }
-        titleStrip.addSubview(claudeStats)
-        contextBar.translatesAutoresizingMaskIntoConstraints = false
-        contextBar.isHidden = true
-        contextBar.onShowFiles = { [weak self] in self?.onOpenFiles?(false) }
-        contextBar.onShowChanges = { [weak self] in self?.onOpenFiles?(true) }
-        contextBar.onWidthChange = { [weak self] in self?.shareTitleStrip() }
-        // Not from inside layout(): the readout's new constraints would wait a pass.
-        titleStrip.onLayout = { [weak self] in Task { self?.shareTitleStrip() } }
-        titleStrip.addSubview(contextBar)
-        backgroundPill.translatesAutoresizingMaskIntoConstraints = false
-        backgroundPill.bezelStyle = .inline
-        backgroundPill.controlSize = .small
-        backgroundPill.font = .role(.meta)
-        backgroundPill.image = NSImage(systemSymbolName: "square.stack.3d.up",
-                                       accessibilityDescription: "Background tasks")?
-            .withSymbolConfiguration(.role(.meta))
-        backgroundPill.imagePosition = .imageLeading
-        backgroundPill.target = self
-        backgroundPill.action = #selector(showBackgroundTasks)
-        backgroundPill.setAccessibilityIdentifier("background-tasks-pill")
-        backgroundPill.isHidden = true
-        titleStrip.addSubview(backgroundPill)
-        for (button, symbol, tip, action, id) in [
-            (chatModeButton, "terminal", "Show as Terminal", #selector(toggleChatClicked), "pane-chat-mode"),
-            (filesPaneButton, "folder", "Show Files beside this pane (⇧⌥⌘0)", #selector(openFilesClicked), "pane-files"),
-            (splitRightButton, "rectangle.split.2x1", "Split Right (⌘D)", #selector(splitRightClicked), "pane-split-right"),
-            (splitDownButton, "rectangle.split.1x2", "Split Down (⇧⌘D)", #selector(splitDownClicked), "pane-split-down"),
-            (closePaneButton, "xmark", "Close Pane (⌥⌘W)", #selector(closePaneClicked), "pane-close"),
-        ] {
-            // Tinted by the theme (applyTheme).
-            button.configureSymbol(symbol, label: tip, tint: nil, target: self, action: action, id: id)
-        }
-        closePaneButton.isHidden = true
-        paneControls.orientation = .horizontal
-        paneControls.spacing = 10
-        paneControls.translatesAutoresizingMaskIntoConstraints = false
-        chatModeButton.isHidden = true
-        paneControls.setViews([chatModeButton, filesPaneButton, splitRightButton, splitDownButton, closePaneButton],
-                              in: .leading)
-        titleStrip.addSubview(paneControls)
+        titleStrip.onShowFiles = { [weak self] changesOnly in self?.onShowFiles?(changesOnly) }
+        titleStrip.onPickView = { [weak self] mode in self?.pickView(mode) }
+        titleStrip.onSplitRight = { [weak self] in self?.onSplit?(.trailing) }
+        titleStrip.onSplitDown = { [weak self] in self?.onSplit?(.bottom) }
+        titleStrip.onClose = { [weak self] in self?.onClosePane?() }
         frameView.addSubview(titleStrip)
+        frameView.addSubview(titleLine)
         frameView.addSubview(host)
 
         // Centered status.
@@ -897,19 +748,13 @@ final class TerminalStackController: NSViewController {
         statusStack.addArrangedSubview(buildLogView)
         statusStack.addArrangedSubview(restartButton)
         // An empty pane (just split, or its session closed): say how to fill
-        // it, and offer Files / Close right there.
+        // it, and offer New Session / Close right there.
         emptyNewButton.bezelStyle = .rounded
         emptyNewButton.image = NSImage(systemSymbolName: "plus", accessibilityDescription: nil)
         emptyNewButton.imagePosition = .imageLeading
         emptyNewButton.target = self
         emptyNewButton.action = #selector(newSessionClicked)
         emptyNewButton.setAccessibilityIdentifier("empty-pane-new")
-        emptyFilesButton.bezelStyle = .rounded
-        emptyFilesButton.image = NSImage(systemSymbolName: "folder", accessibilityDescription: nil)
-        emptyFilesButton.imagePosition = .imageLeading
-        emptyFilesButton.target = self
-        emptyFilesButton.action = #selector(openFilesClicked)
-        emptyFilesButton.setAccessibilityIdentifier("empty-pane-files")
         emptyCloseButton.bezelStyle = .rounded
         emptyCloseButton.target = self
         emptyCloseButton.action = #selector(closePaneClicked)
@@ -917,7 +762,7 @@ final class TerminalStackController: NSViewController {
         emptyCloseButton.setAccessibilityIdentifier("empty-pane-close")
         emptyActions.orientation = .horizontal
         emptyActions.spacing = 10
-        emptyActions.setViews([emptyNewButton, emptyFilesButton, emptyCloseButton], in: .leading)
+        emptyActions.setViews([emptyNewButton, emptyCloseButton], in: .leading)
         emptyActions.isHidden = true
         statusStack.addArrangedSubview(emptyActions)
         for b in [retryButton, editSettingsButton] { b.bezelStyle = .rounded; b.target = self }
@@ -965,22 +810,7 @@ final class TerminalStackController: NSViewController {
             titleStrip.topAnchor.constraint(equalTo: frameView.topAnchor),
             titleStrip.leadingAnchor.constraint(equalTo: frameView.leadingAnchor),
             titleStrip.trailingAnchor.constraint(equalTo: frameView.trailingAnchor),
-            titleStrip.heightAnchor.constraint(equalToConstant: 30),
-            titleLabel.leadingAnchor.constraint(equalTo: titleStrip.leadingAnchor, constant: 14),
-            contextBar.leadingAnchor.constraint(equalTo: titleStrip.leadingAnchor, constant: 10),
-            contextBar.centerYAnchor.constraint(equalTo: titleStrip.centerYAnchor),
-            contextBar.trailingAnchor.constraint(lessThanOrEqualTo: backgroundPill.leadingAnchor, constant: -10),
-            contextBar.trailingAnchor.constraint(lessThanOrEqualTo: claudeStats.leadingAnchor, constant: -10),
-            contextBar.trailingAnchor.constraint(lessThanOrEqualTo: paneControls.leadingAnchor, constant: -10),
-            titleLabel.centerYAnchor.constraint(equalTo: titleStrip.centerYAnchor),
-            paneControls.trailingAnchor.constraint(equalTo: titleStrip.trailingAnchor, constant: -12),
-            paneControls.centerYAnchor.constraint(equalTo: titleStrip.centerYAnchor),
-            claudeStats.trailingAnchor.constraint(equalTo: paneControls.leadingAnchor, constant: -12),
-            claudeStats.centerYAnchor.constraint(equalTo: titleStrip.centerYAnchor),
-            claudeStats.leadingAnchor.constraint(greaterThanOrEqualTo: titleLabel.trailingAnchor, constant: 12),
-            backgroundPill.trailingAnchor.constraint(equalTo: claudeStats.leadingAnchor, constant: -8),
-            backgroundPill.centerYAnchor.constraint(equalTo: titleStrip.centerYAnchor),
-            backgroundPill.leadingAnchor.constraint(greaterThanOrEqualTo: titleLabel.trailingAnchor, constant: 12),
+            titleStrip.heightAnchor.constraint(equalToConstant: PaneStripView.height),
             titleLine.leadingAnchor.constraint(equalTo: titleStrip.leadingAnchor),
             titleLine.trailingAnchor.constraint(equalTo: titleStrip.trailingAnchor),
             titleLine.bottomAnchor.constraint(equalTo: titleStrip.bottomAnchor),
@@ -1002,13 +832,14 @@ final class TerminalStackController: NSViewController {
             size.priority = .defaultHigh
             size.isActive = true
         }
-        // Topmost: dims the pane while another one has focus (clicks pass through).
+        // Topmost: dims the pane's content while another one has focus (clicks
+        // pass through); its strip dims itself, and comes back under the pointer.
         dimOverlay.wantsLayer = true
         dimOverlay.isHidden = true
         dimOverlay.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(dimOverlay)
         NSLayoutConstraint.activate([
-            dimOverlay.topAnchor.constraint(equalTo: container.topAnchor),
+            dimOverlay.topAnchor.constraint(equalTo: titleStrip.bottomAnchor),
             dimOverlay.bottomAnchor.constraint(equalTo: container.bottomAnchor),
             dimOverlay.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             dimOverlay.trailingAnchor.constraint(equalTo: container.trailingAnchor),
@@ -1046,12 +877,9 @@ final class TerminalStackController: NSViewController {
         // sees the new findings.)
         controller.$kitStartup.dropFirst().sink { [weak self] _ in self?.updateKitBanner() }
             .store(in: &cancellables)
-        controller.$backgroundTasks.dropFirst().sink { [weak self] _ in self?.updateBackgroundPill() }
-            .store(in: &cancellables)
-        // The sandbox answered what it is: refresh a Files pane's title and line.
+        // The sandbox answered what it is: its crumb's tooltip says so.
         controller.$sandboxSystems.dropFirst().sink { [weak self] _ in
             guard let self else { return }
-            if self.shownFiles != nil { return self.refresh() }
             if let id = self.activeSessionID, let session = self.controller.session(id: id) {
                 self.configureHeader(session)
             }
@@ -1073,7 +901,6 @@ final class TerminalStackController: NSViewController {
         // Live-update the toolbar status when runtime state changes (status, name, etc.).
         controller.$runtimes.dropFirst().sink { [weak self] _ in
             guard let self, let id = self.activeSessionID else { return }
-            self.updateClaudeStats(id)
             self.updateHeaderStatus(id)
         }.store(in: &cancellables)
         // Tick the work timer every second via the shared workspace clock.
@@ -1090,18 +917,12 @@ final class TerminalStackController: NSViewController {
         let c = c ?? controller.theme.colors
         view.layer?.backgroundColor = c.panel.cgColor
         titleLine.layer?.backgroundColor = c.border.cgColor
-        titleStrip.layer?.backgroundColor = c.termBg.cgColor
         frameView.layer?.backgroundColor = c.termBg.cgColor
         frameView.layer?.borderColor = c.border.cgColor
         host.layer?.backgroundColor = c.termBg.cgColor
-        titleLabel.textColor = c.termDim
-        claudeStats.applyTheme(c)
         kitBanner.applyTheme(c)
         buildLogView.applyTheme(c)
-        for b in [closePaneButton, filesPaneButton, splitRightButton, splitDownButton, chatModeButton] {
-            b.contentTintColor = c.termDim
-        }
-        contextBar.applyTheme(c)
+        titleStrip.applyTheme(c)
         updateFocusRing()
     }
 
@@ -1109,8 +930,6 @@ final class TerminalStackController: NSViewController {
 
     /// Single source of truth for what the detail pane shows.
     func refresh() {
-        // Files don't wait on the container.
-        if let files = shownFiles { return presentFiles(files) }
         // Another sandbox building doesn't hide a session that's already up —
         // its own being rebuilt does (what's on screen is about to go).
         let live = shownSession.map { terminals[$0] != nil || chats[$0] != nil } ?? false
@@ -1269,10 +1088,6 @@ final class TerminalStackController: NSViewController {
     /// Open the active session's working directory in Finder (its own window,
     /// showing the project's contents — not the parent with the folder selected).
     @objc func revealInFinderClicked() {
-        if activeSessionID == nil, let files = shownFiles {
-            NSWorkspace.shared.open(files.resolve(in: controller).url)
-            return
-        }
         guard let id = activeSessionID, let s = controller.session(id: id) else { return }
         NSWorkspace.shared.open(URL(filePath: s.workdir, directoryHint: .isDirectory))
     }
@@ -1303,6 +1118,13 @@ final class TerminalStackController: NSViewController {
         controller.setChat(id, !session.isChat)
     }
 
+    /// The strip's Chat | Terminal: show the session that way (same conversation).
+    private func pickView(_ mode: PaneViewMode) {
+        guard let id = activeSessionID, let session = controller.session(id: id),
+              PaneViewMode.current(for: session) != nil, session.isChat != (mode == .chat) else { return }
+        controller.setChat(id, mode == .chat)
+    }
+
     /// Show the terminal for `id` in this pane (moving it here if it was in
     /// another), hiding the rest and the status.
     private func showActive(_ id: UUID) {
@@ -1325,105 +1147,25 @@ final class TerminalStackController: NSViewController {
 
     private func configureHeader(_ session: Session) {
         let container = controller.containerName(for: session.containerAgentKind)
-        let program = session.agent == .shell ? "bash" : session.agent.rawValue
-        titleLabel.stringValue = "\(program) — \(container)" + (session.isChat ? " · chat (ACP)" : "")
-        // The strip shows where the session runs: sandbox, folder, branch.
+        // The strip shows where the session runs: sandbox › folder › branch (› name).
         let folder = URL(filePath: session.workdir, directoryHint: .checkFileSystem)
-        contextBar.update(folder: folder,
+        titleStrip.update(folder: folder,
                           access: controller.sandboxAccess(for: folder, agent: session.containerAgentKind))
-        contextBar.toolTip = titleLabel.stringValue
-        contextBar.isHidden = false
-        titleLabel.isHidden = true
-        updateClaudeStats(session.id)
-        updateBackgroundPill()
-        filesPaneButton.isHidden = false
-        let canChat = SbxCommand.supportsACP(session.agent) && session.containerAgent == nil
-        chatModeButton.isHidden = !canChat
-        let modeTip = session.isChat ? "Show as Terminal" : "Show as Chat"
-        chatModeButton.image = NSImage(systemSymbolName: session.isChat ? "terminal" : "bubble.left.and.text.bubble.right",
-                                       accessibilityDescription: modeTip)?
-            .withSymbolConfiguration(.role(.meta, weight: .medium))
-        chatModeButton.toolTip = modeTip
-        chatModeButton.setAccessibilityLabel(modeTip)
+        titleStrip.setViewMode(PaneViewMode.current(for: session))
+        updateStripName()
         onChromeChange?(Chrome(agent: session.agent, title: controller.displayName(of: session),
                                subtitle: "\(container) · \(session.workdir.tildeAbbreviated)"))
     }
 
-    /// Split the strip between the context chips and the Claude readout: the
-    /// readout sheds its optional pieces before the chips are squeezed.
-    private func shareTitleStrip() {
-        guard !claudeStats.isHidden else { return }
-        var room = titleStrip.bounds.width - 10 - 12 - paneControls.fittingSize.width - 12
-        if !backgroundPill.isHidden { room -= backgroundPill.fittingSize.width + 8 }
-        if !contextBar.isHidden { room -= contextBar.preferredMinWidth + 10 }
-        claudeStats.maxWidth = max(room, 0)
-    }
-
-    /// Title-strip readout: shown for Claude sessions only; numbers fill in as
-    /// status reports arrive, the model falls back to the workspace's choice.
-    func updateClaudeStats(_ id: UUID) {
-        guard let session = controller.session(id: id) else { return }
-        // A chat reports through ACP (usage updates, the model it answered
-        // with); a terminal through Claude Code's status line. Same readout.
-        let chat = session.isChat ? chats[id]?.session : nil
-        claudeStats.isHidden = session.agent != .claude || (session.isChat && chat == nil)
-        claudeStatsCollapsed.isActive = claudeStats.isHidden
-        guard session.agent == .claude else { return }
-        if let chat {
-            claudeStats.update(status: Self.chatStatus(chat), defaultModel: chat.launchModel,
-                               defaultEffort: chat.launchEffort)
-        } else if !session.isChat {
-            claudeStats.update(status: controller.claudeStatus(id), defaultModel: controller.claudeModel,
-                               defaultEffort: controller.claudeEffort)
-        }
-        shareTitleStrip()
-    }
-
-    /// A chat's readout, in the status line's terms.
-    private static func chatStatus(_ chat: ChatSession) -> ClaudeSessionStatus {
-        var status = ClaudeSessionStatus()
-        status.sessionID = chat.sessionID
-        if let model = chat.liveModel ?? chat.launchModel {
-            status.model = .init(id: model, displayName: ClaudeModelChoice.title(forID: ClaudePriceBook.normalize(model)))
-        }
-        if let effort = chat.launchEffort { status.effort = .init(level: effort) }
-        if let usage = chat.usage, usage.size > 0 {
-            status.contextWindow = .init(contextWindowSize: usage.size,
-                                         usedPercentage: Double(usage.used) / Double(usage.size) * 100)
-        }
-        if let cost = chat.usage?.cost { status.cost = .init(totalCostUSD: cost) }
-        return status
-    }
-
-    /// Shown while the session has background tasks running, or finished ones
-    /// from the last half hour; green while anything runs.
-    private func updateBackgroundPill() {
-        guard let id = activeSessionID else { backgroundPill.isHidden = true; return }
-        let tasks = controller.backgroundTasks(id)
-        let running = tasks.count(where: \.isRunning)
-        let recent = tasks.count(where: {
-            !$0.isRunning && !$0.orphaned && Date.now.timeIntervalSince($0.finishedAt ?? $0.startedAt) < 1800
-        })
-        backgroundPill.isHidden = running == 0 && recent == 0
-        defer { shareTitleStrip() }
-        let color: NSColor = running > 0 ? .sessionWorking : .secondaryLabelColor
-        backgroundPill.attributedTitle = NSAttributedString(
-            string: running > 0 ? "\(running) running" : "\(recent) done",
-            attributes: [.foregroundColor: color, .font: NSFont.role(.meta)])
-
-        backgroundPill.contentTintColor = color
-        backgroundPill.toolTip = running > 0
-            ? "\(running) background task\(running == 1 ? "" : "s") running — click for details"
-            : "Background tasks finished recently — click for details"
-    }
-
+    /// The session's background tasks, under the strip (a tapped "finished"
+    /// notification, the Session Details card).
     @objc func showBackgroundTasks() {
         guard let id = activeSessionID, view.window != nil else { return }
         let list = BackgroundTasksView(controller: controller, sessionIDs: { [id] },
                                        loadOutput: { [controller] sid, task in await controller.backgroundOutput(sid, task) },
                                        stopTask: { [weak self] sid, task in await self?.chats[sid]?.session.stopBackgroundTask(task.id) ?? false },
                                        canStop: { [weak self] sid, _ in self?.chats[sid] != nil })
-        NSPopover.toggle(&backgroundPopover, below: backgroundPill.isHidden ? titleStrip : backgroundPill) {
+        NSPopover.toggle(&backgroundPopover, below: titleStrip) {
             .hosting(list.frame(width: 420, height: 380))
         }
     }
@@ -1436,7 +1178,6 @@ final class TerminalStackController: NSViewController {
         // A chat takes its model at launch too: relaunch it (resuming the
         // conversation) — now, or when the current turn ends.
         if let id = activeSessionID, let chat = chats[id]?.session {
-            defer { updateClaudeStats(id) }
             guard ClaudePriceBook.normalize(modelID ?? "") != ClaudePriceBook.normalize(chat.launchModel ?? "") else { return }
             if case .running = chat.phase {
                 // Whichever pane shows the chat then (if any), not this one.
@@ -1457,7 +1198,6 @@ final class TerminalStackController: NSViewController {
         // A chat changes effort live.
         if let id = activeSessionID, let chat = chats[id]?.session {
             chat.setEffort(level)
-            updateClaudeStats(id)
             return
         }
         offerClaudeRestart(changed: level != liveClaudeStatus?.effort?.level,
@@ -1472,7 +1212,6 @@ final class TerminalStackController: NSViewController {
     /// After a model/effort change, offer to restart the live Claude session so
     /// it relaunches (resuming the conversation) with the new flags.
     private func offerClaudeRestart(changed: Bool, title: String, what: String) {
-        defer { if let id = activeSessionID { updateClaudeStats(id) } }
         guard changed, let id = activeSessionID, let session = controller.session(id: id),
               session.agent == .claude, terminals[id] != nil, !runtime.isExited(id) else { return }
         guard Alerts.confirm(title, "Claude Code chooses its \(what) at launch. Restarting resumes this "
@@ -1926,7 +1665,7 @@ final class TerminalStackController: NSViewController {
     /// event monitor and its session's search window, but leave the shared
     /// terminals (and the other sessions' search windows) alone.
     func paneClosed() {
-        contextBar.stop()
+        titleStrip.stop()
         if let m = pasteEventMonitor { NSEvent.removeMonitor(m); pasteEventMonitor = nil }
         if let id = shownSession {
             searchWindows[id]?.close()
@@ -1939,7 +1678,7 @@ final class TerminalStackController: NSViewController {
     /// temp launch script. Without this, closing a window leaks the scripts.
     func teardown() {
         surfaces.isTornDown = true
-        contextBar.stop()
+        titleStrip.stop()
         if let m = pasteEventMonitor { NSEvent.removeMonitor(m); pasteEventMonitor = nil }
         for wc in searchWindows.values { wc.close() }
         searchWindows.removeAll()
@@ -2323,7 +2062,7 @@ extension TerminalStackController: NSToolbarItemValidation {
     /// Whether a session action (toolbar, Session menu) applies to what this pane shows.
     func canPerformSessionAction(_ action: Selector) -> Bool {
         switch action {
-        case #selector(revealInFinderClicked): return activeSessionID != nil || shownFiles != nil
+        case #selector(revealInFinderClicked): return activeSessionID != nil
         case #selector(toggleChatClicked):
             return activeSessionID.flatMap { controller.session(id: $0) }.map { SbxCommand.supportsACP($0.agent) } ?? false
         case #selector(stopClicked):
@@ -2340,39 +2079,6 @@ extension TerminalStackController: NSToolbarItemValidation {
     }
 }
 
-/// Background for a Files surface in a pane: the system text background,
-/// following light/dark (CALayer colors don't track appearance on their own).
-private final class FilesSurfaceView: NSView {
-    override init(frame: NSRect) {
-        super.init(frame: frame)
-        wantsLayer = true
-    }
-    required init?(coder: NSCoder) { fatalError() }
-    override var wantsUpdateLayer: Bool { true }
-    override func updateLayer() { layer?.backgroundColor = NSColor.textBackgroundColor.cgColor }
-}
-
-/// Takes no width while hidden, so a hidden pill doesn't hold space in the strip.
-private final class CollapsingButton: NSButton {
-    override var isHidden: Bool { didSet { if isHidden != oldValue { invalidateIntrinsicContentSize() } } }
-    override var intrinsicContentSize: NSSize {
-        isHidden ? NSSize(width: 0, height: super.intrinsicContentSize.height) : super.intrinsicContentSize
-    }
-}
-
-/// Tells its owner when it lays out (its width changed).
-private final class LayoutReportingView: NSView {
-    var onLayout: (() -> Void)?
-    private var lastWidth: CGFloat = -1
-
-    override func layout() {
-        super.layout()
-        guard bounds.width != lastWidth else { return }
-        lastWidth = bounds.width
-        onLayout?()
-    }
-}
-
 /// Draws but never takes clicks (the pane's dimming wash).
 private final class PassThroughView: NSView {
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
@@ -2386,28 +2092,25 @@ extension TerminalStackController {
     /// Self-test: the status the pane shows instead of a session, if any.
     var debugStatusText: String? { statusStack.isHidden ? nil : statusLabel.stringValue }
 
-    /// Self-test: show the Claude readout with `status`, whatever the session is.
-    func debugShowClaudeReadout(_ status: ClaudeSessionStatus?) {
-        claudeStats.isHidden = false
-        claudeStatsCollapsed.isActive = false
-        claudeStats.update(status: status, defaultModel: nil, defaultEffort: nil)
-        shareTitleStrip()
-    }
-
-    var debugReadoutFitting: String { claudeStats.debugFitting }
-    var debugReadoutShown: Bool { !claudeStats.isHidden }
     func debugShowLaunchFailure(_ message: String) { showLaunchFailure(message) }
     /// Self-test: paste from `pasteboard` into the shown terminal (as ⌘V would).
     func debugPaste(_ pasteboard: NSPasteboard) -> Bool { insertPasteboard(pasteboard) }
-    /// Self-test: pick a model in the readout, as its menu would.
+    /// Self-test: pick a model, as the model chooser would.
     func debugPickModel(_ id: String?) { modelPicked(id) }
 
-    /// Self-test: the strip's width, the folder chip's, and the readout's.
-    var debugTitleStripWidths: (strip: CGFloat, folder: CGFloat, folderWanted: CGFloat, readout: CGFloat, budget: CGFloat) {
+    /// Self-test: what the title strip shows, its controls' frames in the pane's coordinates.
+    var debugStrip: PaneStripView.DebugState {
         view.layoutSubtreeIfNeeded()
-        return (titleStrip.bounds.width, contextBar.debugFolderChip.frame.width,
-                min(contextBar.debugFolderChip.intrinsicContentSize.width, 140), claudeStats.frame.width,
-                claudeStats.maxWidth)
+        return titleStrip.debugState(in: view)
     }
+
+    /// Self-test: the ⋯ menu's items.
+    var debugStripMoreMenu: [String] { titleStrip.debugMoreMenuTitles }
+
+    /// Self-test: the strip as it would be for `session` (its view switch), without launching it.
+    func debugConfigureStrip(for session: Session) { titleStrip.setViewMode(PaneViewMode.current(for: session)) }
+
+    /// Self-test: snapshot of the strip alone.
+    var debugStripView: NSView { titleStrip }
 }
 #endif
