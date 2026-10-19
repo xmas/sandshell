@@ -78,11 +78,11 @@ final class SidebarTableView: NSTableView {
     }
 }
 
-/// The workspace sidebar: a flat, chronologically-ordered list of sessions
-/// (most recently active first) — every agent kind sits together as a peer,
-/// with no folder grouping. A folder is still each session's working
-/// directory (shown as a subtitle segment when it isn't the root), managed
-/// from the "Folders" inspector pane rather than as sidebar rows.
+/// The workspace sidebar: a header (workspace switcher, +, search field), a
+/// flat list of sessions — whatever needs you, then what's working, then the
+/// rest by recency, forks under their source — and a footer saying what the
+/// sandbox can do with the folder. Every row reads `<glyph> Status · detail`
+/// (`SessionRowStatus`); its views are in SidebarRows.swift.
 /// Mutations route through `WorkspaceController`; the view reloads on changes.
 @MainActor
 final class SidebarListController: NSViewController {
