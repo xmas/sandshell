@@ -48,6 +48,9 @@ final class WorkspaceController: ObservableObject {
     /// Authoritative lifecycle phase per agent container — the single source of
     /// truth for creation, build, running, stopped, and rebuild state.
     @Committed private(set) var containerPhases: [AgentKind: ContainerPhase] = [:]
+    /// What sbx printed while (re)making each agent's sandbox — the latest
+    /// build's, kept until the next (a failed one's shows beside its error).
+    @Committed private(set) var buildLogs: [AgentKind: BuildLog] = [:]
     /// Bumped only on **structural** project/session changes (not selection or
     /// busy/error). The sidebar reloads on this, so opening an inline editor or
     /// changing selection doesn't tear the outline down.
@@ -877,12 +880,14 @@ final class WorkspaceController: ObservableObject {
     /// workspace config and publish the difference in `kitDrift`. Only while
     /// the container is believed in sync: with a create-time change pending
     /// (declined rebuild prompt), a mismatch is expected and the rebuild settles it.
+    /// Asked once any session launching has its `sbx exec` in.
     func refreshKitDrift(for agent: AgentKind) {
         let name = containerName(for: agent)
         let configured = KitStore.kits(resolvedKits(), for: agent)
         let expected = configSignature(mounts: resolvedMounts(), kits: configured, agent: agent)
         let root = workspace.rootURL
         Task { @MainActor in
+            await SbxClient.afterLaunches()
             guard let actual = await SbxClient.shared.inspect(name)?.kits else { return }
             guard self.state.appliedMountSignatures[name] == expected,
                   KitStore.kits(self.resolvedKits(), for: agent) == configured else {
@@ -1178,12 +1183,26 @@ final class WorkspaceController: ObservableObject {
             window.activity = activity
             window.resetKitStartup(for: agent)
             window.kitDrift[agent] = nil
+            window.buildLogs[agent] = BuildLog()
         }
         show(in: self)
         let name = containerName(for: agent)
         for window in store.others(than: self) where !window.isClosed && window.containerName(for: agent) == name {
             show(in: window)
             window.runAction { @MainActor in try await window.bringUpContainer(for: agent, onMismatch: .attach) }
+        }
+    }
+
+    /// Where a build of `agent`'s sandbox reports sbx's progress: its log here
+    /// and in the other windows on the folder (they show the build too).
+    private func buildProgress(for agent: AgentKind) -> SbxClient.ProgressHandler {
+        let name = containerName(for: agent)
+        return { [weak self] lines in
+            guard let self else { return }
+            for window in [self] + self.store.others(than: self)
+            where !window.isClosed && window.containerName(for: agent) == name {
+                window.buildLogs[agent, default: BuildLog()].append(lines)
+            }
         }
     }
 
@@ -1212,7 +1231,7 @@ final class WorkspaceController: ObservableObject {
             let reason: String
             do {
                 let out = try await SbxClient.shared.kitAdd(sandbox: name, ref: ref, cwd: workspace.rootURL.path,
-                                                            mcpURL: workspace.mcpURL)
+                                                            mcpURL: workspace.mcpURL, onProgress: buildProgress(for: agent))
                 if out.ok { continue }
                 reason = out.stderr.isEmpty ? out.stdout : out.stderr
             } catch {
@@ -1313,7 +1332,8 @@ final class WorkspaceController: ObservableObject {
             Log.info(.workspace, "rebuilding container '\(name)' (\(mounts.count) mounts, \(kits.count) kits, force=\(force))")
             beginBuilding(agent, .rebuilding, "Rebuilding \(name)…")
             do {
-                built = try await SbxClient.shared.rebuild(workspace: workspace, agent: agent, name: name, mounts: mounts, kits: kits)
+                built = try await SbxClient.shared.rebuild(workspace: workspace, agent: agent, name: name, mounts: mounts, kits: kits,
+                                                           onProgress: buildProgress(for: agent))
             } catch {
                 containerPhases[agent] = .failed(error.localizedDescription)
                 throw error
@@ -1323,7 +1343,8 @@ final class WorkspaceController: ObservableObject {
             Log.info(.workspace, "creating container '\(name)' for \(agent.rawValue) (\(mounts.count) mounts, \(kits.count) kits)")
             beginBuilding(agent, .creating, "Building \(name)…")
             do {
-                built = try await SbxClient.shared.create(workspace: workspace, agent: agent, name: name, mounts: mounts, kits: kits) { [weak self] in
+                built = try await SbxClient.shared.create(workspace: workspace, agent: agent, name: name, mounts: mounts, kits: kits,
+                                                          onProgress: buildProgress(for: agent)) { [weak self] in
                     // Recorded once it exists: quitting during kit setup mustn't
                     // read as a changed config next time.
                     self?.recordSignature(signature, for: name)
@@ -1555,11 +1576,13 @@ extension WorkspaceController {
     func backgroundTasks(_ id: UUID) -> [BackgroundTask] { backgroundTasks[id] ?? [] }
     func runningBackgroundTasks(_ id: UUID) -> Int { backgroundTasks[id]?.count(where: \.isRunning) ?? 0 }
 
-    /// Ask a running sandbox what it is (cached; one probe at a time).
+    /// Ask a running sandbox what it is (cached; one probe at a time), once
+    /// any session launching has its `sbx exec` in.
     func probeSandboxSystem(_ name: String) {
         guard sandboxSystems[name] == nil, !probingSandboxes.contains(name) else { return }
         probingSandboxes.insert(name)
         Task {
+            await SbxClient.afterLaunches()
             let output = await SbxClient.shared.exec(inSandbox: name, script: SandboxSystem.probe)
             probingSandboxes.remove(name)
             if let output, let system = SandboxSystem(probeOutput: output) { sandboxSystems[name] = system }

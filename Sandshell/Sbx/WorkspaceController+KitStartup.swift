@@ -105,6 +105,8 @@ extension WorkspaceController {
     // MARK: - Internals
 
     private static func readKitStartup(container: String, kitRefs: [String]) async -> KitStartupStatus {
+        // Not before a session that's launching: its `sbx exec` comes first.
+        await SbxClient.afterLaunches()
         do {
             let text = try await SbxClient.shared.readFile(inSandbox: container, path: KitStartupParser.logPath)
             let report = KitStartupParser.parse(text)

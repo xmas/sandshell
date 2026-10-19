@@ -546,6 +546,23 @@ enum SelfTest {
         await wait(0.5)
         check(window.sidebarList?.emptyStateText == nil,
               "with a row in the list, the build placeholder stays off it (\(window.sidebarList?.emptyStateText ?? "hidden"))")
+        // What sbx prints as it makes the sandbox shows under "Building…".
+        let building = ws.containerPhases.first { $0.value.isBuilding }?.key
+        func buildLog() -> BuildLog? { building.flatMap { ws.buildLogs[$0] } }
+        check(await until(120) { buildLog()?.isEmpty == false },
+              "sbx's progress streams into the build log (\(buildLog()?.lines.count ?? 0) lines, step: \(buildLog()?.step ?? "-"))")
+        func logView(_ v: NSView) -> NSTextView? {
+            if let t = v as? NSTextView, t.accessibilityIdentifier() == "build-log" { return t }
+            return v.subviews.lazy.compactMap(logView).first
+        }
+        let shown = await until(10) {
+            guard let content = window.window?.contentView, let t = logView(content) else { return false }
+            return !t.isHiddenOrHasHiddenAncestor && !t.string.isEmpty
+        }
+        check(shown, "the pane shows the build log")
+        // A few lines in (the image pull), for the look of it.
+        _ = await until(60) { (buildLog()?.lines.count ?? 0) > 8 || !ws.isBuilding }
+        if ws.isBuilding { snapshot(window, "building-log") }
         // A new session is a chat (the default) or a terminal: either one up.
         let ok = await until(300) { tree.surfaces.terminals[s.id] != nil || tree.surfaces.chats[s.id]?.session.phase == .ready }
         log("building=\(ws.isBuilding) activity=\(ws.activity ?? "nil") pending=\(tree.surfaces.pending.contains(s.id)) "

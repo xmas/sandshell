@@ -74,6 +74,7 @@ private final class TerminalRuntimeController {
     }
 
     func terminalDidExit(_ id: UUID) {
+        SbxClient.launchSettled(id)
         guard !exited.contains(id) else { return }
         exited.insert(id)
         controller.reportActivity(id, working: false, at: .now)
@@ -248,6 +249,7 @@ private final class TerminalRuntimeController {
             return
         }
         Log.info(.workspace, "session \(id) attached to sbx exec \(claim.id)")
+        SbxClient.launchSettled(id)
         if !claim.state.running { execExited(id, execID: claim.id, state: claim.state) }
     }
 
@@ -569,6 +571,10 @@ final class TerminalStackController: NSViewController {
     private let statusLabel = NSTextField(labelWithString: "Select a session")
     private let spinner = NSProgressIndicator.spinner(.regular)
     private let restartButton = NSButton()
+    /// sbx's output while a sandbox is made (and beside a build that failed).
+    private let buildLogView = BuildLogView()
+    /// Whose build `buildLogView` shows (nil: it's hidden).
+    private var buildLogAgent: AgentKind?
     /// Local event monitor that intercepts Cmd+V (image paste) and Cmd+F (search).
     private var pasteEventMonitor: Any?
     /// One search window per session; opened by Cmd+F, closed when session ends.
@@ -732,8 +738,28 @@ final class TerminalStackController: NSViewController {
     @objc private func closePaneClicked() { onClosePane?() }
 
     /// The sandbox wouldn't come up: say why, and offer to fix the settings or retry.
+    /// Show `agent`'s build log under the status (hidden while it has none).
+    private func showBuildLog(_ agent: AgentKind?) {
+        buildLogAgent = agent
+        updateBuildLog(controller.buildLogs)
+    }
+
+    private func updateBuildLog(_ logs: [AgentKind: BuildLog]) {
+        guard let agent = buildLogAgent, let log = logs[agent], !log.isEmpty else {
+            buildLogView.isHidden = true
+            return
+        }
+        buildLogView.show(log)
+        buildLogView.isHidden = false
+    }
+
     private func showLaunchFailure(_ message: String) {
         showStatus("Couldn't start the sandbox\n\n" + message, busy: false)
+        // Its sandbox's build failed: what sbx printed up to then.
+        if let agent = shownSession.flatMap({ controller.session(id: $0) })?.containerAgentKind,
+           case .failed = controller.containerPhases[agent] {
+            showBuildLog(agent)
+        }
         let lower = message.lowercased()
         editSettingsPane = lower.contains("kit") ? .kits : lower.contains("mount") ? .mounts : .sandboxes
         editSettingsButton.title = editSettingsPane == .kits ? "Edit Kits…"
@@ -867,6 +893,8 @@ final class TerminalStackController: NSViewController {
         restartButton.isHidden = true
         statusStack.addArrangedSubview(spinner)
         statusStack.addArrangedSubview(statusLabel)
+        buildLogView.isHidden = true
+        statusStack.addArrangedSubview(buildLogView)
         statusStack.addArrangedSubview(restartButton)
         // An empty pane (just split, or its session closed): say how to fill
         // it, and offer Files / Close right there.
@@ -966,7 +994,14 @@ final class TerminalStackController: NSViewController {
             statusStack.widthAnchor.constraint(lessThanOrEqualTo: frameView.widthAnchor, constant: -48),
             statusLabel.widthAnchor.constraint(lessThanOrEqualToConstant: 560),
             statusStack.centerYAnchor.constraint(equalTo: container.centerYAnchor),
+            // As big as the pane allows, up to 640×260 (the stack keeps it inside).
+            buildLogView.heightAnchor.constraint(lessThanOrEqualTo: frameView.heightAnchor, multiplier: 0.5),
         ])
+        for size in [buildLogView.widthAnchor.constraint(equalToConstant: 640),
+                     buildLogView.heightAnchor.constraint(equalToConstant: 260)] {
+            size.priority = .defaultHigh
+            size.isActive = true
+        }
         // Topmost: dims the pane while another one has focus (clicks pass through).
         dimOverlay.wantsLayer = true
         dimOverlay.isHidden = true
@@ -1031,6 +1066,8 @@ final class TerminalStackController: NSViewController {
                 }
             }
             .store(in: &cancellables)
+        controller.$buildLogs.dropFirst().sink { [weak self] logs in self?.updateBuildLog(logs) }
+            .store(in: &cancellables)
         controller.$kitDrift.dropFirst().sink { [weak self] _ in self?.updateKitBanner() }
             .store(in: &cancellables)
         // Live-update the toolbar status when runtime state changes (status, name, etc.).
@@ -1060,6 +1097,7 @@ final class TerminalStackController: NSViewController {
         titleLabel.textColor = c.termDim
         claudeStats.applyTheme(c)
         kitBanner.applyTheme(c)
+        buildLogView.applyTheme(c)
         for b in [closePaneButton, filesPaneButton, splitRightButton, splitDownButton, chatModeButton] {
             b.contentTintColor = c.termDim
         }
@@ -1080,6 +1118,10 @@ final class TerminalStackController: NSViewController {
             .map { controller.containerPhases[$0.containerAgentKind] == .rebuilding } ?? false
         if controller.isBuilding, !live || ownRebuilding {
             showStatus(controller.activity ?? "Building…", busy: true)
+            // The shown session's sandbox when it's the one building, else the one that is.
+            let own = shownSession.flatMap { controller.session(id: $0) }?.containerAgentKind
+            showBuildLog(own.flatMap { controller.containerPhases[$0]?.isBuilding == true ? $0 : nil }
+                         ?? controller.containerPhases.first { $0.value.isBuilding }?.key)
             return
         }
         guard let id = shownSession, let session = controller.session(id: id) else {
@@ -1125,6 +1167,8 @@ final class TerminalStackController: NSViewController {
         restartButton.isHidden = true
         emptyActions.isHidden = true
         failureActions.isHidden = true
+        buildLogAgent = nil
+        buildLogView.isHidden = true
         statusLabel.stringValue = text
         if busy { spinner.startAnimation(nil) } else { spinner.stopAnimation(nil) }
         updateFocusRing()
@@ -1488,11 +1532,19 @@ final class TerminalStackController: NSViewController {
 
         showStatus(resumeID == nil ? "Starting \(session.agent.displayName)…"
                                    : "Restoring \(session.agent.displayName)…", busy: true)
+        // Its `sbx exec` goes first: the window's background reads wait for it.
+        SbxClient.launchBegan(id)
 
         // Holds the pane until the terminal is up (its exit handler holds it weakly).
         Task { [self] in
             let containerName = await controller.ensureContainerReady(for: session.containerAgentKind)
-            defer { pending.remove(id) }
+            // The hold is for the launch itself, however long the sandbox took;
+            // once the terminal's there, finding its exec ends it.
+            SbxClient.launchBegan(id)
+            defer {
+                pending.remove(id)
+                if terminals[id] == nil { SbxClient.launchSettled(id) }
+            }
             guard !surfaces.isTornDown else { return }
             guard let containerName else {
                 let message = controller.lastError ?? "Failed to start the sandbox."
@@ -1632,12 +1684,20 @@ final class TerminalStackController: NSViewController {
         if surfaces.isRunningElsewhere(id) { return showOpenElsewhere(session) }
         pending.insert(id)
         showStatus("Starting \(session.agent.displayName) chat…", busy: true)
+        // Its `sbx exec` goes first: the window's background reads wait for it.
+        SbxClient.launchBegan(id)
         Task { [weak self] in
-            guard let self else { return }
+            guard let self else { SbxClient.launchSettled(id); return }
             // Pending until the chat is registered: a second launch while this
             // one awaits would start another agent (and orphan one of them).
-            defer { pending.remove(id) }
+            // Once it is, the chat says when it's up.
+            defer {
+                pending.remove(id)
+                if chats[id] == nil { SbxClient.launchSettled(id) }
+            }
             let containerName = await controller.ensureContainerReady(for: session.containerAgentKind)
+            // The hold is for the launch itself, however long the sandbox took.
+            SbxClient.launchBegan(id)
             // The window closed while the sandbox came up: reap nothing (another
             // window may have started this session since), start nothing.
             guard !surfaces.isTornDown else { return }

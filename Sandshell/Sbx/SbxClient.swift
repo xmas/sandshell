@@ -11,6 +11,12 @@ actor SbxClient {
     private var secretCache: [String: (Bool, Date)] = [:]
     /// Whether the log says yet if sbx's exec inspection includes what an exec runs.
     private var loggedExecCommands = false
+    /// Reads under way that another caller asking the same can share (`sbx ls`,
+    /// `sbx secret ls`), each with the `changes` count it started at.
+    private var sharedReads: [[String]: (task: Task<CommandOutput, Error>, changes: Int)] = [:]
+    /// Commands that may change what those reads say, counted as each starts
+    /// and ends: a read begun before one of them isn't shared after it.
+    private var changes = 0
 
     init() {
         self.sbx = PathFixer.sbxPath()
@@ -35,7 +41,7 @@ actor SbxClient {
 
     /// `sbx ls --json`
     func list() async throws -> [Sandbox] {
-        let out = try await run(["ls", "--json"], routine: true)
+        let out = try await sharedRun(["ls", "--json"])
         guard out.ok else { throw SbxError.command(out.stderr.isEmpty ? out.stdout : out.stderr) }
         // Older CLIs wrap the list (`{"sandboxes": [...]}`); sbx 0.47+ emits a
         // bare array. Decode whichever top-level value comes first.
@@ -155,6 +161,7 @@ actor SbxClient {
     /// `sbx run <name>` — start detached. Returns immediately.
     func start(_ name: String) async throws {
         Log.info(.sbx, "$ sbx run \(name) (detached)")
+        changes += 1
         let proc = makeProcess(["run", name])
         proc.standardInput = FileHandle.nullDevice
         proc.standardOutput = FileHandle.nullDevice
@@ -215,11 +222,13 @@ actor SbxClient {
     ///
     /// `onExists`: called as soon as the sandbox shows up (before any kit
     /// setup finishes), so a quit meanwhile doesn't leave it unrecorded.
+    /// `onProgress`: sbx's progress lines as they come (else it prints none).
     @discardableResult
     func create(workspace: Workspace, agent: AgentKind, name: String,
                 mounts: [MountSpec], kits: [String] = [],
+                onProgress: ProgressHandler? = nil,
                 onExists: (@MainActor @Sendable () -> Void)? = nil) async throws -> Sandbox {
-        var args = ["create", "--no-progress", "--name", name]
+        var args = ["create"] + (onProgress == nil ? ["--no-progress"] : []) + ["--name", name]
         // Base image channel: nil = sbx's default (stable) template; the tag is
         // pulled fresh either way (sbx defaults to --pull always).
         if let template = workspace.templateImage(for: agent) { args += ["-t", template] }
@@ -233,7 +242,8 @@ actor SbxClient {
         args += mounts.map(\.spec)
         return try await createAndPoll(args, cwd: workspace.rootURL.path(percentEncoded: false),
                                        env: ["SBX_MCP_URL": workspace.mcpURL.absoluteString],
-                                       name: name, waitForKitSetup: !kits.isEmpty, onExists: onExists)
+                                       name: name, waitForKitSetup: !kits.isEmpty,
+                                       onProgress: onProgress, onExists: onExists)
     }
 
     /// Attach an already-registered MCP server to a running sandbox
@@ -254,13 +264,15 @@ actor SbxClient {
     /// sandbox appears, its stderr is thrown instead of waiting out the timeout.
     private func createAndPoll(_ args: [String], cwd: String?, env: [String: String]?,
                                name: String, waitForKitSetup: Bool = false,
+                               onProgress: ProgressHandler? = nil,
                                onExists: (@MainActor @Sendable () -> Void)? = nil) async throws -> Sandbox {
         Log.info(.sbx, "creating “\(name)”: sbx \(args.joined(separator: " "))")
+        changes += 1
+        defer { changes += 1 }
         let proc = makeProcess(args, env: env)
         if let cwd { proc.currentDirectoryURL = URL(filePath: cwd) }
         proc.standardInput = FileHandle.nullDevice
-        proc.standardOutput = FileHandle.nullDevice
-        // Capture stderr to a temp *file*, not a Pipe: `sbx create` starts the
+        // Capture stderr (and stdout, its progress) to a temp *file*, not a Pipe: `sbx create` starts the
         // long-lived sandboxd daemon, which inherits this process's stderr fd. A
         // pipe write-end held open by the daemon never EOFs and stalls Foundation's
         // shared FileHandle/Process callback queue, which then wedges termination
@@ -273,9 +285,19 @@ actor SbxClient {
             throw SbxError.spawn("could not open stderr capture for create “\(name)”")
         }
         proc.standardError = errHandle
-        let cleanup: @Sendable () -> Void = {
+        // Its progress, when someone's following it; nowhere otherwise.
+        let outURL = errURL.deletingPathExtension().appendingPathExtension("out")
+        var outHandle: FileHandle?
+        if onProgress != nil {
+            FileManager.default.createFile(atPath: outURL.path(percentEncoded: false), contents: nil)
+            outHandle = try? FileHandle(forWritingTo: outURL)
+        }
+        proc.standardOutput = outHandle ?? FileHandle.nullDevice
+        let cleanup: @Sendable () -> Void = { [outHandle] in
             try? errHandle.close()
+            try? outHandle?.close()
             try? FileManager.default.removeItem(at: errURL)
+            try? FileManager.default.removeItem(at: outURL)
         }
 
         let state = ProcState()
@@ -289,6 +311,12 @@ actor SbxClient {
             cleanup()
             Log.error(.sbx, "create “\(name)” failed to spawn: \(error.localizedDescription)")
             throw SbxError.spawn("\(sbx) \(args.joined(separator: " ")): \(error)")
+        }
+        // Following the output until this returns, then what's left of it.
+        let tail = onProgress.map { Self.follow([outURL, errURL], to: $0) }
+        func endTail() async {
+            tail?.cancel()
+            await tail?.value
         }
 
         let failure: @Sendable () -> String? = {
@@ -312,11 +340,43 @@ actor SbxClient {
                 if let message = failure() { throw SbxError.command(message) }
                 sandbox = try await waitUntilRunning(name: name, failureMessage: failure)
             }
+            await endTail()
             cleanup()
             return sandbox
         } catch {
+            await endTail()
             cleanup()
             throw error
+        }
+    }
+
+    /// Lines of progress, delivered in order a few times a second.
+    typealias ProgressHandler = @MainActor @Sendable ([String]) -> Void
+
+    /// Read what's written to `files` as they grow, and hand each batch of
+    /// whole lines to `handler`; once cancelled, one last read (and any last
+    /// line without its newline) before it ends.
+    private static func follow(_ files: [URL], to handler: @escaping ProgressHandler) -> Task<Void, Never> {
+        Task.detached(priority: .utility) {
+            let handles = files.map { try? FileHandle(forReadingFrom: $0) }
+            defer { for h in handles { try? h?.close() } }
+            var splitters = Array(repeating: BuildLog.LineSplitter(), count: files.count)
+            func read(final: Bool) async {
+                var lines: [String] = []
+                for i in handles.indices {
+                    guard let h = handles[i] else { continue }
+                    while let data = try? h.read(upToCount: 1 << 16), !data.isEmpty {
+                        lines += splitters[i].feed(data)
+                    }
+                    if final { lines += splitters[i].flush() }
+                }
+                if !lines.isEmpty { await handler(lines) }
+            }
+            while !Task.isCancelled {
+                await read(final: false)
+                try? await Task.sleep(for: .milliseconds(250))
+            }
+            await read(final: true)
         }
     }
 
@@ -415,11 +475,12 @@ actor SbxClient {
     /// Used when the mount set (or other create-time config) changes.
     @discardableResult
     func rebuild(workspace: Workspace, agent: AgentKind, name: String,
-                 mounts: [MountSpec], kits: [String] = []) async throws -> Sandbox {
+                 mounts: [MountSpec], kits: [String] = [], onProgress: ProgressHandler? = nil) async throws -> Sandbox {
         if let error = Self.cannotRecreate(agent, sandbox: name) { throw error }
         _ = try? await stop(name)
         _ = try? await remove(name)
-        return try await create(workspace: workspace, agent: agent, name: name, mounts: mounts, kits: kits)
+        return try await create(workspace: workspace, agent: agent, name: name, mounts: mounts, kits: kits,
+                                onProgress: onProgress)
     }
 
     /// Status of a single named container, or `nil` if it does not exist.
@@ -516,6 +577,33 @@ actor SbxClient {
     /// Whether this is `id`'s first launch since this run made it (it isn't, from now on).
     nonisolated static func takeFirstLaunch(_ id: UUID) -> Bool { unlaunched.withLock { $0.remove(id) != nil } }
 
+    // MARK: - Launches first
+
+    /// Session launches (chat or terminal) under way, by session, and when each
+    /// began. A launch's `sbx exec` takes two or three times as long with other
+    /// sbx calls beside it (each takes the same hub-credential lock), so the
+    /// reads a window starts as it opens and nobody waits on — kit startup, kit
+    /// drift, the sandbox probe, its policy — hold off until the launches are
+    /// up, or `launchHoldLimit` after one began (a launch that never says so).
+    private static let launches = Mutex<[UUID: Date]>([:])
+    nonisolated static let launchHoldLimit: TimeInterval = 5
+
+    /// `id` is launching (again: the hold restarts from now).
+    nonisolated static func launchBegan(_ id: UUID) { launches.withLock { $0[id] = .now } }
+
+    /// `id` is up, or won't be.
+    nonisolated static func launchSettled(_ id: UUID) { launches.withLock { _ = $0.removeValue(forKey: id) } }
+
+    /// Whether a launch is under way, as of `now`.
+    nonisolated static func launchUnderway(now: Date = .now) -> Bool {
+        launches.withLock { $0.values.contains { now.timeIntervalSince($0) < launchHoldLimit } }
+    }
+
+    /// Wait for the launches under way: for reads that can come a moment later.
+    nonisolated static func afterLaunches() async {
+        while launchUnderway() { try? await Task.sleep(for: .milliseconds(100)) }
+    }
+
     /// Whether sbx holds an Anthropic credential (API key or OAuth) for this
     /// sandbox — global or scoped to it. When it does, sbx's proxy attaches the
     /// real credential to the agent's API requests and refreshes OAuth on the
@@ -534,7 +622,7 @@ actor SbxClient {
             let secrets: [Secret]
         }
         var found = false
-        if let out = try? await run(["secret", "ls", "--json", "--service", service], routine: true), out.ok,
+        if let out = try? await sharedRun(["secret", "ls", "--json", "--service", service]), out.ok,
            let json = Self.firstJSONObject(in: out.stdout), let data = json.data(using: .utf8),
            let listing = try? JSONDecoder().decode(Listing.self, from: data) {
             found = listing.secrets.contains { $0.name == service && ($0.scope == "global" || $0.scope == sandbox) }
@@ -573,9 +661,12 @@ actor SbxClient {
     /// Output goes to temp files rather than pipes for the same reason as
     /// `createAndPoll`: the recreate (re)starts the sandbox, and a helper that
     /// inherits a pipe fd would stall Foundation's shared callback queue.
-    func kitAdd(sandbox name: String, ref: String, cwd: String, mcpURL: URL) async throws -> CommandOutput {
+    func kitAdd(sandbox name: String, ref: String, cwd: String, mcpURL: URL,
+                onProgress: ProgressHandler? = nil) async throws -> CommandOutput {
         let args = ["kit", "add", name, KitStore.resolve(ref)]
         Log.info(.sbx, "$ sbx \(args.joined(separator: " "))")
+        changes += 1
+        defer { changes += 1 }
         let started = Date.now
         let proc = makeProcess(args, env: ["SBX_MCP_URL": mcpURL.absoluteString])
         proc.currentDirectoryURL = URL(filePath: cwd)
@@ -597,31 +688,44 @@ actor SbxClient {
             try? FileManager.default.removeItem(at: errURL)
         }
 
-        let status: Int32 = try await withCheckedThrowingContinuation { cont in
-            let once = ResumeOnce()
-            let timeout = TaskHolder()
-            proc.terminationHandler = { p in
-                guard once.claim() else { return }
-                timeout.task?.cancel()
-                cont.resume(returning: p.terminationStatus)
-            }
-            // Backstop: a recreate normally takes seconds; a wedged one shouldn't
-            // leave the rebuild spinner up forever. Set before `run()`, so the
-            // termination handler always finds it to cancel.
-            timeout.task = Task.detached { [weak proc] in
-                try? await Task.sleep(for: .seconds(300), clock: .suspending)
-                guard once.claim() else { return }
-                if proc?.isRunning == true { proc?.terminate() }
-                cont.resume(throwing: SbxError.command("sbx kit add timed out after 300s"))
-            }
-            do {
-                try proc.run()
-            } catch {
-                guard once.claim() else { return }
-                timeout.task?.cancel()
-                cont.resume(throwing: SbxError.spawn("\(sbx) \(args.joined(separator: " ")): \(error)"))
-            }
+        // Its output as it comes, for someone following the recreate.
+        let tail = onProgress.map { Self.follow([outURL, errURL], to: $0) }
+        func endTail() async {
+            tail?.cancel()
+            await tail?.value
         }
+        let status: Int32
+        do {
+            status = try await withCheckedThrowingContinuation { cont in
+                let once = ResumeOnce()
+                let timeout = TaskHolder()
+                proc.terminationHandler = { p in
+                    guard once.claim() else { return }
+                    timeout.task?.cancel()
+                    cont.resume(returning: p.terminationStatus)
+                }
+                // Backstop: a recreate normally takes seconds; a wedged one shouldn't
+                // leave the rebuild spinner up forever. Set before `run()`, so the
+                // termination handler always finds it to cancel.
+                timeout.task = Task.detached { [weak proc] in
+                    try? await Task.sleep(for: .seconds(300), clock: .suspending)
+                    guard once.claim() else { return }
+                    if proc?.isRunning == true { proc?.terminate() }
+                    cont.resume(throwing: SbxError.command("sbx kit add timed out after 300s"))
+                }
+                do {
+                    try proc.run()
+                } catch {
+                    guard once.claim() else { return }
+                    timeout.task?.cancel()
+                    cont.resume(throwing: SbxError.spawn("\(sbx) \(args.joined(separator: " ")): \(error)"))
+                }
+            }
+        } catch {
+            await endTail()
+            throw error
+        }
+        await endTail()
         let out = Self.clean((try? String(contentsOf: outURL, encoding: .utf8)) ?? "")
         let err = Self.clean((try? String(contentsOf: errURL, encoding: .utf8)) ?? "")
         let ms = Int(Date.now.timeIntervalSince(started) * 1000)
@@ -710,6 +814,17 @@ actor SbxClient {
         return proc
     }
 
+    /// A routine read, shared with a caller already waiting on the same one
+    /// (windows opening together each ask `sbx ls`) — unless something that
+    /// may change its answer ran since that one began.
+    private func sharedRun(_ args: [String]) async throws -> CommandOutput {
+        if let shared = sharedReads[args], shared.changes == changes { return try await shared.task.value }
+        let task = Task { try await self.run(args, routine: true) }
+        sharedReads[args] = (task, changes)
+        defer { if sharedReads[args]?.task == task { sharedReads[args] = nil } }
+        return try await task.value
+    }
+
     /// Every sbx invocation is logged (start + outcome). `routine` tags the
     /// high-frequency `ls` poll with a "·" marker so it's easy to filter out, but
     /// it is still recorded — every sbx action goes to the Sandshell log.
@@ -721,7 +836,8 @@ actor SbxClient {
     /// long, so they stay unbounded unless a caller passes `timeout`.
     private func run(_ args: [String], cwd: String? = nil, env: [String: String]? = nil,
                      routine: Bool = false, timeout: TimeInterval? = nil) async throws -> CommandOutput {
-        if !routine { Log.info(.sbx, "$ sbx \(args.joined(separator: " "))") }
+        if !routine { Log.info(.sbx, "$ sbx \(args.joined(separator: " "))"); changes += 1 }
+        defer { if !routine { changes += 1 } }
         let started = Date.now
         let proc = makeProcess(args, env: env)
         if let cwd { proc.currentDirectoryURL = URL(filePath: cwd) }

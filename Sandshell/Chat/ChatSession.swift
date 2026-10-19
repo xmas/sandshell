@@ -92,7 +92,7 @@ final class ChatSession: ObservableObject {
     @Published private(set) var phase: Phase = .starting {
         didSet {
             if (oldValue == .running) != (phase == .running), !retryingTurn { onWorkingChange?(phase == .running) }
-            if phase != .starting { isCatchingUp = false }
+            if phase != .starting { isCatchingUp = false; SbxClient.launchSettled(ownSessionID) }
             if oldValue == .running, phase == .ready, let next = afterTurn {
                 afterTurn = nil
                 Task { next() }
@@ -476,6 +476,7 @@ final class ChatSession: ObservableObject {
 
     func close() {
         isClosed = true
+        SbxClient.launchSettled(ownSessionID)
         // Nothing it does from here on is news to anyone (a send or a start
         // still finishing would otherwise report "finished" or "stopped").
         onUsage = nil; onSessionID = nil; onWorkingChange = nil; onPrompt = nil

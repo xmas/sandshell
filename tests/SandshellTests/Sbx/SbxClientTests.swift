@@ -149,3 +149,51 @@ struct SbxClientRecreateTests {
         #expect(message.contains("Settings ▸ Agents"), "Says where to register the kit")
     }
 }
+
+// MARK: - Launches first
+
+/// The hold a session launch puts on a window's background sbx reads. One
+/// process-wide table, so these run one at a time.
+@Suite(.serialized)
+struct SbxClientLaunchHoldTests {
+    @Test("A launch holds background reads until it settles")
+    func holdsUntilSettled() {
+        let id = UUID()
+        SbxClient.launchBegan(id)
+        #expect(SbxClient.launchUnderway())
+        SbxClient.launchSettled(id)
+        #expect(!SbxClient.launchUnderway())
+    }
+
+    @Test("A launch that never settles stops holding after the limit")
+    func expires() {
+        let id = UUID()
+        SbxClient.launchBegan(id)
+        defer { SbxClient.launchSettled(id) }
+        #expect(SbxClient.launchUnderway(now: .now.addingTimeInterval(SbxClient.launchHoldLimit - 1)))
+        #expect(!SbxClient.launchUnderway(now: .now.addingTimeInterval(SbxClient.launchHoldLimit + 1)))
+    }
+
+    @Test("Beginning again restarts the hold")
+    func restarts() async throws {
+        let id = UUID()
+        SbxClient.launchBegan(id)
+        defer { SbxClient.launchSettled(id) }
+        let first = Date.now
+        try await Task.sleep(for: .milliseconds(50))
+        SbxClient.launchBegan(id)
+        #expect(SbxClient.launchUnderway(now: first.addingTimeInterval(SbxClient.launchHoldLimit + 0.01)))
+    }
+
+    @Test("One launch settling leaves the other's hold", .timeLimit(.minutes(1)))
+    func eachLaunchHolds() async {
+        let a = UUID(), b = UUID()
+        SbxClient.launchBegan(a)
+        SbxClient.launchBegan(b)
+        SbxClient.launchSettled(a)
+        #expect(SbxClient.launchUnderway())
+        SbxClient.launchSettled(b)
+        await SbxClient.afterLaunches()   // returns at once: nothing under way
+        #expect(!SbxClient.launchUnderway())
+    }
+}

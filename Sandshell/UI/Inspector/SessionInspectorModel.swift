@@ -150,7 +150,6 @@ final class SessionInspectorModel {
         let ports = workspace.containers[kind]?.distinctPorts ?? []
         Task {
             let git = await Task.detached(priority: .utility) { GitFacts.load(folder, sandbox: sandbox) }.value
-            let network = await SbxClient.shared.networkPolicy(sandbox: sandbox)
             let parent = folder.deletingLastPathComponent().path.tildeAbbreviated
             environment = SessionEnvironment(
                 sandbox: sandbox, sandboxState: phase,
@@ -163,7 +162,13 @@ final class SessionInspectorModel {
                 access: access.summary, accessSymbol: access.symbol,
                 branch: git.branch, worktree: git.worktree, mainCheckout: git.mainCheckout,
                 ahead: git.ahead, behind: git.behind, upstream: git.upstream, changedFiles: git.changed,
-                kits: kits, ports: ports, network: network, cloneRemote: git.sandboxRemote, cloneAhead: git.sandboxAhead)
+                // The last reading until the new one's in (no flicker on a reload).
+                kits: kits, ports: ports, network: environment?.sandbox == sandbox ? environment?.network : nil,
+                cloneRemote: git.sandboxRemote, cloneAhead: git.sandboxAhead)
+            // The policy after any session launching gets its `sbx exec` in.
+            await SbxClient.afterLaunches()
+            let network = await SbxClient.shared.networkPolicy(sandbox: sandbox)
+            if environment?.sandbox == sandbox { environment?.network = network }
         }
     }
 
