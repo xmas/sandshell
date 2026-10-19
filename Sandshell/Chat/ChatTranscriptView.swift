@@ -551,7 +551,7 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
             context.duration = 0.55
             context.timingFunction = CAMediaTimingFunction(name: .easeOut)
             flash.animator().alphaValue = 0
-        }, completionHandler: { flash.removeFromSuperview() })
+        }, completionHandler: { MainActor.assumeIsolated { flash.removeFromSuperview() } })
     }
 
     /// A reply as its Markdown (plain text) and as it looks (rich text); a

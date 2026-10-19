@@ -73,7 +73,8 @@ def set_sessions(d, specs):
              "name": spec["name"], "order": i, "workdir": real,
              "createdAt": (now - timedelta(minutes=i + 1)).strftime("%Y-%m-%dT%H:%M:%SZ")}
         # Shown by its first prompt (Session.displayName), whatever the schema.
-        s["firstPrompt"] = spec["name"]
+        s["firstPrompt"] = spec.get("prompt", spec["name"])
+        if spec.get("generated"): s["generatedName"] = spec["generated"]
         if spec.get("chat"): s["chat"] = True   # Session.isChat's key
         if spec.get("transcript"): s["transcriptID"] = spec["transcript"]
         sessions.append(s)
@@ -133,6 +134,20 @@ def _search(d):
     set_sessions(d, [{"agent": "claude", "name": "Zebra chat", "chat": True, "transcript": ZEBRA},
                      {"agent": "shell", "name": "deploy notes"},
                      {"agent": "shell", "name": "alpha build"}])
+
+@fixture("sidebar")
+def _sidebar(d):
+    # A shell to show, then rows the scenario puts in each of the six states
+    # (none of them launches); one is titled apart from its first prompt.
+    git_repo(d, {}, [("init", {"README.md": README})])
+    set_sessions(d, [{"agent": "shell", "name": "Shell anchor"},
+                     {"agent": "claude", "name": "is hatch accessible?"},
+                     {"agent": "claude", "name": "What's not checked in?", "generated": "Fix trailing-slash path links"},
+                     {"agent": "claude", "name": "What happens here when the path ends in a slash and the link is long"},
+                     {"agent": "claude", "name": "Update to Hatch 2.1"},
+                     {"agent": "claude", "name": "after this make sure all workflows pass"},
+                     {"agent": "shell", "name": "Shell in Claude"},
+                     {"agent": "claude", "name": "where is the dmg of the release"}])
 
 @fixture("kits")
 def _kits(d):

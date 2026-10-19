@@ -41,6 +41,7 @@ extension AgentKind {
 }
 
 extension NSColor {
-    /// A session at work (sidebar timer, title-strip status, background pill).
-    static let sessionWorking = NSColor.hex("16a34a")
+    /// A session at work: the sidebar row's spinner, word and timer, and
+    /// anywhere else a session reads as working (one colour for one status).
+    static let sessionWorking = NSColor.hex("E8845A")
 }

@@ -131,6 +131,7 @@ enum SelfTest {
         case "kits": await kits(window)
         case "agents": await agents(window)
         case "search": await search(window)
+        case "sidebar": await sidebar(window)
         default: check(false, "unknown self-test \(requested ?? "")")
         }
         log(failures == 0 ? "ALL PASSED" : "\(failures) FAILED")
@@ -169,6 +170,17 @@ enum SelfTest {
         log("snapshot \(name).png")
     }
 
+    /// The whole window, title bar and toolbar included (`snapshot` draws the
+    /// content view, which the toolbar isn't part of).
+    private static func snapshotFrame(_ window: MainWindowController, _ name: String) {
+        guard let frame = window.window?.contentView?.superview else { return }
+        frame.layoutSubtreeIfNeeded()
+        guard let rep = frame.bitmapImageRepForCachingDisplay(in: frame.bounds) else { return }
+        frame.cacheDisplay(in: frame.bounds, to: rep)
+        try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: out + "/\(name).png"))
+        log("snapshot \(name).png")
+    }
+
     // MARK: Panes
 
     private static func panes(_ window: MainWindowController) async {
@@ -196,6 +208,12 @@ enum SelfTest {
         ws.selection = .session(b)
         check(await until(90) { live(b) }, "selecting B launches it in the focused pane")
         check(shown() == [a, b], "panes show [A, B]")
+        // The sidebar: B (focused) is the selected row; A, open in the other pane, has the quieter fill.
+        if let sidebar = window.sidebarController, let rowA = sidebar.debugRowView(a), let rowB = sidebar.debugRowView(b) {
+            let p = sidebar.debugPalette
+            check(rowB.currentFill == p.selectedFill && rowA.isOpenElsewhere && rowA.currentFill == p.otherPaneFill,
+                  "the sidebar fills B as selected and A as open in another pane")
+        }
         // A shell's launch runs in its folder as the sandbox mounted it (the
         // fixture saves /private/tmp/…, the sandbox mounts /tmp/…).
         await wait(4)
@@ -714,16 +732,28 @@ enum SelfTest {
         log("saved layout: \(saved)")
         check(!saved.contains("\"files\"") && saved.contains(a.uuidString), "the layout saved is the session's pane alone")
 
-        // The trailing inspector runs under the toolbar: its filter must sit below it.
+        // The Files sidebar: full height (its ground runs up under the title
+        // bar, where its header sits), its content below the title bar, the
+        // editor under the tree; the header says the branch and what changed.
         if let inspector = window.inspectorFiles, let w = window.window {
             let filter = inspector.tree.debugFilterFrameInWindow
-            log("inspector filter \(filter), content layout \(w.contentLayoutRect)")
-            check(filter.maxY <= w.contentLayoutRect.maxY + 1, "the inspector's filter sits below the toolbar")
+            log("Files sidebar filter \(filter), content layout \(w.contentLayoutRect)")
+            check(filter.maxY <= w.contentLayoutRect.maxY + 1, "the Files sidebar's filter sits below the title bar")
+            check(inspector.debugContentTop <= w.contentLayoutRect.maxY + 1, "nothing of its content draws in the title bar")
             let whole = inspector.view.convert(inspector.view.bounds, to: nil)
-            log("inspector frame \(whole)")
-            check(whole.maxY <= w.contentLayoutRect.maxY + 1, "nothing of the inspector draws in the toolbar strip")
+            log("Files sidebar frame \(whole), window \(w.frame.size)")
+            check(whole.maxY >= w.frame.height - 1, "the Files sidebar runs the window's full height")
+            check(whole.width >= 299 && whole.width <= 481, "it is 300–480 pt wide (\(Int(whole.width)))")
+            check(inspector.debugEditorBelowTree, "its editor sits under the tree")
+            check(inspector.editor.debugEditorFillsColumn, "the sidebar's editor fills its column")
+            check(await until(5) { inspector.header.branch.stringValue.contains(" changed") },
+                  "the header says the branch and how many files changed (\(inspector.header.branch.stringValue))")
+            check(inspector.header.branch.stringValue == FilesHeaderView.branchLine(inspector.tree.git)
+                    && inspector.header.branch.stringValue.hasPrefix(inspector.tree.git.branch ?? "?"),
+                  "it is the Files git model's branch and count")
+            check(window.debugFilesToggle.on && window.debugFilesToggle.headerShown, "the Files button shows pressed")
             snapshot(window, "files-inspector")
-            check(inspector.editor.debugEditorFillsColumn, "the inspector's editor fills its column")
+            snapshotFrame(window, "files-sidebar")
         }
 
         // Content search finds a file with an accented name, by its real path.
@@ -970,8 +1000,16 @@ enum SelfTest {
         check(!info.title.isEmpty, "it has a title (\(info.title))")
         ws.selection = .session(s.id)
         await wait(1)
-        check(sidebar.rows.contains(.subagent(info)) || sidebar.rows.contains { if case .subagent(let i) = $0 { i.id == info.id } else { false } },
-              "it's a row under its session")
+        // One row sums them up under the session; a click opens them.
+        check(await until(10) { sidebar.rows.contains(.summary(s.id)) }, "a subagents row sits under its session")
+        let summary = sidebar.debugSummaryCell(s.id)?.debugText ?? "-"
+        log("subagents row: \(summary)")
+        check(summary.hasPrefix("1 subagent") && !sidebar.rows.contains { if case .subagent = $0 { true } else { false } },
+              "it counts them, collapsed (\(summary))")
+        snapshot(window, "subagents-collapsed")
+        sidebar.debugClickSummary(s.id)
+        check(sidebar.rows.contains { if case .subagent(let i) = $0 { i.id == info.id } else { false } },
+              "clicking it opens the subagent's row under its session")
         snapshot(window, "subagents")
         check(await until(240) { c.phase == .ready && c.items.contains { if case .agentText(_, let t) = $0 { t.contains("DONE") } else { false } } },
               "the turn finishes")
@@ -1212,7 +1250,9 @@ enum SelfTest {
         guard let form = tree.surfaces.chats[s.id]?.debugQuestionForm, form.question == q else {
             return check(false, "the question has a form")
         }
-        check(ws.runtime(s.id)?.isWaiting == true, "the session's row says it's waiting for you")
+        check(ws.runtime(s.id)?.isWaiting == true && ws.runtime(s.id)?.waitingFor?.isEmpty == false,
+              "the session's row says it needs you, for \(ws.runtime(s.id)?.waitingFor ?? "-")")
+        check(window.sidebarController?.debugCell(s.id)?.debugWord == "Needs you", "its status word is Needs you")
         guard let (_, options) = form.singleChoice, let blue = options.firstIndex(where: { $0.value.contains("Blue") }) else {
             return check(false, "a single choice with Blue (\(q.fields.map(\.kind)))")
         }
@@ -1807,6 +1847,131 @@ enum SelfTest {
         snapshot(window, "launch-failure")
     }
 
+    // MARK: Sidebar
+
+    /// The sidebar's rows in each of the six states (set straight on the
+    /// runtimes; nothing launches but the shell it shows): their words, their
+    /// order, one line each at the narrowest sidebar, compact density, the
+    /// header's search hint and the footer. Fixture `sidebar`: "Shell anchor"
+    /// then seven sessions, one titled apart from its first prompt.
+    private static func sidebar(_ window: MainWindowController) async {
+        guard let ws = window.workspaceController, let sidebar = window.sidebarController, let w = window.window
+        else { return log("no window") }
+        func session(_ prefix: String) -> Session? { ws.orderedSessions.first { $0.firstPrompt?.hasPrefix(prefix) == true } }
+        guard let anchor = session("Shell anchor"), let needs = session("is hatch"), let working = session("What's not"),
+              let fresh = session("What happens"), let seen = session("Update to"), let stopped = session("after this"),
+              let idleShell = session("Shell in"), let idle = session("where is")
+        else { return log("unexpected sessions \(ws.orderedSessions.map { $0.firstPrompt ?? "-" })") }
+        let defaults = UserDefaults.standard
+        defaults.removeObject(forKey: SidebarDensity.defaultsKey)
+        ws.selection = .session(anchor.id)
+        await wait(1)
+
+        let now = Date()
+        func model(_ rt: inout SessionRuntime) {
+            var status = ClaudeSessionStatus()
+            status.model = .init(id: "claude-opus-5-5", displayName: "Opus 5.5")
+            rt.claudeStatus = status
+        }
+        var rt = SessionRuntime()
+        rt.status = .working; rt.workingSince = now.addingTimeInterval(-60); rt.isWaiting = true
+        rt.waitingFor = "permission to run tests"; rt.lastActivityAt = now.addingTimeInterval(-360)
+        ws.debugSetRuntime(needs.id, rt)
+        rt = SessionRuntime(); model(&rt)
+        rt.status = .working; rt.workingSince = now.addingTimeInterval(-252)
+        ws.debugSetRuntime(working.id, rt)
+        rt = SessionRuntime(); model(&rt)
+        rt.workSecondsCompleted = 720; rt.isUnread = true; rt.lastActivityAt = now.addingTimeInterval(-180)
+        ws.debugSetRuntime(fresh.id, rt)
+        rt = SessionRuntime(); model(&rt)
+        rt.workSecondsCompleted = 120; rt.lastActivityAt = now.addingTimeInterval(-1500)
+        ws.debugSetRuntime(seen.id, rt)
+        rt = SessionRuntime(); rt.stoppedReason = "exit 1"
+        ws.debugSetRuntime(stopped.id, rt)
+        await wait(1)
+
+        // Order: needs you, then working, then by activity.
+        let ids = sidebar.displayedSessionIDs
+        check(Array(ids.prefix(2)) == [needs.id, working.id],
+              "needs-you sorts first, then working (\(ids.prefix(3).map { ws.displayName($0) ?? "?" }))")
+        check(ids.firstIndex(of: fresh.id).map { $0 < ids.firstIndex(of: seen.id) ?? 0 } == true,
+              "the rest by last activity (newer finished above older)")
+
+        // The six states' words and details.
+        let expected: [(Session, String, String)] = [
+            (needs, "Needs you", "· permission to run tests"), (working, "Working", "· Opus 5.5"),
+            (fresh, "Finished", "· worked 12m 0s · Opus 5.5"), (seen, "Finished", "· worked 2m 0s · Opus 5.5"),
+            (stopped, "Stopped", "· exit 1"), (idleShell, "Idle", "· Shell"), (idle, "Idle", ""),
+        ]
+        for (s, word, detail) in expected {
+            let cell = sidebar.debugCell(s.id)
+            check(cell?.debugWord == word && cell?.debugDetail == detail,
+                  "\(ws.displayName(of: s).prefix(24)): “\(cell?.debugWord ?? "-") \(cell?.debugDetail ?? "")”")
+        }
+        let words = Set(ids.compactMap { sidebar.debugCell($0)?.debugWord })
+        check(words.isSuperset(of: ["Needs you", "Working", "Finished", "Stopped", "Idle"])
+              && !words.contains("Ready") && !words.contains("New"), "the rows say \(words.sorted())")
+        check(sidebar.debugCell(working.id)?.debugSpinning == true, "the working row's spinner turns")
+        check(sidebar.debugCell(needs.id)?.debugSpinning == false, "nothing else spins")
+        let workingTime = sidebar.debugCell(working.id)?.debugTime ?? "-", seenTime = sidebar.debugCell(seen.id)?.debugTime ?? "-"
+        check(workingTime.hasPrefix("4:") && seenTime == "25m", "times: working \(workingTime), finished \(seenTime)")
+        let semibold = { (id: UUID) in sidebar.debugCell(id)?.debugTitleFont?.fontDescriptor.symbolicTraits.contains(.bold) }
+        check(semibold(fresh.id) == true && semibold(seen.id) == false, "only the unread row's title is semibold")
+        check(sidebar.debugRowView(anchor.id)?.currentFill != nil, "the shown session's row is filled")
+
+        // The instruction line: the titled one shows its first prompt; the others are it.
+        check(sidebar.debugCell(working.id)?.debugInstructionShown == true, "a row titled apart shows its first instruction")
+        check(sidebar.debugCell(needs.id)?.debugInstructionShown == false, "a row named by its prompt doesn't repeat it")
+        check(sidebar.debugRowHeight(needs.id) == 54, "a comfortable row is 54 pt (\(sidebar.debugRowHeight(needs.id) ?? 0))")
+        snapshot(window, "sidebar-comfortable")
+
+        // Header and footer.
+        check(sidebar.debugSearchHint == SidebarListController.filterShortcut, "the search field shows ⌥⌘F")
+        check(await until(10) { sidebar.debugFooterText.hasPrefix("Sandbox · read-") && sidebar.debugFooterText.hasSuffix("main") },
+              "the footer: \(sidebar.debugFooterText)")
+        check(sidebar.debugOpenFooterPopover(), "the footer opens the sandbox access popover")
+        sidebar.debugCloseFooterPopover()
+
+        // Nothing wraps at the narrowest sidebar (220 pt).
+        if let split = w.contentViewController as? NSSplitViewController, let side = split.splitViewItems.first {
+            let minimum = side.minimumThickness
+            side.minimumThickness = 220
+            split.splitView.setPosition(220, ofDividerAt: 0)
+            split.splitView.layoutSubtreeIfNeeded()
+            await wait(0.5)
+            log("sidebar \(Int(side.viewController.view.frame.width)) pt (its minimum is \(Int(minimum)))")
+            var wrapped: [String] = []
+            for id in ids {
+                guard let cell = sidebar.debugCell(id) else { continue }
+                cell.layoutSubtreeIfNeeded()
+                for label in cell.debugLabels {
+                    let font = label.font ?? .role(.body)
+                    let line = ceil(font.ascender - font.descender + font.leading)
+                    let frame = label.convert(label.bounds, to: cell)
+                    if label.frame.height > line + 4 || label.maximumNumberOfLines != 1 || frame.maxX > cell.bounds.maxX + 0.5 {
+                        wrapped.append("\(label.stringValue.prefix(20)) h\(Int(label.frame.height)) x\(Int(frame.maxX))/\(Int(cell.bounds.width))")
+                    }
+                }
+            }
+            check(abs(side.viewController.view.frame.width - 220) < 1 && wrapped.isEmpty,
+                  "at 220 pt every row label is one line inside its row \(wrapped)")
+            snapshot(window, "sidebar-220")
+            side.minimumThickness = minimum
+            split.splitView.setPosition(300, ofDividerAt: 0)
+        }
+
+        // Compact: 40 pt rows, the instruction is the tooltip.
+        SidebarDensity.current = .compact
+        await wait(0.5)
+        check(sidebar.debugRowHeight(working.id) == 40, "a compact row is 40 pt (\(sidebar.debugRowHeight(working.id) ?? 0))")
+        check(sidebar.debugCell(working.id)?.debugInstructionShown == false, "compact drops the instruction line")
+        check(sidebar.debugCell(working.id)?.toolTip == "What's not checked in?", "and makes it the row's tooltip")
+        snapshot(window, "sidebar-compact")
+        SidebarDensity.current = .comfortable
+        defaults.removeObject(forKey: SidebarDensity.defaultsKey)
+        for s in [needs, working, fresh, seen, stopped] { ws.debugSetRuntime(s.id, nil) }
+    }
+
     // MARK: Fork
 
     /// Two replies; hover the first (Copy / Fork bar), fork there: the new chat
@@ -1849,6 +2014,18 @@ enum SelfTest {
         if let f = chat(forked.id) {
             check(said(f).contains("ALPHA-ONE") && !said(f).contains("BETA-TWO"),
                   "the fork has the first reply and not the second (\(said(f).prefix(80)))")
+        }
+        // The sidebar: the fork's row hangs from the rail under its source, with a branch glyph.
+        if let sidebar = window.sidebarController {
+            let ids = sidebar.displayedSessionIDs
+            check(sidebar.nestedForkIDs.contains(forked.id)
+                  && ids.firstIndex(of: forked.id) == ids.firstIndex(of: s.id).map { $0 + 1 },
+                  "the fork's row is right under its source's")
+            let source = sidebar.debugCell(s.id), fork = sidebar.debugCell(forked.id)
+            check(fork?.debugForkGlyphShown == true && source?.debugForkGlyphShown == false
+                  && (fork?.debugBadgeMinX ?? 0) - (source?.debugBadgeMinX ?? 0) == SidebarMetrics.childIndent,
+                  "indented \(Int((fork?.debugBadgeMinX ?? 0) - (source?.debugBadgeMinX ?? 0))) pt, with a branch glyph")
+            check(sidebar.debugRowView(forked.id)?.drawsRail == true, "on the rail")
         }
         snapshot(window, "fork-final")
     }
@@ -2722,12 +2899,13 @@ enum SelfTest {
             setWindowWidth(width)
             await wait(0.6)
             let t = window.debugToolbarWidths
-            log("  toolbar at \(Int(width)): identity \(Int(t.identity)) status \(Int(t.status)) visible \(t.visible)/\(t.items)")
+            log("  toolbar at \(Int(width)): identity \(Int(t.identity)) visible \(t.visible)/\(t.items) missing \(t.missing)")
+            snapshotFrame(window, "title-bar-\(Int(width))")
             check(t.visible == t.items && t.identity >= 199 && t.identity <= 361,
                   "at \(Int(width)) the toolbar fits every item; the identity flexes within 200–360")
         }
         // A long session name truncates inside the identity item instead of
-        // drawing over the status and buttons beside it.
+        // drawing over the Sandbox group beside it.
         for width in [1000.0, 1300] {
             setWindowWidth(width)
             _ = window.debugToolbarName("New Claude Session with a long name, longer than the toolbar has room for")
@@ -2737,10 +2915,10 @@ enum SelfTest {
             check(long.label <= long.identity + 1 && long.identity <= 361, "at \(Int(width)) a long session name stays inside the identity item")
             check(long.label >= long.identity - 4 && long.identity >= 199,
                   "at \(Int(width)) the name uses the identity's whole width (\(Int(long.label)) of \(Int(long.identity)))")
-            // A name that fits isn't cut short to the subtitle's width.
-            _ = window.debugToolbarName("New Claude Session", subtitle: "msdgc · ~/Code/msdgc")
+            // A name that fits shows whole.
+            _ = window.debugToolbarName("New Claude Session")
             await wait(0.8)
-            _ = window.debugToolbarName("New Claude Session", subtitle: "msdgc · ~/Code/msdgc")
+            _ = window.debugToolbarName("New Claude Session")
             check(window.debugToolbarNameFits, "at \(Int(width)) “New Claude Session” shows whole")
         }
         setWindowWidth(1400)
@@ -2808,6 +2986,71 @@ enum SelfTest {
         check(menu.count == 3 && menu[0].contains("Sandbox") && menu[1].contains("Finder"), "⋯ lists the sandbox, the folder and the branch")
         snapshot(window, "title-strip-380-window")
         pane.reemitChrome()
+        await titleBar(window, session: a)
+    }
+
+    /// The title bar: sidebar toggle · the session's name · Sandbox (Stop,
+    /// Restart) · Files, and nothing else; Stop / Restart follow the focused
+    /// pane; the Files button shows pressed while the Files sidebar is up.
+    /// Runs after `titleStrip` split off an empty pane.
+    private static func titleBar(_ window: MainWindowController, session a: Session) async {
+        guard let tree = window.paneTree, let ws = window.workspaceController else { return }
+        if let empty = tree.panes.first(where: { $0.shownSession == nil }) { tree.focus(empty) }
+        await wait(0.5)
+        let main = ["sidebarToggle", "identity", NSToolbarItem.Identifier.flexibleSpace.rawValue, "sandbox", "filesToggle"]
+        let defaults = window.debugDefaultToolbarItems
+        log("toolbar defaults: \(defaults); items: \(window.debugToolbarItems)")
+        check(defaults == main, "the title bar's items are exactly sidebar · identity · space · Sandbox · Files")
+        check(window.isFilesShown || window.debugToolbarItems == defaults, "the window shows that set (no autosaved leftovers)")
+        check(!defaults.contains { ["sessionStatus", "revealFolder", "stopSession", "restartSession", "chatToggle", "search"].contains($0) },
+              "no status, reveal, bare stop, chat toggle or search in the title bar")
+
+        // An empty pane focused: Stop and Restart are off, the group stays.
+        check(tree.focused.shownSession == nil, "the empty split pane has focus")
+        var group = window.debugSandboxGroup
+        check(group.shown && !group.stop && !group.restart, "no session focused: Sandbox shows, Stop and Restart disabled (\(group))")
+        check(window.debugIdentity.isEmpty, "no session focused: no name in the title bar")
+        // Back to the session's pane: Restart works on it (and Stop, its terminal running).
+        if let sessionPane = tree.panes.first(where: { $0.shownSession == a.id }) { tree.focus(sessionPane) }
+        await wait(0.5)
+        group = window.debugSandboxGroup
+        check(group.shown && group.stop && group.restart, "a running session focused: Stop and Restart enabled (\(group))")
+        check(window.debugIdentity == ws.displayName(of: a), "the title bar names the session (\(window.debugIdentity))")
+        snapshotFrame(window, "title-bar")
+
+        // View ▸ Show Files flips the Files button and shows the sidebar's header.
+        // (One pane: two of today's panes leave no room for Files beside them.)
+        while tree.panes.count > 1, let extra = tree.panes.first(where: { $0.shownSession == nil }) {
+            tree.close(extra)
+            await wait(0.2)
+        }
+        let app = NSApp.delegate as? AppDelegate
+        let before = window.isFilesShown
+        app?.toggleFiles(nil)
+        await wait(0.8)
+        check(window.isFilesShown != before && window.debugFilesToggle.on == window.isFilesShown
+                && window.debugFilesToggle.headerShown == window.isFilesShown,
+              "View ▸ Files toggles the sidebar; the Files button and header follow (\(window.debugFilesToggle))")
+        if let w = window.window, let files = window.inspectorFiles {
+            let frame = files.view.convert(files.view.bounds, to: nil)
+            log("with Files: window \(w.frame.width), panes \(tree.panes.map { Int($0.view.frame.width) }) "
+                + "fitting \(tree.panes.map { Int($0.view.fittingSize.width) }), files \(frame)")
+            check(frame.minX >= 0 && frame.maxX <= w.frame.width + 1 && frame.maxY >= w.frame.height - 1,
+                  "the Files sidebar is in the window, at its trailing edge, full height")
+            check(await until(5) { !files.header.branch.stringValue.isEmpty }
+                    && files.header.branch.stringValue == FilesHeaderView.branchLine(files.tree.git),
+                  "its header names the branch (\(files.header.branch.stringValue))")
+        }
+        if window.isFilesShown {
+            let files = [NSToolbarItem.Identifier.inspectorTrackingSeparator.rawValue, "filesHeader",
+                         NSToolbarItem.Identifier.flexibleSpace.rawValue, "filesClose"]
+            check(window.debugToolbarItems == main + files, "over the Files sidebar: its header and close button (\(window.debugToolbarItems))")
+            snapshotFrame(window, "title-bar-files")
+        }
+        app?.toggleFiles(nil)
+        await wait(0.8)
+        check(window.isFilesShown == before && window.debugFilesToggle.on == before,
+              "and back (\(window.debugFilesToggle))")
     }
 
     // MARK: Links
