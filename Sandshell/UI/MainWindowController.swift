@@ -147,10 +147,6 @@ final class MainWindowController: NSWindowController {
         let sidebarVC = SidebarListController(controller: controller)
         self.sidebar = sidebarVC
         sidebarVC.onOpenWorkspace = { [weak self] r in self?.onOpenWorkspace?(r) }
-        sidebarVC.onOpenFilesInSplit = { [weak self] id in
-            guard let s = self?.workspace?.session(id: id) else { return }
-            self?.detail?.openFiles(FilesTarget(session: id, folder: s.workdir))
-        }
         sidebarVC.onShowSearch = { [weak self] folder in self?.showSearch(preferredFolder: folder) }
         sidebarVC.onStopTask = { [weak self] sid, task in await self?.detail?.surfaces.chats[sid]?.session.stopBackgroundTask(task) ?? false }
         sidebarVC.onDropFiles = { [weak self] id, urls in
@@ -170,6 +166,8 @@ final class MainWindowController: NSWindowController {
                                         restoresLayout: restoresLayout)
         self.detail = detail
         detail.newSessionMenu = { [weak self] in self?.sidebar?.newSessionMenu() }
+        detail.onShowFiles = { [weak self] changesOnly in self?.showInFiles(changesOnly: changesOnly) }
+        detail.onOpenFile = { [weak self] url, line in self?.showInFiles(url, line: line) }
         // Drive the toolbar identity (badge + name/subtitle) from the active
         // session; fall back to the folder name when nothing is selected.
         detail.onChromeChange = { [weak self] chrome in
@@ -469,24 +467,23 @@ final class MainWindowController: NSWindowController {
         syncFilesRoot()
     }
 
-    /// Toolbar Files button: click toggles the trailing Files pane;
-    /// ⌥-click opens Files in a split beside the focused pane instead.
-    @objc func toggleFilesFromToolbar() {
-        if NSApp.currentEvent?.modifierFlags.contains(.option) == true { openFilesInSplit() } else { toggleFiles() }
+    /// Toolbar Files button: toggles the trailing Files pane.
+    @objc func toggleFilesFromToolbar() { toggleFiles() }
+
+    /// A pane's branch crumb or a chat's file link: the Files sidebar (shown
+    /// if it isn't) with just the changes, or `url` open (at `line`).
+    func showInFiles(_ url: URL? = nil, line: Int? = nil, changesOnly: Bool = false) {
+        if filesItem?.isCollapsed == true { toggleFiles() }
+        guard let files = filesPane else { return }
+        if changesOnly { files.showChanges() }
+        guard let url else { return }
+        if let line { files.editor.open(url, line: line, highlight: "") } else { files.open(url) }
     }
 
-    /// View ▸ Open Files in Split (⇧⌥⌘0): the focused session's folder as a pane.
-    func openFilesInSplit() {
-        guard let detail else { return }
-        detail.openFiles(detail.defaultFilesTarget())
-    }
-
-    /// File ▸ Open Quickly (⇧⌘O) when no Files surface has focus: the focused
-    /// Files pane, else the trailing Files pane (shown if needed), else any.
+    /// File ▸ Open Quickly (⇧⌘O) when no Files surface has focus: the trailing
+    /// Files pane, shown if needed.
     func openQuickly() {
-        if let files = detail?.focusedFiles { return files.openQuickly(nil) }
         if let item = filesItem, !item.isCollapsed, let files = filesPane { return files.openQuickly(nil) }
-        if let files = detail?.anyFiles { return files.openQuickly(nil) }
         toggleFiles()
         // After the inspector's expand animation, so the popover anchors in place.
         Task { [weak self] in
@@ -665,10 +662,10 @@ extension MainWindowController: NSWindowDelegate {
 
     func windowDidBecomeKey(_ notification: Notification) { onBecomeKey?() }
 
-    /// Unsaved edits in the Files inspector or a Files pane: Save / Discard /
+    /// Unsaved edits in the Files inspector: Save / Discard /
     /// Cancel for each (false = the person cancelled).
     func confirmUnsavedFiles() -> Bool {
-        ([filesPane] + (detail?.panes.map(\.filesPane) ?? [])).compactMap { $0 }.allSatisfy { $0.confirmClose() }
+        filesPane?.confirmClose() ?? true
     }
 
     /// Tear down this window's terminals (kills their `sbx exec` + removes temp
@@ -747,7 +744,7 @@ extension MainWindowController: NSToolbarDelegate {
             let item = NSToolbarItem(itemIdentifier: .filesToggle)
             item.label = "Files"
             item.paletteLabel = "Show Files"
-            item.toolTip = "Show Files (⌥⌘0) — ⌥-click to open Files in a split"
+            item.toolTip = "Show Files (⌥⌘0)"
             item.view = Self.plainToolbarButton(symbol: "sidebar.right", label: "Show Files",
                                                 target: self, action: #selector(toggleFilesFromToolbar))
             return item

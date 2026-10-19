@@ -777,11 +777,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         activeController?.toggleFiles()
     }
 
-    /// ⇧⌥⌘0 — the Files tree + editor as a pane beside the focused one.
-    @MainActor @objc func openFilesInSplit(_ sender: Any?) {
-        activeController?.openFilesInSplit()
-    }
-
     /// ⇧⌘O — fuzzy file finder over the session folder (the Files surface
     /// holding focus answers first via the responder chain; this is the fallback).
     @MainActor @objc func openQuickly(_ sender: Any?) {
@@ -1009,7 +1004,7 @@ extension AppDelegate: NSMenuItemValidation {
             item.title = controller?.paneTree?.chatToggleTitle ?? "Show as Chat"
             return controller?.paneTree?.canPerformSessionAction(#selector(TerminalStackController.toggleChatClicked)) ?? false
         case #selector(newSession(_:)), #selector(newChat(_:)), #selector(duplicateWindow(_:)), #selector(openQuickly(_:)),
-             #selector(showSearch(_:)), #selector(openFilesInSplit(_:)), #selector(splitRight(_:)), #selector(splitDown(_:)),
+             #selector(showSearch(_:)), #selector(splitRight(_:)), #selector(splitDown(_:)),
              #selector(closePane(_:)), #selector(focusNextPane(_:)), #selector(focusPreviousPane(_:)),
              #selector(equalizePanes(_:)), #selector(selectNextSession(_:)), #selector(selectPreviousSession(_:)),
              #selector(showBackgroundTasks(_:)), #selector(openHostTerminal(_:)), #selector(showSandshellLog(_:)),

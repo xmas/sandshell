@@ -84,9 +84,9 @@ AppDelegate (@main)
   └─ MainWindowController (per workspace root; NSWindow + NSSplitViewController)
        ├─ SidebarOutlineController   NSOutlineView; flat session list
        ├─ PaneTreeController         detail: a split tree of panes, saved per window
-       │    ├─ TerminalStackController   one pane: a session's terminal or chat, or Files
+       │    ├─ TerminalStackController   one pane: a session's terminal or chat
        │    └─ SessionSurfaces           the window's live terminals + chats, shared by its panes
-       └─ FilesPaneController        trailing inspector: file tree + editor (also usable as a pane)
+       └─ FilesPaneController        trailing inspector: file tree + editor (never a pane)
   └─ WorkspaceController (@MainActor ObservableObject)   central state coordinator
        ├─ Workspace          value type: rootURL, policy, mcpServers, primaryAgent, kits
        ├─ WorkspaceState     persisted: folders, sessions, tree expansion (state.json)
@@ -101,8 +101,8 @@ AppDelegate (@main)
 | `App/AppDelegate.swift` | `@main`; patches PATH, creates/restores `MainWindowController` windows, handles Apple Events (`Shll`/`stat`, `Shll`/`news`) and URL scheme (`sandshell://open`), global keyboard shortcuts |
 | `UI/MainWindowController.swift` | NSWindow + `NSSplitViewController` (sidebar \| detail); native toolbar; theme observation |
 | `UI/PaneTreeController.swift` | Detail area as split panes (⌘D / ⇧⌘D / ⌥⌘W, drag a session onto a pane edge); layout saved per window |
-| `UI/TerminalStackController.swift` | One pane: shows a session's terminal or chat (or a Files surface), its title strip (context chips, Claude readout, pane buttons), launch/failure states. `SessionSurfaces` (same file) holds the window's live sessions |
-| `UI/SessionContextBar.swift` | Title-strip chips: sandbox (access popover), folder, git branch ± lines |
+| `UI/TerminalStackController.swift` | One pane: shows a session's terminal or chat, its title strip, launch/failure states. `SessionSurfaces` (same file) holds the window's live sessions |
+| `UI/PaneStrip.swift` | A pane's 34 pt title strip: crumbs (sandbox › folder › branch › name) that condense by its width (`PaneStripCondensing`), and Chat \| Terminal, Split Right/Down, Close |
 | `UI/ClaudeStatsView.swift` | Title-strip Claude readout (context gauge, tokens, cost, model/effort choosers); sheds pieces to fit |
 | `UI/BackgroundTasksView.swift` | Background tasks popover / window (⌥⌘B) |
 | `UI/AgentConfigView.swift` | Settings ▸ Agents: custom agents from `kind: sandbox` kits |
