@@ -49,7 +49,7 @@ struct KitConfigView: View {
                     HStack(spacing: 8) {
                         Label {
                             Text("\(model.missingDefaults.count) default kit\(model.missingDefaults.count == 1 ? " is" : "s are") turned off in this workspace.")
-                                .font(.caption)
+                                .font(.role(.meta))
                         } icon: {
                             Image(systemName: "star")
                         }
@@ -68,14 +68,14 @@ struct KitConfigView: View {
                      + "(sbx kit add) where sbx can; turning one off — or a kit sbx can't add in place — "
                      + "rebuilds the workspace's sandbox(es). ★ marks a default: it is preselected "
                      + "for every new workspace.")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.role(.meta)).foregroundStyle(.secondary)
             }
 
             Section {
                 KitRefAddRow(ref: $model.newRef, prompt: "Folder path, .zip, or OCI reference (docker.io/sbx/…)",
                              onBrowse: model.browse, onAdd: { model.add($0) })
                 if let notice = model.notice {
-                    Text(notice).font(.caption).foregroundStyle(.secondary)
+                    Text(notice).font(.role(.meta)).foregroundStyle(.secondary)
                         .accessibilityIdentifier("kits-notice")
                 }
                 HStack(spacing: 8) {
@@ -86,7 +86,7 @@ struct KitConfigView: View {
                     }
                     .accessibilityIdentifier("kits-browse-hub")
                     Text("Official kits from docker.io/\(KitHub.officialNamespace)")
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(.role(.meta)).foregroundStyle(.secondary)
                 }
             } header: {
                 Text("Add a kit")
@@ -135,7 +135,7 @@ private struct KitDriftSection: View {
                 HStack {
                     Text("Added outside Sandshell (e.g. sbx kit add). A rebuild uses this workspace’s kit list and would drop "
                          + (drift.extra.count == 1 ? "it." : "them."))
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(.role(.meta)).foregroundStyle(.secondary)
                     Spacer()
                     if let onIgnore {
                         Button("Drop on Next Rebuild", action: onIgnore)
@@ -150,7 +150,7 @@ private struct KitDriftSection: View {
             if !drift.missing.isEmpty {
                 ForEach(drift.missing, id: \.self) { KitDriftRow(ref: $0, label: "missing from the sandbox") }
                 HStack {
-                    Text("Rebuild to apply this workspace’s kit list.").font(.caption).foregroundStyle(.secondary)
+                    Text("Rebuild to apply this workspace’s kit list.").font(.role(.meta)).foregroundStyle(.secondary)
                     Spacer()
                     if let onRebuild { Button("Rebuild Sandbox", action: onRebuild) }
                 }
@@ -169,13 +169,13 @@ private struct KitDriftRow: View {
     var body: some View {
         HStack(spacing: 6) {
             Label {
-                Text(KitStartupParser.kitName(forRef: ref)).fontWeight(.medium)
+                Text(KitStartupParser.kitName(forRef: ref)).font(.role(.body))
             } icon: {
                 Image(systemName: "shippingbox.fill").foregroundStyle(.blue)
             }
-            Text(label).font(.caption).foregroundStyle(.secondary)
+            Text(label).font(.role(.meta)).foregroundStyle(.secondary)
             Spacer()
-            Text(ref).font(.caption.monospaced())
+            Text(ref).font(.role(.code))
                 .foregroundStyle(.tertiary).lineLimit(1).truncationMode(.middle)
         }
     }
@@ -204,10 +204,10 @@ private struct KitStartupSection: View {
                     Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
                 }
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(startup.headline).fontWeight(.medium)
+                    Text(startup.headline).font(.role(.body))
                     // "ran 12 seconds ago" keeps counting on its own.
                     TimelineView(.periodic(from: .now, by: 1)) { context in
-                        Text(startup.tally(now: context.date)).font(.caption).foregroundStyle(.secondary)
+                        Text(startup.tally(now: context.date)).font(.role(.meta)).foregroundStyle(.secondary)
                     }
                 }
                 Spacer()
@@ -229,10 +229,10 @@ private struct KitStartupSection: View {
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 6) {
                         KitStatusPill(outcome: entry.outcome)
-                        Text(entry.name).font(.callout.monospaced())
+                        Text(entry.name).font(.role(.code))
                     }
                     ForEach(entry.detail.prefix(3).enumerated(), id: \.offset) { _, line in
-                        Text(line).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                        Text(line).font(.role(.meta)).foregroundStyle(.secondary).lineLimit(2)
                     }
                 }
             }
@@ -242,7 +242,7 @@ private struct KitStartupSection: View {
             Text("Each kit’s startup steps run inside the sandbox right after it is created. "
                  + "A failing step stops the remaining kits; a warning means the kit continued without something it wanted. "
                  + KitStartupBannerView.rebuildHint)
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.role(.meta)).foregroundStyle(.secondary)
         }
     }
 }
@@ -293,7 +293,7 @@ private struct KitStatusPill: View {
         case .skipped: ("skipped", .orange)
         }
         Text(label)
-            .font(.caption.weight(.semibold))
+            .font(.role(.meta, weight: .semibold))
             .padding(.horizontal, 6).padding(.vertical, 2)
             .background(color.quaternary, in: .capsule)
             .foregroundStyle(color)
@@ -318,10 +318,11 @@ private struct KitRow: View {
             HStack(alignment: .top, spacing: 8) {
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 6) {
-                        Text(kit.title).fontWeight(.medium)
+                        Text(kit.title).font(.role(.body))
+
                         if case let agent?? = KitStore.requiredAgent(kit.ref) {
                             Text("\(AgentKind(rawValue: agent).displayName) only")
-                                .font(.caption2.weight(.medium)).foregroundStyle(.secondary)
+                                .font(.role(.meta)).foregroundStyle(.secondary)
                                 .padding(.horizontal, 5).padding(.vertical, 1)
                                 .background(.quinary, in: .capsule)
                                 .help("Made for \(AgentKind(rawValue: agent).displayName): other agents' sandboxes leave it out.")
@@ -331,9 +332,9 @@ private struct KitRow: View {
                         }
                     }
                     if let summary = kit.summary, !summary.isEmpty {
-                        Text(summary).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                        Text(summary).font(.role(.meta)).foregroundStyle(.secondary).lineLimit(2)
                     }
-                    Text(kit.ref).font(.caption.monospaced())
+                    Text(kit.ref).font(.role(.code))
                         .foregroundStyle(.tertiary).lineLimit(1).truncationMode(.middle)
                 }
                 Spacer()

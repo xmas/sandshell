@@ -5,7 +5,8 @@ struct IconSwatch: View {
     let symbol: String; let isSelected: Bool; let tint: String; let action: () -> Void
     var body: some View {
         Button(action: action) {
-            Image(systemName: symbol).font(.system(size: 13, weight: .semibold))
+            Image(systemName: symbol).font(.symbol(.meta, weight: .semibold))
+
                 .frame(width: 30, height: 30)
                 // Before the background, so its quinary fill is a level of the
                 // primary style rather than of this one.

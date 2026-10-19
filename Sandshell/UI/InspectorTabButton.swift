@@ -15,10 +15,11 @@ struct InspectorTabButton: View {
                     .frame(width: 26, height: 26)
                     .overlay {
                         Image(systemName: pane.symbol)
-                            .font(.system(size: 13, weight: .semibold))
+                            .font(.mark(13, weight: .semibold))
                             .foregroundStyle(.white)
                     }
-                Text(pane.title).font(.system(size: 11))
+                Text(pane.title).font(.role(.meta))
+
                     .foregroundStyle(.primary).lineLimit(1)
             }
             .frame(width: 70)

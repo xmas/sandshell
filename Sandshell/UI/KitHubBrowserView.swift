@@ -27,9 +27,9 @@ struct KitHubBrowserView: View {
         VStack(spacing: 0) {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Docker Hub kits").font(.title3.bold())
+                    Text("Docker Hub kits").font(.role(.title))
                     Text("docker.io/\(namespace) · ^[\(kits.count) kit](inflect: true)")
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(.role(.meta)).foregroundStyle(.secondary)
                 }
                 Spacer()
                 Button("Reload", systemImage: "arrow.clockwise") { Task { await load() } }
@@ -59,7 +59,7 @@ struct KitHubBrowserView: View {
             HStack {
                 // With no kits the error is the empty state itself; here it only
                 // flags a failed reload over the list already shown.
-                if let error, !kits.isEmpty { Text(error).font(.caption).foregroundStyle(.red).lineLimit(2) }
+                if let error, !kits.isEmpty { Text(error).font(.role(.meta)).foregroundStyle(.red).lineLimit(2) }
                 Spacer()
                 Button("Done") { dismiss() }.keyboardShortcut(.defaultAction)
             }
@@ -123,16 +123,17 @@ private struct KitHubRow: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
-            Image(systemName: "cube.fill").font(.system(size: 16)).foregroundStyle(.green)
+            Image(systemName: "cube.fill").font(.symbol(.body)).foregroundStyle(.green)
                 .frame(width: 24).padding(.top, 2)
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 8) {
-                    Text(kit.shortName).fontWeight(.medium)
-                    Text(kit.ref).font(.caption.monospaced()).foregroundStyle(.tertiary)
+                    Text(kit.shortName).font(.role(.body))
+
+                    Text(kit.ref).font(.role(.code)).foregroundStyle(.tertiary)
                         .lineLimit(1).truncationMode(.middle)
                 }
                 if !kit.description.isEmpty {
-                    Text(kit.description).font(.caption).foregroundStyle(.secondary).lineLimit(3)
+                    Text(kit.description).font(.role(.meta)).foregroundStyle(.secondary).lineLimit(3)
                 }
                 HStack(spacing: 10) {
                     Label("\(kit.pullCount.formatted(.number.notation(.compactName))) pulls",
@@ -141,7 +142,7 @@ private struct KitHubRow: View {
                         Label(Format.relative(d), systemImage: "clock")
                     }
                 }
-                .font(.caption2).foregroundStyle(.tertiary)
+                .font(.role(.meta)).foregroundStyle(.tertiary)
             }
             Spacer()
             Button(registered ? "Added" : "Add", action: onAdd)

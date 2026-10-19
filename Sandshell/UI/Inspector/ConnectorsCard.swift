@@ -20,7 +20,7 @@ struct ConnectorsCard: View {
                             Text(server.name).lineLimit(1)
                             Spacer(minLength: 4)
                             if !server.tools.isEmpty {
-                                Text("\(server.tools.count)").foregroundStyle(.secondary).monospacedDigit()
+                                Text("\(server.tools.count)").foregroundStyle(.secondary).font(.role(.code))
                                     .help("\(server.tools.count) tools")
                             }
                             Circle()
@@ -40,9 +40,9 @@ struct ConnectorsCard: View {
             }
             Button("MCP Settings…") { model.openMCPSettings?() }
                 .buttonStyle(.link)
-                .font(.caption)
+                .font(.role(.meta))
         }
-        .font(.callout)
+        .font(.role(.body))
     }
 
     static func statusColor(_ status: String) -> Color {
@@ -63,7 +63,7 @@ struct ConnectorMark: View {
     var body: some View {
         let initial = name.first.map { String($0).uppercased() } ?? "?"
         Text(initial)
-            .font(.caption.weight(.bold))
+            .font(.role(.meta, weight: .semibold))
             .foregroundStyle(.white)
             .frame(width: 18, height: 18)
             .background(Self.tint(for: name), in: .rect(cornerRadius: 4))

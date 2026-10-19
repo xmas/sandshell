@@ -55,7 +55,7 @@ private struct MCPGatewaySection: View {
                 .onSubmit { urlFocused.wrappedValue = false }   // Return commits and releases
             if !model.urlString.isEmpty && model.resolvedURL() == nil {
                 Text("Enter a valid http(s) URL.")
-                    .font(.caption).foregroundStyle(.red)
+                    .font(.role(.meta)).foregroundStyle(.red)
             }
         }
     }
@@ -100,9 +100,9 @@ private struct MCPServersSection: View {
                     Toggle(isOn: $model[isEnabled: row.name]) {
                         VStack(alignment: .leading, spacing: 1) {
                             Text(row.name)
-                            Text(row.detail).font(.caption).foregroundStyle(.secondary)
+                            Text(row.detail).font(.role(.meta)).foregroundStyle(.secondary)
                             if let error = controller.mcpErrors[row.name] {
-                                Text(error).font(.caption).foregroundStyle(.red).textSelection(.enabled)
+                                Text(error).font(.role(.meta)).foregroundStyle(.red).textSelection(.enabled)
                             }
                         }
                     }
@@ -122,7 +122,7 @@ private struct MCPServersSection: View {
             Text("Authenticate signs in via the gateway’s hosted OAuth (opens your "
                  + "browser). The toggle loads an authenticated server into the "
                  + "container via sbx mcp load.")
-                .font(.caption)
+                .font(.role(.meta))
         }
     }
 }
@@ -147,7 +147,7 @@ private struct MCPAuthControl: View {
                 }
             case "expired":
                 HStack(spacing: 6) {
-                    Text("Expired").font(.caption).foregroundStyle(.orange)
+                    Text("Expired").font(.role(.meta)).foregroundStyle(.orange)
                     Button("Re-authenticate") { controller.authenticateMCP(name: name, addArgs: addArgs) }
                 }
             default:
@@ -168,13 +168,13 @@ private struct MCPAddServersSection: View {
     var body: some View {
         Section {
             TextEditor(text: $jsonText)
-                .font(.subheadline.monospaced())
+                .font(.role(.code))
                 .frame(height: 92)
                 .overlay {
                     RoundedRectangle(cornerRadius: 5).stroke(.quaternary)
                 }
             if let error = controller.mcpAddError {
-                Text(error).font(.caption).foregroundStyle(.red).textSelection(.enabled)
+                Text(error).font(.role(.meta)).foregroundStyle(.red).textSelection(.enabled)
             }
             HStack {
                 Spacer()
@@ -187,7 +187,7 @@ private struct MCPAddServersSection: View {
             Text("Paste a standard MCP config and each server is registered via "
                  + "sbx mcp add:\n{ \"mcpServers\": { \"name\": { \"command\": \"npx\", "
                  + "\"args\": [\"mcp-remote\", \"https://…/mcp\"] } } }")
-                .font(.caption)
+                .font(.role(.meta))
         }
     }
 
@@ -223,7 +223,7 @@ private struct MCPPaneActions: View {
                          + "loads it into running containers immediately via sbx mcp load. "
                          + "De-selecting takes effect when the container is next recreated "
                          + "(sbx has no live unload). Workspace files are always preserved.")
-                        .font(.callout).padding().frame(width: 320)
+                        .font(.role(.body)).padding().frame(width: 320)
                 }
             Button("Refresh Status", systemImage: "arrow.clockwise") { controller.refreshMCPStatus() }
                 .labelStyle(.iconOnly)

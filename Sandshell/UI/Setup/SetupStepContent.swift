@@ -32,10 +32,10 @@ struct SetupStepContent: View {
                 } footer: {
                     if isKnownWorkspace {
                         Text("This folder is already a Sandshell workspace — Next opens it with its saved look, mounts, and kits.")
-                            .font(.caption).foregroundStyle(.secondary)
+                            .font(.role(.meta)).foregroundStyle(.secondary)
                     } else {
                         Text("Your work happens here; it's mounted into the sandbox. You can change its look, mounts, and kits in the next steps.")
-                            .font(.caption).foregroundStyle(.secondary)
+                            .font(.role(.meta)).foregroundStyle(.secondary)
                     }
                 }
             }

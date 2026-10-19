@@ -33,7 +33,7 @@ struct ThemeBrowserCard: View {
                 Divider()
 
                 Text(t.name)
-                    .font(.caption)
+                    .font(.role(.meta))
                     .lineLimit(1)
                     .truncationMode(.middle)
                     .frame(maxWidth: .infinity)

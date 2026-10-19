@@ -15,15 +15,15 @@ struct OpenFoldersRow: View {
                 RootIconMark(profile: root, side: 28)
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(root.name).font(.callout).fontWeight(.medium).lineLimit(1)
-                    Text(root.path.tildeAbbreviated).font(.caption)
+                    Text(root.name).font(.role(.body)).lineLimit(1)
+                    Text(root.path.tildeAbbreviated).font(.role(.meta))
                         .foregroundStyle(.secondary)
                         .lineLimit(1).truncationMode(.middle)
                 }
                 Spacer()
                 if let opened = root.lastOpened {
                     Text(Format.relative(opened))
-                        .font(.caption)
+                        .font(.role(.meta))
                         // Tertiary is too faint on the accent fill; secondary reads there.
                         .foregroundStyle(isSelected ? AnyShapeStyle(.secondary) : AnyShapeStyle(.tertiary))
                 }

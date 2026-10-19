@@ -14,7 +14,7 @@ final class SessionContextBar: NSStackView {
 
     private let sandboxChip = ContextChip(symbol: "shippingbox")
     private let folderChip = ContextChip(symbol: "folder")
-    private let branchChip = ContextChip(symbol: "arrow.triangle.branch")
+    private let branchChip = ContextChip(symbol: "arrow.triangle.branch", role: .code)
     private var access: SandboxAccess?
     private var folder: URL?
     private var git = GitStatus.empty
@@ -168,10 +168,12 @@ final class ContextChip: NSButton {
     var tint: NSColor = .secondaryLabelColor { didSet { restyle() } }
     var border: NSColor = .separatorColor { didSet { restyle() } }
     private let symbol: String
+    private let role: TypeRole
     private var text = ""
 
-    init(symbol: String) {
+    init(symbol: String, role: TypeRole = .meta) {
         self.symbol = symbol
+        self.role = role
         super.init(frame: .zero)
         isBordered = false
         wantsLayer = true
@@ -198,9 +200,10 @@ final class ContextChip: NSButton {
 
     private func restyle() {
         image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?
-            .withSymbolConfiguration(.init(pointSize: 10, weight: .medium))
+            .withSymbolConfiguration(.role(.meta))
         contentTintColor = tint
-        let font = NSFont.systemFont(ofSize: 11, weight: .medium)
+        let font = NSFont.role(role)
+
         let title = NSMutableAttributedString(string: " " + text, attributes: [.font: font, .foregroundColor: tint])
         if added + removed > 0 {
             title.append(NSAttributedString(string: "  ", attributes: [.font: font]))

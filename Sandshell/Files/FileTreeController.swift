@@ -111,7 +111,7 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
         scroll.hasVerticalScroller = true
         scroll.drawsBackground = false
 
-        branchLabel.font = .systemFont(ofSize: 11)
+        branchLabel.font = .role(.code)
         branchLabel.textColor = .secondaryLabelColor
         branchLabel.lineBreakMode = .byTruncatingMiddle
 
@@ -189,10 +189,10 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
         sandboxButton.isHidden = false
         let tint: NSColor = access.mode == .readWrite ? .systemOrange : .secondaryLabelColor
         sandboxButton.image = NSImage(systemSymbolName: access.symbol, accessibilityDescription: nil)?
-            .withSymbolConfiguration(.init(pointSize: 10, weight: .semibold))
+            .withSymbolConfiguration(.role(.meta, weight: .semibold))
         sandboxButton.contentTintColor = tint
         sandboxButton.attributedTitle = NSAttributedString(string: " " + access.summary, attributes: [
-            .font: NSFont.systemFont(ofSize: 11, weight: .medium), .foregroundColor: tint])
+            .font: NSFont.role(.meta), .foregroundColor: tint])
         sandboxButton.toolTip = "These files are shared with a sandbox — click for what it can do with them"
     }
 
@@ -1128,8 +1128,8 @@ final class FileCell: NSTableCellView {
         imageView = icon
         textField = name
         name.lineBreakMode = .byTruncatingMiddle
-        name.font = .systemFont(ofSize: 13)
-        badge.font = .monospacedSystemFont(ofSize: 10.5, weight: .semibold)
+        name.font = .role(.body)
+        badge.font = .role(.code)
         badge.alignment = .right
         for v in [icon, name, badge] as [NSView] {
             v.translatesAutoresizingMaskIntoConstraints = false
@@ -1192,7 +1192,7 @@ final class FileCell: NSTableCellView {
             // "+22 −1 M" in the changed list: the counts, then the status
             // letter where the tree shows it (so the kind isn't color alone).
             let out = NSMutableAttributedString()
-            let font = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .medium)
+            let font = NSFont.role(.code)
             if let a = counts.added, let r = counts.removed {
                 out.append(.diffCounts(added: a, removed: r))
                 let lines = String(AttributedString(localized: "^[\(a) line](inflect: true) added, \(r) removed").characters)
@@ -1203,7 +1203,7 @@ final class FileCell: NSTableCellView {
             }
             if let change {
                 out.append(NSAttributedString(string: " " + change.badge, attributes: [
-                    .font: NSFont.monospacedSystemFont(ofSize: 10.5, weight: .semibold), .foregroundColor: change.color]))
+                    .font: font, .foregroundColor: change.color]))
             }
             badge.attributedStringValue = out
         } else if let change {
@@ -1251,7 +1251,7 @@ final class MatchCell: NSTableCellView {
     init() {
         super.init(frame: .zero)
         identifier = Self.id
-        number.font = .monospacedDigitSystemFont(ofSize: 10.5, weight: .regular)
+        number.font = .role(.code)
         number.textColor = .tertiaryLabelColor
         number.alignment = .right
         snippet.lineBreakMode = .byTruncatingTail
@@ -1276,11 +1276,12 @@ final class MatchCell: NSTableCellView {
         number.stringValue = "\(match.line)"
         let text = match.text.trimmingCharacters(in: .whitespaces)
         let s = NSMutableAttributedString(string: text, attributes: [
-            .font: NSFont.monospacedSystemFont(ofSize: 11, weight: .regular), .foregroundColor: NSColor.secondaryLabelColor])
+            .font: NSFont.role(.code), .foregroundColor: NSColor.secondaryLabelColor])
         var range = (text as NSString).range(of: query, options: .caseInsensitive)
         while range.location != NSNotFound {
             s.addAttributes([.foregroundColor: NSColor.labelColor,
-                             .font: NSFont.monospacedSystemFont(ofSize: 11, weight: .bold)], range: range)
+                             .font: NSFont.role(.code, weight: .semibold)], range: range)
+
             let next = NSMaxRange(range)
             range = (text as NSString).range(of: query, options: .caseInsensitive,
                                              range: NSRange(location: next, length: (text as NSString).length - next))

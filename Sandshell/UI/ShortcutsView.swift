@@ -22,7 +22,8 @@ struct ShortcutsView: View {
                             HStack {
                                 Text(s.title)
                                 Spacer()
-                                Text(s.keys).font(.system(.body, design: .rounded)).foregroundStyle(.secondary)
+                                Text(s.keys).font(.role(.body))
+.foregroundStyle(.secondary)
                             }
                             .accessibilityElement(children: .combine)
                         }

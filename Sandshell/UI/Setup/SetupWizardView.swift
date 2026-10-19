@@ -57,10 +57,10 @@ struct SetupWizardView: View {
                     Image(nsImage: appIcon).resizable().frame(width: 56, height: 56)
                         .accessibilityHidden(true)
                 }
-                Text(welcome ? "Welcome to Sandshell" : "New Workspace").font(.title2.bold())
+                Text(welcome ? "Welcome to Sandshell" : "New Workspace").font(.role(.title))
                 if welcome {
                     Text("The easiest way to use Docker sbx. Choose where you want to do your work.")
-                        .font(.callout).foregroundStyle(.secondary)
+                        .font(.role(.body)).foregroundStyle(.secondary)
                         .multilineTextAlignment(.center).frame(maxWidth: 400)
                 }
             }
@@ -72,7 +72,7 @@ struct SetupWizardView: View {
                         .frame(width: 8, height: 8)
                 }
                 Text("Step \(step.rawValue + 1) of \(SetupStep.allCases.count) · \(step.title)")
-                    .font(.caption).foregroundStyle(.secondary).padding(.leading, 4)
+                    .font(.role(.meta)).foregroundStyle(.secondary).padding(.leading, 4)
             }
             .padding(.vertical, 10)
             Divider()

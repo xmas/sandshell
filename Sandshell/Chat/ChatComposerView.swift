@@ -50,7 +50,7 @@ final class ChatComposerView: NSView, NSTextViewDelegate {
         textView.isRichText = true
         textView.importsGraphics = false
         textView.allowsUndo = true
-        textView.font = .systemFont(ofSize: 13.5)
+        textView.font = .role(.body)
         textView.textContainerInset = NSSize(width: 6, height: 8)
         textView.isContinuousSpellCheckingEnabled = true
         textView.isAutomaticQuoteSubstitutionEnabled = false   // prompts are often code
@@ -318,8 +318,10 @@ final class ChatComposerView: NSView, NSTextViewDelegate {
                                  accessibilityDescription: nil)
             name.imagePosition = .imageLeading
             name.toolTip = "Quick Look"
-            let remove = NSButton.symbol("xmark.circle.fill", label: "Remove \(a.displayName)", pointSize: 13, weight: .regular,
+            let remove = NSButton.symbol("xmark.circle.fill", label: "Remove \(a.displayName)",
+                                         pointSize: TypeRole.meta.symbolPointSize, weight: .regular,
                                          target: self, action: #selector(removeChip(_:)))
+
             remove.tag = i
             // Unlike the toolbar's, it can be tabbed to, like the chip's name.
             remove.refusesFirstResponder = false
@@ -374,7 +376,8 @@ final class ComposerTextView: NSTextView {
         let inset = textContainerInset
         let padding = textContainer?.lineFragmentPadding ?? 0
         (placeholder as NSString).draw(at: NSPoint(x: inset.width + padding, y: inset.height),
-                                       withAttributes: [.font: font ?? .systemFont(ofSize: 13.5),
+                                       withAttributes: [.font: font ?? .role(.body),
+
                                                         .foregroundColor: NSColor.placeholderTextColor])
     }
 

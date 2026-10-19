@@ -186,7 +186,7 @@ final class SidebarListController: NSViewController {
 
     private let searchField = SidebarSearchField()
     private let newSessionButton = SidebarIconButton(
-        symbolName: "plus", pointSize: 14, accessibilityDescription: "New Session")
+        symbolName: "plus", pointSize: TypeRole.body.symbolPointSize, accessibilityDescription: "New Session")
 
     /// Overlay shown in place of the (empty) list: the container's build
     /// status while one is coming up, else "No sessions yet"/"No matches".
@@ -206,15 +206,15 @@ final class SidebarListController: NSViewController {
     private let searchButton = HoverButton()
     private let settingsButton = SidebarIconButton(
         symbolName: "gearshape",
-        pointSize: 13,
+        pointSize: TypeRole.body.symbolPointSize,
         accessibilityDescription: "Folder settings")
     private let terminalButton = SidebarIconButton(
         symbolName: "terminal",
-        pointSize: 13,
+        pointSize: TypeRole.body.symbolPointSize,
         accessibilityDescription: "Open a terminal to the Mac host")
     private let consoleButton = SidebarIconButton(
         symbolName: "ladybug",
-        pointSize: 13,
+        pointSize: TypeRole.body.symbolPointSize,
         accessibilityDescription: "Open the Sandshell log in Console")
     /// A host (Mac) shell terminal window, kept open across re-clicks.
     private var hostTerminal: HostTerminalWindowController?
@@ -338,7 +338,7 @@ final class SidebarListController: NSViewController {
         brandBox.addSubview(appMark)
 
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
-        titleLabel.font = .systemFont(ofSize: 19, weight: .bold)
+        titleLabel.font = .role(.title)
         titleLabel.lineBreakMode = .byTruncatingTail
         titleLabel.setContentHuggingPriority(.required, for: .horizontal)
         updateHeaderIdentity()   // icon/color/title from the folder profile
@@ -348,7 +348,7 @@ final class SidebarListController: NSViewController {
         headerChevron.translatesAutoresizingMaskIntoConstraints = false
         headerChevron.image = NSImage(systemSymbolName: "chevron.down",
                                       accessibilityDescription: "Workspace")
-        headerChevron.symbolConfiguration = .init(pointSize: 11, weight: .semibold)
+        headerChevron.symbolConfiguration = .role(.meta, weight: .semibold)
         headerChevron.setContentHuggingPriority(.required, for: .horizontal)
 
         let header = SidebarHeaderView(views: [brandBox, titleLabel, headerChevron])
@@ -383,7 +383,7 @@ final class SidebarListController: NSViewController {
         searchButton.imagePosition = .imageLeading
         searchButton.imageHugsTitle = true        // keep icon + text together, centered
         searchButton.alignment = .center
-        searchButton.font = .systemFont(ofSize: 12, weight: .regular)
+        searchButton.font = .role(.meta)
         searchButton.target = self
         searchButton.action = #selector(searchClicked)
         searchButton.toolTip = "Search sessions and past conversations (⇧⌘F)"
@@ -415,7 +415,7 @@ final class SidebarListController: NSViewController {
         footerBorder.wantsLayer = true
 
         emptyStateLabel.alignment = .center
-        emptyStateLabel.font = .systemFont(ofSize: 12)
+        emptyStateLabel.font = .role(.body)
         emptyStateLabel.translatesAutoresizingMaskIntoConstraints = false
         emptyStateStack.orientation = .vertical
         emptyStateStack.alignment = .centerX
@@ -552,7 +552,7 @@ final class SidebarListController: NSViewController {
             string: "  Search",
             attributes: [
                 .foregroundColor: c.sidebarFg,
-                .font: NSFont.systemFont(ofSize: 12, weight: .regular),
+                .font: NSFont.role(.meta),
             ])
     }
 
@@ -1674,13 +1674,13 @@ final class SidebarSearchField: NSView {
         icon.translatesAutoresizingMaskIntoConstraints = false
         icon.image = NSImage(systemSymbolName: "magnifyingglass", accessibilityDescription: nil)
         icon.imageScaling = .scaleProportionallyUpOrDown
-        icon.symbolConfiguration = .init(pointSize: 12, weight: .regular)
+        icon.symbolConfiguration = .role(.meta)
 
         field.translatesAutoresizingMaskIntoConstraints = false
         field.isBordered = false
         field.drawsBackground = false
         field.focusRingType = .none
-        field.font = .systemFont(ofSize: 12.5)
+        field.font = .role(.body)
         field.lineBreakMode = .byTruncatingTail
         field.usesSingleLineMode = true
         field.cell?.usesSingleLineMode = true
@@ -1727,7 +1727,7 @@ final class SidebarSearchField: NSView {
         field.textColor = fg
         field.placeholderAttributedString = NSAttributedString(
             string: "Search sessions",
-            attributes: [.foregroundColor: muted, .font: NSFont.systemFont(ofSize: 12.5)])
+            attributes: [.foregroundColor: muted, .font: NSFont.role(.body)])
     }
 }
 
@@ -1834,9 +1834,9 @@ final class SessionCellView: NSTableCellView {
 
         nameLabel.translatesAutoresizingMaskIntoConstraints = false
         nameLabel.lineBreakMode = .byTruncatingTail
-        nameLabel.font = .systemFont(ofSize: 13.5, weight: .semibold)
+        nameLabel.font = .role(.bodyEmphasis)
         subLabel.translatesAutoresizingMaskIntoConstraints = false
-        subLabel.font = .systemFont(ofSize: 11)
+        subLabel.font = .role(.meta)
         subLabel.textColor = .secondaryLabelColor
         subLabel.lineBreakMode = .byTruncatingTail
 
@@ -1850,12 +1850,12 @@ final class SessionCellView: NSTableCellView {
         statusSlot.addSubview(workingView)
         statusSlot.addSubview(statusDot)
         timeLabel.translatesAutoresizingMaskIntoConstraints = false
-        timeLabel.font = .monospacedSystemFont(ofSize: 10, weight: .regular)
+        timeLabel.font = .role(.code)
         timeLabel.textColor = .secondaryLabelColor
 
         disclosure.isBordered = false
         disclosure.imagePosition = .imageLeading
-        disclosure.font = .systemFont(ofSize: 11, weight: .medium)
+        disclosure.font = .role(.code)
         disclosure.target = self
         disclosure.action = #selector(disclosureClicked)
         disclosure.isHidden = true
@@ -1942,7 +1942,7 @@ final class SessionCellView: NSTableCellView {
     /// weight and dimmed so they clearly read as not-running. Applied in place so
     /// clicking a session bolds it immediately (before its terminal launches).
     func setActive(_ active: Bool) {
-        nameLabel.font = .systemFont(ofSize: 13.5, weight: active ? .semibold : .regular)
+        nameLabel.font = .role(active ? .bodyEmphasis : .body)
         let contrast = NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
         nameLabel.textColor = active || contrast ? fg : fg.withAlphaComponent(0.55)
     }
@@ -2022,12 +2022,12 @@ final class SessionCellView: NSTableCellView {
         onDisclosure = toggle
         disclosure.isHidden = false
         disclosure.image = NSImage(systemSymbolName: expanded ? "chevron.down" : "chevron.right", accessibilityDescription: nil)?
-            .withSymbolConfiguration(.init(pointSize: 8, weight: .bold))
+            .withSymbolConfiguration(.role(.meta, weight: .semibold))
         // Just the count: the status beside it keeps its room.
         let words = "\(count) subagent\(count == 1 ? "" : "s")"
         disclosure.contentTintColor = subLabel.textColor
         disclosure.attributedTitle = NSAttributedString(string: "\(count)", attributes: [
-            .font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .semibold), .foregroundColor: subLabel.textColor ?? .secondaryLabelColor])
+            .font: NSFont.role(.code), .foregroundColor: subLabel.textColor ?? .secondaryLabelColor])
         disclosure.toolTip = "\(expanded ? "Hide" : "Show") \(words)"
         disclosure.setAccessibilityLabel(disclosure.toolTip)
     }
@@ -2306,17 +2306,18 @@ final class SubagentCellView: NSTableCellView {
         lineColor = theme.sidebarMuted.withAlphaComponent(0.45)
         super.init(frame: .zero)
         let titleLabel = NSTextField(labelWithString: title)
-        titleLabel.font = .systemFont(ofSize: 12.5, weight: running ? .medium : .regular)
+        titleLabel.font = .role(.body)
         titleLabel.textColor = theme.sidebarFg.withAlphaComponent(running ? 1 : 0.8)
         titleLabel.lineBreakMode = .byTruncatingTail
         let sub = NSTextField(labelWithString: subtitle)
-        sub.font = .systemFont(ofSize: 10.5)
+        sub.font = .role(.meta)
         sub.textColor = theme.sidebarMuted
         sub.lineBreakMode = .byTruncatingTail
         let mark: NSView
         if let symbol {
             let image = NSImageView(image: NSImage(systemSymbolName: symbol, accessibilityDescription: nil) ?? NSImage())
-            image.symbolConfiguration = .init(pointSize: 10, weight: .semibold)
+            image.symbolConfiguration = .role(.meta, weight: .semibold)
+
             image.contentTintColor = running ? .sessionWorking : failed ? .systemRed : theme.sidebarMuted
             mark = image
         } else {

@@ -102,9 +102,9 @@ struct InspectorCard<Content: View>: View {
                     withAnimation(.snappy(duration: 0.18)) { layout.toggle(kind) }
                 } label: {
                     HStack(spacing: 5) {
-                        Text(kind.title).font(.headline)
+                        Text(kind.title).font(.role(.title))
                         Image(systemName: "chevron.down")
-                            .font(.caption.weight(.semibold))
+                            .font(.symbol(.meta, weight: .semibold))
                             .foregroundStyle(.secondary)
                             .rotationEffect(.degrees(isCollapsed ? -90 : 0))
                     }
@@ -114,7 +114,7 @@ struct InspectorCard<Content: View>: View {
                 .accessibilityLabel(isCollapsed ? "Show \(kind.title)" : "Hide \(kind.title)")
                 Spacer()
                 Image(systemName: "line.3.horizontal")
-                    .font(.caption)
+                    .font(.symbol(.meta))
                     .foregroundStyle(.tertiary)
                     .padding(4)
                     .contentShape(.rect)

@@ -149,18 +149,19 @@ final class KitStartupBannerView: NSView {
         setAccessibilityIdentifier("kit-startup-banner")
 
         icon.translatesAutoresizingMaskIntoConstraints = false
-        icon.symbolConfiguration = .init(pointSize: 15, weight: .semibold)
+        icon.symbolConfiguration = .role(.body, weight: .semibold)
 
-        title.font = .systemFont(ofSize: 12.5, weight: .semibold)
+        title.font = .role(.bodyEmphasis)
         title.maximumNumberOfLines = 2
         title.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        detail.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
+        detail.font = .role(.code)
         detail.textColor = .secondaryLabelColor
         detail.maximumNumberOfLines = 2
         detail.lineBreakMode = .byTruncatingTail
         detail.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         detail.isSelectable = true
-        hint.font = .systemFont(ofSize: 11)
+        hint.font = .role(.meta)
+
         hint.textColor = .secondaryLabelColor
         hint.maximumNumberOfLines = 2
         hint.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)

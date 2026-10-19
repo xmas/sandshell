@@ -91,7 +91,7 @@ struct ChatRendererTests {
             #expect(CRFixture.font(in: rendered, at: text.location) == ChatRenderer.body)
             #expect(CRFixture.color(in: rendered, at: text.location) == NSColor.labelColor)
             let clip = try #require(CRFixture.range(of: "📎", in: rendered))
-            #expect(CRFixture.font(in: rendered, at: clip.location) == ChatRenderer.small)
+            #expect(CRFixture.font(in: rendered, at: clip.location) == ChatRenderer.mono)
             #expect(CRFixture.color(in: rendered, at: clip.location) == NSColor.secondaryLabelColor)
         }
 
@@ -214,7 +214,7 @@ struct ChatRendererTests {
 
         @Test func thoughtIsDimAndItalic() throws {
             let rendered = ChatRenderer.render(.thought(id: "t1", text: "pondering"), expanded: false)
-            CRFixture.verifyFace(CRFixture.font(in: rendered, at: 1), matches: .systemFont(ofSize: 11, weight: .semibold))
+            CRFixture.verifyFace(CRFixture.font(in: rendered, at: 1), matches: .role(.meta, weight: .semibold))
             #expect(CRFixture.color(in: rendered, at: 1) == NSColor.tertiaryLabelColor)
             let text = try #require(CRFixture.range(of: "pondering", in: rendered))
             #expect(CRFixture.font(in: rendered, at: text.location)?.fontDescriptor.symbolicTraits.contains(.italic) == true)
@@ -289,7 +289,7 @@ struct ChatRendererTests {
             #expect(CRFixture.color(in: rendered, at: input.location) == NSColor.secondaryLabelColor)
             let output = try #require(CRFixture.range(of: "ok", in: rendered))
             #expect(CRFixture.color(in: rendered, at: output.location) == NSColor.labelColor)
-            #expect(CRFixture.font(in: rendered, at: output.location) == ChatRenderer.small)
+            #expect(CRFixture.font(in: rendered, at: output.location) == ChatRenderer.mono)
         }
 
         @Test func inputThatContinuesTheTitleShowsOnlyTheRest() {
@@ -664,7 +664,7 @@ struct ChatRendererTests {
             #expect(CRFixture.link(in: rendered, at: undo.location) == expected)
             #expect(CRFixture.color(in: rendered, at: undo.location) == NSColor.controlAccentColor)
             CRFixture.verifyFace(CRFixture.font(in: rendered, at: undo.location),
-                                 matches: .systemFont(ofSize: 11.5, weight: .semibold))
+                                 matches: .role(.meta, weight: .semibold))
             #expect(CRFixture.link(in: rendered, at: 1) == nil, "Only Undo is a link")
         }
 
@@ -705,7 +705,7 @@ struct ChatRendererTests {
             let rendered = ChatRenderer.render(.notice(id: UUID(), text: "Connection lost", isError: isError), expanded: false)
             #expect(rendered.string == (isError ? "\n⚠︎  Connection lost\n\n" : "\nConnection lost\n\n"),
                     "Errors are marked by more than color")
-            CRFixture.verifyFace(CRFixture.font(in: rendered, at: 1), matches: .systemFont(ofSize: 11.5))
+            CRFixture.verifyFace(CRFixture.font(in: rendered, at: 1), matches: .role(.meta))
             #expect(CRFixture.blockRuns(rendered).isEmpty)
         }
 
@@ -768,42 +768,42 @@ struct ChatRendererTests {
 
         @Test func chatParagraphsUseTheSystemFace() throws {
             let rendered = ChatRenderer.markdown("Hello")
-            CRFixture.verifyFace(CRFixture.font(in: rendered, at: 0), matches: .systemFont(ofSize: 13.5, weight: .regular))
+            CRFixture.verifyFace(CRFixture.font(in: rendered, at: 0), matches: .role(.body))
             let style = try #require(CRFixture.paragraphStyle(in: rendered, at: 0))
             #expect(style.paragraphSpacing == 4)
             #expect(style.lineSpacing == 1.5)
             #expect(CRFixture.blockRuns(rendered).isEmpty, "Prose sits on no block")
         }
 
-        @Test func documentParagraphsAreLargerAndLooser() throws {
+        @Test func documentParagraphsAreSerifAndLooser() throws {
             let rendered = ChatRenderer.markdown("Hello", prose: .document)
-            #expect(CRFixture.font(in: rendered, at: 0)?.pointSize == 15)
+            #expect(CRFixture.font(in: rendered, at: 0) == ChatRenderer.Prose.document.font())
             let style = try #require(CRFixture.paragraphStyle(in: rendered, at: 0))
             #expect(style.paragraphSpacing == 7)
             #expect(style.lineSpacing == 3)
         }
 
         @Test(arguments: [
-            ("# Title", 18), ("## Title", 16.5), ("### Title", 15),
-            ("#### Title", 13.5), ("##### Title", 13.5), ("###### Title", 13.5),
-        ] as [(String, CGFloat)])
-        func headingsAreSemiboldAndShrinkByLevel(line: String, size: CGFloat) {
+            ("# Title", .title), ("## Title", .title), ("### Title", .bodyEmphasis),
+            ("#### Title", .bodyEmphasis), ("##### Title", .bodyEmphasis), ("###### Title", .bodyEmphasis),
+        ] as [(String, TypeRole)])
+        func headingsAreTitlesThenEmphasizedBody(line: String, role: TypeRole) {
             let rendered = ChatRenderer.markdown(line)
             #expect(rendered.string == "Title\n")
-            CRFixture.verifyFace(CRFixture.font(in: rendered, at: 0), matches: .systemFont(ofSize: size, weight: .semibold))
+            CRFixture.verifyFace(CRFixture.font(in: rendered, at: 0), matches: .role(role))
             #expect(CRFixture.paragraphStyle(in: rendered, at: 0)?.paragraphSpacingBefore == 8)
         }
 
-        @Test func documentHeadingsGrowFromTheDocumentSize() {
+        @Test func documentHeadingsAreSerifTitles() {
             let rendered = ChatRenderer.markdown("# Title", prose: .document)
-            #expect(CRFixture.font(in: rendered, at: 0)?.pointSize == 19.5)
+            #expect(CRFixture.font(in: rendered, at: 0) == ChatRenderer.Prose.document.font(.title))
         }
 
         @Test(.tags(.edgeCase), arguments: ["#Title", "####### Title"])
         func notQuiteHeadingsArePlainText(line: String) {
             let rendered = ChatRenderer.markdown(line)
             #expect(rendered.string == line + "\n")
-            #expect(CRFixture.font(in: rendered, at: 0)?.pointSize == 13.5)
+            #expect(CRFixture.font(in: rendered, at: 0) == ChatRenderer.body)
         }
 
         @Test(arguments: ["- item", "* item", "+ item"])
@@ -907,10 +907,10 @@ struct ChatRendererTests {
             #expect(traits?.contains(.italic) == true)
         }
 
-        @Test func codeSpansAreMonospacedOnePointSmallerOnATint() {
+        @Test func codeSpansAreInTheCodeRoleOnATint() {
             let text = ChatRenderer.inline("run `ls` now")
             #expect(text.string == "run ls now")
-            CRFixture.verifyFace(CRFixture.font(in: text, at: 4), matches: .monospacedSystemFont(ofSize: 12.5, weight: .regular))
+            CRFixture.verifyFace(CRFixture.font(in: text, at: 4), matches: .role(.code))
             #expect(CRFixture.value(.backgroundColor, in: text, at: 4) != nil, "Code sits on a tint")
             #expect(CRFixture.value(.backgroundColor, in: text, at: 0) == nil, "Prose doesn't")
         }
@@ -929,9 +929,9 @@ struct ChatRendererTests {
             let rendered = ChatRenderer.markdown("## **Bold** title")
             #expect(rendered.string == "Bold title\n")
             let bold = try #require(CRFixture.font(in: rendered, at: 0))
-            #expect(bold.pointSize == 16.5)
+            #expect(bold.pointSize == TypeRole.title.pointSize)
             #expect(bold.fontDescriptor.symbolicTraits.contains(.bold))
-            CRFixture.verifyFace(CRFixture.font(in: rendered, at: 5), matches: .systemFont(ofSize: 16.5, weight: .semibold))
+            CRFixture.verifyFace(CRFixture.font(in: rendered, at: 5), matches: .role(.title))
         }
     }
 
@@ -1038,9 +1038,9 @@ struct ChatRendererTests {
             let runs = CRFixture.blockRuns(rendered)
             try #require(runs.count == 3)
             CRFixture.verifyFace(CRFixture.font(in: rendered, at: runs[0].range.location),
-                                 matches: .systemFont(ofSize: 13.5, weight: .semibold))
+                                 matches: .role(.bodyEmphasis))
             CRFixture.verifyFace(CRFixture.font(in: rendered, at: runs[2].range.location),
-                                 matches: .systemFont(ofSize: 13.5, weight: .regular))
+                                 matches: .role(.body))
         }
 
         @Test func separatorColonsAlignTheColumns() throws {
@@ -1130,7 +1130,7 @@ struct ChatRendererTests {
             #expect(rendered.string.contains("Name") == false, "The first column heads each record instead of labelling it")
             let title = try #require(runs.first)
             CRFixture.verifyFace(CRFixture.font(in: rendered, at: title.range.location),
-                                 matches: .systemFont(ofSize: 13.5, weight: .semibold))
+                                 matches: .role(.bodyEmphasis))
             let label = try #require(CRFixture.range(of: "Notes", in: rendered))
             #expect(CRFixture.color(in: rendered, at: label.location) == NSColor.secondaryLabelColor)
         }
@@ -1189,34 +1189,30 @@ struct ChatRendererTests {
     @MainActor
     struct Typography {
         @Test func transcriptFacesAndMetrics() {
-            #expect(ChatRenderer.body.pointSize == 13.5)
-            #expect(ChatRenderer.mono.pointSize == 12)
+            #expect(ChatRenderer.body == .role(.body))
+            #expect(ChatRenderer.mono == .role(.code))
             #expect(ChatRenderer.mono.isFixedPitch)
-            #expect(ChatRenderer.small.pointSize == 11)
-            #expect(ChatRenderer.small.isFixedPitch)
             #expect(ChatRenderer.pad == 14)
             #expect(ChatRenderer.maxImageWidth == 520)
         }
 
         @Test func prosePresetsMatchTheTranscriptAndTheDocumentPreview() {
-            #expect(ChatRenderer.Prose.chat.size == 13.5)
             #expect(ChatRenderer.Prose.chat.serif == false)
-            #expect(ChatRenderer.Prose.document.size == 15)
             #expect(ChatRenderer.Prose.document.serif)
         }
 
-        @Test func sansProseIsTheSystemFontAtTheRequestedSizeAndWeight() {
-            CRFixture.verifyFace(ChatRenderer.Prose.chat.font(), matches: .systemFont(ofSize: 13.5, weight: .regular))
-            CRFixture.verifyFace(ChatRenderer.Prose.chat.font(20, weight: .bold), matches: .systemFont(ofSize: 20, weight: .bold))
-            CRFixture.verifyFace(ChatRenderer.Prose(size: 10, serif: false).font(), matches: .systemFont(ofSize: 10, weight: .regular))
+        @Test(arguments: TypeRole.allCases)
+        func sansProseIsTheRoleFont(role: TypeRole) {
+            CRFixture.verifyFace(ChatRenderer.Prose.chat.font(role), matches: .role(role))
         }
 
-        @Test func serifProseSwitchesToTheSerifDesign() {
-            let font = ChatRenderer.Prose.document.font()
-            #expect(font.pointSize == 15)
-            #expect(font.fontName != NSFont.systemFont(ofSize: 15, weight: .regular).fontName, "New York, not San Francisco")
-            #expect(ChatRenderer.Prose.document.font(22, weight: .semibold).pointSize == 22)
+        @Test(arguments: [TypeRole.body, .bodyEmphasis, .title, .meta])
+        func serifProseIsTheRoleInTheSerifDesign(role: TypeRole) {
+            let font = ChatRenderer.Prose.document.font(role)
+            #expect(font.pointSize == role.pointSize)
+            #expect(font.fontName != NSFont.role(role).fontName, "New York, not San Francisco")
         }
+
     }
 
     // MARK: - Syntax highlighting

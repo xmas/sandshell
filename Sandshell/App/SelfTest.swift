@@ -2249,7 +2249,7 @@ enum SelfTest {
         for (name, look) in [("light", NSAppearance.Name.aqua), ("dark", .darkAqua)] {
             for splash in [nil, CGPoint(x: 200, y: 84)] as [CGPoint?] {
                 let host = NSHostingView(rootView: SeaBackdrop(initialSplash: splash) {
-                        Text("What should Claude work on?").font(.title3.weight(.medium)).foregroundStyle(.secondary)
+                        Text("What should Claude work on?").font(.role(.title)).foregroundStyle(.secondary)
                     }
                     .background(Color(nsColor: .textBackgroundColor)))
                 host.appearance = NSAppearance(named: look)
@@ -2269,7 +2269,7 @@ enum SelfTest {
         // A narrow pane: the hint wraps inside it instead of being cut off.
         let narrow = NSHostingView(rootView: SeaBackdrop {
                 Text("It works in msdgc, inside its sandbox. Type / for commands, @ to mention a file, or drop files here.")
-                    .font(.callout).multilineTextAlignment(.center).frame(maxWidth: 360)
+                    .font(.role(.body)).multilineTextAlignment(.center).frame(maxWidth: 360)
                     .fixedSize(horizontal: false, vertical: true).padding(.horizontal, 24)
             }
             .background(Color(nsColor: .textBackgroundColor)))

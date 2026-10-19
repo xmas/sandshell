@@ -22,8 +22,8 @@ struct ThisFolderSection: View {
             HStack(spacing: 10) {
                 BadgeMark(color: .hex(editing.colorHex), content: .symbol(editing.icon), side: 24)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(editing.name).font(.headline)
-                    Text(controller.rootURL.path).font(.caption.monospaced())
+                    Text(editing.name).font(.role(.title))
+                    Text(controller.rootURL.path).font(.role(.code))
                         .foregroundStyle(.tertiary).lineLimit(1).truncationMode(.middle)
                 }
             }
@@ -35,7 +35,7 @@ struct ThisFolderSection: View {
         } footer: {
             Text("Used only when Sandshell has no windows to restore at launch. "
                  + "Other folders live in the Open Workspace browser (⌘O).")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.role(.meta)).foregroundStyle(.secondary)
         }
     }
 

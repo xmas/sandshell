@@ -17,15 +17,15 @@ struct ClaudeStatsDetailView: View {
                 rows(for: status)
             } else {
                 Text("Waiting for Claude Code's first status report…")
-                    .font(.callout)
+                    .font(.role(.body))
                     .foregroundStyle(.secondary)
             }
             Divider()
-            Text("Show in title strip").font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
+            Text("Show in title strip").font(.role(.title)).foregroundStyle(.secondary)
             ForEach(ClaudeStatsSegment.allCases) { seg in
                 Toggle(seg.title, isOn: $visibility[visible: seg])
                     .toggleStyle(.checkbox)
-                    .font(.callout)
+                    .font(.role(.body))
             }
             Divider()
             ClaudeUsageSummaryView()
@@ -144,15 +144,15 @@ struct ClaudeStatsDetailView: View {
 
     private func row(_ label: String, _ value: String, detail: String? = nil) -> some View {
         GridRow {
-            Text(label).font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary)
+            Text(label).font(.role(.meta)).foregroundStyle(.secondary)
                 .gridColumnAlignment(.trailing)
             // Wrap, never truncate: multi-line values grow the row.
             VStack(alignment: .leading, spacing: 1) {
-                Text(value).font(.system(size: 12, design: .monospaced))
+                Text(value).font(.role(.code))
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
                 if let detail {
-                    Text(detail).font(.footnote).foregroundStyle(.secondary)
+                    Text(detail).font(.role(.meta)).foregroundStyle(.secondary)
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -172,12 +172,12 @@ private struct ClaudeUsageSummaryView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Text("Claude usage on this Mac").font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
+                Text("Claude usage on this Mac").font(.role(.title)).foregroundStyle(.secondary)
                 Spacer()
                 if usage.isScanning {
                     ProgressView().controlSize(.mini)
                 } else if let t = usage.lastUpdated {
-                    Text("updated \(t, style: .relative) ago").font(.system(size: 10)).foregroundStyle(.tertiary)
+                    Text("updated \(t, style: .relative) ago").font(.role(.meta)).foregroundStyle(.tertiary)
                     Button("Rescan Transcripts", systemImage: "arrow.clockwise") {
                         usage.refresh(force: true)
                     }
@@ -189,25 +189,25 @@ private struct ClaudeUsageSummaryView: View {
                 GridRow {
                     Text("").gridColumnAlignment(.leading)
                     ForEach(["Cost", "In", "Out", "Cache"], id: \.self) {
-                        Text($0).font(.system(size: 10, weight: .medium)).foregroundStyle(.secondary)
+                        Text($0).font(.role(.meta)).foregroundStyle(.secondary)
                     }
                 }
                 ForEach(ClaudeUsagePeriod.allCases) { period in
                     let t = usage.totals[period] ?? ClaudeUsageTotals()
                     GridRow {
-                        Text(period.title).font(.system(size: 11)).foregroundStyle(.secondary)
+                        Text(period.title).font(.role(.meta)).foregroundStyle(.secondary)
                             .gridColumnAlignment(.leading)
-                        Text(ClaudeStatsFormat.money(t.costUSD)).font(.system(size: 12, design: .monospaced))
-                        Text(ClaudeStatsFormat.compact(t.input)).font(.system(size: 12, design: .monospaced))
-                        Text(ClaudeStatsFormat.compact(t.output)).font(.system(size: 12, design: .monospaced))
-                        Text(ClaudeStatsFormat.compact(t.cacheRead + t.cacheWrite)).font(.system(size: 12, design: .monospaced))
+                        Text(ClaudeStatsFormat.money(t.costUSD)).font(.role(.code))
+                        Text(ClaudeStatsFormat.compact(t.input)).font(.role(.code))
+                        Text(ClaudeStatsFormat.compact(t.output)).font(.role(.code))
+                        Text(ClaudeStatsFormat.compact(t.cacheRead + t.cacheWrite)).font(.role(.code))
                     }
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             ClaudeModelBreakdownView(byModel: usage.byModel)
             Text(footnote)
-                .font(.footnote).foregroundStyle(.tertiary)
+                .font(.role(.meta)).foregroundStyle(.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
@@ -231,7 +231,7 @@ private struct ClaudeModelBreakdownView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Text("By model").font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
+                Text("By model").font(.role(.title)).foregroundStyle(.secondary)
                 Spacer()
                 Picker("Period", selection: $period) {
                     Text("Week").tag(ClaudeUsagePeriod.week)
@@ -248,18 +248,19 @@ private struct ClaudeModelBreakdownView: View {
             let total = rows.reduce(0.0) { $0 + $1.totals.costUSD }
             if rows.isEmpty {
                 Text("No Claude usage in this period.")
-                    .font(.subheadline).foregroundStyle(.secondary)
+                    .font(.role(.meta)).foregroundStyle(.secondary)
             } else {
                 Grid(alignment: .trailingFirstTextBaseline, horizontalSpacing: 12, verticalSpacing: 3) {
                     GridRow {
                         Text("Model").gridColumnAlignment(.leading)
                         Text("Cost"); Text("Share"); Text("Msgs"); Text("Out"); Text("Cache")
                     }
-                    .font(.system(size: 10, weight: .medium)).foregroundStyle(.secondary)
+                    .font(.role(.meta)).foregroundStyle(.secondary)
                     ForEach(rows, id: \.name) { r in
                         let t = r.totals
                         GridRow {
-                            Text(r.name).font(.system(size: 12, weight: .medium))
+                            Text(r.name).font(.role(.body))
+
                                 .gridColumnAlignment(.leading)
                                 .fixedSize(horizontal: false, vertical: true)
                             Text(t.unpriced == t.messages && t.messages > 0 ? "—" : ClaudeStatsFormat.money(t.costUSD))
@@ -269,7 +270,7 @@ private struct ClaudeModelBreakdownView: View {
                             Text(ClaudeStatsFormat.compact(t.output))
                             Text(ClaudeStatsFormat.compact(t.cacheRead + t.cacheWrite))
                         }
-                        .font(.system(size: 12, design: .monospaced))
+                        .font(.role(.code))
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)

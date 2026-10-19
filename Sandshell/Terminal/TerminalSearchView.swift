@@ -31,11 +31,12 @@ struct TerminalSearchView: View {
                 .foregroundStyle(.tertiary)
             TextField("Search session history…", text: $model.query)
                 .textFieldStyle(.plain)
-                .font(.system(size: 14))
+                .font(.role(.body))
                 .focused($searchFocused)
             if !model.query.isEmpty {
                 statusText
-                    .font(.caption).foregroundStyle(.secondary).monospacedDigit()
+                    .font(.role(.code)).foregroundStyle(.secondary)
+
                 Button("Clear Search", systemImage: "xmark.circle.fill", action: clearSearch)
                     .labelStyle(.iconOnly)
                     .buttonStyle(.plain)
@@ -95,12 +96,11 @@ private struct MatchRow: View {
     var body: some View {
         HStack(spacing: 6) {
             Text("\(match.lineNumber)")
-                .font(.caption.monospaced())
+                .font(.role(.code))
                 .foregroundStyle(.secondary)
                 .frame(width: 40, alignment: .trailing)
-                .monospacedDigit()
             Text(highlighted)
-                .font(.subheadline.monospaced())
+                .font(.role(.code))
                 .lineLimit(1)
         }
         .padding(.vertical, 1)
@@ -126,13 +126,12 @@ private struct ContextPane: View {
                 ForEach(lines) { row in
                     HStack(alignment: .top, spacing: 0) {
                         Text("\(row.id)")
-                            .font(.caption.monospaced())
+                            .font(.role(.code))
                             .foregroundStyle(.secondary)
                             .frame(width: 44, alignment: .trailing)
                             .padding(.trailing, 10)
-                            .monospacedDigit()
                         Text(row.isMatch ? highlighted(row.text) : AttributedString(row.text))
-                            .font(.callout.monospaced())
+                            .font(.role(.code))
                             .textSelection(.enabled)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }

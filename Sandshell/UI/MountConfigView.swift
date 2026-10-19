@@ -24,9 +24,9 @@ struct MountConfigView: View {
         VStack(alignment: .leading, spacing: 0) {
             if !embedded {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Workspace Mounts").font(.headline)
+                    Text("Workspace Mounts").font(.role(.title))
                     Text("Choose which folders this workspace's sandboxes can access.")
-                        .font(.subheadline).foregroundStyle(.secondary)
+                        .font(.role(.meta)).foregroundStyle(.secondary)
                 }
                 .padding([.horizontal, .top])
                 .padding(.bottom, 10)
@@ -59,7 +59,7 @@ private struct MountList: View {
                 HStack {
                     Label(model.shortPath(model.root), systemImage: "folder.fill")
                     Spacer()
-                    Text("Root").foregroundStyle(.secondary).font(.caption)
+                    Text("Root").foregroundStyle(.secondary).font(.role(.meta))
                 }
             }
 
@@ -90,7 +90,7 @@ private struct MountList: View {
                             model.toggleReadonly(spec)
                         } label: {
                             Text(spec.readonly ? "ro" : "rw")
-                                .font(.caption.monospaced().weight(.semibold))
+                                .font(.role(.code, weight: .semibold))
                                 .foregroundStyle(spec.readonly ? Color.secondary : Color.orange)
                                 .frame(minWidth: 22)
                                 .padding(.horizontal, 5).padding(.vertical, 2)
@@ -122,7 +122,7 @@ private struct MountList: View {
                             .foregroundStyle(.secondary)
                     }
                     Text("Always mounted read-write — agents need these for settings, history, and auth.")
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(.role(.meta)).foregroundStyle(.secondary)
                 }
             }
         }
@@ -148,13 +148,13 @@ private struct MountConfigFooter: View {
             Image(systemName: model.atLimit ? "exclamationmark.triangle.fill" : "externaldrive")
                 .foregroundStyle(model.atLimit ? .orange : .secondary)
             Text("\(model.mountCount) / \(MountPolicy.mountLimit) mounts")
-                .font(.callout)
+                .font(.role(.body))
                 .foregroundStyle(model.atLimit ? .orange : .secondary)
             if model.atLimit {
-                Text("limit reached").font(.caption).foregroundStyle(.orange)
+                Text("limit reached").font(.role(.meta)).foregroundStyle(.orange)
             }
             if requireChanges && model.isDirty {
-                Text("• Unsaved changes").font(.caption).foregroundStyle(.orange)
+                Text("• Unsaved changes").font(.role(.meta)).foregroundStyle(.orange)
             }
             Spacer()
             Button("About \(confirmTitle)", systemImage: "info.circle") {
@@ -165,7 +165,7 @@ private struct MountConfigFooter: View {
             .help("What does “\(confirmTitle)” do?")
             .popover(isPresented: $showInfo, arrowEdge: .bottom) {
                 Text(confirmInfo)
-                    .font(.callout)
+                    .font(.role(.body))
                     .frame(width: 280, alignment: .leading)
                     .padding(12)
             }
@@ -199,7 +199,7 @@ private struct MountSection<Content: View>: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(title).font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
+            Text(title).font(.role(.meta, weight: .semibold)).foregroundStyle(.secondary)
             content
         }
     }

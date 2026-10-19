@@ -13,26 +13,26 @@ struct MCPServerRow: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 8) {
                 Circle().fill(MCPStatusView.color(server.status)).frame(width: 8, height: 8)
-                Text(server.name).font(.body.weight(.semibold))
-                if let v = server.version { Text(v).font(.caption).foregroundStyle(.tertiary) }
+                Text(server.name).font(.role(.bodyEmphasis))
+                if let v = server.version { Text(v).font(.role(.meta)).foregroundStyle(.tertiary) }
                 Spacer()
-                Text(MCPStatusView.label(server.status)).font(.caption).foregroundStyle(MCPStatusView.color(server.status))
+                Text(MCPStatusView.label(server.status)).font(.role(.meta)).foregroundStyle(MCPStatusView.color(server.status))
             }
             if let detail = server.detail {
-                Text(detail).font(.subheadline.monospaced()).foregroundStyle(.secondary)
+                Text(detail).font(.role(.code)).foregroundStyle(.secondary)
                     .lineLimit(2).truncationMode(.middle).textSelection(.enabled)
             }
             if let err = server.error, server.status != "connected" {
-                Text(err).font(.caption).foregroundStyle(.red).textSelection(.enabled)
+                Text(err).font(.role(.meta)).foregroundStyle(.red).textSelection(.enabled)
             }
             HStack(spacing: 10) {
-                if let where_ = server.source ?? server.scope { Text("from \(where_)").font(.caption).foregroundStyle(.tertiary) }
+                if let where_ = server.source ?? server.scope { Text("from \(where_)").font(.role(.meta)).foregroundStyle(.tertiary) }
                 if !server.tools.isEmpty {
                     Button(isExpanded ? "Hide ^[\(server.tools.count) tool](inflect: true)"
                                       : "^[\(server.tools.count) tool](inflect: true)") {
                         isExpanded.toggle()
                     }
-                    .buttonStyle(.link).font(.caption)
+                    .buttonStyle(.link).font(.role(.meta))
                 }
                 Spacer()
                 if isBusy { ProgressView().controlSize(.mini) }
@@ -44,7 +44,7 @@ struct MCPServerRow: View {
                     .controlSize(.small)
             }
             if isExpanded {
-                Text(server.tools.joined(separator: "  ·  ")).font(.subheadline.monospaced())
+                Text(server.tools.joined(separator: "  ·  ")).font(.role(.code))
                     .foregroundStyle(.secondary).textSelection(.enabled)
             }
         }

@@ -257,7 +257,7 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
         tabScroll.drawsBackground = false
         tabBar.translatesAutoresizingMaskIntoConstraints = false
 
-        pathLabel.font = .systemFont(ofSize: 12)
+        pathLabel.font = .role(.code)
         pathLabel.textColor = .secondaryLabelColor
         pathLabel.lineBreakMode = .byTruncatingHead
         pathLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
@@ -269,7 +269,7 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
         header.orientation = .horizontal
         header.edgeInsets = NSEdgeInsets(top: 0, left: 12, bottom: 0, right: 10)
 
-        bannerLabel.font = .systemFont(ofSize: 12)
+        bannerLabel.font = .role(.meta)
         reloadButton.target = self
         reloadButton.action = #selector(reloadFromDisk)
         let keep = NSButton(title: "Keep Mine", target: self, action: #selector(dismissBanner))
@@ -283,7 +283,7 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
         setUpEditor()
         setUpPreview()
         emptyLabel.textColor = .tertiaryLabelColor
-        emptyLabel.font = .systemFont(ofSize: 13)
+        emptyLabel.font = .role(.body)
         // A read error is a sentence with the reason in its middle: it wraps,
         // centered, rather than truncate in a narrow pane.
         emptyLabel.alignment = .center
@@ -770,7 +770,7 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
         let out = NSMutableAttributedString()
         if unstaged.isEmpty && staged.isEmpty {
             out.append(NSAttributedString(string: "No changes against HEAD.", attributes: [
-                .font: NSFont.systemFont(ofSize: 13), .foregroundColor: NSColor.secondaryLabelColor]))
+                .font: NSFont.role(.body), .foregroundColor: NSColor.secondaryLabelColor]))
             return out
         }
         if !editable {
@@ -812,7 +812,7 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
         }
         if out.length == 0 {
             out.append(NSAttributedString(string: "No changes against HEAD.", attributes: [
-                .font: NSFont.systemFont(ofSize: 13), .foregroundColor: NSColor.secondaryLabelColor]))
+                .font: NSFont.role(.body), .foregroundColor: NSColor.secondaryLabelColor]))
         }
         return out
     }
@@ -848,7 +848,7 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
         for (title, path) in actions {
             out.append(NSAttributedString(string: "   ", attributes: [.font: diffFont]))
             out.append(NSAttributedString(string: title, attributes: [
-                .font: NSFont.systemFont(ofSize: 11.5, weight: .semibold),
+                .font: NSFont.role(.meta, weight: .semibold),
                 .foregroundColor: NSColor.controlAccentColor,
                 .link: URL(string: "\(hunkScheme)://\(path)")!,
                 .toolTip: title.hasPrefix("Revert") ? "Discard this hunk's changes from the file" : "\(title) this hunk",
@@ -882,7 +882,7 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
         p.paragraphSpacingBefore = 6
         p.paragraphSpacing = 4
         let out = NSMutableAttributedString(string: text, attributes: [
-            .font: NSFont.systemFont(ofSize: 12, weight: .semibold), .foregroundColor: NSColor.secondaryLabelColor])
+            .font: NSFont.role(.bodyEmphasis), .foregroundColor: NSColor.secondaryLabelColor])
         if !actions.isEmpty { out.append(actionLinks(actions)) }
         out.append(NSAttributedString(string: "\n"))
         out.addAttribute(.paragraphStyle, value: p, range: NSRange(location: 0, length: out.length))
@@ -1209,11 +1209,11 @@ final class EditorTab: NSView {
         let image = NSImageView(image: icon)
         image.setAccessibilityElement(false)   // the tab's label names the file
         let label = NSTextField(labelWithString: title)
-        label.font = .systemFont(ofSize: 12, weight: selected ? .medium : .regular)
+        label.font = .role(selected ? .bodyEmphasis : .body)
         label.textColor = change?.color ?? (selected ? .labelColor : .secondaryLabelColor)
         let close = NSButton(image: NSImage(systemSymbolName: dirty ? "circle.fill" : "xmark",
                                             accessibilityDescription: dirty ? "Unsaved" : "Close")!
-                                .withSymbolConfiguration(.init(pointSize: dirty ? 7 : 9, weight: .semibold))!,
+                                .withSymbolConfiguration(dirty ? .init(pointSize: 7, weight: .semibold) : .role(.meta))!,
                              target: nil, action: nil)
         close.isBordered = false
         close.contentTintColor = .secondaryLabelColor
@@ -1351,7 +1351,7 @@ final class LineNumberRuler: NSRulerView {
         guard let tv = textView, let tlm = tv.textLayoutManager, let tcm = tlm.textContentManager else { return }
         NSColor.textBackgroundColor.withAlphaComponent(0.0).setFill()
         let attrs: [NSAttributedString.Key: Any] = [
-            .font: NSFont.monospacedDigitSystemFont(ofSize: 10.5, weight: .regular),
+            .font: NSFont.role(.code),
             .foregroundColor: NSColor.tertiaryLabelColor]
         let visible = tv.visibleRect
         let origin = convert(NSPoint.zero, from: tv)
@@ -1403,14 +1403,15 @@ final class AskField: NSViewController, NSTextFieldDelegate {
 
     override func loadView() {
         field.placeholderString = placeholder
-        field.font = .systemFont(ofSize: 13)
+        field.font = .role(.body)
         field.bezelStyle = .roundedBezel
         field.delegate = self
         field.target = self
         field.action = #selector(enter)
         field.setAccessibilityIdentifier("files-ask-field")
         let hint = NSTextField(labelWithString: "↩ send to the session · esc to cancel")
-        hint.font = .systemFont(ofSize: 10.5)
+        hint.font = .role(.meta)
+
         hint.textColor = .tertiaryLabelColor
         let stack = NSStackView(views: [field, hint])
         stack.orientation = .vertical

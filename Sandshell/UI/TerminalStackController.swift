@@ -791,7 +791,7 @@ final class TerminalStackController: NSViewController {
         frameView.layer?.cornerRadius = 12
         frameView.layer?.borderWidth = 1
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
-        titleLabel.font = .monospacedSystemFont(ofSize: 10.5, weight: .regular)
+        titleLabel.font = .role(.code)
         titleLabel.lineBreakMode = .byTruncatingMiddle
         titleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         titleStrip.addSubview(titleLabel)
@@ -813,10 +813,10 @@ final class TerminalStackController: NSViewController {
         backgroundPill.translatesAutoresizingMaskIntoConstraints = false
         backgroundPill.bezelStyle = .inline
         backgroundPill.controlSize = .small
-        backgroundPill.font = .systemFont(ofSize: 11, weight: .medium)
+        backgroundPill.font = .role(.meta)
         backgroundPill.image = NSImage(systemSymbolName: "square.stack.3d.up",
                                        accessibilityDescription: "Background tasks")?
-            .withSymbolConfiguration(.init(pointSize: 10, weight: .medium))
+            .withSymbolConfiguration(.role(.meta))
         backgroundPill.imagePosition = .imageLeading
         backgroundPill.target = self
         backgroundPill.action = #selector(showBackgroundTasks)
@@ -847,7 +847,7 @@ final class TerminalStackController: NSViewController {
         // Centered status.
         statusLabel.alignment = .center
         statusLabel.textColor = .secondaryLabelColor
-        statusLabel.font = .systemFont(ofSize: 15)
+        statusLabel.font = .role(.body)
         // Selectable so errors (e.g. sbx create failures) can be copied out;
         // long ones wrap within the pane instead of running off both sides.
         statusLabel.isSelectable = true
@@ -1298,7 +1298,7 @@ final class TerminalStackController: NSViewController {
         let modeTip = session.isChat ? "Show as Terminal" : "Show as Chat"
         chatModeButton.image = NSImage(systemSymbolName: session.isChat ? "terminal" : "bubble.left.and.text.bubble.right",
                                        accessibilityDescription: modeTip)?
-            .withSymbolConfiguration(.init(pointSize: 11, weight: .medium))
+            .withSymbolConfiguration(.role(.meta, weight: .medium))
         chatModeButton.toolTip = modeTip
         chatModeButton.setAccessibilityLabel(modeTip)
         onChromeChange?(Chrome(agent: session.agent, title: session.name,
@@ -1365,7 +1365,8 @@ final class TerminalStackController: NSViewController {
         let color: NSColor = running > 0 ? .sessionWorking : .secondaryLabelColor
         backgroundPill.attributedTitle = NSAttributedString(
             string: running > 0 ? "\(running) running" : "\(recent) done",
-            attributes: [.foregroundColor: color, .font: NSFont.systemFont(ofSize: 11, weight: .medium)])
+            attributes: [.foregroundColor: color, .font: NSFont.role(.meta)])
+
         backgroundPill.contentTintColor = color
         backgroundPill.toolTip = running > 0
             ? "\(running) background task\(running == 1 ? "" : "s") running — click for details"

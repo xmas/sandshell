@@ -45,7 +45,8 @@ final class SubagentWindowController: NSWindowController, NSWindowDelegate {
         super.init(window: window)
         window.delegate = self
 
-        status.font = .systemFont(ofSize: 11)
+        status.font = .role(.meta)
+
         status.textColor = .secondaryLabelColor
         let root = NSView()
         for v in [transcript, status] as [NSView] {

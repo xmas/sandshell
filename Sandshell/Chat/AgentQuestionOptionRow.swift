@@ -19,15 +19,16 @@ struct AgentQuestionOptionRow: View {
                                         : (selected ? "largecircle.fill.circle" : "circle"))
                     .foregroundStyle(selected ? Color.accentColor : .secondary)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(option.title).font(.callout.weight(selected ? .semibold : .regular))
+                    Text(option.title).font(.role(selected ? .bodyEmphasis : .body))
                     if let detail = option.detail {
-                        Text(detail).font(.subheadline).foregroundStyle(.secondary)
+                        Text(detail).font(.role(.meta)).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }
                 Spacer(minLength: 0)
                 if index < 9, form.singleChoice != nil {
-                    Text("\(index + 1)").font(.system(size: 10.5, design: .monospaced)).foregroundStyle(.tertiary)
+                    Text("\(index + 1)").font(.role(.code))
+.foregroundStyle(.tertiary)
                 }
             }
             .padding(.vertical, 3)

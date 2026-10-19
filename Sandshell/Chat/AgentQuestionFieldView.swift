@@ -13,11 +13,11 @@ struct AgentQuestionFieldView: View {
             if question.questions.count > 1 || field.title != nil || field.detail != nil {
                 VStack(alignment: .leading, spacing: 2) {
                     if let title = field.title {
-                        Text(title).font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
+                        Text(title).font(.role(.meta, weight: .semibold)).foregroundStyle(.secondary)
                             .textCase(question.questions.count > 1 ? .uppercase : nil)
                     }
                     if let detail = field.detail, question.questions.count > 1 || field.title == nil {
-                        Text(detail).font(.callout).textSelection(.enabled)
+                        Text(detail).font(.role(.body)).textSelection(.enabled)
                     }
                 }
             }
@@ -49,7 +49,8 @@ struct AgentQuestionFieldView: View {
             }
             if let preview = form.previewed[field.id]?.preview, !preview.isEmpty {
                 ScrollView([.vertical, .horizontal]) {
-                    Text(preview).font(.system(size: 11, design: .monospaced)).textSelection(.enabled)
+                    Text(preview).font(.role(.code))
+.textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading).padding(8)
                 }
                 .frame(maxHeight: 160)

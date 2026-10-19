@@ -20,12 +20,12 @@ struct SearchPreviewPane: View {
                 VStack(alignment: .leading, spacing: 0) {
                     VStack(alignment: .leading, spacing: 3) {
                         Text(AttributedString(selection.title, highlighting: matchedQuery))
-                            .font(.headline).lineLimit(2)
+                            .font(.role(.title)).lineLimit(2)
                         HStack(spacing: 6) {
                             Text(selection.agent.displayName.capitalized)
                             if let folder = selection.folder { Text("·"); Text(folder.tildeAbbreviated).truncationMode(.middle) }
                         }
-                        .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        .font(.role(.meta)).foregroundStyle(.secondary).lineLimit(1)
                     }
                     .padding(.horizontal, 14).padding(.vertical, 10)
                     Divider()

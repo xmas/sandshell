@@ -21,9 +21,9 @@ struct SearchableColorPicker: View {
         Button { isOpen.toggle() } label: {
             HStack(spacing: 6) {
                 Circle().fill(Color(NSColor.hex(selected))).frame(width: 12, height: 12)
-                Text(selectedName).font(.callout).lineLimit(1).truncationMode(.tail)
+                Text(selectedName).font(.role(.body)).lineLimit(1).truncationMode(.tail)
                 Spacer(minLength: 0)
-                Image(systemName: "chevron.up.chevron.down").font(.caption2).foregroundStyle(.secondary)
+                Image(systemName: "chevron.up.chevron.down").font(.symbol(.meta)).foregroundStyle(.secondary)
             }
             .contentShape(.rect)
         }
@@ -54,10 +54,10 @@ private struct ColorPickerDropdown: View {
         } label: {
             HStack(spacing: 8) {
                 Circle().fill(Color(NSColor.hex(hex))).frame(width: 14, height: 14)
-                Text(name).font(.callout)
+                Text(name).font(.role(.body))
                 Spacer()
                 if hex == selected {
-                    Image(systemName: "checkmark").font(.caption).foregroundStyle(Color.accentColor)
+                    Image(systemName: "checkmark").font(.symbol(.meta)).foregroundStyle(Color.accentColor)
                 }
             }
             .padding(.horizontal, 10).padding(.vertical, 6)

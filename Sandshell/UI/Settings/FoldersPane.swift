@@ -30,7 +30,7 @@ struct FoldersPaneView: View {
                     Sessions start in one of these folders. Renaming moves the directory on disk; \
                     sessions already running keep their old working directory until reopened.
                     """)
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.role(.meta)).foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)

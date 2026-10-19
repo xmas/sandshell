@@ -110,10 +110,10 @@ final class CompletionPanel: NSObject, NSTableViewDataSource, NSTableViewDelegat
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         let item = items[row]
         let title = NSTextField(labelWithString: item.title)
-        title.font = .systemFont(ofSize: 13, weight: .medium)
+        title.font = .role(.body)
         title.lineBreakMode = .byTruncatingMiddle
         let detail = NSTextField(labelWithString: item.detail)
-        detail.font = .systemFont(ofSize: 11)
+        detail.font = .role(.meta)
         detail.textColor = .secondaryLabelColor
         detail.lineBreakMode = .byTruncatingTail
         let icon = NSImageView(image: NSImage(systemSymbolName: {
@@ -143,14 +143,15 @@ final class MentionAttachment: NSTextAttachment {
         self.relative = relative
         super.init(data: nil, ofType: nil)
         let label = url.lastPathComponent
-        let font = NSFont.systemFont(ofSize: 12, weight: .medium)
+        let font = NSFont.role(.meta)
         let textSize = (label as NSString).size(withAttributes: [.font: font])
         let size = NSSize(width: ceil(textSize.width) + 30, height: 20)
         image = NSImage(size: size, flipped: false) { rect in
             NSColor.controlAccentColor.withAlphaComponent(0.16).setFill()
             NSBezierPath(roundedRect: rect.insetBy(dx: 0.5, dy: 0.5), xRadius: 6, yRadius: 6).fill()
             if let doc = NSImage(systemSymbolName: "doc", accessibilityDescription: nil)?
-                .withSymbolConfiguration(.init(pointSize: 10, weight: .medium)) {
+                .withSymbolConfiguration(.role(.meta)) {
+
                 doc.draw(in: NSRect(x: 7, y: 4, width: 10, height: 12))
             }
             (label as NSString).draw(at: NSPoint(x: 21, y: (rect.height - textSize.height) / 2),

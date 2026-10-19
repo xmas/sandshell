@@ -23,9 +23,10 @@ struct BadgeMark: View {
                     Image(nsImage: image).renderingMode(.template).resizable().scaledToFit()
                         .frame(width: side * 0.6, height: side * 0.6).foregroundStyle(.white)
                 case .symbol(let name):
-                    Image(systemName: name).font(.system(size: side * 0.5, weight: .semibold)).foregroundStyle(.white)
+                    Image(systemName: name).font(.mark(side * 0.5, weight: .semibold)).foregroundStyle(.white)
                 case .glyph(let text):
-                    Text(text).font(.system(size: side * 0.45, weight: .bold, design: .monospaced)).foregroundStyle(.white)
+                    Text(text).font(.mark(side * 0.45, weight: .bold, monospaced: true)).foregroundStyle(.white)
+
                 }
             }
             .accessibilityElement(children: speaksForItself ? .combine : .ignore)

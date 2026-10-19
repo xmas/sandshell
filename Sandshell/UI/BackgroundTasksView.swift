@@ -81,7 +81,8 @@ private struct BackgroundTaskSection: View {
             if titled {
                 Button { onSelectSession?(session.id) } label: {
                     HStack(spacing: 6) {
-                        Text(session.name).font(.headline).lineLimit(1)
+                        Text(session.name).font(.role(.bodyEmphasis)).lineLimit(1)
+
                         Image(systemName: "arrow.right.circle").foregroundStyle(.secondary)
                     }
                 }
@@ -104,7 +105,7 @@ private struct BackgroundTaskSection: View {
 
     private func header(_ title: String, _ count: Int) -> some View {
         Text("\(title.uppercased()) · \(count)")
-            .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            .font(.role(.meta, weight: .semibold)).foregroundStyle(.secondary)
             .padding(.top, 2)
     }
 
@@ -130,7 +131,7 @@ private struct BackgroundTaskRow: View {
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: kindSymbol)
-                .font(.system(size: 13, weight: .medium))
+                .font(.symbol(.body))
                 .foregroundStyle(.secondary)
                 .frame(width: 18, height: 18)
                 .accessibilityLabel(kindName)
@@ -149,19 +150,19 @@ private struct BackgroundTaskRow: View {
                     BackgroundTaskStateBadge(task: task)
                 }
                 if let detail = task.detail, detail != task.title {
-                    Text(detail).font(.subheadline.monospaced()).foregroundStyle(.secondary)
+                    Text(detail).font(.role(.code)).foregroundStyle(.secondary)
                         .lineLimit(1).truncationMode(.middle).textSelection(.enabled)
                 }
                 if let line = task.isRunning ? task.activity : (task.summary ?? task.activity) {
-                    Text(line).font(.callout)
+                    Text(line).font(.role(.body))
                         .foregroundStyle(task.state == .failed ? Color.red : Color.secondary)
                         .lineLimit(3).textSelection(.enabled)
                 }
                 if stopFailed {
-                    Text("Couldn’t stop it — it may have just finished.").font(.caption).foregroundStyle(.red)
+                    Text("Couldn’t stop it — it may have just finished.").font(.role(.meta)).foregroundStyle(.red)
                 }
                 if task.kind == .monitor, task.events > 0 {
-                    Text("^[\(task.events) event](inflect: true)").font(.caption).foregroundStyle(.tertiary)
+                    Text("^[\(task.events) event](inflect: true)").font(.role(.meta)).foregroundStyle(.tertiary)
                 }
                 if task.kind == .shell, task.outputPath != nil, loadOutput != nil {
                     BackgroundTaskOutput(output: output, loading: loading,
@@ -229,7 +230,8 @@ private struct BackgroundTaskStateBadge: View {
         // A finished task's time is fixed: only a running one needs the tick.
         TimelineView(.animation(minimumInterval: 1, paused: !task.isRunning)) { context in
             let elapsed = formatWorkTime(task.duration(at: context.date))
-            let time = Text(elapsed).monospacedDigit()
+            let time = Text(elapsed).font(.role(.code))
+
             Group {
                 switch task.state {
                 case .running:
@@ -254,7 +256,7 @@ private struct BackgroundTaskStateBadge: View {
             .accessibilityLabel(stateName)
             .accessibilityValue(elapsed)
         }
-        .font(.caption)
+        .font(.role(.meta))
         .labelStyle(.titleAndIcon)
     }
 
@@ -281,7 +283,7 @@ private struct BackgroundTaskOutput: View {
                 if loading { ProgressView().controlSize(.small) }
                 else {
                     Text(output ?? "No output yet.")
-                        .font(.caption.monospaced())
+                        .font(.role(.code))
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -289,7 +291,7 @@ private struct BackgroundTaskOutput: View {
             .padding(6)
             .background(.quinary, in: .rect(cornerRadius: 5))
         } label: {
-            Text("Output").font(.caption)
+            Text("Output").font(.role(.meta))
         }
         .onChange(of: isExpanded) { _, open in if open { onOpen() } }
     }

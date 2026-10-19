@@ -46,7 +46,7 @@ struct OpenFoldersView: View {
             Divider()
             HStack {
                 Text("^[\(roots.count) folder](inflect: true)")
-                    .font(.caption).foregroundStyle(.tertiary)
+                    .font(.role(.meta)).foregroundStyle(.tertiary)
                 Spacer()
                 Button("Open New…", action: onOpenNew)
                     .help("Choose a folder. A folder you’ve opened before opens directly; a new one runs the setup wizard.")

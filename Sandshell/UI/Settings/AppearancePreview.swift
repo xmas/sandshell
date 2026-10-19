@@ -12,7 +12,7 @@ struct AppearancePreview: View {
     var body: some View {
         let sb = Color(NSColor.hex(sidebar))
         VStack(alignment: .leading, spacing: 4) {
-            Text(dark ? "Dark" : "Light").font(.caption2).foregroundStyle(.secondary)
+            Text(dark ? "Dark" : "Light").font(.role(.meta)).foregroundStyle(.secondary)
             HStack(spacing: 0) {
                 // Sidebar column
                 VStack(alignment: .leading, spacing: 0) {
@@ -30,11 +30,11 @@ struct AppearancePreview: View {
                             .frame(width: 22, height: 22)
                             .overlay {
                                 Image(systemName: icon)
-                                    .font(.system(size: 10, weight: .semibold))
+                                    .font(.mark(10, weight: .semibold))
                                     .foregroundStyle(.white)
                             }
                         Text(name)
-                            .font(.system(size: 9, weight: .semibold))
+                            .font(.mark(9, weight: .semibold))
                             .foregroundStyle(.white)
                             .lineLimit(1)
                     }
@@ -58,7 +58,8 @@ struct AppearancePreview: View {
                     // Bottom toolbar strip — slightly darker via black overlay
                     HStack(spacing: 0) {
                         ForEach(0..<4) { _ in
-                            Image(systemName: "circle").font(.system(size: 7))
+                            Image(systemName: "circle").font(.mark(7))
+
                                 .foregroundStyle(.white.opacity(0.4))
                                 .frame(maxWidth: .infinity)
                         }

@@ -5,7 +5,7 @@ import AppKit
 /// choices, the current one checked. One look and one way to fill it.
 final class ChoicePopUp: NSPopUpButton {
     struct Choice { var id: String?; var title: String }
-    static let titleFont = NSFont.monospacedSystemFont(ofSize: 10.5, weight: .semibold)
+    static let titleFont = NSFont.role(.meta)
 
     /// The user picked a choice (its id).
     var onPick: ((String?) -> Void)?

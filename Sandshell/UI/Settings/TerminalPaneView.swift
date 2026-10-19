@@ -45,7 +45,7 @@ struct TerminalPaneView: View {
                 Text("Cursor")
             } footer: {
                 Text("Cursor changes apply to open terminals immediately. Set Blink to Off to stop blinking.")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.role(.meta)).foregroundStyle(.secondary)
             }
 
             Section("Preview") {
@@ -59,7 +59,7 @@ struct TerminalPaneView: View {
             } footer: {
                 Text("Colors for the context gauge, percent, tokens, cost and model name in the terminal "
                      + "title strip. Unset colors follow the terminal palette. Applies to every window.")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.role(.meta)).foregroundStyle(.secondary)
             }
 
             if isCustom {

@@ -21,10 +21,10 @@ struct ContextCard: View {
     @ViewBuilder private func breakdown(_ usage: ContextUsage) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline) {
-                Text("\(usage.percentage)% used").font(.title3.weight(.medium))
+                Text("\(usage.percentage)% used").font(.role(.title))
                 Spacer()
                 Text("\(Format.tokens(usage.totalTokens)) / \(Format.tokens(usage.maxTokens))")
-                    .foregroundStyle(.secondary).monospacedDigit()
+                    .foregroundStyle(.secondary).font(.role(.code))
             }
             ContextBar(rows: usage.windowRows, total: max(usage.maxTokens, 1))
                 .frame(height: 6)
@@ -47,9 +47,9 @@ struct ContextCard: View {
                                 Text(group.server.isEmpty ? "MCP" : group.server).lineLimit(1)
                                 Spacer()
                                 Text("\(group.tools.count) tools · \(Format.tokens(group.tokens))")
-                                    .foregroundStyle(.secondary).monospacedDigit()
+                                    .foregroundStyle(.secondary).font(.role(.code))
                             }
-                            .font(.callout)
+                            .font(.role(.body))
                         }
                     }
                     .padding(.leading, 4)
@@ -65,9 +65,9 @@ struct ContextCard: View {
                                 Text((file.name as NSString).abbreviatingWithTildeInPath).lineLimit(1).truncationMode(.head)
                                     .help(file.name)
                                 Spacer()
-                                Text(Format.tokens(file.tokens)).foregroundStyle(.secondary).monospacedDigit()
+                                Text(Format.tokens(file.tokens)).foregroundStyle(.secondary).font(.role(.code))
                             }
-                            .font(.callout)
+                            .font(.role(.body))
                         }
                     }
                     .padding(.leading, 4)
@@ -82,9 +82,9 @@ struct ContextCard: View {
                             HStack {
                                 Text(skill.name).lineLimit(1)
                                 Spacer()
-                                Text(Format.tokens(skill.tokens)).foregroundStyle(.secondary).monospacedDigit()
+                                Text(Format.tokens(skill.tokens)).foregroundStyle(.secondary).font(.role(.code))
                             }
-                            .font(.callout)
+                            .font(.role(.body))
                         }
                     }
                     .padding(.leading, 4)
@@ -106,7 +106,7 @@ struct ContextCard: View {
                 .foregroundStyle(row.kind == .deferred ? .secondary : .primary)
                 .lineLimit(1)
             Spacer()
-            Text(Format.tokens(row.tokens)).foregroundStyle(.secondary).monospacedDigit()
+            Text(Format.tokens(row.tokens)).foregroundStyle(.secondary).font(.role(.code))
             Group {
                 if let total, total > 0 {
                     Text(Double(row.tokens) / Double(total), format: .percent.precision(.fractionLength(1)))
@@ -115,9 +115,9 @@ struct ContextCard: View {
                 }
             }
             .frame(width: 48, alignment: .trailing)
-            .monospacedDigit()
+            .font(.role(.code))
         }
-        .font(.callout)
+        .font(.role(.body))
         .accessibilityElement(children: .combine)
     }
 
@@ -125,9 +125,9 @@ struct ContextCard: View {
         HStack {
             Text(title)
             Spacer()
-            Text(count, format: .number).foregroundStyle(.secondary).monospacedDigit()
+            Text(count, format: .number).foregroundStyle(.secondary).font(.role(.code))
         }
-        .font(.callout)
+        .font(.role(.body))
     }
 
     private func footer(_ usage: ContextUsage) -> some View {
@@ -147,7 +147,7 @@ struct ContextCard: View {
                 .disabled(model.canCompact == false)
                 .help("Summarize the conversation so far to free up the window (/compact)")
         }
-        .font(.callout)
+        .font(.role(.body))
         .padding(.top, 2)
     }
 
@@ -158,10 +158,10 @@ struct ContextCard: View {
             if let usage = model.usage, usage.size > 0 {
                 HStack(alignment: .firstTextBaseline) {
                     Text(Double(usage.used) / Double(usage.size), format: .percent.precision(.fractionLength(0)))
-                        .font(.title3.weight(.medium))
-                    Text("used").font(.title3.weight(.medium))
+                        .font(.role(.title))
+                    Text("used").font(.role(.title))
                     Spacer()
-                    Text("\(Format.tokens(usage.used)) / \(Format.tokens(usage.size))").foregroundStyle(.secondary).monospacedDigit()
+                    Text("\(Format.tokens(usage.used)) / \(Format.tokens(usage.size))").foregroundStyle(.secondary).font(.role(.code))
                 }
                 ProgressView(value: Double(usage.used), total: Double(usage.size))
                     .progressViewStyle(.linear)
@@ -169,9 +169,9 @@ struct ContextCard: View {
             if model.refreshingContext {
                 ProgressView().controlSize(.small)
             } else if let note = model.contextNote {
-                Text(note).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                Text(note).font(.role(.body)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             } else if model.usage == nil {
-                Text("Shows once the chat has started.").font(.callout).foregroundStyle(.secondary)
+                Text("Shows once the chat has started.").font(.role(.body)).foregroundStyle(.secondary)
             }
         }
     }

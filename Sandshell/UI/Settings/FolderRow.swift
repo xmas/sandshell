@@ -46,12 +46,12 @@ struct FolderRow: View {
                     }
                 }
                 Text(controller.folderURL(for: folder).path)
-                    .font(.caption.monospaced()).foregroundStyle(.tertiary)
+                    .font(.role(.code)).foregroundStyle(.tertiary)
                     .lineLimit(1).truncationMode(.head)
             }
             Spacer()
             let n = controller.sessions(in: folder.id).count
-            Text("^[\(n) session](inflect: true)").font(.caption).foregroundStyle(.secondary)
+            Text("^[\(n) session](inflect: true)").font(.role(.meta)).foregroundStyle(.secondary)
             Menu("Folder Actions", systemImage: "ellipsis.circle") {
                 Button("Reveal in Finder") {
                     NSWorkspace.shared.activateFileViewerSelecting([controller.folderURL(for: folder)])

@@ -27,7 +27,8 @@ struct SymbolPickerView: View {
                         Button { choose(s) } label: {
                             Label(SymbolCatalog.spokenName(s), systemImage: s)
                                 .labelStyle(.iconOnly)
-                                .font(.system(size: 18))
+                                .font(.symbol(.body))
+
                                 .frame(width: 42, height: 42)
                                 .background(selection == s ? Color.accentColor : Color.secondary.opacity(0.12),
                                             in: .rect(cornerRadius: 8))

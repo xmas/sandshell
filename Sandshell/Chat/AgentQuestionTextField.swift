@@ -17,7 +17,7 @@ struct AgentQuestionTextField: View {
             }
         }
         .textFieldStyle(.roundedBorder)
-        .font(.callout)
+        .font(.role(.body))
         .onSubmit { form.submit() }
     }
 }

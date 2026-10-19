@@ -23,14 +23,14 @@ struct AgentConfigView: View {
                      + "rather than extending one. Turned-on agents appear in + New Session; each gets its own "
                      + "sandbox the first time you start it. Custom agents always run their kit's image: the "
                      + "General ▸ Sandbox Image choice applies to built-in agents only.")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.role(.meta)).foregroundStyle(.secondary)
             }
 
             Section {
                 KitRefAddRow(ref: $model.newRef, prompt: "Kit folder, .zip, git+https://… or OCI reference",
                              busy: model.adding, addID: "agents-add", onBrowse: model.browse, onAdd: { model.add($0) })
                 if let error = model.error {
-                    Text(error).font(.caption).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
+                    Text(error).font(.role(.meta)).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
                 }
             } header: {
                 Text("Add an agent")
@@ -38,7 +38,7 @@ struct AgentConfigView: View {
 
             Section {
                 Text(AgentKind.builtins.map(\.displayName).joined(separator: " · "))
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.role(.meta)).foregroundStyle(.secondary)
             } header: {
                 Text("Built in")
             }
@@ -77,14 +77,15 @@ private struct AgentProfileRow: View {
                 TextField("Display name", text: $model[displayNameFor: profile.agent],
                           prompt: Text("Display name"))
                     .labelsHidden()
-                    .textFieldStyle(.plain).fontWeight(.medium)
+                    .textFieldStyle(.plain).font(.role(.body))
                     .accessibilityIdentifier("agent-display-name")
                 if let summary = profile.summary, !summary.isEmpty {
-                    Text(summary).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                    Text(summary).font(.role(.meta)).foregroundStyle(.secondary).lineLimit(2)
                 }
                 Text([profile.agent, profile.kitRef, profile.image.map { "image \($0)" }].compactMap { $0 }
                         .joined(separator: " · "))
-                    .font(.system(size: 10.5, design: .monospaced))
+                    .font(.role(.code))
+
                     .foregroundStyle(.tertiary).lineLimit(1).truncationMode(.middle)
                 HStack(spacing: 5) {
                     ForEach(AgentProfile.palette.enumerated(), id: \.element) { index, hex in

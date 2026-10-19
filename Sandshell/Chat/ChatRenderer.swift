@@ -112,9 +112,8 @@ final class BlockFragmentProvider: NSObject, NSTextLayoutManagerDelegate {
 /// of items the user opened ("Show more"); links use `sandshell-chat://toggle/<id>`.
 @MainActor
 enum ChatRenderer {
-    static let body = NSFont.systemFont(ofSize: 13.5)
-    static let mono = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
-    static let small = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
+    static let body = NSFont.role(.body)
+    static let mono = NSFont.role(.code)
     static let pad: CGFloat = 14           // text inset inside a block
     static let maxImageWidth: CGFloat = 520
 
@@ -128,7 +127,7 @@ enum ChatRenderer {
         switch item {
         case .user(_, let text, let attachments):
             var paras = text.isEmpty ? [] : plainParagraphs(text, font: body)
-            paras += attachments.map { line("📎 \($0)", font: small, color: .secondaryLabelColor) }
+            paras += attachments.map { line("📎 \($0)", font: mono, color: .secondaryLabelColor) }
             if paras.isEmpty { return NSAttributedString() }
             return spaced(blocked(paras, .user), before: 14, after: 6)
         case .agentText(_, let text):
@@ -145,7 +144,7 @@ enum ChatRenderer {
                 return line("\(mark)  \(e.content)", font: body,
                             color: e.status == "completed" ? .secondaryLabelColor : .labelColor)
             }
-            return spaced(blocked([line("Plan", font: .systemFont(ofSize: 11.5, weight: .semibold),
+            return spaced(blocked([line("Plan", font: .role(.meta, weight: .semibold),
                                         color: .secondaryLabelColor)] + paras, .card), before: 4, after: 4)
         case .image(_, let data):
             return image(data)
@@ -153,7 +152,7 @@ enum ChatRenderer {
             return spaced(fileChanges(turn: turn, paths: paths, restored: restored), before: 2, after: 6)
         case .notice(_, let text, let isError):
             // Errors carry a warning mark, not only red, so they read as errors without color.
-            return spaced(line(isError ? "⚠︎  \(text)" : text, font: .systemFont(ofSize: 11.5),
+            return spaced(line(isError ? "⚠︎  \(text)" : text, font: .role(.meta),
                                color: isError ? .systemRed : .secondaryLabelColor),
                           before: 4, after: 4)
         }
@@ -171,7 +170,7 @@ enum ChatRenderer {
     /// "Changed 3 files: a.swift, b.swift, and c.swift · Undo", or once undone,
     /// "Restored 3 files to before this message".
     private static func fileChanges(turn: String, paths: [String], restored: Bool) -> NSAttributedString {
-        let font = NSFont.systemFont(ofSize: 11.5)
+        let font = NSFont.role(.meta)
         let names = paths.map { ($0 as NSString).lastPathComponent }
         let list = (Array(names.prefix(4)) + (names.count > 4 ? ["\(names.count - 4) more"] : [])).formatted()
         let count = paths.count == 1 ? "1 file" : "\(paths.count) files"
@@ -184,7 +183,7 @@ enum ChatRenderer {
                 .font: font, .foregroundColor: NSColor.secondaryLabelColor, .toolTip: paths.joined(separator: "\n")]))
             out.append(NSAttributedString(string: "   ", attributes: [.font: font]))
             out.append(NSAttributedString(string: "Undo", attributes: [
-                .font: NSFont.systemFont(ofSize: 11.5, weight: .semibold), .foregroundColor: NSColor.controlAccentColor,
+                .font: NSFont.role(.meta, weight: .semibold), .foregroundColor: NSColor.controlAccentColor,
                 .link: undoURL(turn), .toolTip: "Put these files back as they were before this message"]))
         }
         out.append(NSAttributedString(string: "\n", attributes: [.font: font]))
@@ -239,20 +238,20 @@ enum ChatRenderer {
         let p = NSMutableParagraphStyle()
         p.minimumLineHeight = height
         p.maximumLineHeight = height
-        return NSAttributedString(string: "\n", attributes: [.font: NSFont.systemFont(ofSize: 1), .paragraphStyle: p])
+        return NSAttributedString(string: "\n", attributes: [.font: NSFont.spacer(1), .paragraphStyle: p])
     }
 
     private static func link(_ title: String, id: String) -> NSAttributedString {
         NSAttributedString(string: title + "\n", attributes: [
-            .font: NSFont.systemFont(ofSize: 11.5, weight: .medium), .link: toggleURL(id),
+            .font: NSFont.role(.meta), .link: toggleURL(id),
             .foregroundColor: NSColor.linkColor])
     }
 
     private static func thought(id: String, text: String, expanded: Bool) -> NSAttributedString {
-        let italic = NSFontManager.shared.convert(NSFont.systemFont(ofSize: 12.5), toHaveTrait: .italicFontMask)
+        let italic = NSFontManager.shared.convert(body, toHaveTrait: .italicFontMask)
         let lines = text.trimmingCharacters(in: .whitespacesAndNewlines).split(separator: "\n", omittingEmptySubsequences: false)
         let out = NSMutableAttributedString()
-        out.append(line("Thinking", font: .systemFont(ofSize: 11, weight: .semibold), color: .tertiaryLabelColor))
+        out.append(line("Thinking", font: .role(.meta, weight: .semibold), color: .tertiaryLabelColor))
         let shown = expanded ? lines[...] : lines.prefix(2)
         out.append(line(shown.joined(separator: "\n"), font: italic, color: .tertiaryLabelColor))
         if lines.count > 2 { out.append(link(expanded ? "Show less" : "Show more", id: "thought-\(id)")) }
@@ -268,16 +267,16 @@ enum ChatRenderer {
         let running = calls.contains { $0.status == "pending" || $0.status == "in_progress" }
         let failed = calls.count { $0.status == "failed" }
         let head = NSMutableAttributedString(string: groupSummary(calls, running: running) + (expanded ? "  ⌄" : "  ›"),
-                                             attributes: [.font: NSFont.systemFont(ofSize: 12.5),
+                                             attributes: [.font: body,
                                                           .foregroundColor: NSColor.secondaryLabelColor,
                                                           .link: toggleURL(id),
                                                           .toolTip: expanded ? "Hide the tool calls" : "Show the tool calls"])
         if failed > 0 {
             head.append(NSAttributedString(string: failed == calls.count && failed == 1 ? "  · failed" : "  · \(failed) failed",
-                                           attributes: [.font: NSFont.systemFont(ofSize: 12.5),
+                                           attributes: [.font: body,
                                                         .foregroundColor: NSColor.systemRed]))
         }
-        head.append(NSAttributedString(string: "\n", attributes: [.font: NSFont.systemFont(ofSize: 12.5)]))
+        head.append(NSAttributedString(string: "\n", attributes: [.font: body]))
         guard expanded else { return head }
         for call in calls {
             head.append(spaced(tool(call, expanded: isExpanded("tool-\(call.id)")), before: 4, after: 4))
@@ -368,14 +367,14 @@ enum ChatRenderer {
         let title = firstLine.count > 120 ? String(firstLine.prefix(117)) + "…" : firstLine
         let head = NSMutableAttributedString(string: glyph + "  ", attributes: [.font: mono, .foregroundColor: color])
         head.append(NSAttributedString(string: title + "\n", attributes: [
-            .font: NSFont.systemFont(ofSize: 12.5, weight: .medium), .foregroundColor: NSColor.labelColor]))
+            .font: body, .foregroundColor: NSColor.labelColor]))
         paras.append(head)
 
         // Lines beyond the collapsed limits (shown when expanded, up to 400).
         var overflow = 0
         func appendLines(_ text: String, limit: Int, color: NSColor) {
             let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
-            for l in lines.prefix(expanded ? 400 : limit) { paras.append(line(String(l), font: small, color: color)) }
+            for l in lines.prefix(expanded ? 400 : limit) { paras.append(line(String(l), font: mono, color: color)) }
             overflow += max(0, lines.count - limit)
         }
         // The full command/path when the title is just its first line or a label.
@@ -388,18 +387,18 @@ enum ChatRenderer {
         if !input.isEmpty { appendLines(input, limit: 3, color: .secondaryLabelColor) }
         let output = stripFences(call.output).trimmingCharacters(in: .newlines)
         if !output.isEmpty {
-            if !input.isEmpty { paras.append(line("", font: .systemFont(ofSize: 4), color: .clear)) }
+            if !input.isEmpty { paras.append(line("", font: .spacer(4), color: .clear)) }
             appendLines(output, limit: 8, color: .labelColor)
         }
         for d in call.diffs {
             if !title.contains(d.path) && !title.contains((d.path as NSString).lastPathComponent) {
-                paras.append(line(d.path, font: small, color: .secondaryLabelColor))
+                paras.append(line(d.path, font: mono, color: .secondaryLabelColor))
             }
             let old = (d.oldText ?? "").split(separator: "\n", omittingEmptySubsequences: false).map { "- \($0)" }
             let new = d.newText.split(separator: "\n", omittingEmptySubsequences: false).map { "+ \($0)" }
             let all = (d.oldText == nil ? [] : old) + new
             for l in all.prefix(expanded ? 400 : 12) {
-                paras.append(line(l, font: small, color: l.hasPrefix("-") ? .systemRed : .systemGreen))
+                paras.append(line(l, font: mono, color: l.hasPrefix("-") ? .systemRed : .systemGreen))
             }
             overflow += max(0, all.count - 12)
         }
@@ -439,18 +438,17 @@ enum ChatRenderer {
 
     /// Typeface for Markdown prose (code, tables and inline code stay monospaced).
     struct Prose {
-        var size: CGFloat
         var serif: Bool
-        /// Chat transcript: the system font at the transcript size.
-        static let chat = Prose(size: 13.5, serif: false)
-        /// A Markdown document (Files preview): New York, a little larger.
-        static let document = Prose(size: 15, serif: true)
+        /// Chat transcript: the system font.
+        static let chat = Prose(serif: false)
+        /// A Markdown document (Files preview): New York.
+        static let document = Prose(serif: true)
 
-        func font(_ size: CGFloat? = nil, weight: NSFont.Weight = .regular) -> NSFont {
-            let size = size ?? self.size
-            let system = NSFont.systemFont(ofSize: size, weight: weight)
+        /// A type role in the prose face.
+        func font(_ role: TypeRole = .body) -> NSFont {
+            let system = NSFont.role(role)
             guard serif, let serif = system.fontDescriptor.withDesign(.serif) else { return system }
-            return NSFont(descriptor: serif, size: size) ?? system
+            return NSFont(descriptor: serif, size: system.pointSize) ?? system
         }
     }
 
@@ -531,7 +529,7 @@ enum ChatRenderer {
         let header = cells.first ?? []
         let columns = cells.map(\.count).max() ?? 0
         guard columns > 0 else { return NSAttributedString() }
-        let headFont = prose.font(weight: .semibold)
+        let headFont = prose.font(.bodyEmphasis)
         let lineBreak = /<br\s*\/?>/.ignoresCase()
         func render(_ cell: String, _ font: NSFont, _ color: NSColor = .labelColor) -> NSAttributedString {
             inline(cell.replacing(lineBreak, with: "\u{2028}"), font: font, color: color)
@@ -579,7 +577,8 @@ enum ChatRenderer {
                 return line
             }
             paras.append(gridRow(header, headFont))
-            let ruleFont = NSFont.systemFont(ofSize: 7)
+            let ruleFont = NSFont.mark(7)
+
             let dash = max(1, ("─" as NSString).size(withAttributes: [.font: ruleFont]).width)
             paras.append(line(String(repeating: "─", count: max(1, Int((total / dash).rounded(.up)))), font: ruleFont, color: .tertiaryLabelColor))
             paras += body.map { gridRow($0, prose.font()) }
@@ -588,11 +587,11 @@ enum ChatRenderer {
 
         // Records: the first cell heads each row; the other columns follow as
         // labelled lines, values hanging past the widest label.
-        let labelFont = prose.font(prose.size - 1.5, weight: .medium)
+        let labelFont = prose.font(.meta)
         let labels = (0..<columns).map { render(cell(header, $0).trimmingCharacters(in: .whitespaces), labelFont, .secondaryLabelColor) }
         let labelWidth = labels.dropFirst().map { ceil($0.size().width) }.max() ?? 0
         let stacked = labelWidth > 170
-        let gapLine = NSAttributedString(string: "\n", attributes: [.font: NSFont.systemFont(ofSize: 6)])
+        let gapLine = NSAttributedString(string: "\n", attributes: [.font: NSFont.spacer(6)])
         for (r, row) in body.enumerated() {
             if r > 0 { paras.append(gapLine) }
             let title = NSMutableAttributedString(attributedString: render(cell(row, 0), headFont))
@@ -672,7 +671,7 @@ enum ChatRenderer {
         if let m = trimmed.range(of: #"^#{1,6} "#, options: .regularExpression) {
             let level = trimmed[m].count - 1
             text = String(trimmed[m.upperBound...])
-            font = prose.font(body.pointSize + CGFloat(max(0, 4 - level)) * 1.5, weight: .semibold)
+            font = prose.font(level <= 2 ? .title : .bodyEmphasis)
             para.paragraphSpacingBefore = 8
         } else if trimmed.range(of: #"^(-{3,}|\*{3,}|_{3,})$"#, options: .regularExpression) != nil {
             return NSAttributedString(string: "\n", attributes: [.font: body])
@@ -713,7 +712,8 @@ enum ChatRenderer {
             let intent = (value as? NSNumber).map { InlinePresentationIntent(rawValue: $0.uintValue) } ?? []
             var font = base
             if intent.contains(.code) {
-                font = NSFont.monospacedSystemFont(ofSize: base.pointSize - 1, weight: .regular)
+                font = NSFont.role(.code)
+
                 ns.addAttribute(.backgroundColor, value: NSColor.labelColor.withAlphaComponent(0.07), range: range)
             }
             if intent.contains(.stronglyEmphasized) { font = withTrait(font, .bold, .boldFontMask) }

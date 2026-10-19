@@ -14,7 +14,7 @@ struct ThemeScopeButtons: View {
         } footer: {
             Text("These settings apply to this folder. 'Make Default' sets the default for new "
                  + "folders; 'Apply to All' also updates every open window.")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.role(.meta)).foregroundStyle(.secondary)
         }
     }
 

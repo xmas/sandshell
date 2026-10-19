@@ -5,8 +5,8 @@ extension NSButton {
     /// a pane's title-strip controls, a reply's hover actions. `size` fixes
     /// its frame; `tint` nil leaves the theme to color it.
     @MainActor
-    static func symbol(_ name: String, label: String, pointSize: CGFloat = 11, weight: NSFont.Weight = .medium,
-                       tint: NSColor? = .secondaryLabelColor, size: NSSize? = nil,
+    static func symbol(_ name: String, label: String, pointSize: CGFloat = TypeRole.meta.symbolPointSize,
+                       weight: NSFont.Weight = .medium, tint: NSColor? = .secondaryLabelColor, size: NSSize? = nil,
                        target: AnyObject?, action: Selector?, id: String? = nil) -> NSButton {
         let button = NSButton()
         button.configureSymbol(name, label: label, pointSize: pointSize, weight: weight, tint: tint, size: size,
@@ -16,8 +16,8 @@ extension NSButton {
 
     /// The same, applied to an existing button.
     @MainActor
-    func configureSymbol(_ name: String, label: String, pointSize: CGFloat = 11, weight: NSFont.Weight = .medium,
-                         tint: NSColor? = .secondaryLabelColor, size: NSSize? = nil,
+    func configureSymbol(_ name: String, label: String, pointSize: CGFloat = TypeRole.meta.symbolPointSize,
+                         weight: NSFont.Weight = .medium, tint: NSColor? = .secondaryLabelColor, size: NSSize? = nil,
                          target: AnyObject?, action: Selector?, id: String? = nil) {
         isBordered = false
         title = ""

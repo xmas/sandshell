@@ -15,17 +15,17 @@ struct SearchResultRow: View {
                 HStack(spacing: 6) {
                     if result.isChat {
                         Image(systemName: "bubble.left.and.text.bubble.right")
-                            .font(.caption).foregroundStyle(.secondary)
+                            .font(.symbol(.meta)).foregroundStyle(.secondary)
                             .help("Chat session")
                             .accessibilityLabel("Chat session")
                     }
                     Text(AttributedString(result.title, highlighting: query))
-                        .fontWeight(.medium)
+                        .font(.role(.body))
                         .lineLimit(1)
                     Spacer(minLength: 4)
                     if result.isLive {
                         Text("Open")
-                            .font(.caption2.weight(.semibold))
+                            .font(.role(.meta, weight: .semibold))
                             .foregroundStyle(.green)
                             .padding(.horizontal, 6).padding(.vertical, 1)
                             .background(.green.opacity(0.15), in: .capsule)
@@ -40,11 +40,11 @@ struct SearchResultRow: View {
                     Text(result.date, format: .relative(presentation: .named))
                         .lineLimit(1)
                 }
-                .font(.caption)
+                .font(.role(.meta))
                 .foregroundStyle(.secondary)
                 if let snippet = result.snippet {
                     Text(AttributedString(snippet, highlighting: query))
-                        .font(.caption)
+                        .font(.role(.meta))
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
                 }

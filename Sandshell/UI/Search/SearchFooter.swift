@@ -8,11 +8,11 @@ struct SearchFooter: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            counts.font(.caption).foregroundStyle(.secondary)
+            counts.font(.role(.meta)).foregroundStyle(.secondary)
                 .lineLimit(1).truncationMode(.tail)
             Spacer(minLength: 8)
             Text("↑↓ to select · ↩ to open · esc to close")
-                .font(.caption).foregroundStyle(.tertiary)
+                .font(.role(.meta)).foregroundStyle(.tertiary)
             Button(store.selected?.isLive == false ? "Restore Session" : "Show Session", action: onOpenSelected)
                 .disabled(store.selected == nil)
         }
