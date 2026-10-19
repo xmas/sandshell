@@ -229,9 +229,11 @@ final class SessionCellView: NSTableCellView {
         timeLabel.alignment = .right
         timeLabel.setContentHuggingPriority(.required, for: .horizontal)
         timeLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
-        nameLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        // The name takes the room; the time sits at the right edge.
+        nameLabel.setContentHuggingPriority(.init(1), for: .horizontal)
         let titleRow = NSStackView(views: [forkGlyph, nameLabel, timeLabel])
         titleRow.orientation = .horizontal
+        titleRow.distribution = .fill
         titleRow.alignment = .centerY
         titleRow.spacing = 8
         titleRow.setCustomSpacing(6, after: forkGlyph)

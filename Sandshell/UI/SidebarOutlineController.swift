@@ -1290,7 +1290,10 @@ final class SidebarListController: NSViewController {
     func debugRowView(_ id: UUID) -> SidebarRowView? {
         row(of: id).flatMap { outline.rowView(atRow: $0, makeIfNecessary: true) as? SidebarRowView }
     }
-    func debugRowHeight(_ id: UUID) -> CGFloat? { row(of: id).map { outline.rect(ofRow: $0).height } }
+    /// A row's height, without the 1 pt between rows.
+    func debugRowHeight(_ id: UUID) -> CGFloat? {
+        row(of: id).map { outline.rect(ofRow: $0).height - outline.intercellSpacing.height }
+    }
     /// Click the subagents row (as a click would, once the event is over).
     func debugClickSummary(_ id: UUID) { summaryClicked(id) }
     var debugPalette: SidebarPalette { palette }
