@@ -12,8 +12,8 @@ on run argv
 	set thisDir to do shell script "dirname " & quoted form of (POSIX path of (path to me))
 	set Helpers to load script POSIX file (thisDir & "/lib/Helpers.scpt")
 
-	-- Open the per-root settings sheet (sidebar gear icon) and switch to Sandboxes.
-	Helpers's axPressLabel(windowTitle, "Folder settings", 15)
+	-- Open the workspace's Settings (⌘,) and switch to Sandboxes.
+	Helpers's axOpenSettings(windowTitle)
 	Helpers's axWaitForSheet(windowTitle, 10)
 	Helpers's axPressIdentifier(windowTitle, "inspector-tab-sandboxes", 15)
 	Helpers's axPressIdentifier(windowTitle, "sandboxes-refresh", 10)
