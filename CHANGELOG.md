@@ -2,7 +2,7 @@
 
 A running log of what changed, newest first. Yes, we actually write these.
 
-## Unreleased
+## v0.2.29 — "Steady"
 - **The message field grows** with what you type, up to about half the chat's height (it had stopped at one line), then scrolls.
 - **Copy your own messages** from the hover bar or the right-click menu, like replies. Hovering shows just the Copy / Fork buttons; what you copy briefly lights up.
 - **Fixes:** the sidebar resizes again with a chat showing (0.2.28's centered chat column held the chat pane to its width and pinned the sidebar at its widest); the window's header is one strip over the Files inspector too, with nothing of the inspector drawn in it; the inspector's editor fills its column again instead of squeezing the code into a narrow strip; the chat no longer jitters while the sidebar slides in or out (the text keeps its width and just moves); a reply's Copy / Fork bar stays up as you move onto it, with an arrow pointer instead of the text cursor.
