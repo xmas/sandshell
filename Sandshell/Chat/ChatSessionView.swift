@@ -66,6 +66,7 @@ final class ChatSessionView: NSView {
 
     #if DEBUG
     var debugTranscript: ChatTranscriptView { transcript }
+    var debugComposer: ChatComposerView { composer }
     var debugComposerEnabled: Bool { composer.isEnabled }
     func debugSetDraft(_ text: String) { composer.setDraft(text) }
     #endif
@@ -398,6 +399,8 @@ final class ChatSessionView: NSView {
     override func layout() {
         super.layout()
         updateInspector()
+        // Like the Claude app's: what you type grows to about half the chat.
+        composer.maximumHeight = (bounds.height / 2).rounded()
     }
 
     /// The MCP details (the Connectors card's rows open them too).
@@ -504,9 +507,9 @@ final class ChatSessionView: NSView {
     /// it), the composer, or neither.
     var debugQuestionHasKeyboard: Bool { questionHost.map { keyboardIsIn($0) } ?? false }
     var debugComposerHasKeyboard: Bool { keyboardIsIn(composer) }
-    /// The composer's frame (in this view), the transcript's text inset and its text area's width.
-    var debugColumn: (composer: NSRect, textInset: CGFloat, textWidth: CGFloat) {
-        (composer.convert(composer.bounds, to: self), transcript.debugTextInset, transcript.debugContentWidth)
+    /// The composer's frame and the transcript's text column, in this view.
+    var debugColumn: (composer: NSRect, text: NSRect) {
+        (composer.convert(composer.bounds, to: self), transcript.convert(transcript.debugTextColumn, to: self))
     }
     #endif
 

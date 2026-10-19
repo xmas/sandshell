@@ -73,6 +73,9 @@ final class ImageAttachment: NSTextAttachment {
 final class TranscriptTextView: NSTextView {
     /// The pointer moved over / left the transcript (view coordinates; nil = left).
     var onHover: ((NSPoint?) -> Void)?
+    /// Whether `point` is over controls laid on the text (a reply's Copy /
+    /// Fork bar): the pointer is an arrow there, not the I-beam.
+    var isOverControls: ((NSPoint) -> Bool)?
     private var hoverArea: NSTrackingArea?
 
     override func updateTrackingAreas() {
@@ -86,7 +89,14 @@ final class TranscriptTextView: NSTextView {
 
     override func mouseMoved(with event: NSEvent) {
         super.mouseMoved(with: event)
-        onHover?(convert(event.locationInWindow, from: nil))
+        let point = convert(event.locationInWindow, from: nil)
+        onHover?(point)
+        if isOverControls?(point) == true { NSCursor.arrow.set() }
+    }
+
+    override func cursorUpdate(with event: NSEvent) {
+        if isOverControls?(convert(event.locationInWindow, from: nil)) == true { return NSCursor.arrow.set() }
+        super.cursorUpdate(with: event)
     }
 
     override func mouseExited(with event: NSEvent) {

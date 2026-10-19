@@ -42,6 +42,7 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
     override init(frame: NSRect) {
         super.init(frame: frame)
         scrollView.translatesAutoresizingMaskIntoConstraints = false
+        scrollView.contentView = CenteringClipView()
         scrollView.hasVerticalScroller = true
         scrollView.drawsBackground = false
         addSubview(scrollView)
@@ -56,7 +57,7 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
         tv.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: .greatestFiniteMagnitude)
         tv.isVerticallyResizable = true
         tv.isHorizontallyResizable = false
-        tv.autoresizingMask = [.width]
+        tv.autoresizingMask = []   // sized in layout(): the readable column's width at most
         tv.textContainer?.widthTracksTextView = true
         scrollView.documentView = tv
         tv.isEditable = false
@@ -89,6 +90,7 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
         replyActions.isHidden = true
         tv.addSubview(replyActions)
         tv.onHover = { [weak self] point in self?.hover(at: point) }
+        tv.isOverControls = { [weak self] point in self?.isOverActions(point) ?? false }
         tv.replyMenuItems = { [weak self] point in self?.replyMenuItems(at: point) ?? [] }
 
         scrollView.contentView.postsBoundsChangedNotifications = true
@@ -103,24 +105,46 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
     static let readableWidth: CGFloat = 800
     private static let minInset: CGFloat = 20
 
-    /// The text's side inset in a transcript `width` wide: the margin, or
-    /// whatever centers a readable-width column.
-    static func sideInset(forWidth width: CGFloat) -> CGFloat {
-        max(minInset, ((width - readableWidth) / 2).rounded(.down))
+    /// The text view's width in a transcript `width` wide: the whole width, up
+    /// to the readable column and its margins.
+    static func textViewWidth(forWidth width: CGFloat) -> CGFloat {
+        min(width, readableWidth + 2 * minInset)
     }
 
     override func layout() {
         super.layout()
-        let side = Self.sideInset(forWidth: scrollView.contentSize.width)
-        guard textView.textContainerInset.width != side else { return }
-        let keep = stickToBottom
-        textView.textContainerInset.width = side
-        if keep { scrollToBottom() }
+        // A wide pane centers a column of fixed width (the clip view centers
+        // it), so resizing the pane — the sidebar sliding in or out — moves the
+        // text without laying it out again; a narrower pane reflows it.
+        let width = Self.textViewWidth(forWidth: scrollView.contentSize.width)
+        if textView.frame.width != width {
+            let keep = stickToBottom
+            textView.setFrameSize(NSSize(width: width, height: textView.frame.height))
+            if keep { scrollToBottomSoon() }
+        }
+        let clip = scrollView.contentView
+        let centered = clip.constrainBoundsRect(clip.bounds).origin
+        if clip.bounds.origin != centered { clip.setBoundsOrigin(centered) }
     }
 
+    /// Once per runloop turn, however many times layout asks.
+    private func scrollToBottomSoon() {
+        guard !bottomPending else { return }
+        bottomPending = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.bottomPending = false
+            self.scrollToBottom()
+        }
+    }
+    private var bottomPending = false
+
     #if DEBUG
-    var debugTextInset: CGFloat { textView.textContainerInset.width }
-    var debugContentWidth: CGFloat { scrollView.contentSize.width }
+    /// The text's column (inside the margins), in this view's coordinates.
+    var debugTextColumn: NSRect {
+        convert(textView.frame, from: textView.superview).insetBy(dx: textView.textContainerInset.width, dy: 0)
+    }
+    var debugTextViewWidth: CGFloat { textView.frame.width }
     #endif
 
     /// Coalesce bursts of streaming updates into one pass per runloop turn.
@@ -344,7 +368,16 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
         NSButton.symbol(symbol, label: label, size: NSSize(width: 24, height: 20), target: target, action: action)
     }
 
-    /// Which reply (agent text segment) is under `point`, and its frame.
+    /// The text a hover bar copies: a reply's Markdown, or your own message.
+    private static func copyableText(_ item: ChatItem) -> String? {
+        switch item {
+        case .agentText(_, let text): text
+        case .user(_, let text, _): text.isEmpty ? nil : text
+        default: nil
+        }
+    }
+
+    /// Which reply (or message of yours) is under `point`, and its frame.
     private func reply(at point: NSPoint) -> (index: Int, frame: NSRect)? {
         guard let storage = textView.textStorage, storage.length > 0 else { return nil }
         let char = textView.characterIndexForInsertion(at: point)
@@ -352,7 +385,7 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
         for (i, segment) in segments.enumerated() {
             defer { location += segment.length }
             guard char >= location, char < location + segment.length else { continue }
-            guard case .agentText = segment.item, let frame = frame(of: NSRange(location: location, length: segment.length)),
+            guard Self.copyableText(segment.item) != nil, let frame = frame(of: NSRange(location: location, length: segment.length)),
                   frame.insetBy(dx: -12, dy: -6).contains(point) else { return nil }
             return (i, frame)
         }
@@ -376,6 +409,9 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
     }
 
     private func hover(at point: NSPoint?) {
+        // On the action bar (or about to be): still the reply it's for. Half of
+        // it sits above the reply, where the reply's own area ends.
+        if let point, isOverActions(point) { return }
         let hit = point.flatMap { reply(at: $0) }
         hovered = hit?.index
         guard let hit else {
@@ -389,7 +425,8 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
         hoverBackground.isHidden = false
         replyActions.layer?.backgroundColor = NSColor.textBackgroundColor.cgColor
         replyActions.layer?.borderColor = NSColor.separatorColor.cgColor
-        forkButton?.isHidden = onFork == nil
+        // Fork is from a reply; your own messages just copy.
+        forkButton?.isHidden = onFork == nil || !isReply(hit.index)
         let size = replyActions.fittingSize
         replyActions.frame = NSRect(x: hoverBackground.frame.maxX - size.width - 6,
                                     y: hoverBackground.frame.minY - size.height / 2,
@@ -397,9 +434,18 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
         replyActions.isHidden = false
     }
 
+    private func isOverActions(_ point: NSPoint) -> Bool {
+        !replyActions.isHidden && replyActions.frame.insetBy(dx: -6, dy: -6).contains(point)
+    }
+
     private var hoveredText: String? {
-        guard let i = hovered, i < segments.count, case .agentText(_, let text) = segments[i].item else { return nil }
-        return text
+        guard let i = hovered, i < segments.count else { return nil }
+        return Self.copyableText(segments[i].item)
+    }
+
+    private func isReply(_ index: Int) -> Bool {
+        guard index < segments.count, case .agentText = segments[index].item else { return false }
+        return true
     }
 
     #if DEBUG
@@ -413,6 +459,18 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
             location += segment.length
         }
     }
+    /// Self-test: hover your first message.
+    func debugHoverFirstUserMessage() {
+        var location = 0
+        for segment in segments {
+            if case .user = segment.item, let f = frame(of: NSRange(location: location, length: segment.length)) {
+                return hover(at: NSPoint(x: f.midX, y: f.midY))
+            }
+            location += segment.length
+        }
+    }
+    /// Self-test: the pointer moves onto the top half of the hover bar (above the reply).
+    func debugHoverActionsTop() { hover(at: NSPoint(x: replyActions.frame.midX, y: replyActions.frame.minY + 2)) }
     var debugReplyActionsShown: Bool { !replyActions.isHidden }
     /// Whether the hover bar offers Fork to New Chat (only where forking is wired).
     var debugForkShown: Bool { !replyActions.isHidden && forkButton?.isHidden == false }
@@ -440,7 +498,7 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
     }
 
     @objc private func forkReply() {
-        guard let text = hoveredText else { return }
+        guard let i = hovered, isReply(i), let text = hoveredText else { return }
         onFork?(text)
     }
 
@@ -451,9 +509,10 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
         if let window { op.runModal(for: window, delegate: nil, didRun: nil, contextInfo: nil) } else { op.run() }
     }
 
-    /// A reply as its Markdown (plain text) and as it looks (rich text).
+    /// A reply as its Markdown (plain text) and as it looks (rich text); a
+    /// message of yours as you typed it.
     private func copyReplyText(at index: Int) {
-        guard index < segments.count, case .agentText(_, let markdown) = segments[index].item else { return }
+        guard index < segments.count, let markdown = Self.copyableText(segments[index].item) else { return }
         let pb = NSPasteboard.general
         pb.clearContents()
         pb.setString(markdown, forType: .string)
@@ -469,7 +528,10 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
 
     /// Right-click on a reply: the hover actions, reachable without a pointer hover.
     private func replyMenuItems(at point: NSPoint) -> [NSMenuItem] {
-        guard let hit = reply(at: point), case .agentText(_, let text) = segments[hit.index].item else { return [] }
+        guard let hit = reply(at: point), let text = Self.copyableText(segments[hit.index].item) else { return [] }
+        guard isReply(hit.index) else {
+            return [NSMenuItem("Copy Message") { [weak self] in self?.copyReplyText(at: hit.index) }]
+        }
         var items = [NSMenuItem("Copy Reply") { [weak self] in self?.copyReplyText(at: hit.index) }]
         if onFork != nil { items.append(NSMenuItem("Fork from This Reply") { [weak self] in self?.onFork?(text) }) }
         items.append(NSMenuItem("Share Reply…") { [weak self] in
@@ -504,5 +566,17 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
         apply(items, force: [id])
         stickToBottom = keep
         return true
+    }
+}
+
+/// Keeps a document narrower than the clip centered in it: the transcript's
+/// column, with the scroller still at the pane's edge.
+final class CenteringClipView: NSClipView {
+    override func constrainBoundsRect(_ proposedBounds: NSRect) -> NSRect {
+        var rect = super.constrainBoundsRect(proposedBounds)
+        if let document = documentView, document.frame.width < rect.width {
+            rect.origin.x = ((document.frame.width - rect.width) / 2).rounded()
+        }
+        return rect
     }
 }

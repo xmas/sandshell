@@ -3,7 +3,9 @@
 A running log of what changed, newest first. Yes, we actually write these.
 
 ## Unreleased
-- **Fixes:** the sidebar resizes again with a chat showing (0.2.28's centered chat column held the chat pane to its width and pinned the sidebar at its widest); the window's header is one strip over the Files inspector too, with nothing of the inspector drawn in it; the inspector's editor fills its column again instead of squeezing the code into a narrow strip.
+- **The message field grows** with what you type, up to about half the chat's height (it had stopped at one line), then scrolls.
+- **Copy your own messages** from the hover bar or the right-click menu, like replies.
+- **Fixes:** the sidebar resizes again with a chat showing (0.2.28's centered chat column held the chat pane to its width and pinned the sidebar at its widest); the window's header is one strip over the Files inspector too, with nothing of the inspector drawn in it; the inspector's editor fills its column again instead of squeezing the code into a narrow strip; the chat no longer jitters while the sidebar slides in or out (the text keeps its width and just moves); a reply's Copy / Fork bar stays up as you move onto it, with an arrow pointer instead of the text cursor.
 
 ## v0.2.28 — "In Detail"
 - **Chats read in a centered column** up to 800 points wide in a wide pane, like the Claude app — the transcript, the composer and its controls line up; the scroller stays at the edge.

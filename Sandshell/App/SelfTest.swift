@@ -800,6 +800,13 @@ enum SelfTest {
         check(v.isInspectorShown, "Session Details shows beside the chat")
         v.session.send(text: "Reply with exactly the word PONG and nothing else.", attachments: [])
         check(await until(180) { v.session.phase == .ready && v.session.usage != nil }, "a turn gives it usage to show")
+        v.debugComposer.debugType((1...60).map { "line \($0)" }.joined(separator: "\n"))
+        v.layoutSubtreeIfNeeded()
+        let field = v.debugComposer.debugFieldHeight
+        log("composer field \(Int(field)) in a \(Int(v.bounds.height))-point chat")
+        check(field > 200 && field <= v.bounds.height / 2 + 1, "a long message grows the field to about half the chat")
+        v.debugComposer.debugType("")
+        check(v.debugComposer.debugFieldHeight <= 41, "and it shrinks back when it's sent or cleared")
         await wait(1)
         snapshot(window, "details")
         SessionDetails.toggle()
@@ -812,10 +819,12 @@ enum SelfTest {
             await wait(0.5)
             v.layoutSubtreeIfNeeded()
             let col = v.debugColumn
-            log("column: window \(Int(w.frame.width)), pane \(Int(v.bounds.width)), composer x \(Int(col.composer.minX)) w \(Int(col.composer.width)), text inset \(Int(col.textInset))")
+            log("column: window \(Int(w.frame.width)), pane \(Int(v.bounds.width)), composer x \(Int(col.composer.minX)) w \(Int(col.composer.width)), text \(Int(col.text.minX))–\(Int(col.text.maxX))")
             check(col.composer.width <= ChatTranscriptView.readableWidth + 1
                   && abs(col.composer.midX - v.bounds.midX) < 2, "a wide pane centers the composer, at most the readable width")
-            check(col.textInset == ChatTranscriptView.sideInset(forWidth: col.textWidth), "the transcript's text sits in the same column")
+            // (A legacy scroller takes width from the transcript's right: its center moves left by half.)
+            check(col.text.width <= ChatTranscriptView.readableWidth + 1 && abs(col.text.midX - col.composer.midX) <= 9,
+                  "the transcript's text sits in the same column (\(Int(col.text.minX))–\(Int(col.text.maxX)))")
             // The column mustn't hold the pane to its width: the sidebar still resizes.
             if let split = w.contentViewController as? NSSplitViewController, let side = split.splitViewItems.first {
                 let sidebar = side.viewController.view
@@ -828,8 +837,15 @@ enum SelfTest {
             // The window can't outgrow the screen: a transcript on its own, wider.
             let wide = ChatTranscriptView(frame: NSRect(x: 0, y: 0, width: 1600, height: 400))
             wide.layoutSubtreeIfNeeded()
-            log("1600-wide transcript: text inset \(Int(wide.debugTextInset))")
-            check(wide.debugTextInset >= 390, "a wide transcript centers its text in an 800-point column")
+            let text = wide.debugTextColumn
+            log("1600-wide transcript: text \(Int(text.minX))–\(Int(text.maxX))")
+            check(abs(text.width - ChatTranscriptView.readableWidth) < 1 && abs(text.midX - 800) <= 9,
+                  "a wide transcript centers its text in an 800-point column")
+            // Resizing a wide pane (the sidebar sliding) moves the text, never lays it out again.
+            wide.setFrameSize(NSSize(width: 1300, height: 400))
+            wide.layoutSubtreeIfNeeded()
+            check(wide.debugTextViewWidth == ChatTranscriptView.readableWidth + 40 && abs(wide.debugTextColumn.midX - 650) <= 9,
+                  "a narrower but still wide pane keeps the text's width, centered")
             w.setFrame(before, display: true)
             await wait(0.3)
         }
@@ -1769,6 +1785,12 @@ enum SelfTest {
             check(view.debugTranscript.debugReplyActionsShown && view.debugTranscript.debugForkShown,
                   "hovering a reply shows Copy / Fork")
             snapshot(window, "fork-hover")
+            view.debugTranscript.debugHoverActionsTop()
+            check(view.debugTranscript.debugReplyActionsShown, "the bar stays up with the pointer on its top half")
+            view.debugTranscript.debugHoverFirstUserMessage()
+            await wait(0.2)
+            check(view.debugTranscript.debugReplyActionsShown && !view.debugTranscript.debugForkShown,
+                  "hovering your own message shows Copy alone")
         }
         let first = c.items.compactMap { if case .agentText(_, let t) = $0 { t } else { nil } }.first { $0.contains("ALPHA-ONE") } ?? "ALPHA-ONE"
         guard let forked = ws.forkChat(s.id, upTo: first) else { return check(false, "fork created") }

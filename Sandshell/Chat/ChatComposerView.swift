@@ -277,12 +277,33 @@ final class ChatComposerView: NSView, NSTextViewDelegate {
         resize()
     }
 
-    /// Grow with the text, 1–10 lines, then scroll.
+    #if DEBUG
+    /// Self-test: type `text` (replacing what's there) and the field's height.
+    func debugType(_ text: String) { textView.string = text; resize() }
+    var debugFieldHeight: CGFloat { heightConstraint.constant }
+    #endif
+
+    /// How tall the field may grow before it scrolls (the chat sets it to about
+    /// half its height).
+    var maximumHeight: CGFloat = 200 {
+        didSet { if oldValue != maximumHeight { resize() } }
+    }
+
+    /// Grow with the text, from one line up to `maximumHeight`, then scroll.
     private func resize() {
-        guard let tlm = textView.textLayoutManager else { return }
-        tlm.ensureLayout(for: tlm.documentRange)
-        let used = tlm.usageBoundsForTextContainer.height
-        let h = min(max(used + textView.textContainerInset.height * 2, 40), 200)
+        let used: CGFloat
+        if let tlm = textView.textLayoutManager {
+            tlm.ensureLayout(for: tlm.documentRange)
+            used = tlm.usageBoundsForTextContainer.height
+        } else if let layout = textView.layoutManager, let container = textView.textContainer {
+            // TextKit 1: AppKit moves the field onto it (for the inline file
+            // chips); measuring only through TextKit 2 left it one line tall.
+            layout.ensureLayout(for: container)
+            used = layout.usedRect(for: container).height
+        } else {
+            return
+        }
+        let h = min(max(used + textView.textContainerInset.height * 2, 40), max(maximumHeight, 40))
         if abs(heightConstraint.constant - h) > 0.5 { heightConstraint.constant = h }
     }
 
