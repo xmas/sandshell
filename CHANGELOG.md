@@ -2,7 +2,7 @@
 
 A running log of what changed, newest first. Yes, we actually write these.
 
-## Unreleased
+## v0.2.30 — "Less Chrome"
 - **Less chrome, one place for everything.** The window was redesigned around one rule: each action lives in one place.
 - **Type:** the whole interface uses four text styles — title, body, small and code — instead of fourteen sizes. Weight means unread; colour means status. Chat text is 13 pt.
 - **Sessions keep their names.** A session is named by your first message (no longer by your latest), then by Claude's own title for the conversation once it has one; a rename still wins, and clearing it goes back. Forks remember where they came from, read "Fork of …" until you write in them, and sit under their source in the sidebar.
