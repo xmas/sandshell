@@ -198,6 +198,9 @@ final class SessionCellView: NSTableCellView {
     private let badge = AgentBadgeView(side: SidebarMetrics.badgeSide, fontSize: 9, radius: 6)
     private let forkGlyph = NSImageView()
     private let nameLabel = NSTextField.sidebarLabel(.role(.body))
+    /// Behind the name while it's renamed: a soft field in the sidebar's own
+    /// colours, padded around the text (the field editor's own is black).
+    private let renameBackdrop = NSView()
     private let timeLabel = NSTextField.sidebarLabel(.role(.code))
     private let closeButton = NSButton()
     private let glyphSlot = NSView()
@@ -237,6 +240,12 @@ final class SessionCellView: NSTableCellView {
         titleRow.alignment = .centerY
         titleRow.spacing = 8
         titleRow.setCustomSpacing(6, after: forkGlyph)
+
+        renameBackdrop.wantsLayer = true
+        renameBackdrop.layer?.cornerRadius = 5
+        renameBackdrop.layer?.borderWidth = 1
+        renameBackdrop.isHidden = true
+        renameBackdrop.translatesAutoresizingMaskIntoConstraints = false
 
         glyphSlot.translatesAutoresizingMaskIntoConstraints = false
         for v in [dot, spinner] as [NSView] {
@@ -403,11 +412,31 @@ final class SessionCellView: NSTableCellView {
         nameLabel.isEditable = true
         nameLabel.isSelectable = true
         nameLabel.delegate = self
+        nameLabel.focusRingType = .none   // the backdrop is its frame
+        if renameBackdrop.superview == nil, let row = nameLabel.superview {
+            row.addSubview(renameBackdrop, positioned: .below, relativeTo: nil)
+            NSLayoutConstraint.activate([
+                renameBackdrop.leadingAnchor.constraint(equalTo: nameLabel.leadingAnchor, constant: -6),
+                renameBackdrop.trailingAnchor.constraint(equalTo: nameLabel.trailingAnchor, constant: 4),
+                renameBackdrop.topAnchor.constraint(equalTo: nameLabel.topAnchor, constant: -4),
+                renameBackdrop.bottomAnchor.constraint(equalTo: nameLabel.bottomAnchor, constant: 4),
+            ])
+        }
+        renameBackdrop.layer?.backgroundColor = palette.background.mixed(with: palette.foreground, 0.14).cgColor
+        renameBackdrop.layer?.borderColor = NSColor.controlAccentColor.withAlphaComponent(0.8).cgColor
+        renameBackdrop.isHidden = false
         guard window?.makeFirstResponder(nameLabel) == true else {
             renameDone = nil
             nameLabel.isEditable = false
             nameLabel.isSelectable = false
+            renameBackdrop.isHidden = true
             return false
+        }
+        if let editor = nameLabel.currentEditor() as? NSTextView {
+            editor.drawsBackground = false
+            editor.backgroundColor = .clear
+            editor.insertionPointColor = palette.foreground
+            editor.textColor = palette.foreground
         }
         nameLabel.currentEditor()?.selectAll(nil)
         syncHover()
@@ -421,12 +450,14 @@ final class SessionCellView: NSTableCellView {
         renameDone = nil
         nameLabel.isEditable = false
         nameLabel.isSelectable = false
+        renameBackdrop.isHidden = true
         if name == nil { nameLabel.stringValue = nameBeforeRename }
         done(name == nameBeforeRename ? nil : name)
     }
 
     #if DEBUG
     var debugName: String { nameLabel.stringValue }
+    var debugRenameBackdropShown: Bool { !renameBackdrop.isHidden && renameBackdrop.superview != nil }
     func debugFinishRenaming(_ name: String?) {
         if let name { nameLabel.stringValue = name }
         finishRenaming(name)

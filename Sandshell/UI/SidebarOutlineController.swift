@@ -314,6 +314,7 @@ final class SidebarListController: NSViewController {
         outline.setDraggingSourceOperationMask([.move, .copy], forLocal: true)
         outline.target = self
         outline.action = #selector(rowClicked)
+        outline.doubleAction = #selector(rowDoubleClicked)
         outline.menuProvider = { [weak self] row in self?.contextMenu(forRow: row) }
         outline.onDeleteKey = { [weak self] in self?.closeSelectedSession() }
         outline.onReturnKey = { [weak self] in
@@ -850,6 +851,16 @@ final class SidebarListController: NSViewController {
     /// (re-clicking an already-selected row doesn't fire selectionDidChange).
     /// A ⌘- or ⇧-click only changes what's picked (selectionDidChange did that):
     /// republishing its row would undo a ⌘-click that unpicked it.
+    /// Double-click: rename a session in place (a subagent opens its window).
+    @objc private func rowDoubleClicked() { doubleClicked(row: outline.clickedRow) }
+
+    private func doubleClicked(row: Int) {
+        guard row >= 0 else { return }
+        if let info = subagent(atRow: row) { return SubagentWindowController.show(info, workspace: controller) }
+        guard let id = sessionID(atRow: row) else { return }
+        Self.afterEvent { [weak self] in self?.beginRename(id) }
+    }
+
     @objc private func rowClicked() {
         let row = outline.clickedRow
         let modifiers = NSApp.currentEvent?.modifierFlags ?? []
@@ -1251,6 +1262,7 @@ final class SidebarListController: NSViewController {
     /// Click the subagents row (as a click would, once the event is over).
     func debugClickSummary(_ id: UUID) { summaryClicked(id) }
     var debugPalette: SidebarPalette { palette }
+    func debugDoubleClick(_ id: UUID) { row(of: id).map { doubleClicked(row: $0) } }
     var debugSearchHint: String? { searchField.hintText }
     #endif
 

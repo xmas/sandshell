@@ -1240,9 +1240,12 @@ enum SelfTest {
         undo.undo()
         check(ws.session(id: a.id)?.name == a.name && ws.session(id: a.id)?.isNamedByUser == false
                 && ws.displayName(a.id) == automatic, "Undo Rename (\(ws.displayName(a.id) ?? "-"))")
-        // Inline, from the row.
+        // Inline, from the row: a double-click starts it.
         await wait(0.3)
-        sidebar.beginRename(a.id)
+        sidebar.debugDoubleClick(a.id)
+        check(await until(2) { sidebar.debugCell(a.id)?.isRenaming == true }, "double-clicking a row renames it in place")
+        check(sidebar.debugCell(a.id)?.debugRenameBackdropShown == true, "in a padded field of the sidebar's own colours")
+        snapshot(window, "sidebar-rename")
         if let cell = sidebar.debugCell(a.id) {
             cell.debugFinishRenaming("Renamed inline")
             check(ws.session(id: a.id)?.name == "Renamed inline", "renaming in the row")

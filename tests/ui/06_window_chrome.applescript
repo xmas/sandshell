@@ -11,7 +11,7 @@ on run argv
 	set Helpers to load script POSIX file (thisDir & "/lib/Helpers.scpt")
 	tell Helpers to waitUntilRunning(bundleID, 20)
 
-	repeat with ident in {"sidebar-terminal", "sidebar-debug", "toolbar-sandbox", "toolbar-files", "context-folder"}
+	repeat with ident in {"toolbar-sandbox", "toolbar-files", "context-folder"}
 		Helpers's axWaitForIdentifier(windowTitle, ident as text, 30)
 	end repeat
 	set ids to Helpers's axIdentifiers(windowTitle)
@@ -19,6 +19,8 @@ on run argv
 		if ids contains (gone as text) then error "the old pane buttons are still there: " & gone
 	end repeat
 	set tree to Helpers's axCommand("dump", windowTitle, "")
+	-- (A symbol button's identifier doesn't reach the accessibility tree; its label does.)
+	if tree does not contain "label=Open a Terminal on This Mac" or tree does not contain "label=Status Debug" then error "the sidebar footer's terminal and Status Debug buttons are missing"
 	if tree contains "label=Folder settings" then error "the sidebar footer still has its settings button"
-	return "PASS: 06_window_chrome — one-line sidebar footer, title bar Sandbox group + Files, pane breadcrumb; no old footer buttons"
+	return "PASS: 06_window_chrome — sidebar footer buttons, title bar Sandbox group + Files, pane breadcrumb; no old pane buttons"
 end run
