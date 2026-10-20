@@ -1327,6 +1327,8 @@ enum SelfTest {
         guard let tree = window.paneTree, let ws = window.workspaceController else { return log("no window") }
         await wait(1.0)
         check(tree.panes.count == 1 && tree.panes[0].shownSession != nil, "the session's pane restored, alone (got \(tree.panes.count))")
+        check(tree.focused.shownSession.map { ws.selection == .session($0) } == true,
+              "the sidebar selects the session the restored pane shows (\(String(describing: ws.selection)))")
         check(window.isFilesShown, "the Files sidebar comes back open")
         if let files = window.inspectorFiles {
             check(files.tree.root?.standardizedFileURL.path == ws.rootURL.standardizedFileURL.path, "restored Files shows the session's folder")

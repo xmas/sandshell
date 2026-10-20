@@ -97,7 +97,9 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
         if case .session(let id)? = controller.selection, let holder = panes.first(where: { $0.shownSession == id }) {
             focused = holder
         } else {
-            focused = panes.first
+            focused = panes.first(where: { $0.shownSession != nil }) ?? panes.first
+            // The sidebar selects what the restored pane shows (not something off screen).
+            if let id = focused.shownSession { controller.selection = .session(id) }
         }
         rebuild()
     }

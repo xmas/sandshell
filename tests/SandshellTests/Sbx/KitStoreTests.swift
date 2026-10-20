@@ -346,6 +346,17 @@ struct KitStoreAgentRequirementTests {
         #expect(KitStore.kits([], for: .claude).isEmpty)
     }
 
+    @Test("An inspected kit is cached with its kind: an agent kit can be told from a mixin made for that agent",
+          arguments: [("sandbox", "droid", nil, "sandbox:droid"), ("mixin", nil, "claude", "mixin:claude"),
+                      ("mixin", nil, nil, "mixin:"), (nil, "x", nil, "mixin:")] as [(String?, String?, String?, String)])
+    func requirementEntry(kind: String?, name: String?, requires: String?, entry: String) {
+        var info = KitInspection()
+        info.kind = kind
+        info.name = name
+        info.requires = requires.map { KitInspection.Requires(agent: $0) }
+        #expect(KitStore.requirementEntry(info) == entry)
+    }
+
     @Test("An agent's own create reference is never also a --kit")
     func ownCreateReferenceDropped() {
         #expect(KitStore.kits(["claude", "sandshell-claude"], for: .claude) == ["sandshell-claude"])

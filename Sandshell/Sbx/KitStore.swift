@@ -96,50 +96,58 @@ enum KitStore {
 
     // MARK: Agent requirements
 
-    /// v2: entries learned before agent kits (`kind: sandbox`) counted said
-    /// "any agent" for them, which sent them to other agents as `--kit`
-    /// (sbx refuses); every kit is asked again.
-    private static let requirementsKey = "kitRequiredAgents.v2"
-    private static let staleRequirementsKeys = ["kitRequiredAgents"]
+    /// v3: one entry per kit holds both what `sbx kit inspect` said it is
+    /// and the agent it's for — `sandbox:droid` (it defines that agent),
+    /// `mixin:claude` (made for Claude), `mixin:` (any agent). Earlier caches
+    /// kept the agent alone (v1 even said "any agent" for agent kits, which
+    /// sent them to other sandboxes as `--kit`; sbx refuses), so every kit is
+    /// asked again.
+    private static let requirementsKey = "kitRequirements.v3"
+    private static let staleRequirementsKeys = ["kitRequiredAgents", "kitRequiredAgents.v2", "kitDefinesAgent"]
     /// Known up front, so the official default works offline.
     private static let knownRequirements = ["docker.io/sbx/code-server-kit:latest": "claude",
                                             "sandshell-claude": "claude", "sandshell-codex": "codex"]
+
+    /// What's cached for `ref`: its kind and the agent it's for ("" = any).
+    private static func cached(_ ref: String) -> (kind: String, agent: String)? {
+        _ = dropStaleRequirements
+        let cache = UserDefaults.standard.dictionary(forKey: requirementsKey) as? [String: String] ?? [:]
+        guard let entry = cache[ref], let colon = entry.firstIndex(of: ":") else { return nil }
+        return (String(entry[..<colon]), String(entry[entry.index(after: colon)...]))
+    }
 
     /// The agent a kit is made for (`requires.agent` in its spec, or the agent
     /// a `kind: sandbox` kit defines): `.some(nil)` for any agent, `nil` while
     /// not yet known.
     static func requiredAgent(_ ref: String) -> String?? {
-        dropStaleRequirements
         if let known = knownRequirements[ref] { return .some(known) }
         // An agent kit is its own agent's: sbx refuses it as another's --kit.
         if let profile = AgentProfileStore.all.first(where: { $0.kitRef == ref }) { return .some(profile.agent) }
-        let cache = UserDefaults.standard.dictionary(forKey: requirementsKey) as? [String: String] ?? [:]
-        guard let agent = cache[ref] else { return nil }
-        return .some(agent.isEmpty ? nil : agent)
+        guard let entry = cached(ref) else { return nil }
+        return .some(entry.agent.isEmpty ? nil : entry.agent)
     }
 
     private static let dropStaleRequirements: Void = {
         for key in staleRequirementsKeys { UserDefaults.standard.removeObject(forKey: key) }
     }()
 
-    /// Remember what `sbx kit inspect` said a kit requires (and whether it
-    /// defines an agent).
+    /// Remember what `sbx kit inspect` said a kit is and requires.
     static func learn(_ ref: String, from info: KitInspection) {
+        _ = dropStaleRequirements
         var cache = UserDefaults.standard.dictionary(forKey: requirementsKey) as? [String: String] ?? [:]
-        cache[ref] = info.kind == "sandbox" ? (info.name ?? "") : (info.requires?.agent ?? "")
+        cache[ref] = requirementEntry(info)
         UserDefaults.standard.set(cache, forKey: requirementsKey)
-        var agentKits = Set(UserDefaults.standard.stringArray(forKey: agentKitsKey) ?? [])
-        if info.kind == "sandbox" { agentKits.insert(ref) } else { agentKits.remove(ref) }
-        UserDefaults.standard.set(agentKits.sorted(), forKey: agentKitsKey)
     }
 
-    private static let agentKitsKey = "kitDefinesAgent"
+    /// The cache entry for an inspected kit: `sandbox:<agent>` or `mixin:<agent or "">`.
+    static func requirementEntry(_ info: KitInspection) -> String {
+        info.kind == "sandbox" ? "sandbox:\(info.name ?? "")" : "mixin:\(info.requires?.agent ?? "")"
+    }
 
     /// A `kind: sandbox` kit: it defines an agent, so it's only ever the create
     /// positional (`createReference`), never anyone's `--kit` — not even its own agent's.
     static func definesAgent(_ ref: String) -> Bool {
-        AgentProfileStore.all.contains { $0.kitRef == ref }
-            || (UserDefaults.standard.stringArray(forKey: agentKitsKey) ?? []).contains(ref)
+        AgentProfileStore.all.contains { $0.kitRef == ref } || cached(ref)?.kind == "sandbox"
     }
 
     /// Which of `refs` a sandbox for `agent` can take as `--kit`: a kit made for
