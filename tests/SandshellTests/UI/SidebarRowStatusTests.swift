@@ -43,6 +43,39 @@ struct SidebarRowStatusTests {
     }
 }
 
+// MARK: - A plan's progress
+
+extension SidebarRowStatusTests {
+    struct PlanProgressDetail {
+        static func working(plan statuses: [String]?) -> SessionRuntime? {
+            var rt = SidebarRowStatusTests.runtime(.working)
+            if let statuses {
+                rt?.planProgress = PlanProgress(statuses.map { ChatItem.PlanEntry(content: "x", status: $0) })
+            }
+            return rt
+        }
+
+        @Test func aWorkingRowSaysHowFarThroughItsPlan() {
+            let rt = Self.working(plan: ["completed", "completed", "completed", "in_progress", "pending", "pending"])
+            let status = SessionRowStatus.of(rt, agent: .claude)
+            #expect(status.word == "Working")
+            #expect(status.detail == "3/6")
+        }
+
+        @Test func withoutAPlanItKeepsTheModel() {
+            #expect(SessionRowStatus.of(Self.working(plan: nil), agent: .claude).detail == "Opus 5.5")
+            #expect(SessionRowStatus.of(Self.working(plan: []), agent: .claude).detail == "Opus 5.5")
+        }
+
+        @Test(arguments: [SessionRowStatus.State.needsYou, .finishedUnread, .finishedSeen, .ready])
+        func onlyWorkingShowsIt(_ state: SessionRowStatus.State) {
+            var rt = SidebarRowStatusTests.runtime(state)
+            rt?.planProgress = PlanProgress([.init(content: "x", status: "completed")])
+            #expect(SessionRowStatus.of(rt, agent: .claude).detail?.contains("1/1") != true)
+        }
+    }
+}
+
 // MARK: - The six states
 
 extension SidebarRowStatusTests {

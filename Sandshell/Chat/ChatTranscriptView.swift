@@ -625,6 +625,16 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
     func debugApplyNow(_ items: [ChatItem]) { apply(items) }
     /// Self-test: the transcript's text.
     var debugText: String { textView.string }
+    /// Self-test: the plan marks the laid-out fragments draw, in order.
+    var debugPlanMarks: [ChatItem.PlanEntry.State] {
+        guard let tlm = textView.textLayoutManager else { return [] }
+        var marks: [ChatItem.PlanEntry.State] = []
+        tlm.enumerateTextLayoutFragments(from: tlm.documentRange.location, options: [.ensuresLayout]) { fragment in
+            if let mark = (fragment as? BlockBackgroundFragment)?.mark { marks.append(mark.state) }
+            return true
+        }
+        return marks
+    }
     /// Self-test: click a "Show more" / group link by id.
     func debugToggle(_ id: String) {
         _ = textView(textView, clickedOnLink: ChatRenderer.toggleURL(id), at: 0)
