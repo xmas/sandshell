@@ -435,6 +435,12 @@ final class MainWindowController: NSWindowController {
     var debugSandboxAccess: String { sandboxActions.toolTip ?? "" }
     func debugShowSandboxAccess() -> Bool { showSandboxAccessFromMenu(); return accessPopover?.isShown == true }
     func debugCloseSandboxAccess() { accessPopover?.close(); accessPopover = nil }
+    /// Self-test: collapse or expand Files as a person's click does (animated).
+    func debugSetFilesShownAnimated(_ show: Bool) {
+        guard let item = filesItem, item.isCollapsed == show else { return }
+        NSAnimationContext.runAnimationGroup { _ in item.animator().isCollapsed = !show }
+        filesVisibilityChanged()
+    }
     /// Self-test: what the Sandbox group's label says.
     var debugSandboxLabel: String { sandboxActions.debugLabel }
     var debugSandboxLabelWhole: Bool { sandboxActions.layoutSubtreeIfNeeded(); return sandboxActions.debugLabelWhole }

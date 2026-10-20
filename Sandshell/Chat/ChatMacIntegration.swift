@@ -78,6 +78,17 @@ final class TranscriptTextView: NSTextView {
     var isOverControls: ((NSPoint) -> Bool)?
     private var hoverArea: NSTrackingArea?
 
+    /// The end of a live resize (the Files sidebar sliding shut, a window
+    /// drag): NSTextView's own re-sizes itself "forcing a scroll" through
+    /// TextKit 2's viewport, and on a text whose content changed meanwhile
+    /// (a streaming reply, a diff redrawn) that reached a freed text range
+    /// and crashed (0.2.35). These read-only texts need none of it: they're
+    /// sized by their containers all along; lay out what shows and redraw.
+    override func viewDidEndLiveResize() {
+        textLayoutManager?.textViewportLayoutController.layoutViewport()
+        needsDisplay = true
+    }
+
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         if let hoverArea { removeTrackingArea(hoverArea) }

@@ -852,6 +852,20 @@ enum SelfTest {
             snapshotFrame(window, "files-sidebar")
         }
 
+        // Hiding Files while it shows a rendered Markdown file and the diff
+        // column, animated as a click does it (a crash once ended that
+        // collapse's live resize in a text view).
+        files.open(repo.appendingPathComponent("README.md"))
+        files.editor.setMode(.preview)
+        files.setDiffColumnShown(true)
+        await wait(0.5)
+        for show in [false, true, false, true] {
+            window.debugSetFilesShownAnimated(show)
+            await wait(1.0)
+        }
+        check(window.isFilesShown, "Files hides and shows again, animated, with a preview and the diff column up")
+        files.setDiffColumnShown(false)
+
         // Content search finds a file with an accented name, by its real path.
         let accented = repo.appendingPathComponent("Café notes.md")
         try? "zanzibar-needle\n".write(to: accented, atomically: true, encoding: .utf8)
