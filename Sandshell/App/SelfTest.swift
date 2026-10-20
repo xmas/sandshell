@@ -943,6 +943,31 @@ enum SelfTest {
         files.setTreeShown(true)
         await wait(0.3)
         check(files.isTreeShown && files.debugEditorRightOfTree, "and it shows again")
+        // A divider dragged mid-way: the hairline is where the columns now meet.
+        files.debugDragDivider(0, to: 260)
+        await wait(0.3)
+        let edge = files.debugColumns.tree.map { $0.width } ?? -1   // the tree starts at the columns' edge
+        check(files.debugDividerLines.first.map { abs($0 - edge) < 1 } == true,
+              "after dragging the tree's divider the hairline moves with it (\(files.debugDividerLines), tree ends \(Int(edge)))")
+
+        // The open file's menu: reveal it in the tree (shown again), Finder, copy.
+        let menuFile = repo.appendingPathComponent("src/app.py")
+        files.open(menuFile)
+        files.setTreeShown(false)
+        await wait(0.4)
+        let fileMenu = files.editor.debugFileMenu
+        check(fileMenu.items.map(\.title).filter { !$0.isEmpty } == ["Reveal in File Tree", "Show in Finder", "Copy", "Copy Path", "Copy Relative Path"],
+              "the open file's menu (\(fileMenu.items.map(\.title)))")
+        func run(_ title: String) { (fileMenu.items.first { $0.title == title }).map { fileMenu.performActionForItem(at: fileMenu.index(of: $0)) } }
+        run("Reveal in File Tree")
+        await wait(0.5)
+        check(files.isTreeShown && files.tree.selectedURLs.map(\.realPath) == [menuFile.realPath],
+              "Reveal in File Tree shows the tree with the file selected (\(files.tree.selectedURLs.map(\.lastPathComponent)))")
+        run("Copy")
+        let copied = NSPasteboard.general.readObjects(forClasses: [NSURL.self]) as? [URL]
+        check(copied?.first?.realPath == menuFile.realPath, "Copy puts the file on the pasteboard (Finder pastes a copy)")
+        run("Copy Relative Path")
+        check(NSPasteboard.general.string(forType: .string) == "src/app.py", "Copy Relative Path: src/app.py")
 
         // The diff column: the open file's changes beside its text.
         files.open(repo.appendingPathComponent("src/app.py"))
