@@ -2,6 +2,11 @@
 
 A running log of what changed, newest first. Yes, we actually write these.
 
+## v0.2.36 — "Checklist"
+- **Claude's to-do list, like the Claude app's.** When Claude plans its work, the chat shows a checklist — a filled check for done steps (muted), a spinner ring on the one in progress, empty rings for the rest. While the turn runs, the list is pinned above the message field as one line — the current step, "3 of 6" and a turning spinner — that opens to the whole list; and the session's sidebar row reads *Working · 3/6*.
+- **The open file's menu in Files** (⋯ beside its path, or right-click the path or a tab): Reveal in File Tree, Show in Finder, Copy (the file itself, for pasting in Finder), Copy Path and Copy Relative Path.
+- **Fixes:** a crash when hiding the Files sidebar while a chat was streaming or a preview showed; the line between Files' columns now follows a dragged divider instead of staying behind across the tree; queued-message cards keep their faint fill in dark mode.
+
 ## v0.2.35 — "Whole Names"
 - **The sandbox's name shows whole** in the title bar, always; the session's name gives way when room is short.
 - **Roomier sidebar header:** more space around the workspace name, + and the search field, and a taller search field.
