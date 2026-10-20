@@ -3410,6 +3410,7 @@ enum SelfTest {
         check(window.debugIdentity == ws.displayName(of: a), "the title bar names the session (\(window.debugIdentity))")
         check(window.debugSandboxLabel == ws.containerName(for: a.containerAgentKind),
               "the Sandbox group names the session's sandbox (\(window.debugSandboxLabel))")
+        check(window.debugSandboxLabelWhole, "its name shows whole, not cut off")
         let shellStrip = tree.focused.debugStrip
         check(shellStrip.stopSession == true && shellStrip.restartSession == true,
               "a running shell's strip has its own Stop and Restart (\(String(describing: shellStrip.stopSession)), \(String(describing: shellStrip.restartSession)))")

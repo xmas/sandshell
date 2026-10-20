@@ -790,13 +790,13 @@ final class SidebarSearchField: NSView {
 
         for v in [icon, field, hint] as [NSView] { addSubview(v) }
         NSLayoutConstraint.activate([
-            heightAnchor.constraint(equalToConstant: 28),
-            icon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 9),
+            heightAnchor.constraint(equalToConstant: 32),
+            icon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 11),
             icon.centerYAnchor.constraint(equalTo: centerYAnchor),
-            field.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 7),
+            field.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 8),
             field.trailingAnchor.constraint(equalTo: hint.leadingAnchor, constant: -6),
             field.centerYAnchor.constraint(equalTo: centerYAnchor),
-            hint.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -9),
+            hint.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -11),
             hint.centerYAnchor.constraint(equalTo: centerYAnchor),
         ])
     }

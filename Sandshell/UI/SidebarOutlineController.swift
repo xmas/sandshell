@@ -437,19 +437,19 @@ final class SidebarListController: NSViewController {
             appMark.heightAnchor.constraint(equalToConstant: 12),
 
             // Its own line below the window's traffic-light controls.
-            newSessionButton.topAnchor.constraint(equalTo: container.topAnchor, constant: 38),
-            newSessionButton.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -12),
+            newSessionButton.topAnchor.constraint(equalTo: container.topAnchor, constant: 44),
+            newSessionButton.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -16),
             newSessionButton.widthAnchor.constraint(equalToConstant: 26),
             newSessionButton.heightAnchor.constraint(equalToConstant: 26),
             header.centerYAnchor.constraint(equalTo: newSessionButton.centerYAnchor),
-            header.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 14),
+            header.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 18),
             header.trailingAnchor.constraint(lessThanOrEqualTo: newSessionButton.leadingAnchor, constant: -8),
 
-            searchField.topAnchor.constraint(equalTo: newSessionButton.bottomAnchor, constant: 8),
-            searchField.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 12),
-            searchField.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -12),
+            searchField.topAnchor.constraint(equalTo: newSessionButton.bottomAnchor, constant: 14),
+            searchField.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 16),
+            searchField.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -16),
 
-            scroll.topAnchor.constraint(equalTo: searchField.bottomAnchor, constant: 8),
+            scroll.topAnchor.constraint(equalTo: searchField.bottomAnchor, constant: 12),
             scroll.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             scroll.bottomAnchor.constraint(equalTo: footerBorder.topAnchor),

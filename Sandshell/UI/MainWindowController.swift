@@ -437,6 +437,7 @@ final class MainWindowController: NSWindowController {
     func debugCloseSandboxAccess() { accessPopover?.close(); accessPopover = nil }
     /// Self-test: what the Sandbox group's label says.
     var debugSandboxLabel: String { sandboxActions.debugLabel }
+    var debugSandboxLabelWhole: Bool { sandboxActions.layoutSubtreeIfNeeded(); return sandboxActions.debugLabelWhole }
     /// Self-test: the Files toggle shows pressed; the sidebar's header shows.
     var debugFilesToggle: (on: Bool, headerShown: Bool) {
         let header = window?.toolbar?.items.first { $0.itemIdentifier == .filesHeader }
