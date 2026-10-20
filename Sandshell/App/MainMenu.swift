@@ -264,6 +264,11 @@ enum MainMenu {
         daemon.isAlternate = true
         helpMenu.addItem(daemon)
         helpMenu.addItem(NSMenuItem("Show Status Debug Window", action: #selector(AppDelegate.showStatusDebug(_:))))
+        helpMenu.addItem(NSMenuItem("Open Remote Control in Browser", action: #selector(AppDelegate.openRemoteControl(_:))))
+        helpMenu.addItem(NSMenuItem("Remote Control Devices…", action: #selector(AppDelegate.showRemoteDevices(_:))))
+        #if DEBUG
+        helpMenu.addItem(NSMenuItem("Remote Check Session (Fake Agent)", action: #selector(AppDelegate.toggleRemoteCheck(_:))))
+        #endif
         helpMenu.addItem(NSMenuItem("Open Terminal on This Mac", action: #selector(AppDelegate.openHostTerminal(_:))))
         helpMenu.addItem(withTitle: "Check sbx Daemon Health…",
                          action: #selector(AppDelegate.checkDaemonHealth(_:)), keyEquivalent: "")

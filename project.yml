@@ -40,6 +40,11 @@ targets:
       - path: kits
         type: folder
         buildPhase: resources
+      # Remote Control: the web client devices load (remote/web), and the fake
+      # ACP agent the DEBUG check session runs.
+      - path: remote
+        type: folder
+        buildPhase: resources
     info:
       path: Sandshell/Resources/Info.plist
       properties:
@@ -63,6 +68,10 @@ targets:
           - CFBundleURLName: com.xmas.sandshell
             CFBundleURLSchemes:
               - sandshell
+        # Remote Control on the home network: devices find and reach the Mac.
+        NSLocalNetworkUsageDescription: Remote Control lets the phones and computers you pair with this Mac find it on your network and drive your chats.
+        NSBonjourServices:
+          - _sandshell._tcp
         # Services ▸ New Sandshell Chat (selected text or files → new chat).
         NSServices:
           - NSMenuItem:

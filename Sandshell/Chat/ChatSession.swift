@@ -220,6 +220,10 @@ final class ChatSession: ObservableObject {
     /// to show when the agent exits before it ever answered.
     private var launchError: String?
 
+    /// Run this instead of the agent in a sandbox (DEBUG: the fake ACP agent
+    /// Remote Control's checks drive). Nothing is warmed or reaped for it.
+    var launchOverride: (executable: String, arguments: [String])?
+
     /// `close()` ran: nothing may start the agent again (a pending catch-up).
     private var isClosed = false
 
@@ -280,9 +284,10 @@ final class ChatSession: ObservableObject {
             phase = .closed("\(title) can’t start — see above.")
             return
         }
-        guard let args = SbxCommand.acpArguments(agent: agent, containerName: containerName, workdir: workdir,
-                                                 home: home, mcpURL: mcpURL, sbxProxyAuth: sbxProxyAuth, tag: tag,
-                                                 claudeModel: agent == .claude ? launchModel : nil)
+        guard let args = launchOverride?.arguments
+                ?? SbxCommand.acpArguments(agent: agent, containerName: containerName, workdir: workdir,
+                                           home: home, mcpURL: mcpURL, sbxProxyAuth: sbxProxyAuth, tag: tag,
+                                           claudeModel: agent == .claude ? launchModel : nil)
         else {
             phase = .closed("\(title) can’t run as a chat (no ACP support).")
             return
@@ -290,13 +295,13 @@ final class ChatSession: ObservableObject {
         // A warm spare for the same sandbox, folder and settings, if one's ready
         // — for new conversations only: a spare started before another app
         // wrote to a conversation can load a stale copy of it.
-        let spare = resumeID == nil ? ACPSparePool.shared.claim(args) : nil
+        let spare = resumeID == nil && launchOverride == nil ? ACPSparePool.shared.claim(args) : nil
         let conn: ACPConnection
         if let spare {
             conn = spare.connection
             tag = spare.tag
         } else {
-            conn = ACPConnection(executable: PathFixer.sbxPath(), arguments: args)
+            conn = ACPConnection(executable: launchOverride?.executable ?? PathFixer.sbxPath(), arguments: args)
             do { try conn.start() } catch {
                 phase = .closed("Couldn’t launch sbx: \(error.localizedDescription)")
                 return
@@ -507,6 +512,7 @@ final class ChatSession: ObservableObject {
 
     /// Have the next chat like this one start warm.
     private func warmSpare() {
+        guard launchOverride == nil else { return }
         let spareTag = SbxCommand.ProcessTag(session: UUID())
         guard !isClosed, let args = SbxCommand.acpArguments(
             agent: agent, containerName: containerName, workdir: workdir, home: home, mcpURL: mcpURL,
@@ -528,7 +534,7 @@ final class ChatSession: ObservableObject {
         connection?.terminate()
         connection = nil
         // The adapter exits on stdin EOF; reap anyway (its claude child, tools).
-        if wasRunning { SbxClient.reapSessionProcesses(container: containerName, match: tag.pairs[1]) }
+        if wasRunning, launchOverride == nil { SbxClient.reapSessionProcesses(container: containerName, match: tag.pairs[1]) }
     }
 
     // MARK: User actions

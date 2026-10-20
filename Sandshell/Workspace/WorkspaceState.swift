@@ -76,6 +76,9 @@ struct Session: Identifiable, Codable, Hashable {
     var isChat: Bool
     /// Named by the person (Rename): automatic naming leaves it alone.
     var isNamedByUser = false
+    /// Remote Control is on: devices paired with this Mac can see and drive
+    /// the chat (`RemoteHub`).
+    var isRemote = false
     /// The cwd its agent files the conversation under, when that isn't
     /// `workdir`: its folder moved while it ran, and a running agent keeps the
     /// cwd it started in (Claude: `~/.claude/projects/<encoded cwd>`). Its next
@@ -220,6 +223,7 @@ struct Session: Identifiable, Codable, Hashable {
         case transcriptWorkdir, forkedFrom, forkedAt, firstPrompt, generatedName
         case isChat = "chat"
         case isNamedByUser = "namedByUser"
+        case isRemote = "remote"
         case projectID   // legacy key (pre-folders model)
     }
 
@@ -239,6 +243,7 @@ struct Session: Identifiable, Codable, Hashable {
         containerAgent = try c.decodeIfPresent(AgentKind.self, forKey: .containerAgent)
         isChat = try c.decodeIfPresent(Bool.self, forKey: .isChat) ?? false
         isNamedByUser = try c.decodeIfPresent(Bool.self, forKey: .isNamedByUser) ?? false
+        isRemote = try c.decodeIfPresent(Bool.self, forKey: .isRemote) ?? false
         transcriptWorkdir = try c.decodeIfPresent(String.self, forKey: .transcriptWorkdir)
         forkedFrom = try c.decodeIfPresent(UUID.self, forKey: .forkedFrom)
         forkedAt = try c.decodeIfPresent(Date.self, forKey: .forkedAt)
@@ -260,6 +265,7 @@ struct Session: Identifiable, Codable, Hashable {
         try c.encodeIfPresent(containerAgent, forKey: .containerAgent)
         if isChat { try c.encode(true, forKey: .isChat) }
         if isNamedByUser { try c.encode(true, forKey: .isNamedByUser) }
+        if isRemote { try c.encode(true, forKey: .isRemote) }
         try c.encodeIfPresent(transcriptWorkdir, forKey: .transcriptWorkdir)
         try c.encodeIfPresent(forkedFrom, forKey: .forkedFrom)
         try c.encodeIfPresent(forkedAt, forKey: .forkedAt)

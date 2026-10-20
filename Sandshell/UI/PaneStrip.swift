@@ -95,6 +95,8 @@ final class PaneStripView: NSView {
     /// The session's own controls: stop its process, start it again.
     var onStopSession: (() -> Void)?
     var onRestartSession: (() -> Void)?
+    /// A chat's Remote Control button was clicked (its popover goes below it).
+    var onRemote: ((NSView) -> Void)?
 
     private let content = NSView()
     private let crumbs = NSView()
@@ -111,6 +113,10 @@ final class PaneStripView: NSView {
     /// The session's process (a chat's turn stops in its composer).
     private let stopSessionButton = StripIconButton()
     private let restartSessionButton = StripIconButton()
+    /// A chat's Remote Control: on, devices can see and drive it.
+    private let remoteButton = StripIconButton()
+    /// The switch's state (nil: hidden — not a chat).
+    private(set) var remoteState: Bool?
 
     private var colors = ThemeColors.lightBase
     private var access: SandboxAccess?
@@ -169,6 +175,9 @@ final class PaneStripView: NSView {
         }
         stopSessionButton.isHidden = true
         restartSessionButton.isHidden = true
+        content.addSubview(remoteButton)
+        remoteButton.isHidden = true
+        restyleRemote()
         // Commits and edits happen behind our back: re-read the branch now and then.
         gitTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
@@ -281,10 +290,11 @@ final class PaneStripView: NSView {
             crumb.hoverColor = c.stripHover
         }
         for sep in separators { sep.textColor = c.stripSeparator }
-        for b in [splitRightButton, splitDownButton, closeButton, stopSessionButton, restartSessionButton] {
+        for b in [splitRightButton, splitDownButton, closeButton, stopSessionButton, restartSessionButton, remoteButton] {
             b.contentTintColor = c.stripCrumb
             b.hoverColor = c.stripHover
         }
+        restyleRemote()
         viewSwitch.applyTheme(c)
         restyleName()
         if hasBranch { restyleBranch() }
@@ -323,8 +333,8 @@ final class PaneStripView: NSView {
             x -= Self.controlGap
         }
         x += Self.controlGap
-        // The session's Stop / Restart, set off from the pane's own buttons.
-        let session = [restartSessionButton, stopSessionButton].filter { !$0.isHidden }
+        // The session's Remote Control, Stop and Restart, set off from the pane's own buttons.
+        let session = [restartSessionButton, stopSessionButton, remoteButton].filter { !$0.isHidden }
         if !session.isEmpty { x -= 6 }
         for button in session {
             x -= Self.controlSize
@@ -415,6 +425,28 @@ final class PaneStripView: NSView {
     @objc private func closeClicked() { onClose?() }
     @objc private func stopSessionClicked() { onStopSession?() }
     @objc private func restartSessionClicked() { onRestartSession?() }
+    @objc private func remoteClicked() { onRemote?(remoteButton) }
+
+    /// A chat's Remote Control switch: on or off (nil hides it — not a chat).
+    func setRemote(_ on: Bool?) {
+        guard on != remoteState else { return }
+        let wasHidden = remoteState == nil
+        remoteState = on
+        remoteButton.isHidden = on == nil
+        restyleRemote()
+        if wasHidden != (on == nil) { needsLayout = true }
+    }
+
+    private func restyleRemote() {
+        let on = remoteState == true
+        let tip = on ? "Remote Control is on — click for this chat's address"
+                     : "Remote Control — drive this chat from a browser"
+        remoteButton.configureSymbol(on ? "antenna.radiowaves.left.and.right" : "antenna.radiowaves.left.and.right.slash",
+                                     label: tip, pointSize: Self.controlSymbol, weight: .regular,
+                                     tint: on ? .controlAccentColor : colors.stripCrumb,
+                                     target: self, action: #selector(remoteClicked), id: "pane-remote")
+        remoteButton.setAccessibilityValue(on ? "on" : "off")
+    }
 
     /// The session's controls: nil hides one (no session; a chat's Stop is its
     /// composer's), else enabled or not.

@@ -1732,6 +1732,7 @@ extension WorkspaceController {
         guard rt.isLive != live else { return }
         rt.isLive = live
         runtimes[id] = rt
+        if session(id: id)?.isRemote == true { RemoteHub.shared.setNeedsRefresh() }
         // A live terminal means sbx exec succeeded → container is running.
         // (The sandbox it runs in: a shell in Claude's sandbox is Claude's.)
         if live, let kind = session(id: id)?.containerAgentKind,
@@ -2262,6 +2263,18 @@ extension WorkspaceController {
         state.sessions[idx].transcriptID = transcriptID
         saveState()
     }
+
+    /// Turn Remote Control on or off for a session (devices see it while its chat runs).
+    func setRemote(_ id: UUID, _ on: Bool) {
+        guard let idx = state.sessions.firstIndex(where: { $0.id == id }),
+              state.sessions[idx].isRemote != on else { return }
+        state.sessions[idx].isRemote = on
+        saveState()
+        RemoteHub.shared.setNeedsRefresh()
+    }
+
+    /// Sessions with Remote Control on.
+    var remoteSessions: [Session] { state.sessions.filter(\.isRemote) }
 
     /// Switch a session between the terminal and the native chat view. The
     /// detail pane tears down the old surface and resumes the same conversation.

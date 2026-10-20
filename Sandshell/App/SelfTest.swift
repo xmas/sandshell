@@ -132,6 +132,7 @@ enum SelfTest {
         case "agents": await agents(window)
         case "search": await search(window)
         case "sidebar": await sidebar(window)
+        case "remote": await remote(window)
         default: check(false, "unknown self-test \(requested ?? "")")
         }
         log(failures == 0 ? "ALL PASSED" : "\(failures) FAILED")
@@ -139,19 +140,19 @@ enum SelfTest {
         NSApp.terminate(nil)
     }
 
-    private static func log(_ s: String) {
+    static func log(_ s: String) {
         lines.append(s)
         print("[selftest] " + s)
     }
 
-    private static func check(_ ok: Bool, _ what: String) {
+    static func check(_ ok: Bool, _ what: String) {
         if !ok { failures += 1 }
         log((ok ? "PASS " : "FAIL ") + what)
     }
 
-    private static func wait(_ seconds: Double = 0.4) async { try? await Task.sleep(for: .seconds(seconds)) }
+    static func wait(_ seconds: Double = 0.4) async { try? await Task.sleep(for: .seconds(seconds)) }
 
-    private static func until(_ timeout: Double, _ condition: () -> Bool) async -> Bool {
+    static func until(_ timeout: Double, _ condition: () -> Bool) async -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline { if condition() { return true }; await wait(0.25) }
         return condition()
@@ -819,7 +820,7 @@ enum SelfTest {
 
     // MARK: Files in a pane
 
-    private static func snapshot(_ view: NSView, _ name: String) {
+    static func snapshot(_ view: NSView, _ name: String) {
         view.layoutSubtreeIfNeeded()
         guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
         view.cacheDisplay(in: view.bounds, to: rep)
