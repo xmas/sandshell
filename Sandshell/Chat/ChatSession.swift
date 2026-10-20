@@ -92,6 +92,8 @@ final class ChatSession: ObservableObject {
     @Published private(set) var phase: Phase = .starting {
         didSet {
             if (oldValue == .running) != (phase == .running), !retryingTurn { onWorkingChange?(phase == .running) }
+            // A turn's plan is its own: none yet as one starts, gone when it ends.
+            if (oldValue == .running) != (phase == .running), turnPlan != nil { turnPlan = nil }
             if phase != .starting { isCatchingUp = false; SbxClient.launchSettled(ownSessionID) }
             if oldValue == .running, phase == .ready, let next = afterTurn {
                 afterTurn = nil
@@ -106,6 +108,17 @@ final class ChatSession: ObservableObject {
             if case .closed(let why) = phase, oldValue != phase { onClosed?(why) }
         }
     }
+    /// The plan (to-do list) the agent set during the running turn, as it
+    /// stands now: pinned above the composer, and the sidebar row's "3/6".
+    /// Nil between turns, and in a turn until the agent sets one.
+    @Published private(set) var turnPlan: [ChatItem.PlanEntry]? {
+        didSet {
+            let progress = turnPlan.flatMap(PlanProgress.init)
+            if progress != oldValue.flatMap(PlanProgress.init) { onPlanProgress?(progress) }
+        }
+    }
+    /// The running turn's plan progress changed (nil: no plan, or the turn ended).
+    var onPlanProgress: ((PlanProgress?) -> Void)?
     @Published private(set) var permission: PendingPermission? { didSet { reportWaiting() } }
     /// A question the agent is waiting on (AskUserQuestion, Codex's
     /// request_user_input, an MCP server's form or sign-in link).
@@ -687,6 +700,8 @@ final class ChatSession: ObservableObject {
     func debugAsk(_ q: AgentQuestion?) { question = q }
     /// Tests: the agent sends this `session/update`.
     func debugApply(_ update: JSONValue) { apply(update) }
+    /// Tests: a turn starts (`.running`) or ends (`.ready`) without the agent.
+    func debugSetPhase(_ phase: Phase) { self.phase = phase }
     /// Tests: Claude Code suggests a next message (as `_claude/sdkMessage` brings it).
     func debugSuggest(_ text: String?) { suggestedPrompt = text }
     /// Tests: talk to `connection` as session `sessionID` (nil and nil: as a
@@ -1405,6 +1420,7 @@ final class ChatSession: ObservableObject {
             } else {
                 items.append(.plan(id: UUID(), entries: entries))
             }
+            if phase == .running { turnPlan = entries }
         case "available_commands_update":
             commands = (u["availableCommands"]?.array ?? []).compactMap {
                 guard let name = $0["name"]?.string else { return nil }

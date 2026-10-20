@@ -166,5 +166,45 @@ struct ChatSessionTests {
             #expect(help == nil)
         }
     }
+
+    // MARK: The running turn's plan
+
+    private static func plan(_ statuses: [String]) -> JSONValue {
+        ["sessionUpdate": "plan",
+         "entries": .array(statuses.enumerated().map {
+             ["content": .string("Step \($0.offset + 1)"), "status": .string($0.element), "priority": "medium"]
+         })]
+    }
+
+    @Test func aPlanSetDuringATurnIsTheTurnsPlan() {
+        var reported: [PlanProgress?] = []
+        session.onPlanProgress = { reported.append($0) }
+        session.debugSetPhase(.running)
+        session.debugApply(Self.plan(["completed", "in_progress", "pending"]))
+        #expect(session.turnPlan?.map(\.status) == ["completed", "in_progress", "pending"])
+        session.debugApply(Self.plan(["completed", "completed", "in_progress"]))
+        #expect(reported.map { $0?.compact } == ["1/3", "2/3"])
+        // One card in the transcript, updated in place.
+        #expect(session.items.count { if case .plan = $0 { true } else { false } } == 1)
+
+        session.debugSetPhase(.ready)
+        #expect(session.turnPlan == nil, "The turn's plan goes when it ends")
+        #expect(reported.last == .some(nil), "and the row hears it's gone")
+    }
+
+    @Test func aPlanOutsideATurnOnlyGoesInTheTranscript() {
+        // A resumed conversation's history replays while it starts.
+        session.debugApply(Self.plan(["completed", "pending"]))
+        #expect(session.turnPlan == nil)
+        #expect(session.items.contains { if case .plan = $0 { true } else { false } })
+    }
+
+    @Test func aNewTurnStartsWithoutTheLastOnesPlan() {
+        session.debugSetPhase(.running)
+        session.debugApply(Self.plan(["in_progress"]))
+        session.debugSetPhase(.ready)
+        session.debugSetPhase(.running)
+        #expect(session.turnPlan == nil)
+    }
 }
 #endif

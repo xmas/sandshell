@@ -615,39 +615,75 @@ struct ChatRendererTests {
 
     @MainActor
     struct Plans {
-        @Test func entriesListUnderAPlanHeadingOnACard() {
-            let entries = [ChatItem.PlanEntry(content: "Write tests", status: "completed"),
-                           ChatItem.PlanEntry(content: "Run them", status: "in_progress"),
-                           ChatItem.PlanEntry(content: "Ship", status: "pending")]
-            let rendered = ChatRenderer.render(.plan(id: UUID(), entries: entries), expanded: false)
-            #expect(rendered.string == "\nPlan\n☑  Write tests\n◐  Run them\n☐  Ship\n\n")
+        static let entries = [ChatItem.PlanEntry(content: "Write tests", status: "completed"),
+                              ChatItem.PlanEntry(content: "Run them", status: "in_progress"),
+                              ChatItem.PlanEntry(content: "Ship", status: "pending")]
+
+        @Test func entriesListOnACardUnderAnUnseenProgressLine() {
+            let rendered = ChatRenderer.render(.plan(id: UUID(), entries: Self.entries), expanded: false)
+            #expect(rendered.string == "\nPlan: 1 of 3 done\n☑ Write tests\n◐ Run them\n☐ Ship\n\n")
             let runs = CRFixture.blockRuns(rendered)
             #expect(runs.map(\.kind) == [.card, .card, .card, .card])
             #expect(runs.map(\.position) == [.first, .middle, .middle, .last])
         }
 
-        @Test(arguments: [("completed", "☑"), ("in_progress", "◐"), ("pending", "☐"), ("", "☐"), ("blocked", "☐")])
-        func statusPicksTheMark(status: String, mark: String) {
-            let entry = ChatItem.PlanEntry(content: "Task", status: status)
-            let rendered = ChatRenderer.render(.plan(id: UUID(), entries: [entry]), expanded: false)
-            #expect(rendered.string == "\nPlan\n\(mark)  Task\n\n")
+        @Test func theProgressLineAndTextMarksAreUnseen() throws {
+            let rendered = ChatRenderer.render(.plan(id: UUID(), entries: Self.entries), expanded: false)
+            for needle in ["Plan: 1 of 3 done", "☑", "◐", "☐"] {
+                let range = try #require(CRFixture.range(of: needle, in: rendered))
+                #expect(CRFixture.color(in: rendered, at: range.location) == NSColor.clear, "\(needle)")
+                #expect((CRFixture.font(in: rendered, at: range.location)?.pointSize ?? 99) <= 1, "\(needle)")
+            }
         }
 
-        @Test func completedEntriesAreDimmed() throws {
-            let entries = [ChatItem.PlanEntry(content: "Done", status: "completed"),
-                           ChatItem.PlanEntry(content: "Todo", status: "pending")]
-            let rendered = ChatRenderer.render(.plan(id: UUID(), entries: entries), expanded: false)
-            let done = try #require(CRFixture.range(of: "Done", in: rendered))
+        @Test(arguments: [("completed", ChatItem.PlanEntry.State.completed, "☑"),
+                          ("in_progress", .inProgress, "◐"), ("pending", .pending, "☐"),
+                          ("", .pending, "☐"), ("blocked", .pending, "☐")])
+        func statusPicksTheMark(status: String, state: ChatItem.PlanEntry.State, mark: String) throws {
+            let entry = ChatItem.PlanEntry(content: "Task", status: status)
+            let rendered = ChatRenderer.render(.plan(id: UUID(), entries: [entry]), expanded: false)
+            #expect(rendered.string.contains("\(mark) Task\n"))
+            let task = try #require(CRFixture.range(of: "Task", in: rendered))
+            let drawn = try #require(CRFixture.value(.chatPlanMark, in: rendered, at: task.location) as? PlanMark)
+            #expect(drawn.state == state)
+            #expect(drawn.leading == ChatRenderer.pad)
+        }
+
+        @Test func eachEntryHangsPastItsMark() throws {
+            let rendered = ChatRenderer.render(.plan(id: UUID(), entries: Self.entries), expanded: false)
+            let ship = try #require(CRFixture.range(of: "Ship", in: rendered))
+            let style = try #require(CRFixture.paragraphStyle(in: rendered, at: ship.location))
+            #expect(style.firstLineHeadIndent == ChatRenderer.pad + ChatRenderer.planMarkSlot)
+            #expect(style.headIndent == style.firstLineHeadIndent)
+        }
+
+        @Test func completedEntriesAreMutedOthersFullStrength() throws {
+            let rendered = ChatRenderer.render(.plan(id: UUID(), entries: Self.entries), expanded: false)
+            let done = try #require(CRFixture.range(of: "Write tests", in: rendered))
             #expect(CRFixture.color(in: rendered, at: done.location) == NSColor.secondaryLabelColor)
-            let todo = try #require(CRFixture.range(of: "Todo", in: rendered))
-            #expect(CRFixture.color(in: rendered, at: todo.location) == NSColor.labelColor)
+            for needle in ["Run them", "Ship"] {
+                let range = try #require(CRFixture.range(of: needle, in: rendered))
+                #expect(CRFixture.color(in: rendered, at: range.location) == NSColor.labelColor, "\(needle)")
+            }
+        }
+
+        @Test func theCardsTooltipSaysHowFarItIs() throws {
+            let rendered = ChatRenderer.render(.plan(id: UUID(), entries: Self.entries), expanded: false)
+            let ship = try #require(CRFixture.range(of: "Ship", in: rendered))
+            #expect(CRFixture.value(.toolTip, in: rendered, at: ship.location) as? String == "Plan: 1 of 3 done")
         }
 
         @Test(.tags(.edgeCase))
-        func emptyPlanIsJustItsHeading() {
+        func anEntrySpanningLinesStaysOneLine() {
+            let entry = ChatItem.PlanEntry(content: "Fix\nthe build", status: "pending")
+            let rendered = ChatRenderer.render(.plan(id: UUID(), entries: [entry]), expanded: false)
+            #expect(rendered.string.contains("☐ Fix the build\n"))
+        }
+
+        @Test(.tags(.edgeCase))
+        func anEmptyPlanRendersNothing() {
             let rendered = ChatRenderer.render(.plan(id: UUID(), entries: []), expanded: false)
-            #expect(rendered.string == "\nPlan\n\n")
-            #expect(CRFixture.blockRuns(rendered).map(\.position) == [.single])
+            #expect(rendered.length == 0)
         }
     }
 

@@ -11,6 +11,8 @@ extension NSAttributedString.Key {
     /// Marks a table's text: it was laid out for a width, so the transcript
     /// lays it out again when its own width changes.
     static let chatTable = NSAttributedString.Key("SandshellChatTable")
+    /// A `PlanMark` drawn before a plan entry's first line by `BlockBackgroundFragment`.
+    static let chatPlanMark = NSAttributedString.Key("SandshellChatPlanMark")
 }
 
 /// The line above a table row: under the header, or between body rows.
@@ -69,6 +71,7 @@ final class BlockStyle: NSObject, @unchecked Sendable {
 final class BlockBackgroundFragment: NSTextLayoutFragment {
     var style: BlockStyle?
     var rule: TableRule?
+    var mark: PlanMark?
     static let margin: CGFloat = 4
     static let radius: CGFloat = 8
 
@@ -95,8 +98,23 @@ final class BlockBackgroundFragment: NSTextLayoutFragment {
         return ruleRect.map { bounds.union($0) } ?? bounds
     }
 
+    /// The plan mark, in fragment coordinates: in the indent, centred on the
+    /// first line's capitals.
+    private var markRect: CGRect? {
+        guard let mark, let first = textLineFragments.first else { return nil }
+        let inset = textLayoutManager?.textContainer?.lineFragmentPadding ?? 0
+        let baseline = first.typographicBounds.minY + first.glyphOrigin.y
+        let midY = baseline - mark.capHeight / 2
+        return CGRect(x: inset + mark.leading - layoutFragmentFrame.minX, y: midY - mark.diameter / 2,
+                      width: mark.diameter, height: mark.diameter)
+    }
+
     override func draw(at point: CGPoint, in context: CGContext) {
         defer {
+            if let mark, let rect = markRect {
+                // Fragment coordinates are flipped (y grows downward).
+                PlanGlyph.draw(mark.state, in: rect.offsetBy(dx: point.x, dy: point.y), context: context, flipped: true)
+            }
             if let rule, let rect = ruleRect {
                 context.saveGState()
                 context.setFillColor(rule.color.cgColor)
@@ -147,6 +165,7 @@ final class BlockFragmentProvider: NSObject, NSTextLayoutManagerDelegate {
             let fragment = BlockBackgroundFragment(textElement: textElement, range: textElement.elementRange)
             fragment.style = style
             fragment.rule = paragraph.attributedString.attribute(.chatTableRule, at: 0, effectiveRange: nil) as? TableRule
+            fragment.mark = paragraph.attributedString.attribute(.chatPlanMark, at: 0, effectiveRange: nil) as? PlanMark
             return fragment
         }
         return NSTextLayoutFragment(textElement: textElement, range: textElement.elementRange)
@@ -189,13 +208,7 @@ enum ChatRenderer {
         case .toolGroup(let calls):
             return spaced(toolGroup(calls, id: item.id, expanded: expanded, isExpanded: isExpanded), before: 4, after: 4)
         case .plan(_, let entries):
-            let paras = entries.map { e -> NSAttributedString in
-                let mark = e.status == "completed" ? "☑" : e.status == "in_progress" ? "◐" : "☐"
-                return line("\(mark)  \(e.content)", font: body,
-                            color: e.status == "completed" ? .secondaryLabelColor : .labelColor)
-            }
-            return spaced(blocked([line("Plan", font: .role(.meta, weight: .semibold),
-                                        color: .secondaryLabelColor)] + paras, .card), before: 4, after: 4)
+            return spaced(plan(entries), before: 4, after: 4)
         case .image(_, let data):
             return image(data)
         case .fileChanges(let turn, let paths, let restored):
@@ -206,6 +219,52 @@ enum ChatRenderer {
                                color: isError ? .systemRed : .secondaryLabelColor),
                           before: 4, after: 4)
         }
+    }
+
+    // MARK: Plans
+
+    /// A plan mark's size, and the indent it sits in (the mark and a gap).
+    static let planMarkDiameter: CGFloat = 14
+    static let planMarkSlot: CGFloat = 23
+
+    /// The text mark an entry carries in the text (unseen: the mark is drawn
+    /// over its indent), so a copy or VoiceOver still says where it stands.
+    static func planTextMark(_ state: ChatItem.PlanEntry.State) -> String {
+        switch state {
+        case .completed: "☑"
+        case .inProgress: "◐"
+        case .pending: "☐"
+        }
+    }
+
+    /// The agent's to-do list on a card, as the Claude app's checklist: each
+    /// entry a line beside its mark (drawn by the fragment), done ones muted.
+    /// No heading shows; an unseen first line says "Plan: 3 of 6 done" for
+    /// VoiceOver (and a copy).
+    private static func plan(_ entries: [ChatItem.PlanEntry]) -> NSAttributedString {
+        guard let progress = PlanProgress(entries) else { return NSAttributedString() }
+        let unseen: [NSAttributedString.Key: Any] = [.font: NSFont.spacer(1), .foregroundColor: NSColor.clear]
+        var paras = [NSAttributedString(string: progress.accessibilityLabel + "\n", attributes: unseen)]
+        for (i, entry) in entries.enumerated() {
+            let state = entry.state
+            let row = NSMutableAttributedString(string: planTextMark(state) + " ", attributes: unseen)
+            let content = entry.content.split(whereSeparator: \.isNewline).joined(separator: " ")
+            row.append(inline(content, font: body, color: state == .completed ? .secondaryLabelColor : .labelColor))
+            row.append(NSAttributedString(string: "\n", attributes: [.font: body]))
+            let p = NSMutableParagraphStyle()
+            p.firstLineHeadIndent = planMarkSlot
+            p.headIndent = planMarkSlot
+            p.lineSpacing = 1.5
+            if i < entries.count - 1 { p.paragraphSpacing = 6 }
+            let range = NSRange(location: 0, length: row.length)
+            row.addAttribute(.paragraphStyle, value: p, range: range)
+            row.addAttribute(.chatPlanMark, value: PlanMark(state, leading: pad, diameter: planMarkDiameter,
+                                                            capHeight: body.capHeight), range: range)
+            paras.append(row)
+        }
+        let card = NSMutableAttributedString(attributedString: blocked(paras, .card))
+        card.addAttribute(.toolTip, value: progress.accessibilityLabel, range: NSRange(location: 0, length: card.length))
+        return card
     }
 
     // MARK: Pieces

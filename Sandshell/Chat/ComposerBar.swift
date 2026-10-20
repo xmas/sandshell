@@ -95,6 +95,13 @@ extension NSColor {
     static let composerFill = NSColor(name: nil) { a in
         a.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? NSColor(white: 1, alpha: 0.07) : .white
     }
+    /// A card above the pill (a queued message, the pinned plan): the pill's
+    /// fill at 60 % — of its own alpha in dark (`withAlphaComponent` would
+    /// replace the 7 % with 60 %, a grey slab).
+    static let composerCardFill = NSColor(name: nil) { a in
+        a.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? NSColor(white: 1, alpha: 0.07 * 0.6)
+            : NSColor(white: 1, alpha: 0.6)
+    }
     /// The Stop button: a quiet secondary-label grey, not the Send button's
     /// near-black (opaque, so its ring can be a fainter share of it).
     static let composerStopInk = NSColor(name: nil) { a in
