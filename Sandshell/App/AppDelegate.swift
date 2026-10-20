@@ -193,6 +193,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         RemoteHub.shared.setNeedsRefresh()
         #if DEBUG
         if UserDefaults.standard.bool(forKey: "SandshellRemoteCheck") { RemoteHub.shared.setCheckSession(true) }
+        // Scripted checks of pairing in a browser: open one, and log its code.
+        if UserDefaults.standard.bool(forKey: "SandshellRemotePairNow") {
+            let offer = RemoteHub.shared.startPairing()
+            Log.info(.app, "remote: (debug) pairing code \(offer.code), secret \(offer.secret)")
+        }
         #endif
         if !openedAtLaunch.isEmpty {
             let urls = openedAtLaunch
@@ -854,6 +859,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let url = RemoteHub.shared.localURL else { return NSSound.beep() }
         NSWorkspace.shared.open(url)
     }
+    /// Pair devices for Remote Control; see or revoke paired ones.
+    @MainActor @objc func showRemoteDevices(_ sender: Any?) { RemoteDevicesWindowController.shared.show() }
     #if DEBUG
     /// The Remote check session (a fake agent for devices' /check page).
     @MainActor @objc func toggleRemoteCheck(_ sender: Any?) {

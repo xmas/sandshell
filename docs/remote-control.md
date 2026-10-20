@@ -46,6 +46,27 @@ Every device pairs once (QR code on the phone, a 6-digit code elsewhere) and
 gets a revocable token (an HttpOnly cookie). A hosted relay and public tunnels
 (ngrok, cloudflared, Funnel) are out of v1.
 
+### Pairing and who gets in (built)
+
+- **This Mac is trusted**: a request that arrives on loopback, for a loopback
+  name, with no proxy headers (`X-Forwarded-For`, `Forwarded`,
+  `Tailscale-User-Login`). An SSH tunnel's far end counts — SSH did the
+  sign-in.
+- **Everything else needs a paired device's cookie** (`sandshell_device`,
+  HttpOnly, SameSite=Strict, a year; Secure behind HTTPS). The Mac keeps only
+  its SHA-256 (`RemoteDevices`, in the app's defaults). Revoking closes the
+  device's open streams.
+- **Pairing** (`RemotePairing`): Remote Control Devices… (or the popover's
+  Pair a Device…) opens a 5-minute, one-device offer: a 6-digit code to type,
+  and a link — `/pair#<secret>`, the secret in the fragment so it never
+  reaches logs or history — as a QR code or by AirDrop. Five wrong codes end it.
+- **Home network** (the popover's switch, `remoteHomeNetwork`): the server
+  listens beyond loopback, advertises `_sandshell._tcp` (once macOS's Local
+  Network permission is given), and accepts this Mac's `.local` name and its
+  Wi-Fi/Ethernet IPs in `Host`. Off, it's loopback only.
+- Static files (the client) are public; every `/api` call but `/api/pair`
+  needs a caller.
+
 ## Testing on every device, all the time
 
 1. **Fake agent** (`remote/fake-acp-agent.py`, DEBUG): a scripted ACP agent

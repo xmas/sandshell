@@ -2,8 +2,9 @@ import Foundation
 
 /// Remote Control's HTTP API and the web client's files:
 ///
-///     GET  /                              the web client (remote/web)
-///     GET  /api/info                      this Mac, and the sessions it shares
+///     GET  /                              the web client (remote/web); /s/<id>, /check and /pair too
+///     POST /api/pair                      {code | secret, name} → the device's cookie
+///     GET  /api/info                      this Mac, and the sessions it shares (401: pair first)
 ///     GET  /api/events[?session=<id>]     event stream: hello, sessions, state, patch, gone
 ///     GET  /api/sessions/<id>/images/<item>/<n>
 ///     POST /api/sessions/<id>/send        {text, images: [{name, mimeType, data(base64)}]}
@@ -13,16 +14,38 @@ import Foundation
 ///     POST /api/sessions/<id>/mode        {mode}
 ///     POST /api/check                     a device's /check results; GET /api/checks lists them
 ///
+/// Who may use the API: this Mac (a browser here, or an SSH tunnel's far end —
+/// both arrive on loopback, for 127.0.0.1), or a paired device (its cookie).
 /// Requests must name this server in `Host` (a DNS-rebinding page can't), and
 /// POSTs must carry `X-Sandshell: 1` (another site's page can't send that
 /// without a CORS preflight, which is never allowed).
 @MainActor
 final class RemoteRoutes {
     private unowned let hub: RemoteHub
+    private let devices: RemoteDevices
+    private let pairing: RemotePairing
     /// The port the server took (for the Host check).
     var port: UInt16 = RemoteHub.defaultPort
+    /// Listening on the home network: its names for this Mac are this server's too.
+    var homeNetwork = false
+    /// This Mac's tailnet names (`tailscale serve` forwards to us under them).
+    var tailnetNames: [String] = []
 
-    init(hub: RemoteHub) { self.hub = hub }
+    static let cookieName = "sandshell_device"
+
+    /// Who made a request.
+    enum Caller: Equatable {
+        case thisMac
+        case device(UUID)
+
+        var deviceID: UUID? { if case .device(let id) = self { id } else { nil } }
+    }
+
+    init(hub: RemoteHub, devices: RemoteDevices = .shared, pairing: RemotePairing = .shared) {
+        self.hub = hub
+        self.devices = devices
+        self.pairing = pairing
+    }
 
     func handle(_ request: HTTPServer.Request) -> HTTPServer.Reply {
         guard hostAllowed(request.headers["host"]) else {
@@ -31,12 +54,18 @@ final class RemoteRoutes {
         }
         let parts = request.segments
         guard parts.first == "api" else { return .response(file(request)) }
-        switch (request.method, Array(parts.dropFirst())) {
+        let rest = Array(parts.dropFirst())
+        if request.method == "POST", rest == ["pair"] { return .response(pair(request)) }
+        guard let caller = caller(request) else {
+            return .response(.json(["error": "Pair this device with the Mac first", "pairing": "required",
+                                    "host": RemoteHub.hostName], status: 401))
+        }
+        switch (request.method, rest) {
         case ("GET", ["info"]):
-            return .response(.json(RemoteHub.Hello(host: RemoteHub.hostName, sessions: hub.summaries)))
+            return .response(.json(hub.hello(for: caller)))
         case ("GET", ["events"]):
             let session = request.query["session"].flatMap(UUID.init(uuidString:))
-            return .events { [hub] stream in hub.attach(stream, following: session) }
+            return .events { [hub] stream in hub.attach(stream, following: session, caller: caller) }
         case ("GET", let p) where p.count == 5 && p[0] == "sessions" && p[2] == "images":
             guard let id = UUID(uuidString: p[1]), let index = Int(p[4]),
                   let data = hub.image(id, item: p[3], index: index) else { return .response(.error(404, "No such image")) }
@@ -50,7 +79,7 @@ final class RemoteRoutes {
             guard let report = try? JSONDecoder().decode(RemoteHub.CheckReport.self, from: request.body) else {
                 return .response(.error(400, "Expected {device, userAgent, results}"))
             }
-            hub.record(report, from: request.peer)
+            hub.record(report, from: Self.clientAddress(request))
             return .response(.json(["ok": true]))
         case ("POST", let p) where p.count == 3 && p[0] == "sessions":
             guard request.headers["x-sandshell"] == "1" else { return .response(.error(403, "Missing X-Sandshell header")) }
@@ -61,6 +90,89 @@ final class RemoteRoutes {
         default:
             return .response(.error(404, "No such endpoint"))
         }
+    }
+
+    // MARK: Who's asking
+
+    /// This Mac, a paired device, or nobody we know.
+    func caller(_ request: HTTPServer.Request) -> Caller? {
+        if Self.isThisMac(request) { return .thisMac }
+        guard let token = Self.cookie(Self.cookieName, in: request.headers["cookie"]),
+              let device = devices.device(forToken: token) else { return nil }
+        devices.touch(device.id, from: Self.clientAddress(request))
+        return .device(device.id)
+    }
+
+    /// A browser on this Mac (or an SSH tunnel's far end): it came in on
+    /// loopback, for a loopback name, and no proxy forwarded it (a proxy here,
+    /// like `tailscale serve`, carries someone else's request).
+    static func isThisMac(_ request: HTTPServer.Request) -> Bool {
+        guard request.peerIsLoopback, let host = request.headers["host"] else { return false }
+        let forwarded = ["x-forwarded-for", "forwarded", "x-forwarded-host", "tailscale-user-login"]
+        return forwarded.allSatisfy { request.headers[$0] == nil }
+            && RemoteAddresses.loopbackNames.contains(RemoteAddresses.hostName(host).name)
+    }
+
+    /// The device's address (a proxy's `X-Forwarded-For`, else the peer).
+    static func clientAddress(_ request: HTTPServer.Request) -> String {
+        request.headers["x-forwarded-for"]?.split(separator: ",").first.map { $0.trimmingCharacters(in: .whitespaces) }
+            ?? request.peer
+    }
+
+    static func cookie(_ name: String, in header: String?) -> String? {
+        for part in (header ?? "").split(separator: ";") {
+            let pair = part.split(separator: "=", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
+            if pair.count == 2, pair[0] == name, !pair[1].isEmpty { return pair[1] }
+        }
+        return nil
+    }
+
+    private func hostAllowed(_ header: String?) -> Bool {
+        guard let header else { return false }
+        let (name, port) = RemoteAddresses.hostName(header)
+        if RemoteAddresses.loopbackNames.contains(name) { return port == nil || port == self.port }
+        if tailnetNames.contains(name) { return true }   // via `tailscale serve`: its own port
+        guard homeNetwork else { return false }
+        return (port == nil || port == self.port) && homeHosts.contains(name)
+    }
+
+    /// The home network's names for this Mac (re-read every few seconds: the
+    /// Mac may change networks).
+    private var homeHosts: Set<String> {
+        if Date.now.timeIntervalSince(homeHostsRead) > 5 {
+            cachedHomeHosts = Set(RemoteAddresses.homeNetworkHosts().map { $0.lowercased() })
+            homeHostsRead = .now
+        }
+        return cachedHomeHosts
+    }
+    private var cachedHomeHosts: Set<String> = []
+    private var homeHostsRead = Date.distantPast
+
+    // MARK: Pairing
+
+    private struct PairBody: Decodable { let code: String?; let secret: String?; let name: String? }
+
+    private func pair(_ request: HTTPServer.Request) -> HTTPServer.Response {
+        guard request.headers["x-sandshell"] == "1" else { return .error(403, "Missing X-Sandshell header") }
+        guard let body = try? JSONDecoder().decode(PairBody.self, from: request.body) else {
+            return .error(400, "Expected {code or secret, name}")
+        }
+        switch pairing.redeem(code: body.code, secret: body.secret, name: body.name ?? "Device") {
+        case .paired(let device, let token):
+            devices.touch(device.id, from: Self.clientAddress(request))
+            var response = HTTPServer.Response.json(["ok": true, "device": .string(device.name)] as JSONValue)
+            response.headers["Set-Cookie"] = Self.cookieHeader(token, secure: request.headers["x-forwarded-proto"] == "https")
+            hub.refresh()
+            return response
+        case .wrongCode: return .error(403, "That code isn’t right — check the Mac and try again")
+        case .locked: return .error(429, "Too many wrong codes — start pairing again on the Mac")
+        case .noOffer: return .error(410, "Pairing isn’t open on the Mac (or it timed out) — start it again there")
+        }
+    }
+
+    /// A year, this site only, out of scripts' reach.
+    static func cookieHeader(_ token: String, secure: Bool) -> String {
+        "\(cookieName)=\(token); Path=/; Max-Age=31536000; HttpOnly; SameSite=Strict" + (secure ? "; Secure" : "")
     }
 
     // MARK: Commands
@@ -133,8 +245,8 @@ final class RemoteRoutes {
         guard request.method == "GET" || request.method == "HEAD" else { return .error(405, "Method not allowed") }
         guard let root = webRoot?.standardizedFileURL else { return .error(404, "No web client") }
         var path = request.path
-        // The client routes /check and /s/<id> itself.
-        if path == "/" || path == "/check" || path.hasPrefix("/s/") { path = "/index.html" }
+        // The client routes these itself.
+        if ["/", "/check", "/pair"].contains(path) || path.hasPrefix("/s/") { path = "/index.html" }
         let url = root.appending(path: String(path.dropFirst())).standardizedFileURL
         guard url.path.hasPrefix(root.path + "/"), let data = try? Data(contentsOf: url) else {
             return .error(404, "Not found")
@@ -142,11 +254,6 @@ final class RemoteRoutes {
         return HTTPServer.Response(status: 200, headers: ["Content-Type": Self.contentType(url.pathExtension),
                                                           "Cache-Control": "no-cache"],
                                    body: request.method == "HEAD" ? Data() : data)
-    }
-
-    private func hostAllowed(_ host: String?) -> Bool {
-        guard let host else { return false }
-        return ["127.0.0.1", "localhost", "[::1]"].contains { host == $0 || host == "\($0):\(port)" }
     }
 
     static func contentType(_ ext: String) -> String {

@@ -11,6 +11,8 @@ const el = {
   transcript: $("transcript"), cards: $("cards"), composer: $("composer"), input: $("input"),
   send: $("send"), file: $("file"), attachments: $("attachments"), status: $("status"),
   checkBack: $("check-back"), checkRun: $("check-run"), checkResults: $("check-results"),
+  pairPane: $("pair-pane"), pairForm: $("pair-form"), pairHost: $("pair-host"), pairCode: $("pair-code"),
+  pairName: $("pair-name"), pairSubmit: $("pair-submit"), pairError: $("pair-error"),
 };
 
 const state = {
@@ -62,7 +64,14 @@ function open(id) {
   state.stream = stream;
   setConn("connecting");
   stream.onopen = () => setConn("on");
-  stream.onerror = () => setConn(stream.readyState === EventSource.CLOSED ? "off" : "connecting");
+  stream.onerror = () => {
+    const closed = stream.readyState === EventSource.CLOSED;
+    setConn(closed ? "off" : "connecting");
+    // Refused (unpaired, or revoked on the Mac): pair. Otherwise try again soon.
+    if (closed && state.stream === stream) {
+      checkPaired().then((ok) => { if (ok && state.stream === stream) setTimeout(() => open(state.current), 3000); });
+    }
+  };
   for (const name of ["hello", "sessions", "state", "patch", "gone"]) {
     stream.addEventListener(name, (e) => {
       const data = JSON.parse(e.data);
@@ -845,6 +854,83 @@ async function tinyPhoto() {
   return { name: "check.png", mimeType: "image/png", data: c.toDataURL("image/png").split(",")[1] };
 }
 
+// ---------- Pairing ----------
+
+/// Whether this browser may use the Mac (else the pairing screen is up).
+async function checkPaired() {
+  try {
+    const r = await fetch("/api/info", { cache: "no-store" });
+    if (r.status === 401) {
+      const info = await r.json().catch(() => ({}));
+      showPairing(info.host);
+      return false;
+    }
+    return r.ok;
+  } catch {
+    return true;   // the Mac's unreachable: not a pairing problem
+  }
+}
+
+function showPairing(host) {
+  if (state.stream) { state.stream.close(); state.stream = null; }
+  el.app.classList.add("pairing");
+  el.pairPane.hidden = false;
+  if (host) { el.pairHost.textContent = host; document.title = "Pair with " + host; }
+  if (!el.pairName.value) el.pairName.value = deviceName();
+  setTimeout(() => el.pairCode.focus(), 50);
+}
+
+el.pairCode.addEventListener("input", () => {
+  const digits = el.pairCode.value.replace(/\D/g, "").slice(0, 6);
+  el.pairCode.value = digits.length > 3 ? digits.slice(0, 3) + " " + digits.slice(3) : digits;
+  el.pairError.textContent = "";
+  if (digits.length === 6) pair({ code: digits });
+});
+
+el.pairForm.addEventListener("submit", (e) => {
+  e.preventDefault();
+  pair({ code: el.pairCode.value.replace(/\D/g, "") });
+});
+
+let pairing = false;
+
+async function pair(answer) {
+  if (pairing) return;
+  pairing = true;
+  el.pairSubmit.disabled = true;
+  el.pairError.textContent = "";
+  try {
+    const r = await post("/api/pair", { ...answer, name: el.pairName.value.trim() || deviceName() });
+    if (r.ok) {
+      // Paired: the cookie's set. Start over where the device meant to go.
+      location.replace(location.pathname === "/pair" ? "/" : location.pathname);
+      return;
+    }
+    const body = await r.json().catch(() => ({}));
+    showPairing();
+    el.pairError.textContent = body.error || "The Mac said no (" + r.status + ")";
+    el.pairCode.select();
+  } catch {
+    el.pairError.textContent = "Couldn’t reach the Mac";
+  } finally {
+    pairing = false;
+    el.pairSubmit.disabled = false;
+  }
+}
+
 // ---------- Start ----------
 
-route();
+(async () => {
+  // A pairing link (QR code, AirDrop): /pair#<secret>.
+  if (location.pathname === "/pair" && location.hash.length > 1) {
+    const secret = decodeURIComponent(location.hash.slice(1));
+    history.replaceState(null, "", "/pair");   // don't keep the secret in history
+    el.pairName.value = deviceName();
+    await pair({ secret });
+    return;
+  }
+  if (await checkPaired()) {
+    if (location.pathname === "/pair") history.replaceState(null, "", "/");
+    route();
+  }
+})();

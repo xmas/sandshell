@@ -265,6 +265,7 @@ enum MainMenu {
         helpMenu.addItem(daemon)
         helpMenu.addItem(NSMenuItem("Show Status Debug Window", action: #selector(AppDelegate.showStatusDebug(_:))))
         helpMenu.addItem(NSMenuItem("Open Remote Control in Browser", action: #selector(AppDelegate.openRemoteControl(_:))))
+        helpMenu.addItem(NSMenuItem("Remote Control Devices…", action: #selector(AppDelegate.showRemoteDevices(_:))))
         #if DEBUG
         helpMenu.addItem(NSMenuItem("Remote Check Session (Fake Agent)", action: #selector(AppDelegate.toggleRemoteCheck(_:))))
         #endif

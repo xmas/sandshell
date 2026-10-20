@@ -24,9 +24,12 @@ final class RemoteHub: ObservableObject {
     private final class Subscriber {
         let stream: HTTPServer.EventStream
         let session: UUID?
-        init(stream: HTTPServer.EventStream, session: UUID?) {
+        /// The paired device it belongs to (nil: this Mac).
+        let device: UUID?
+        init(stream: HTTPServer.EventStream, session: UUID?, device: UUID?) {
             self.stream = stream
             self.session = session
+            self.device = device
         }
     }
 
@@ -46,6 +49,14 @@ final class RemoteHub: ObservableObject {
     @Published private(set) var port: UInt16?
     /// The server came up or went down.
     var onServing: ((UInt16?) -> Void)?
+    /// Something wants the server up (a session with Remote Control on, a
+    /// pairing, the check session).
+    private var servingWanted = false
+    /// Listen on the home network too (paired devices only), not just this Mac.
+    @Published private(set) var homeNetwork = UserDefaults.standard.bool(forKey: "remoteHomeNetwork")
+    /// This Mac's tailnet names, when Tailscale serves it.
+    @Published private(set) var tailnetNames: [String] = []
+    private var routes: RemoteRoutes?
 
     #if DEBUG
     /// The check session: a fake agent a device's /check page drives.
@@ -112,7 +123,8 @@ final class RemoteHub: ObservableObject {
         }
         sources = found
         broadcastSummaries()
-        setServing(!found.isEmpty || anyRemote)
+        servingWanted = !found.isEmpty || anyRemote || RemotePairing.shared.current != nil
+        setServing(servingWanted)
     }
 
     var summaries: [RemoteWire.SessionSummary] {
@@ -184,18 +196,25 @@ final class RemoteHub: ObservableObject {
     // MARK: Devices
 
     struct Hello: Encodable {
-        let version = RemoteWire.version
+        var version = RemoteWire.version
         let host: String
         let sessions: [RemoteWire.SessionSummary]
+        /// The paired device asking, by name (nil: this Mac).
+        var device: String?
     }
 
     static var hostName: String { Host.current().localizedName ?? "Mac" }
 
+    func hello(for caller: RemoteRoutes.Caller) -> Hello {
+        Hello(host: Self.hostName, sessions: summaries,
+              device: caller.deviceID.flatMap { id in RemoteDevices.shared.devices.first { $0.id == id }?.name })
+    }
+
     /// A device opened an event stream (following `session`, if it named one).
-    func attach(_ stream: HTTPServer.EventStream, following session: UUID?) {
+    func attach(_ stream: HTTPServer.EventStream, following session: UUID?, caller: RemoteRoutes.Caller = .thisMac) {
         // Its first state is the next patch's base for everyone following it.
         if let session, dirty.contains(session) { dirty.remove(session); flush(session) }
-        let sub = Subscriber(stream: stream, session: session)
+        let sub = Subscriber(stream: stream, session: session, device: caller.deviceID)
         let key = ObjectIdentifier(sub)
         subscribers[key] = sub
         let previous = stream.onClose
@@ -205,13 +224,35 @@ final class RemoteHub: ObservableObject {
             Log.info(.app, "remote: \(stream.peer) stopped following\(session.map { " \($0)" } ?? " the list")")
         }
         Log.info(.app, "remote: \(stream.peer) following\(session.map { " \($0)" } ?? " the list")")
-        stream.send("hello", Hello(host: Self.hostName, sessions: summaries))
+        stream.send("hello", hello(for: caller))
         guard let session else { return }
         if let source = sources[session] {
             stream.send("state", state(session, source))
         } else {
             stream.send("gone", ["session": session])
         }
+    }
+
+    /// Unpair a device: its token stops working and its open streams close.
+    func revoke(_ device: UUID) {
+        RemoteDevices.shared.revoke(device)
+        for sub in subscribers.values where sub.device == device { sub.stream.close() }
+    }
+
+    /// Open pairing (the server comes up for it while it's open): the offer
+    /// a device answers.
+    @discardableResult
+    func startPairing() -> RemotePairing.Offer {
+        let offer = RemotePairing.shared.start()
+        refresh()
+        // Once it runs out, nothing needs the server for it.
+        DispatchQueue.main.asyncAfter(deadline: .now() + RemotePairing.lifetime + 1) { [weak self] in self?.refresh() }
+        return offer
+    }
+
+    func cancelPairing() {
+        RemotePairing.shared.cancel()
+        refresh()
     }
 
     // MARK: Commands
@@ -319,10 +360,29 @@ final class RemoteHub: ObservableObject {
         guard let server else { return }
         server.stop()
         self.server = nil
+        routes = nil
         subscribers = [:]
         port = nil
-        Log.info(.app, "remote: stopped serving (no session has Remote Control on)")
+        Log.info(.app, "remote: stopped serving")
         onServing?(nil)
+    }
+
+    /// Let paired devices on the home network in (or keep it to this Mac):
+    /// a running server starts again listening the new way.
+    func setHomeNetwork(_ on: Bool) {
+        guard on != homeNetwork else { return }
+        homeNetwork = on
+        UserDefaults.standard.set(on, forKey: "remoteHomeNetwork")
+        Log.info(.app, "remote: home network \(on ? "on" : "off")")
+        guard server != nil else { return }
+        stopServer()
+        setServing(servingWanted)
+    }
+
+    /// Where devices can open the server now (nil: not serving).
+    var addresses: [RemoteAddresses.Address] {
+        guard let port else { return [] }
+        return RemoteAddresses.current(port: port, homeNetwork: homeNetwork, tailnet: tailnetNames)
     }
 
     private func startServer() async {
@@ -334,21 +394,24 @@ final class RemoteHub: ObservableObject {
         // Another Sandshell may hold the usual port: take the next one.
         let candidates: [UInt16] = first == 0 ? [0] : (0..<10).map { first &+ $0 } + [0]
         let routes = RemoteRoutes(hub: self)
+        let lan = homeNetwork
+        routes.homeNetwork = lan
+        routes.tailnetNames = tailnetNames
         for candidate in candidates {
-            let server = HTTPServer(loopbackOnly: true) { routes.handle($0) }
+            let server = HTTPServer(loopbackOnly: !lan, bonjourName: lan ? Self.hostName : nil) { routes.handle($0) }
             do {
                 let port = try await server.start(port: candidate)
                 self.server = server
+                self.routes = routes
                 self.port = port
                 routes.port = port
-                Log.info(.app, "remote: serving on http://127.0.0.1:\(port)")
+                Log.info(.app, "remote: serving on " + addresses.map(\.url.absoluteString).joined(separator: ", "))
                 onServing?(port)
-                // Nothing to serve any more (turned off while it started).
-                if sources.isEmpty, !SessionSurfaces.live.contains(where: { !$0.controller.remoteSessions.isEmpty }) {
-                    #if DEBUG
-                    if checkChat != nil { return }
-                    #endif
-                    setServing(false)
+                // Nothing to serve any more (turned off while it started), or
+                // the home network was switched meanwhile.
+                if !servingWanted || lan != homeNetwork {
+                    stopServer()
+                    setServing(servingWanted)
                 }
                 return
             } catch {

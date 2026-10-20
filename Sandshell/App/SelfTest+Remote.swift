@@ -1,5 +1,6 @@
 #if DEBUG
 import AppKit
+import Network
 import SwiftUI
 
 /// `remote`: Remote Control end to end, as a device sees it — over HTTP on
@@ -137,10 +138,17 @@ extension SelfTest {
         await perSessionSwitch(window, hub: hub, base: base)
         stripSwitch()
         await popoverPlacement()
+        await homeNetworkPairing(hub: hub, checkID: checkID)
 
-        // Off: devices following it are told.
+        // Off: devices following it are told. (A fresh device: switching the
+        // home network on and off restarted the server, which drops streams.)
+        _ = await until(10) { hub.port != nil && !hub.homeNetwork }
+        guard let local = hub.localURL else { return check(false, "the server is back on this Mac only") }
+        let lastDevice = RemoteTestDevice(base: local, session: checkID)
+        defer { lastDevice.stop() }
+        check(await until(10) { lastDevice.state != nil }, "back on this Mac only, a device follows the chat again")
         hub.setCheckSession(false)
-        check(await until(5) { device.gone }, "a device following a session that goes away is told")
+        check(await until(5) { lastDevice.gone }, "a device following a session that goes away is told")
         check(await until(5) { hub.port == nil }, "the server stops when there's nothing to serve")
     }
 
@@ -224,6 +232,119 @@ extension SelfTest {
         }
     }
 
+    /// The home network, as another device there sees it: over this Mac's own
+    /// Wi-Fi address a request isn't "this Mac", so it has to pair first.
+    private static func homeNetworkPairing(hub: RemoteHub, checkID: UUID) async {
+        let wasOn = hub.homeNetwork
+        hub.setHomeNetwork(true)
+        defer {
+            hub.cancelPairing()
+            hub.setHomeNetwork(wasOn)
+            for d in RemoteDevices.shared.devices where d.name.hasPrefix("SelfTest") { hub.revoke(d.id) }
+        }
+        guard await until(10, { hub.addresses.contains { $0.kind == .homeNetwork } }), let port = hub.port else {
+            return check(false, "the server comes back up on the home network")
+        }
+        check(true, "the server comes back up on the home network: "
+              + hub.addresses.map(\.url.absoluteString).joined(separator: ", "))
+        guard let ip = RemoteAddresses.lanIPv4().first, let lan = URL(string: "http://\(ip):\(port)/") else {
+            return log("no Wi-Fi or Ethernet address: skipping the home-network checks")
+        }
+        let stranger = RemoteTestClient(base: lan)
+        check(await stranger.get("").status == 200, "an unpaired device on the network loads the web client")
+        check(await stranger.get("api/info").status == 401, "but the API asks it to pair")
+        check(await stranger.post("api/sessions/\(checkID.uuidString)/send", ["text": "hi"]).status == 401, "it can't send")
+        let refused = RemoteTestDevice(base: lan, session: checkID)
+        defer { refused.stop() }
+        check(await until(5) { refused.ended } && refused.httpStatus == 401 && refused.state == nil, "nor follow a chat")
+        check(await stranger.post("api/pair", ["code": "123456", "name": "SelfTest"]).status == 410,
+              "pairing is refused while none is open on the Mac")
+
+        let offer = hub.startPairing()
+        snapshotDevicesWindow("remote-pairing")
+        let wrong = offer.code == "000000" ? "111111" : "000000"
+        check(await stranger.post("api/pair", ["code": .string(wrong), "name": "SelfTest"]).status == 403, "a wrong code is refused")
+        let paired = await stranger.post("api/pair", ["code": .string(offer.code), "name": "SelfTest Phone"])
+        let cookie = paired.headers["set-cookie"]?.split(separator: ";").first.map(String.init)
+        check(paired.status == 200 && cookie?.hasPrefix(RemoteRoutes.cookieName + "=") == true,
+              "the right code pairs, and sets the device's cookie")
+        guard let cookie, let device = RemoteDevices.shared.devices.first(where: { $0.name == "SelfTest Phone" }) else { return }
+        check(await stranger.post("api/pair", ["code": .string(offer.code), "name": "SelfTest Again"]).status == 410,
+              "a code works once")
+
+        let phone = RemoteTestClient(base: lan, cookie: cookie)
+        let info = try? await phone.json("api/info")
+        check(info?["device"]?.string == "SelfTest Phone" && info?["sessions"]?.array?.isEmpty == false,
+              "the paired device gets in, and is known by name")
+        check(await phone.get("api/info", host: "evil.example:\(port)").status == 403, "only under this Mac's own names")
+        if let name = RemoteAddresses.localHostName {
+            check(await phone.get("api/info", host: "\(name).local:\(port)").status == 200, "its .local name is one")
+        }
+        let follower = RemoteTestDevice(base: lan, session: checkID, cookie: cookie)
+        defer { follower.stop() }
+        check(await until(10) { follower.state != nil }, "the paired device follows a chat")
+        check(await phone.post("api/sessions/\(checkID.uuidString)/send", ["text": "hello over the network"]).status == 200,
+              "and sends to it")
+        check(await until(15) { follower.texts.contains { $0.contains("pong: hello over the network") } }, "and gets the reply")
+        check(RemoteDevices.shared.devices.first { $0.id == device.id }?.lastAddress == ip,
+              "the Mac knows where it last connected from")
+        snapshotDevicesWindow("remote-devices")
+
+        hub.revoke(device.id)
+        check(await until(5) { follower.ended }, "revoking it closes its stream")
+        check(await phone.get("api/info").status == 401, "and it has to pair again")
+
+        let next = hub.startPairing()
+        let bad = next.code == "000000" ? "111111" : "000000"
+        var last = 0
+        for _ in 0..<RemotePairing.maxWrongTries {
+            last = await stranger.post("api/pair", ["code": .string(bad), "name": "SelfTest"]).status
+        }
+        check(last == 429 && RemotePairing.shared.current == nil, "five wrong codes end the pairing")
+
+        if let local = hub.localURL {
+            let proxied = RemoteTestClient(base: local, headers: ["X-Forwarded-For": "100.64.0.9"])
+            check(await proxied.get("api/info").status == 401, "a request a proxy here forwards (tailscale serve) needs pairing too")
+        }
+        // Advertising waits on macOS's Local Network permission, which a test
+        // build can't give itself: report it rather than fail on it.
+        let found = await bonjourNames(timeout: 6)
+        log(found.contains(RemoteHub.hostName)
+            ? "NOTE the Mac advertises _sandshell._tcp on the network"
+            : "NOTE not advertised over Bonjour (found \(found)) — allow Local Network access for this build in System Settings")
+    }
+
+    /// The devices window's content as it is now.
+    private static func snapshotDevicesWindow(_ name: String) {
+        let view = NSHostingView(rootView: RemoteDevicesView(hub: .shared, devices: .shared, pairing: .shared))
+        view.frame = NSRect(x: 0, y: 0, width: 420, height: 560)
+        let window = NSWindow(contentRect: view.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.alphaValue = 0
+        window.contentView = view
+        snapshot(view, name)
+        window.close()
+    }
+
+    /// The `_sandshell._tcp` services on the network.
+    private static func bonjourNames(timeout: Double) async -> [String] {
+        // Only touched on the main queue (the browser's).
+        final class Found: @unchecked Sendable { var names: [String] = [] }
+        let found = Found()
+        let browser = NWBrowser(for: .bonjour(type: HTTPServer.bonjourType, domain: nil), using: .tcp)
+        browser.browseResultsChangedHandler = { results, _ in
+            MainActor.assumeIsolated {
+                found.names = results.compactMap {
+                    if case .service(let name, _, _, _) = $0.endpoint { name } else { nil }
+                }
+            }
+        }
+        browser.start(queue: .main)
+        _ = await until(timeout) { found.names.contains(RemoteHub.hostName) }
+        browser.cancel()
+        return found.names
+    }
+
     /// A window session shows up only while Remote Control is on for it.
     private static func perSessionSwitch(_ window: MainWindowController, hub: RemoteHub, base: URL) async {
         guard let tree = window.paneTree, let ws = window.workspaceController, let folder = ws.folders.first,
@@ -267,10 +388,21 @@ private extension NSView {
     var descendants: [NSView] { subviews + subviews.flatMap(\.descendants) }
 }
 
-/// Plain HTTP calls against the server.
+/// A URL session that keeps no cookies of its own (each test device brings its own).
+@MainActor let remoteTestSession: URLSession = {
+    let config = URLSessionConfiguration.ephemeral
+    config.httpShouldSetCookies = false
+    config.httpCookieAcceptPolicy = .never
+    config.requestCachePolicy = .reloadIgnoringLocalCacheData
+    return URLSession(configuration: config)
+}()
+
+/// Plain HTTP calls against the server, as one device (its `cookie`, if paired).
 @MainActor
 struct RemoteTestClient {
     let base: URL
+    var cookie: String?
+    var headers: [String: String] = [:]
     struct Reply { var status: Int; var headers: [String: String]; var body: Data }
 
     func get(_ path: String, host: String? = nil) async -> Reply {
@@ -293,7 +425,10 @@ struct RemoteTestClient {
     }
 
     private func perform(_ request: URLRequest) async -> Reply {
-        guard let (data, response) = try? await URLSession.shared.data(for: request),
+        var request = request
+        if let cookie { request.setValue(cookie, forHTTPHeaderField: "Cookie") }
+        for (k, v) in headers { request.setValue(v, forHTTPHeaderField: k) }
+        guard let (data, response) = try? await remoteTestSession.data(for: request),
               let http = response as? HTTPURLResponse else { return Reply(status: 0, headers: [:], body: Data()) }
         var headers: [String: String] = [:]
         for (k, v) in http.allHeaderFields { headers[String(describing: k).lowercased()] = String(describing: v) }
@@ -315,13 +450,20 @@ final class RemoteTestDevice {
 
     var texts: [String] { items.filter { $0.kind == .text }.compactMap(\.text) }
 
-    init(base: URL, session: UUID) {
+    /// The stream ended (the server closed it, or refused it).
+    private(set) var ended = false
+    private(set) var httpStatus = 0
+
+    init(base: URL, session: UUID, cookie: String? = nil) {
         var components = URLComponents(url: base.appending(path: "api/events"), resolvingAgainstBaseURL: false)!
         components.queryItems = [URLQueryItem(name: "session", value: session.uuidString)]
-        let url = components.url!
+        var request = URLRequest(url: components.url!)
+        if let cookie { request.setValue(cookie, forHTTPHeaderField: "Cookie") }
         task = Task { [weak self] in
+            defer { self?.ended = true }
             do {
-                let (bytes, _) = try await URLSession.shared.bytes(from: url)
+                let (bytes, response) = try await remoteTestSession.bytes(for: request)
+                self?.httpStatus = (response as? HTTPURLResponse)?.statusCode ?? 0
                 var event = "message"
                 // One `data:` line per event, right after its `event:` line.
                 for try await line in bytes.lines {

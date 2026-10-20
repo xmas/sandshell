@@ -17,6 +17,9 @@ final class HTTPServer {
         let body: Data
         /// The peer's address ("127.0.0.1", "fe80::1%en0").
         let peer: String
+        /// The connection came from this Mac (a proxy on it, like `tailscale
+        /// serve` or an SSH tunnel, also does: see `RemoteRoutes.isLocal`).
+        var peerIsLoopback = false
 
         /// The path's segments: "/api/sessions/x" → ["api", "sessions", "x"].
         var segments: [String] { path.split(separator: "/").map(String.init) }
@@ -111,11 +114,17 @@ final class HTTPServer {
     private let handler: (Request) -> Reply
     /// Accept connections only from this Mac.
     let loopbackOnly: Bool
+    /// Advertised as this Bonjour service (`_sandshell._tcp`) when it listens
+    /// beyond this Mac.
+    let bonjourName: String?
     /// The port it listens on, once it's up.
     private(set) var port: UInt16?
 
-    init(loopbackOnly: Bool, handler: @escaping (Request) -> Reply) {
+    static let bonjourType = "_sandshell._tcp"
+
+    init(loopbackOnly: Bool, bonjourName: String? = nil, handler: @escaping (Request) -> Reply) {
         self.loopbackOnly = loopbackOnly
+        self.bonjourName = bonjourName
         self.handler = handler
     }
 
@@ -126,6 +135,16 @@ final class HTTPServer {
         if loopbackOnly { params.requiredInterfaceType = .loopback }
         let listener = try NWListener(using: params, on: port == 0 ? .any : NWEndpoint.Port(rawValue: port) ?? .any)
         self.listener = listener
+        if !loopbackOnly, let bonjourName {
+            listener.service = NWListener.Service(name: bonjourName, type: Self.bonjourType)
+            listener.serviceRegistrationUpdateHandler = { change in
+                switch change {
+                case .add(let endpoint): Log.info(.app, "remote: advertising \(endpoint) on the network")
+                case .remove(let endpoint): Log.info(.app, "remote: stopped advertising \(endpoint)")
+                @unknown default: break
+                }
+            }
+        }
         listener.newConnectionHandler = { [weak self] connection in
             MainActor.assumeIsolated { self?.accept(connection) }
         }
@@ -134,6 +153,8 @@ final class HTTPServer {
             nonisolated(unsafe) var resumed = false
             listener.stateUpdateHandler = { state in
                 MainActor.assumeIsolated {
+                    if case .waiting(let error) = state { Log.info(.app, "remote: listener waiting: \(error)") }
+                    if resumed, case .failed(let error) = state { Log.error(.app, "remote: listener failed: \(error)") }
                     guard !resumed else { return }
                     switch state {
                     case .ready:
@@ -172,26 +193,27 @@ final class HTTPServer {
 
     private func accept(_ connection: NWConnection) {
         let peer = Self.address(of: connection.endpoint)
-        if loopbackOnly, !Self.isLoopback(connection.endpoint) {
+        let local = Self.isLoopback(connection.endpoint)
+        if loopbackOnly, !local {
             Log.info(.app, "remote: refused a connection from \(peer) (this Mac only)")
             connection.cancel()
             return
         }
         connection.start(queue: .main)
-        receive(connection, peer: peer, buffer: Data())
+        receive(connection, peer: peer, local: local, buffer: Data())
     }
 
-    private func receive(_ connection: NWConnection, peer: String, buffer: Data) {
+    private func receive(_ connection: NWConnection, peer: String, local: Bool, buffer: Data) {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 256 * 1024) { [weak self] data, _, isComplete, error in
             MainActor.assumeIsolated {
                 guard let self else { return connection.cancel() }
                 var buffer = buffer
                 if let data { buffer.append(data) }
-                switch Self.parse(buffer, peer: peer) {
+                switch Self.parse(buffer, peer: peer, peerIsLoopback: local) {
                 case .incomplete where isComplete || error != nil:
                     connection.cancel()
                 case .incomplete:
-                    self.receive(connection, peer: peer, buffer: buffer)
+                    self.receive(connection, peer: peer, local: local, buffer: buffer)
                 case .invalid(let status):
                     self.respond(connection, .error(status, "Bad request"))
                 case .request(let request):
@@ -241,7 +263,7 @@ final class HTTPServer {
     }
 
     /// A whole request from what's arrived so far, if it's all there.
-    nonisolated static func parse(_ buffer: Data, peer: String) -> Parsed {
+    nonisolated static func parse(_ buffer: Data, peer: String, peerIsLoopback: Bool = false) -> Parsed {
         let separator = Data("\r\n\r\n".utf8)
         guard let end = buffer.firstRange(of: separator) else {
             return buffer.count > maxHeader ? .invalid(431) : .incomplete
@@ -268,14 +290,14 @@ final class HTTPServer {
         for item in components?.queryItems ?? [] { query[item.name] = item.value ?? "" }
         let path = components?.percentEncodedPath.removingPercentEncoding ?? target
         return .request(Request(method: String(requestLine[0]).uppercased(), path: path, query: query,
-                                headers: headers, body: Data(body), peer: peer))
+                                headers: headers, body: Data(body), peer: peer, peerIsLoopback: peerIsLoopback))
     }
 
     nonisolated static func isLoopback(_ endpoint: NWEndpoint) -> Bool {
         guard case .hostPort(let host, _) = endpoint else { return false }
         switch host {
         case .ipv4(let address): return address.isLoopback
-        case .ipv6(let address): return address.isLoopback || address == .loopback
+        case .ipv6(let address): return address.isLoopback || address.asIPv4?.isLoopback == true
         case .name(let name, _): return name == "localhost"
         @unknown default: return false
         }

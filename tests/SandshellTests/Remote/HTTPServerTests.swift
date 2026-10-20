@@ -89,7 +89,7 @@ struct RemoteRoutesTests {
         let routes = RemoteRoutes(hub: RemoteHub.shared)
         routes.port = 47820
         let request = HTTPServer.Request(method: "GET", path: "/api/info", query: [:], headers: ["host": host],
-                                         body: Data(), peer: "127.0.0.1")
+                                         body: Data(), peer: "127.0.0.1", peerIsLoopback: true)
         guard case .response(let r) = routes.handle(request) else { Issue.record("expected a response"); return }
         #expect(r.status == status)
     }
@@ -97,7 +97,8 @@ struct RemoteRoutesTests {
     @Test func postsNeedTheMarkerHeader() {
         let routes = RemoteRoutes(hub: RemoteHub.shared)
         let request = HTTPServer.Request(method: "POST", path: "/api/sessions/\(UUID().uuidString)/cancel", query: [:],
-                                         headers: ["host": "127.0.0.1:47820"], body: Data(), peer: "127.0.0.1")
+                                         headers: ["host": "127.0.0.1:47820"], body: Data(), peer: "127.0.0.1",
+                                         peerIsLoopback: true)
         guard case .response(let r) = routes.handle(request) else { Issue.record("expected a response"); return }
         #expect(r.status == 403)
     }
@@ -106,7 +107,7 @@ struct RemoteRoutesTests {
         let routes = RemoteRoutes(hub: RemoteHub.shared)
         let request = HTTPServer.Request(method: "POST", path: "/api/sessions/\(UUID().uuidString)/cancel", query: [:],
                                          headers: ["host": "127.0.0.1:47820", "x-sandshell": "1"], body: Data(),
-                                         peer: "127.0.0.1")
+                                         peer: "127.0.0.1", peerIsLoopback: true)
         guard case .response(let r) = routes.handle(request) else { Issue.record("expected a response"); return }
         #expect(r.status == 404)
     }
