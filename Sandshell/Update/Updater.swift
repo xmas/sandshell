@@ -37,14 +37,24 @@ final class Updater {
 
     // MARK: - Entry points
 
-    /// Silent check on launch: only speaks up when an update exists.
+    /// Silent check on launch: only speaks up when an update exists. A
+    /// Debug build (built from source) doesn't check: the cask isn't its source.
     func checkInBackground() {
+        #if DEBUG
+        Log.info(.app, "development build: not checking Homebrew for updates")
+        #else
         check(userInitiated: false)
+        #endif
     }
 
     /// Menu "Check for Updates…".
     func checkForUpdatesMenu() {
+        #if DEBUG
+        inform("Development build", "This copy of Sandshell was built from source, so it doesn’t update "
+               + "from Homebrew. Pull and build again to update it.")
+        #else
         check(userInitiated: true)
+        #endif
     }
 
     private func check(userInitiated: Bool) {
