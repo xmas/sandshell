@@ -2,6 +2,9 @@
 
 A running log of what changed, newest first. Yes, we actually write these.
 
+## v0.2.32 — "One Toggle"
+- **Files sidebar:** one column toggle — the tree's, at the left of the header (the diff column is View ▸ Diff Column, ⌥⌘2); columns slide in and out; hiding the tree no longer leaves a line across the open file.
+
 ## v0.2.31 — "Fade Out"
 - **The chat fades into the composer.** While there's more conversation below, the transcript's bottom edge fades out above the message field, and a round ↓ button jumps to the newest message (and follows it again).
 - **Context is back under the chat.** The composer's readout leads with how full the context window is — a small bar (green, orange past 70 %, red past 90 %) and "38% context" — then the cost; the token counts are in its tooltip, and a click opens Session details.
