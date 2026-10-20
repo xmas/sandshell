@@ -142,6 +142,29 @@ struct SandboxInspection: Decodable {
     var agent: String?
     var kits: [String]?
     var state: String?
+    var image: String?
+    var imageDigest: String?
+    /// The primary workspace folder, then the others (read-only or not).
+    var workspace: String?
+    var additionalWorkspaces: [Workspace]?
+    var networkPolicy: NetworkPolicy?
+    var secrets: [Secret]?
+    var sessions: Int?
+    var daemonVersion: String?
+
+    struct Workspace: Decodable, Hashable {
+        var dir: String
+        var readOnly: Bool?
+        enum CodingKeys: String, CodingKey { case dir, readOnly = "read_only" }
+    }
+    struct NetworkPolicy: Decodable { var scope: String? }
+    struct Secret: Decodable, Hashable { var name: String; var source: String? }
+
+    enum CodingKeys: String, CodingKey {
+        case name, agent, kits, state, image, workspace, secrets, sessions
+        case imageDigest = "image_digest", additionalWorkspaces = "additional_workspaces"
+        case networkPolicy = "network_policy", daemonVersion = "daemon_version"
+    }
 }
 
 /// Result of running an `sbx` command.

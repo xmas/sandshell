@@ -38,6 +38,16 @@ enum Alerts {
         if let window { alert.beginSheetModal(for: window) } else { alert.runModal() }
     }
 
+    /// Ask with several answers, as a sheet on `window` (app-modal without
+    /// one): the index of the button pressed, `buttons[0]` being the default.
+    static func choose(_ title: String, _ info: String, buttons: [String], style: NSAlert.Style = .warning,
+                       in window: NSWindow?) async -> Int {
+        let alert = make(title, info, style: style, buttons: buttons, destructive: false)
+        let answer: NSApplication.ModalResponse
+        if let window { answer = await alert.beginSheetModal(for: window) } else { answer = alert.runModal() }
+        return answer.rawValue - NSApplication.ModalResponse.alertFirstButtonReturn.rawValue
+    }
+
     enum SaveChoice { case save, cancel, discard }
 
     /// "Save changes to …?" with Save (All) / Cancel / Don't Save.

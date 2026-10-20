@@ -51,8 +51,11 @@ final class MainWindowController: NSWindowController {
         return stack
     }()
     /// Stop / Restart for the focused session's process in its sandbox.
-    private lazy var sandboxActions = SandboxActionsView(
-        target: self, stop: #selector(stopFromToolbar), restart: #selector(restartFromToolbar))
+    private lazy var sandboxActions: SandboxActionsView = {
+        let view = SandboxActionsView(target: self, stop: #selector(stopFromToolbar), rebuild: #selector(rebuildFromToolbar))
+        view.sandboxMenu = { [weak self] in self?.sandboxMenu() }
+        return view
+    }()
     /// The Files sidebar's toggle (pressed while it shows).
     private lazy var filesToggleButton = ChromeButton(
         "Files", symbol: "doc.text", symbolConfiguration: .role(.body),
@@ -414,12 +417,16 @@ final class MainWindowController: NSWindowController {
     /// Self-test: the title bar's session name.
     var debugIdentity: String { toolbarName.stringValue }
     /// Self-test: the Sandbox group — shown, and Stop / Restart enabled.
-    var debugSandboxGroup: (shown: Bool, stop: Bool, restart: Bool) {
+    var debugSandboxGroup: (shown: Bool, stop: Bool, rebuild: Bool) {
         window?.toolbar?.validateVisibleItems()
         let item = window?.toolbar?.items.first { $0.itemIdentifier == .sandbox }
         return (item.map { !$0.isHidden } ?? false, sandboxActions.stopButton.isEnabled,
-                sandboxActions.restartButton.isEnabled)
+                sandboxActions.rebuildButton.isEnabled)
     }
+    /// Self-test: the sandbox menu's titles ("" for a separator).
+    var debugSandboxMenuTitles: [String] { sandboxMenu()?.items.map { $0.isSeparatorItem ? "" : $0.title } ?? [] }
+    /// Self-test: Inspect, as the sandbox menu does it.
+    func debugInspectSandbox() { inspectSandboxFromMenu() }
     /// Self-test: what the Sandbox group's label says.
     var debugSandboxLabel: String { sandboxActions.debugLabel }
     /// Self-test: the Files toggle shows pressed; the sidebar's header shows.
@@ -870,7 +877,7 @@ extension MainWindowController: NSToolbarDelegate {
         // Not while it's being made or acted on, or before it exists.
         let busy = box.map { workspace?.sandboxBusy.contains($0.name) ?? false } ?? true
         let ready = (phase == .running || phase == .stopped) && !busy
-        sandboxActions.setEnabled(stop: ready, restart: ready)
+        sandboxActions.setEnabled(stop: ready, rebuild: ready)
     }
 
     /// A borderless, non-focusable symbol button for toolbar items — the
@@ -896,7 +903,7 @@ extension MainWindowController: NSToolbarDelegate {
     }
     /// Sandbox ▸ Restart: the sandbox stopped and started again, then the
     /// sessions this window shows in it.
-    @objc private func restartFromToolbar() {
+    @objc private func restartSandboxFromMenu() {
         guard let workspace, let box = focusedSandbox else { return }
         let live = workspace.liveSessionCount(inSandboxOf: box.agent)
         guard live == 0 || Alerts.confirm("Restart the sandbox “\(box.name)”?",
@@ -904,6 +911,70 @@ extension MainWindowController: NSToolbarDelegate {
                                           + "the ones in this window start again.",
                                           confirm: "Restart Sandbox") else { return }
         workspace.restartSandbox(box.name) { [weak self] in self?.restartSessions(inSandboxOf: box.agent) }
+    }
+
+    /// Sandbox ▸ Rebuild: the sandbox made again from its image and the
+    /// workspace's kits. First looks for what was added in it since it was
+    /// made, and offers to keep that as a kit (installed again on the new one).
+    @objc private func rebuildFromToolbar() {
+        guard let workspace, let box = focusedSandbox else { return }
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            self.sandboxActions.setEnabled(stop: false, rebuild: false)   // while it looks
+            let found: Result<SandboxChanges, Error>
+            do { found = .success(try await SbxClient.shared.readChanges(inSandbox: box.name)) } catch { found = .failure(error) }
+            self.updateSandboxGroup()
+            let live = workspace.liveSessionCount(inSandboxOf: box.agent)
+            var info = "It’s made again from its image and the workspace’s kits"
+                + (live == 0 ? "." : "; \(live == 1 ? "the session" : "all \(live) sessions") running in it stop.")
+            var buttons = ["Rebuild", "Cancel"]
+            switch found {
+            case .success(let changes) where !changes.isEmpty:
+                info += "\n\nAdded since it was made: \(changes.summary). Keep them as a kit, so the new sandbox "
+                    + "(and any later rebuild) installs them again?"
+                if !changes.notes.isEmpty { info += "\n\nNot capturable: \(changes.notes.prefix(4).joined(separator: "; "))" }
+                buttons = ["Keep as Kit & Rebuild", "Rebuild Without", "Cancel"]
+            case .success:
+                info += "\n\nNothing was installed in it since it was made."
+            case .failure(let error):
+                info += "\n\nCouldn’t check what was added in it: \(error.localizedDescription)"
+            }
+            let answer = await Alerts.choose("Rebuild the sandbox “\(box.name)”?", info, buttons: buttons, in: self.window)
+            guard buttons.indices.contains(answer), buttons[answer] != "Cancel" else { return }
+            if buttons[answer] == "Keep as Kit & Rebuild", case .success(let changes) = found {
+                do { try workspace.captureChangesAsKit(changes, for: box.agent) } catch {
+                    return Alerts.inform("Couldn’t save the kit", error.localizedDescription, style: .warning, in: self.window)
+                }
+            }
+            workspace.rebuildContainer(for: box.agent, force: true)
+        }
+    }
+
+    /// The sandbox's details, and what was added in it (with Keep as Kit).
+    @objc private func inspectSandboxFromMenu() {
+        guard let workspace, let box = focusedSandbox else { return }
+        SandboxInspectWindowController.show(sandbox: box.name, agent: box.agent, workspace: workspace, near: window)
+    }
+
+    /// The menu under the sandbox's name in the title bar.
+    private func sandboxMenu() -> NSMenu? {
+        guard let workspace, let box = focusedSandbox else { return nil }
+        let stopped = workspace.containerPhases[box.agent] == .stopped
+        let busy = workspace.sandboxBusy.contains(box.name)
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        func add(_ title: String, _ action: Selector, symbol: String, enabled: Bool = true) {
+            let item = NSMenuItem(title, action: action, target: self, symbol: symbol)
+            item.isEnabled = enabled && !busy
+            menu.addItem(item)
+        }
+        add("Inspect…", #selector(inspectSandboxFromMenu), symbol: "info.circle")
+        add("Keep What Was Added as a Kit…", #selector(inspectSandboxFromMenu), symbol: "shippingbox")
+        menu.addItem(.separator())
+        add(stopped ? "Start" : "Stop", #selector(stopFromToolbar), symbol: stopped ? "play.fill" : "stop.fill")
+        add("Restart", #selector(restartSandboxFromMenu), symbol: "arrow.clockwise", enabled: !stopped)
+        add("Rebuild…", #selector(rebuildFromToolbar), symbol: "hammer")
+        return menu
     }
 
     /// The focused session's sandbox (its container name and agent).

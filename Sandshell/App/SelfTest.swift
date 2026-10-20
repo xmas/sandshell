@@ -3024,7 +3024,7 @@ enum SelfTest {
         // An empty pane focused: Stop and Restart are off, the group stays.
         check(tree.focused.shownSession == nil, "the empty split pane has focus")
         var group = window.debugSandboxGroup
-        check(group.shown && !group.stop && !group.restart, "no session focused: Sandbox shows, Stop and Restart disabled (\(group))")
+        check(group.shown && !group.stop && !group.rebuild, "no session focused: Sandbox shows, Stop and Rebuild disabled (\(group))")
         check(window.debugIdentity.isEmpty, "no session focused: no name in the title bar")
         check(window.debugSandboxLabel == "Sandbox", "no session focused: the group says Sandbox (\(window.debugSandboxLabel))")
         let emptyStrip = tree.focused.debugStrip
@@ -3033,7 +3033,22 @@ enum SelfTest {
         if let sessionPane = tree.panes.first(where: { $0.shownSession == a.id }) { tree.focus(sessionPane) }
         await wait(0.5)
         group = window.debugSandboxGroup
-        check(group.shown && group.stop && group.restart, "a running session focused: Stop and Restart enabled (\(group))")
+        check(group.shown && group.stop && group.rebuild, "a running session focused: Stop and Rebuild enabled (\(group))")
+        let menu = window.debugSandboxMenuTitles
+        check(menu == ["Inspect…", "Keep What Was Added as a Kit…", "", "Stop", "Restart", "Rebuild…"],
+              "the sandbox's name opens its menu (\(menu))")
+        // What was added in it: the probe runs in the real sandbox and reads back.
+        let box = ws.containerName(for: a.containerAgentKind)
+        do {
+            let changes = try await SbxClient.shared.readChanges(inSandbox: box)
+            check(changes.baseline != nil, "the sandbox says when it was made, and what was added since (\(changes.summary.isEmpty ? "nothing" : changes.summary))")
+        } catch {
+            check(false, "reading what was added in \(box): \(error.localizedDescription)")
+        }
+        window.debugInspectSandbox()
+        let inspected = await until(30) { SandboxInspectWindowController.debugWindow(box)?.model.details != nil }
+        check(inspected, "Inspect opens the sandbox's window with its details")
+        SandboxInspectWindowController.debugWindow(box)?.close()
         check(window.debugIdentity == ws.displayName(of: a), "the title bar names the session (\(window.debugIdentity))")
         check(window.debugSandboxLabel == ws.containerName(for: a.containerAgentKind),
               "the Sandbox group names the session's sandbox (\(window.debugSandboxLabel))")

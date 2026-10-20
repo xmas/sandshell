@@ -747,6 +747,16 @@ actor SbxClient {
         return out.stdout
     }
 
+    /// What was installed in a sandbox since it was made (`SandboxChanges`).
+    /// Starts the sandbox if it's stopped (`sbx exec` does).
+    func readChanges(inSandbox name: String) async throws -> SandboxChanges {
+        let out = try await run(["exec", name, "sh", "-c", SandboxChanges.probeScript], timeout: 120)
+        if !out.ok, !out.stdout.contains("{") {
+            throw SbxError.command(out.stderr.isEmpty ? "sbx exec failed (\(out.status))" : out.stderr)
+        }
+        return try SandboxChanges.parse(out.stdout)
+    }
+
     /// Read a file from inside a running sandbox (`sbx exec <name> cat <path>`).
     /// Routine (not logged per call, bounded timeout) — used for polling the kit
     /// startup log. Throws if the sandbox isn't running or the file is missing.

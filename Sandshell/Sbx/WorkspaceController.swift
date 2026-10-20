@@ -960,6 +960,33 @@ final class WorkspaceController: ObservableObject {
         refreshKitDrift(for: agent)
     }
 
+    /// Save what was added in `agent`'s sandbox as a kit in the workspace
+    /// (`.sandshell/kits/<sandbox>-env`) and turn it on, so a rebuilt sandbox
+    /// gets it all again. The sandbox itself has it already: if it matched the
+    /// workspace config before, it still counts as matching. Returns the kit's path.
+    @discardableResult
+    func captureChangesAsKit(_ changes: SandboxChanges, for agent: AgentKind) throws -> String {
+        let sandbox = containerName(for: agent)
+        let name = SandboxChanges.kitName(for: sandbox)
+        let dir = workspace.rootURL.appending(path: ".sandshell/kits/\(name)", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try changes.kitSpec(name: name, sandbox: sandbox, agent: agent.rawValue)
+            .write(to: dir.appending(path: "spec.yaml"), atomically: true, encoding: .utf8)
+        var path = dir.path(percentEncoded: false)
+        if path.hasSuffix("/") { path.removeLast() }
+        let mounts = resolvedMounts()
+        let wasInSync = state.appliedMountSignatures[sandbox] == configSignature(mounts: mounts, kits: resolvedKits(), agent: agent)
+        KitStore.add(path)
+        KitStore.update(path, displayName: "What was added in \(sandbox)", summary: changes.summary)
+        if !resolvedKits().contains(path) {
+            let kits = resolvedKits() + [path]
+            storeKits(kits)
+            if wasInSync { recordSignature(configSignature(mounts: mounts, kits: kits, agent: agent), for: sandbox) }
+        }
+        Log.info(.workspace, "captured what was added in '\(sandbox)' as the kit \(path): \(changes.summary)")
+        return path
+    }
+
     /// Leave a container's extra kits alone and stop reporting them; the next
     /// rebuild (which uses the workspace config) drops them.
     func ignoreKitDrift(for agent: AgentKind) {

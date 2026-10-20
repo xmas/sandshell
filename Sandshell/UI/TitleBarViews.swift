@@ -111,28 +111,34 @@ final class ChromeButton: NSButton {
     }
 }
 
-/// The title bar's Sandbox group: one bordered pill, a non-interactive label
-/// naming the focused session's sandbox, then Stop (Start while it's stopped)
-/// and Restart for the sandbox itself. A session's own Stop / Restart are in
-/// its pane's strip; a chat's turn stops in its composer.
+/// The title bar's Sandbox group: one bordered pill — the focused session's
+/// sandbox by name (click: its menu, Inspect / Capture Changes as Kit /
+/// Restart / …), then Stop (Start while it's stopped) and Rebuild for the
+/// sandbox itself. A session's own Stop / Restart are in its pane's strip; a
+/// chat's turn stops in its composer.
 @MainActor
 final class SandboxActionsView: NSView {
     let stopButton: ChromeButton
-    let restartButton: ChromeButton
+    let rebuildButton: ChromeButton
+    /// The sandbox's menu, shown under the name.
+    var sandboxMenu: (() -> NSMenu?)?
     private let label = NSStackView()
     private let labelIcon = NSImageView()
+    private let labelChevron = NSImageView()
+    private var labelHover = false { didSet { updateLabelFill() } }
+    private var colors = ThemeColors.lightBase
     private let labelText = NSTextField(labelWithString: "Sandbox")
     private let dividers = [NSView(), NSView()]
 
-    init(target: AnyObject?, stop: Selector, restart: Selector) {
+    init(target: AnyObject?, stop: Selector, rebuild: Selector) {
         stopButton = ChromeButton("Stop", symbol: "stop.fill", toolTip: Self.stopTip,
                                   target: target, action: stop, id: "toolbar-sandbox-stop")
-        restartButton = ChromeButton("Restart", symbol: "arrow.clockwise",
-                                     toolTip: "Restart the sandbox (its sessions stop and start again)",
-                                     target: target, action: restart, id: "toolbar-sandbox-restart")
+        rebuildButton = ChromeButton("Rebuild", symbol: "hammer",
+                                     toolTip: "Make the sandbox again from its image and kits (offers to keep what was added)",
+                                     target: target, action: rebuild, id: "toolbar-sandbox-rebuild")
         super.init(frame: .zero)
         stopButton.isSegment = true
-        restartButton.isSegment = true
+        rebuildButton.isSegment = true
         wantsLayer = true
         layer?.cornerRadius = 8
         layer?.borderWidth = 1
@@ -149,13 +155,16 @@ final class SandboxActionsView: NSView {
         labelText.lineBreakMode = .byTruncatingMiddle
         labelText.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         labelText.widthAnchor.constraint(lessThanOrEqualToConstant: 140).isActive = true
-        label.setViews([labelIcon, labelText], in: .leading)
+        labelChevron.image = NSImage(systemSymbolName: "chevron.down", accessibilityDescription: nil)?
+            .withSymbolConfiguration(.init(pointSize: 9, weight: .semibold))
+        labelChevron.setAccessibilityElement(false)
+        label.setViews([labelIcon, labelText, labelChevron], in: .leading)
         label.orientation = .horizontal
         label.spacing = 5
         label.edgeInsets = NSEdgeInsets(top: 0, left: 9, bottom: 0, right: 9)
         label.wantsLayer = true
 
-        let row = NSStackView(views: [label, dividers[0], stopButton, dividers[1], restartButton])
+        let row = NSStackView(views: [label, dividers[0], stopButton, dividers[1], rebuildButton])
         row.orientation = .horizontal
         row.spacing = 0
         row.alignment = .centerY
@@ -178,22 +187,49 @@ final class SandboxActionsView: NSView {
 
     @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
 
-    /// The label is just a label: clicks on it go nowhere.
+    /// Clicks on the name land here (it opens the menu); the buttons take their own.
     override func hitTest(_ point: NSPoint) -> NSView? {
         let hit = super.hitTest(point)
-        return hit.map { $0 === stopButton || $0 === restartButton || $0.isDescendant(of: stopButton)
-            || $0.isDescendant(of: restartButton) ? $0 : self }
+        return hit.map { $0 === stopButton || $0 === rebuildButton || $0.isDescendant(of: stopButton)
+            || $0.isDescendant(of: rebuildButton) ? $0 : self }
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        guard label.convert(label.bounds, to: self).contains(point), let menu = sandboxMenu?() else { return }
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: label.bounds.maxY + 4), in: label)
+    }
+
+    private var hoverArea: NSTrackingArea?
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hoverArea { removeTrackingArea(hoverArea) }
+        let area = NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .mouseMoved, .activeInKeyWindow, .inVisibleRect],
+                                  owner: self, userInfo: nil)
+        addTrackingArea(area)
+        hoverArea = area
+    }
+    override func mouseMoved(with event: NSEvent) {
+        labelHover = label.convert(label.bounds, to: self).contains(convert(event.locationInWindow, from: nil))
+    }
+    override func mouseExited(with event: NSEvent) { labelHover = false }
+
+    private func updateLabelFill() {
+        label.layer?.backgroundColor = (labelHover ? colors.pillLabelFill.blended(withFraction: 0.5, of: colors.chromeHover)
+                                                   ?? colors.pillLabelFill : colors.pillLabelFill).cgColor
     }
 
     func apply(_ colors: ThemeColors) {
         layer?.backgroundColor = colors.pillFill.cgColor
         layer?.borderColor = colors.chromeLine.cgColor
-        label.layer?.backgroundColor = colors.pillLabelFill.cgColor
+        self.colors = colors
+        updateLabelFill()
         labelIcon.contentTintColor = colors.text2
+        labelChevron.contentTintColor = colors.text2
         labelText.textColor = colors.text2
         for divider in dividers { divider.layer?.backgroundColor = colors.chromeInnerLine.cgColor }
         stopButton.apply(colors)
-        restartButton.apply(colors)
+        rebuildButton.apply(colors)
     }
 
     /// The focused session's sandbox ("Sandbox" when no session is focused).
@@ -215,10 +251,10 @@ final class SandboxActionsView: NSView {
         else { stopButton.set(word: "Start", symbol: "play.fill", toolTip: "Start the sandbox and its sessions in this window") }
     }
 
-    /// Stop / Restart enabled for the focused session's sandbox (both off without one).
-    func setEnabled(stop: Bool, restart: Bool) {
+    /// Stop / Rebuild enabled for the focused session's sandbox (both off without one).
+    func setEnabled(stop: Bool, rebuild: Bool) {
         if stopButton.isEnabled != stop { stopButton.isEnabled = stop }
-        if restartButton.isEnabled != restart { restartButton.isEnabled = restart }
+        if rebuildButton.isEnabled != rebuild { rebuildButton.isEnabled = rebuild }
     }
 }
 

@@ -32,11 +32,11 @@ truncating; no status, timer or subtitle) · flexible space · the **Sandbox**
 group · **Files**.
 
 - **Sandbox group** — one bordered pill: the focused session's sandbox by
-  name, then **Stop** (**Start** while it's stopped) and **Restart** for the
-  sandbox itself — every session in it stops; Restart and Start bring this
-  window's sessions in it back. Disabled when no pane shows a session. A
-  session's own Stop / Restart are in its pane strip; a chat's turn stops in
-  its composer.
+  name (click it for the sandbox menu: Inspect…, Keep What Was Added as a
+  Kit…, Stop/Start, Restart, Rebuild…), then **Stop** (**Start** while it's
+  stopped) and **Rebuild** for the sandbox itself. Rebuild first looks for what
+  was installed in it and offers to keep that as a workspace kit. A session's
+  own Stop / Restart are in its pane strip; a chat's turn stops in its composer.
 - **Files** — toggles the Files sidebar (⇧⌥⌘0, View ▸ Show Files); pressed
   while it's shown.
 
