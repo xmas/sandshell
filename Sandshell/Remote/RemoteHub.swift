@@ -8,7 +8,7 @@ import Foundation
 /// `ChatSession` methods the window does. Runs the server while there's
 /// anything to serve.
 @MainActor
-final class RemoteHub {
+final class RemoteHub: ObservableObject {
     static let shared = RemoteHub()
 
     /// The port devices use (`SandshellRemotePort` overrides it; 0: any free one).
@@ -43,7 +43,7 @@ final class RemoteHub {
     private var server: HTTPServer?
     private var serverStarting = false
     /// Where devices reach the server, once it's up (nil: not serving).
-    private(set) var port: UInt16?
+    @Published private(set) var port: UInt16?
     /// The server came up or went down.
     var onServing: ((UInt16?) -> Void)?
 
@@ -361,6 +361,11 @@ final class RemoteHub {
 
     /// The address to open on this Mac, while serving.
     var localURL: URL? { port.map { URL(string: "http://127.0.0.1:\($0)/")! } }
+
+    /// A session's own address on this Mac, while serving.
+    func localURL(for session: UUID) -> URL? {
+        localURL?.appending(path: "s/\(session.uuidString)")
+    }
 
     // MARK: The check session (DEBUG)
 

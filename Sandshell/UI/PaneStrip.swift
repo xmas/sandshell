@@ -95,8 +95,8 @@ final class PaneStripView: NSView {
     /// The session's own controls: stop its process, start it again.
     var onStopSession: (() -> Void)?
     var onRestartSession: (() -> Void)?
-    /// A chat's Remote Control switch was clicked.
-    var onToggleRemote: (() -> Void)?
+    /// A chat's Remote Control button was clicked (its popover goes below it).
+    var onRemote: ((NSView) -> Void)?
 
     private let content = NSView()
     private let crumbs = NSView()
@@ -425,7 +425,7 @@ final class PaneStripView: NSView {
     @objc private func closeClicked() { onClose?() }
     @objc private func stopSessionClicked() { onStopSession?() }
     @objc private func restartSessionClicked() { onRestartSession?() }
-    @objc private func remoteClicked() { onToggleRemote?() }
+    @objc private func remoteClicked() { onRemote?(remoteButton) }
 
     /// A chat's Remote Control switch: on or off (nil hides it — not a chat).
     func setRemote(_ on: Bool?) {
@@ -439,8 +439,8 @@ final class PaneStripView: NSView {
 
     private func restyleRemote() {
         let on = remoteState == true
-        let tip = on ? "Remote Control is on: devices paired with this Mac can see and drive this chat. Click to turn it off"
-                     : "Turn on Remote Control: drive this chat from your phone or another computer"
+        let tip = on ? "Remote Control is on — click for this chat's address"
+                     : "Remote Control — drive this chat from a browser"
         remoteButton.configureSymbol(on ? "antenna.radiowaves.left.and.right" : "antenna.radiowaves.left.and.right.slash",
                                      label: tip, pointSize: Self.controlSymbol, weight: .regular,
                                      tint: on ? .controlAccentColor : colors.stripCrumb,

@@ -1,5 +1,6 @@
 #if DEBUG
 import AppKit
+import SwiftUI
 
 /// `remote`: Remote Control end to end, as a device sees it — over HTTP on
 /// loopback against this app's own server, with the fake ACP agent (no
@@ -135,6 +136,7 @@ extension SelfTest {
 
         await perSessionSwitch(window, hub: hub, base: base)
         stripSwitch()
+        await popoverPlacement()
 
         // Off: devices following it are told.
         hub.setCheckSession(false)
@@ -166,6 +168,60 @@ extension SelfTest {
         check(button()?.accessibilityValue() as? String == "on" && button()?.contentTintColor == .controlAccentColor,
               "turned on, it reads on, in the accent colour")
         snapshot(strip, "remote-switch-on")
+
+        // Its popover, off and then on (the server's up: the check session runs).
+        let id = UUID()
+        for on in [false, true] {
+            var flipped: Bool?
+            let popover = NSHostingView(rootView: RemoteControlPopover(hub: .shared, sessionID: id, isOn: on) { flipped = $0 })
+            popover.frame.size = popover.fittingSize
+            let window = NSWindow(contentRect: NSRect(origin: .zero, size: popover.frame.size), styleMask: [.borderless],
+                                  backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.alphaValue = 0
+            window.contentView = popover
+            snapshot(popover, on ? "remote-popover-on" : "remote-popover-off")
+            check(flipped == nil, "showing the popover changes nothing")
+            window.close()
+        }
+        check(RemoteHub.shared.localURL(for: id)?.absoluteString.hasSuffix("/s/\(id.uuidString)") == true,
+              "the popover's address is the chat's own page")
+    }
+
+    /// The popover opens right under the antenna, on and off (a popover whose
+    /// content sizes itself late gets slid away from its arrow).
+    private static func popoverPlacement() async {
+        let window = NSWindow(contentRect: NSRect(x: 200, y: 200, width: 900, height: 700),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.alphaValue = 0
+        window.ignoresMouseEvents = true
+        let strip = PaneStripView(frame: NSRect(x: 0, y: 700 - 34, width: 900, height: 34))
+        strip.autoresizingMask = [.width, .minYMargin]
+        window.contentView?.addSubview(strip)
+        window.orderBack(nil)
+        defer { window.close() }
+        strip.setSessionControls(stop: nil, restart: true)
+        guard let button = strip.descendants.compactMap({ $0 as? NSButton }).first(where: { $0.accessibilityIdentifier() == "pane-remote" })
+        else { return check(false, "the strip's Remote Control button") }
+        for on in [true, false] {
+            strip.setRemote(on)
+            strip.layoutSubtreeIfNeeded()
+            var slot: NSPopover?
+            let view = RemoteControlPopover(hub: .shared, sessionID: UUID(), isOn: on) { _ in }
+            let popover = NSPopover.toggle(&slot, below: button, behavior: .applicationDefined) {
+                RemoteControlPopover.controller(view)
+            }
+            popover?.contentViewController?.view.window?.alphaValue = 0
+            await wait(0.6)
+            let anchor = button.window?.convertToScreen(button.convert(button.bounds, to: nil)) ?? .zero
+            let frame = popover?.contentViewController?.view.window?.frame ?? .zero
+            let gap = anchor.minY - frame.maxY
+            log("popover (\(on ? "on" : "off")): anchor \(anchor), popover \(frame), gap \(gap)")
+            check(frame.height > 60 && gap > -4 && gap < 30 && abs(frame.midX - anchor.midX) < frame.width / 2,
+                  "the popover (\(on ? "on" : "off")) opens right under the antenna")
+            popover?.close()
+        }
     }
 
     /// A window session shows up only while Remote Control is on for it.

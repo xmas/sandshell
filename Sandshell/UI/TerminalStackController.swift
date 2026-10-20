@@ -530,6 +530,7 @@ final class TerminalStackController: NSViewController {
     /// Over an unfocused pane's content (when split): a translucent wash of the background.
     private let dimOverlay = PassThroughView()
     private var backgroundPopover: NSPopover?
+    private var remotePopover: NSPopover?
     // Kit startup banner (failed / warning / still installing), above the frame.
     private let kitBanner = KitStartupBannerView()
     private var frameTopNoBanner: NSLayoutConstraint?
@@ -720,7 +721,7 @@ final class TerminalStackController: NSViewController {
         titleStrip.onClose = { [weak self] in self?.onClosePane?() }
         titleStrip.onStopSession = { [weak self] in self?.stopClicked() }
         titleStrip.onRestartSession = { [weak self] in self?.headerRestartClicked() }
-        titleStrip.onToggleRemote = { [weak self] in self?.toggleRemote() }
+        titleStrip.onRemote = { [weak self] anchor in self?.showRemoteControl(below: anchor) }
         frameView.addSubview(titleStrip)
         frameView.addSubview(titleLine)
         frameView.addSubview(host)
@@ -1239,14 +1240,17 @@ final class TerminalStackController: NSViewController {
         titleStrip.setRemote(session.isChat ? session.isRemote : nil)
     }
 
-    /// The strip's Remote Control switch: devices see the chat, or stop seeing it.
-    @objc func toggleRemote() {
+    /// The strip's Remote Control button: a popover with the chat's switch and,
+    /// while it's on, its address.
+    private func showRemoteControl(below anchor: NSView) {
         guard let id = activeSessionID, let session = controller.session(id: id), session.isChat else { return }
-        controller.setRemote(id, !session.isRemote)
-        updateSessionControls()
-        if !session.isRemote, let url = RemoteHub.shared.localURL {
-            Log.info(.app, "remote: “\(controller.displayName(of: session))” is shared at \(url)")
+        let view = RemoteControlPopover(hub: .shared, sessionID: id, isOn: session.isRemote) { [weak self] on in
+            guard let self else { return }
+            self.controller.setRemote(id, on)
+            self.updateSessionControls()
+            Log.info(.app, "remote: Remote Control \(on ? "on" : "off") for “\(self.controller.displayName(id) ?? "?")”")
         }
+        NSPopover.toggle(&remotePopover, below: anchor) { RemoteControlPopover.controller(view) }
     }
 
     private func updateHeaderStatus(_ id: UUID) {
