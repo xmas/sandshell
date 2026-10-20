@@ -2,6 +2,10 @@
 
 A running log of what changed, newest first. Yes, we actually write these.
 
+## v0.2.35 — "Whole Names"
+- **The sandbox's name shows whole** in the title bar, always; the session's name gives way when room is short.
+- **Roomier sidebar header:** more space around the workspace name, + and the search field, and a taller search field.
+
 ## v0.2.34 — "Accent"
 - **Send wears your theme.** The chat's round Send button (and Reconnect) takes the window theme's accent colour.
 - **README:** Homebrew 7 only loads casks from taps you trust — install with both names (`brew install --cask docker/tap/sbx xmas/xmas/sandshell`), or `brew trust` them if Homebrew refuses; and what to do if Gatekeeper still blocks the unsigned app.
