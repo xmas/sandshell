@@ -112,7 +112,7 @@ AppDelegate (@main)
 | `Chat/AgentQuestion.swift`, `AgentQuestionView.swift` | An agent's interactive question (ACP `elicitation/create`: Claude's AskUserQuestion, Codex's request_user_input, MCP forms and sign-in links) — parsed into fields, answered in a card above the composer |
 | `Workspace/Subagents.swift`, `UI/SubagentWindowController.swift` | A Claude session's subagents (`<session>/subagents/agent-<id>.jsonl` + `.meta.json`), polled into `WorkspaceController.subagents`; shown as sidebar child rows; read-only transcript window |
 | `Chat/ClaudeTranscriptTail.swift` | Parses lines another client appended to a Claude transcript |
-| `Files/FilesPaneController.swift` | Files surface: `FileTreeController` (tree, git badges, Changed view) beside `FileEditorController` (editor, Markdown preview, Changes/hunks) |
+| `Files/FilesPaneController.swift` | Files sidebar: three columns — `FileTreeController` (tree, git badges, Changed view, Commits), `FileEditorController` (editor, Markdown preview, Changes/hunks), and its diff column; tree and diff column collapse |
 | `Files/FileNavigation.swift` | Open Quickly (⇧⌘O), Go to Line |
 | `Files/FileModel.swift` | Git status, hunks, file nodes, FSEvents `FileWatcher` |
 | `Sbx/SandboxAccess.swift` | What a sandbox can see of a folder (mount, ro/rw, VM details) for the sandbox chip and Files |

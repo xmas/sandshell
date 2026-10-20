@@ -162,6 +162,11 @@ enum MainMenu {
         let showFiles = viewMenu.addItem(withTitle: "Show Files", action: #selector(AppDelegate.toggleFiles(_:)),
                                          keyEquivalent: "0")
         showFiles.keyEquivalentModifierMask = [.command, .option, .shift]
+        // Its columns: the tree and the diff column (titled Show / Hide by validation).
+        viewMenu.addItem(NSMenuItem("Show File Tree", action: #selector(AppDelegate.toggleFileTree(_:)),
+                                    key: "1", modifiers: [.command, .option]))
+        viewMenu.addItem(NSMenuItem("Show Diff Column", action: #selector(AppDelegate.toggleDiffColumn(_:)),
+                                    key: "2", modifiers: [.command, .option]))
         viewMenu.addItem(.separator())
         viewMenu.addItem(withTitle: "Split Right", action: #selector(AppDelegate.splitRight(_:)), keyEquivalent: "d")
         let splitDown = viewMenu.addItem(withTitle: "Split Down", action: #selector(AppDelegate.splitDown(_:)), keyEquivalent: "d")

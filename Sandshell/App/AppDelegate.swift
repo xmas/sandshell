@@ -777,6 +777,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         activeController?.toggleFiles()
     }
 
+    /// ⌥⌘1 / ⌥⌘2 — the Files sidebar's tree column / diff column.
+    @MainActor @objc func toggleFileTree(_ sender: Any?) { activeController?.toggleFileTree() }
+    @MainActor @objc func toggleDiffColumn(_ sender: Any?) { activeController?.toggleDiffColumn() }
+
     /// ⇧⌘O — fuzzy file finder over the session folder (the Files surface
     /// holding focus answers first via the responder chain; this is the fallback).
     @MainActor @objc func openQuickly(_ sender: Any?) {
@@ -976,6 +980,12 @@ extension AppDelegate: NSMenuItemValidation {
         switch item.action {
         case #selector(toggleFiles(_:)):
             item.title = controller?.isFilesShown == true ? "Hide Files" : "Show Files"
+            return controller != nil
+        case #selector(toggleFileTree(_:)):
+            item.title = controller?.isFileTreeShown == true ? "Hide File Tree" : "Show File Tree"
+            return controller != nil
+        case #selector(toggleDiffColumn(_:)):
+            item.title = controller?.isDiffColumnShown == true ? "Hide Diff Column" : "Show Diff Column"
             return controller != nil
         case #selector(toggleSessionDetails(_:)):
             item.title = SessionDetails.isShown ? "Hide Session Details" : "Show Session Details"
