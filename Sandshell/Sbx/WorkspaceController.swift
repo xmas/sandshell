@@ -1559,6 +1559,9 @@ struct SessionRuntime: Equatable {
     /// Latest status Claude Code reported for this session (model, context,
     /// tokens, cost) via the Sandshell status feed. `nil` until the first report.
     var claudeStatus: ClaudeSessionStatus?
+    /// How far a chat's running turn is through its plan (the row's "3/6");
+    /// nil without one.
+    var planProgress: PlanProgress?
 
     /// Real-time work total: completed bursts + elapsed in the current burst.
     /// Pass `at:` from a `TimelineView` context for SwiftUI; defaults to `Date.now`.
@@ -1694,6 +1697,14 @@ extension WorkspaceController {
         guard rt.isWaiting != waiting || rt.waitingFor != what else { return }
         rt.isWaiting = waiting
         rt.waitingFor = what
+        runtimes[id] = rt
+    }
+
+    /// A chat's running turn moved on through its plan (nil: none, or the turn ended).
+    func setPlanProgress(_ id: UUID, _ progress: PlanProgress?) {
+        guard runtimes[id]?.planProgress != progress else { return }
+        var rt = runtimes[id] ?? SessionRuntime()
+        rt.planProgress = progress
         runtimes[id] = rt
     }
 

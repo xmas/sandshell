@@ -229,6 +229,12 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
     private let tabBar = NSStackView()
     private let tabScroll = NSScrollView()
     private let pathLabel = NSTextField(labelWithString: "")
+    /// The open file's menu (also on the path and the tabs, right-click).
+    private lazy var fileMenuButton = NSButton.symbol(
+        "ellipsis.circle", label: "File", pointSize: TypeRole.meta.symbolPointSize,
+        size: NSSize(width: 22, height: 20), target: self, action: #selector(fileMenuClicked), id: "files-file-menu")
+    /// Reveal in File Tree: the tree selects it (showing the tree if hidden).
+    var onRevealInTree: ((URL) -> Void)?
     private let modeControl = NSSegmentedControl(labels: ["Preview", "Source", "Changes"], trackingMode: .selectOne,
                                                  target: nil, action: nil)
     private let banner = BannerView()
@@ -289,7 +295,8 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
         modeControl.target = self
         modeControl.action = #selector(modeChanged)
         modeControl.setAccessibilityIdentifier("files-mode")
-        header.setViews([pathLabel, NSView(), modeControl], in: .leading)
+        pathLabel.menu = fileMenu(for: nil)   // filled per click (menuNeedsUpdate)
+        header.setViews([pathLabel, fileMenuButton, NSView(), modeControl], in: .leading)
         header.orientation = .horizontal
         header.edgeInsets = NSEdgeInsets(top: 0, left: 12, bottom: 0, right: 10)
 
@@ -463,6 +470,27 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
         diffScroll.isHidden = false
         showDiff(file)
     }
+
+    // MARK: The file's menu
+
+    /// Reveal in File Tree, Show in Finder, Copy, Copy Path, Copy Relative
+    /// Path — for `url` (nil: whichever file is open when it's shown).
+    private func fileMenu(for url: URL?) -> NSMenu {
+        let menu = FileMenu(url: url) { [weak self] in self?.current?.url }
+        menu.onReveal = { [weak self] url in self?.onRevealInTree?(url) }
+        menu.repoRoot = { [weak self] in self?.git.repoRoot }
+        return menu
+    }
+
+    @objc private func fileMenuClicked() {
+        let menu = fileMenu(for: nil)
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: fileMenuButton.bounds.maxY + 4), in: fileMenuButton)
+    }
+
+    #if DEBUG
+    /// Self-test: the open file's menu, as the ⋯ button shows it.
+    var debugFileMenu: NSMenu { let m = fileMenu(for: nil); (m as? FileMenu)?.menuNeedsUpdate(m); return m }
+    #endif
 
     // MARK: Opening
 
@@ -1175,6 +1203,7 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
                                 change: git.change(for: file.url))
             tab.onSelect = { [weak self] in self?.select(i) }
             tab.onClose = { [weak self] in self?.close(i) }
+            tab.menu = fileMenu(for: file.url)
             tabBar.addArrangedSubview(tab)
         }
         tabScroll.isHidden = files.isEmpty
@@ -1575,5 +1604,54 @@ final class AskField: NSViewController, NSTextFieldDelegate {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         onSubmit?(trimmed)
+    }
+}
+
+/// The open file's menu: where it is (the tree, Finder) and copying it.
+@MainActor
+final class FileMenu: NSMenu, NSMenuDelegate {
+    private let fixed: URL?
+    private let current: () -> URL?
+    var onReveal: ((URL) -> Void)?
+    var repoRoot: (() -> String?)?
+
+    init(url: URL?, current: @escaping () -> URL?) {
+        fixed = url
+        self.current = current
+        super.init(title: "File")
+        delegate = self
+    }
+    required init(coder: NSCoder) { fatalError() }
+
+    private var url: URL? { fixed ?? current() }
+
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        removeAllItems()
+        guard let url else { return }
+        addItem(Self.item("Reveal in File Tree", "list.bullet.indent") { [weak self] in self?.onReveal?(url) })
+        addItem(Self.item("Show in Finder", "folder") { NSWorkspace.shared.activateFileViewerSelecting([url]) })
+        addItem(.separator())
+        addItem(Self.item("Copy", "doc.on.doc") {
+            // The file itself (Finder pastes a copy) and its path as text.
+            let pb = NSPasteboard.general
+            pb.clearContents()
+            pb.writeObjects([url as NSURL])
+            pb.setString(url.plainPath, forType: .string)
+        })
+        addItem(Self.item("Copy Path", nil) { Self.copyText(url.plainPath) })
+        if let root = repoRoot?(), url.realPath.hasPrefix(root + "/") {
+            addItem(Self.item("Copy Relative Path", nil) { Self.copyText(String(url.realPath.dropFirst(root.count + 1))) })
+        }
+    }
+
+    private static func item(_ title: String, _ symbol: String?, _ handler: @escaping () -> Void) -> NSMenuItem {
+        let item = NSMenuItem(title, handler: handler)
+        if let symbol { item.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil) }
+        return item
+    }
+
+    private static func copyText(_ text: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
     }
 }

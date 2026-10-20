@@ -110,6 +110,7 @@ AppDelegate (@main)
 | `Chat/ACPConnection.swift` | JSON-RPC 2.0 over the agent's stdio |
 | `Chat/ChatSessionView.swift`, `ChatTranscriptView.swift`, `ChatComposerView.swift`, `ChatRenderer.swift` | Chat UI: transcript (links, reply hover Copy/Fork), composer pill (/ commands, @ files, Send/Stop inside), rendering |
 | `Chat/AgentQuestion.swift`, `AgentQuestionView.swift` | An agent's interactive question (ACP `elicitation/create`: Claude's AskUserQuestion, Codex's request_user_input, MCP forms and sign-in links) — parsed into fields, answered in a card above the composer |
+| `Chat/PlanProgress.swift`, `PlanPinView.swift` | The agent's plan (ACP `plan`, Claude's TodoWrite): progress ("3 of 6"), the checklist marks (`PlanGlyph`, drawn in the transcript card by `BlockBackgroundFragment`), and the running turn's plan pinned above the composer; `SessionRuntime.planProgress` → the sidebar's "Working · 3/6" |
 | `Workspace/Subagents.swift`, `UI/SubagentWindowController.swift` | A Claude session's subagents (`<session>/subagents/agent-<id>.jsonl` + `.meta.json`), polled into `WorkspaceController.subagents`; shown as sidebar child rows; read-only transcript window |
 | `Chat/ClaudeTranscriptTail.swift` | Parses lines another client appended to a Claude transcript |
 | `Files/FilesPaneController.swift` | Files sidebar: three columns — `FileTreeController` (tree, git badges, Changed view, Commits), `FileEditorController` (editor, Markdown preview, Changes/hunks), and its diff column; tree and diff column collapse |

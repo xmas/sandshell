@@ -24,6 +24,10 @@ final class ChatSessionView: NSView {
     private let queuedView = QueuedPromptsView()
     /// How many messages wait (the status line's wording).
     private var queuedCount = 0
+    /// The running turn's plan, above the queued messages.
+    private let planView = PlanPinView()
+    /// Takes a finished plan down after a moment.
+    private var planHide: Task<Void, Never>?
     private let permissionBar = NSStackView()
     private let permissionLabel = NSTextField(wrappingLabelWithString: "")
     private let permissionButtons = NSStackView()
@@ -84,6 +88,7 @@ final class ChatSessionView: NSView {
     var debugComposer: ChatComposerView { composer }
     var debugComposerEnabled: Bool { composer.isEnabled }
     var debugQueuedView: QueuedPromptsView { queuedView }
+    var debugPlanView: PlanPinView { planView }
     var debugStatusText: String { statusLabel.stringValue }
     var debugSendButton: ComposerSendButton { sendButton }
     func debugSetDraft(_ text: String) { composer.setDraft(text) }
@@ -210,7 +215,7 @@ final class ChatSessionView: NSView {
         updatePieces()
 
         // Permission bar + composer stack: a hidden bar collapses (no blank band).
-        let bottom = NSStackView(views: [permissionBar, queuedView, composer])
+        let bottom = NSStackView(views: [permissionBar, planView, queuedView, composer])
         bottomStack = bottom
         bottom.orientation = .vertical
         bottom.alignment = .width
@@ -303,6 +308,7 @@ final class ChatSessionView: NSView {
             self.queuedCount = queue.items.count
             if case .running = self.session.phase { self.showPhase(.running) }
         }.store(in: &bag)
+        session.$turnPlan.sink { [weak self] in self?.showPlan($0) }.store(in: &bag)
         session.$hasExtras.dropFirst().sink { [weak self] on in
             // Published before it's stored: the pieces read it next turn.
             Task { [weak self] in self?.updatePieces() }
@@ -344,6 +350,21 @@ final class ChatSessionView: NSView {
                 .store(in: &bag)
         }
         showUsage()
+    }
+
+    /// The running turn's plan, pinned above the composer while it runs; a
+    /// finished one stays a moment, then goes (as it does when the turn ends).
+    private func showPlan(_ entries: [ChatItem.PlanEntry]?) {
+        planHide?.cancel()
+        planHide = nil
+        guard let entries, let progress = PlanProgress(entries) else { return planView.hide() }
+        planView.show(entries)
+        guard progress.isComplete else { return }
+        planHide = Task { [weak self] in
+            try? await Task.sleep(for: PlanPinView.lingerAfterDone)
+            guard !Task.isCancelled else { return }
+            self?.planView.hide()
+        }
     }
 
     /// Which controls apply to this chat now.

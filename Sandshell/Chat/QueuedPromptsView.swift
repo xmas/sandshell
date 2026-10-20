@@ -128,7 +128,7 @@ final class QueuedPromptCard: NSView {
         layer?.cornerRadius = 12
         layer?.borderWidth = 1
         effectiveAppearance.performAsCurrentDrawingAppearance {
-            layer?.backgroundColor = NSColor.composerFill.withAlphaComponent(0.6).cgColor
+            layer?.backgroundColor = NSColor.composerCardFill.cgColor
             layer?.borderColor = NSColor.composerBorder.cgColor
         }
     }

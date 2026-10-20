@@ -95,7 +95,9 @@ struct SessionRowStatus: Equatable {
         case .needsYou:
             return .init(state: state, word: "Needs you", detail: runtime?.waitingFor?.nonEmpty)
         case .working:
-            return .init(state: state, word: "Working", detail: model)
+            // How far through its plan, when the turn has one ("3/6"): what
+            // changes as it works, where the model doesn't.
+            return .init(state: state, word: "Working", detail: runtime?.planProgress?.compact ?? model)
         case .finishedUnread, .finishedSeen:
             let worked = (runtime?.workSecondsCompleted ?? 0) >= 1
                 ? "worked \(Format.workTime(runtime?.workSecondsCompleted ?? 0))" : nil

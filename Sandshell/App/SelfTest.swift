@@ -300,6 +300,7 @@ enum SelfTest {
         check(chat.usage != nil, "usage reported for the ctx/cost footer (\(String(describing: chat.usage)))")
         snapshot(window, "chat-pong")
         if let view = tree.surfaces.chats[s.id] { await composerKeys(view, chat, window) }
+        if let view = tree.surfaces.chats[s.id] { await planChecklist(view, chat, window, session: s.id) }
 
         // A shell command: asks permission unless the mode/settings allow it.
         let marker = URL(fileURLWithPath: chat.workdir).appendingPathComponent("sandshell-selftest.txt")
@@ -389,6 +390,105 @@ enum SelfTest {
             composer.debugType("")
         } else {
             check(false, "a command to complete (\(chat.commands.map(\.name)))")
+        }
+    }
+
+    /// A `session/update` setting the agent's plan: `(content, status)` pairs.
+    private static func planUpdate(_ entries: [(String, String)]) -> JSONValue {
+        ["sessionUpdate": "plan",
+         "entries": .array(entries.map { ["content": .string($0.0), "status": .string($0.1), "priority": "medium"] })]
+    }
+
+    /// The agent's plan (a debug turn: no agent involved): a checklist card in
+    /// the transcript (three kinds of mark), pinned above the composer while
+    /// the turn runs — one line with a spinner, opening to the whole list —
+    /// gone after it's done or the turn ends; the sidebar row reads "3/6".
+    private static func planChecklist(_ view: ChatSessionView, _ chat: ChatSession, _ window: MainWindowController,
+                                      session id: UUID) async {
+        let pin = view.debugPlanView
+        let steps = ["Read the failing test", "Find where the date is parsed", "Fix the parser",
+                     "Run the whole suite", "Update the changelog", "Open a pull request"]
+        func plan(done: Int, current: Bool = true) -> JSONValue {
+            planUpdate(steps.enumerated().map { i, step in
+                (step, i < done ? "completed" : i == done && current ? "in_progress" : "pending")
+            })
+        }
+        chat.debugSetPhase(.running)
+        check(pin.isHidden, "a turn without a plan pins nothing")
+        chat.debugApply(plan(done: 3))
+        await wait(0.6)
+
+        // The transcript's card: three kinds of mark, under an unseen "Plan: 3 of 6 done".
+        let marks = view.debugTranscript.debugPlanMarks
+        check(marks == [.completed, .completed, .completed, .inProgress, .pending, .pending],
+              "the plan's card draws done, in-progress and to-do marks (\(marks))")
+        check(view.debugTranscript.debugText.contains("Plan: 3 of 6 done\n☑ Read the failing test"),
+              "and says how far it is to VoiceOver")
+
+        // Pinned above the composer: one line, the step it's on with its spinner.
+        check(!pin.isHidden && !pin.isExpanded, "the running turn's plan is pinned above the composer, closed")
+        check(pin.debugHeadline == steps[3] && pin.debugCount == "3 of 6",
+              "its line: “\(pin.debugHeadline)” · \(pin.debugCount)")
+        let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        check(pin.debugSpinning == !reduceMotion,
+              reduceMotion ? "its spinner stands still (Reduce Motion)" : "its spinner turns")
+        let composer = view.debugComposer.convert(view.debugComposer.bounds, to: view)
+        let pinFrame = pin.convert(pin.bounds, to: view)
+        check(abs(pinFrame.width - composer.width) < 1 && pinFrame.minY > composer.maxY,
+              "as wide as the composer, above it (\(pinFrame) over \(composer))")
+        check(pinFrame.height < 40, "one line high (\(pinFrame.height))")
+        if let sidebar = window.sidebarController {
+            check(await until(3) { sidebar.debugCell(id)?.debugDetail == "· 3/6" },
+                  "the sidebar row: “\(sidebar.debugCell(id)?.debugWord ?? "-") \(sidebar.debugCell(id)?.debugDetail ?? "")”")
+        }
+        snapshot(window, "chat-plan")
+        snapshotLayers(pin, "chat-plan-pin")
+
+        // Open: the whole list; closed again.
+        pin.debugClickChevron()
+        await wait(0.3)
+        let rows = pin.debugRows
+        check(pin.isExpanded && pin.debugListShown && rows.map(\.state) == [.completed, .completed, .completed, .inProgress, .pending, .pending],
+              "the chevron opens it to the whole checklist (\(rows.map(\.state)))")
+        check(rows.first?.text.textColor == .secondaryLabelColor && rows[3].text.textColor == .labelColor,
+              "done steps muted, the current one full strength")
+        let open = pin.convert(pin.bounds, to: view)
+        check(open.height > pinFrame.height + 5 * PlanPinView.rowHeight && view.debugTranscript.frame.height > 100,
+              "it grows up over the transcript (\(open.height) pt)")
+        snapshot(window, "chat-plan-open")
+        snapshotLayers(pin, "chat-plan-pin-open")
+        pin.toggle()   // a click on its line
+        await wait(0.3)
+        check(!pin.isExpanded && !pin.debugListShown && pin.convert(pin.bounds, to: view).height == pinFrame.height,
+              "a click on its line closes it")
+
+        // The theme's other appearance: the marks redraw in its colours.
+        let appearance = window.window?.appearance
+        let dark = window.window?.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        window.window?.appearance = NSAppearance(named: dark ? .aqua : .darkAqua)
+        await wait(0.4)
+        window.window?.displayIfNeeded()   // (an offscreen window has no display cycle)
+        snapshot(window, dark ? "chat-plan-light" : "chat-plan-dark")
+        window.window?.appearance = appearance
+
+        // All done: it stays a moment, then goes (the turn running on).
+        chat.debugApply(plan(done: 6))
+        await wait(0.3)
+        check(!pin.isHidden && pin.debugHeadline == "All done" && pin.debugCount == "6 of 6", "done: “All done” · 6 of 6")
+        check(await until(4) { pin.isHidden }, "then the finished plan goes")
+        check(chat.phase == .running, "while the turn still runs")
+
+        // A new step: back; the turn ends: gone, and the row with it.
+        chat.debugApply(plan(done: 5))
+        await wait(0.3)
+        check(!pin.isHidden && pin.debugCount == "5 of 6", "a plan that moves on pins again")
+        chat.debugSetPhase(.ready)
+        await wait(0.3)
+        check(pin.isHidden, "the turn ends: the pinned plan goes")
+        check(chat.items.contains { if case .plan = $0 { true } else { false } }, "the card stays in the transcript")
+        if let sidebar = window.sidebarController {
+            check(await until(3) { sidebar.debugCell(id)?.debugDetail.contains("/6") == false },
+                  "and the row stops counting (“\(sidebar.debugCell(id)?.debugWord ?? "-") \(sidebar.debugCell(id)?.debugDetail ?? "")”)")
         }
     }
 
@@ -853,6 +953,20 @@ enum SelfTest {
             snapshotFrame(window, "files-sidebar")
         }
 
+        // Hiding Files while it shows a rendered Markdown file and the diff
+        // column, animated as a click does it (a crash once ended that
+        // collapse's live resize in a text view).
+        files.open(repo.appendingPathComponent("README.md"))
+        files.editor.setMode(.preview)
+        files.setDiffColumnShown(true)
+        await wait(0.5)
+        for show in [false, true, false, true] {
+            window.debugSetFilesShownAnimated(show)
+            await wait(1.0)
+        }
+        check(window.isFilesShown, "Files hides and shows again, animated, with a preview and the diff column up")
+        files.setDiffColumnShown(false)
+
         // Content search finds a file with an accented name, by its real path.
         let accented = repo.appendingPathComponent("Café notes.md")
         try? "zanzibar-needle\n".write(to: accented, atomically: true, encoding: .utf8)
@@ -944,6 +1058,31 @@ enum SelfTest {
         files.setTreeShown(true)
         await wait(0.3)
         check(files.isTreeShown && files.debugEditorRightOfTree, "and it shows again")
+        // A divider dragged mid-way: the hairline is where the columns now meet.
+        files.debugDragDivider(0, to: 260)
+        await wait(0.3)
+        let edge = files.debugColumns.tree.map { $0.width } ?? -1   // the tree starts at the columns' edge
+        check(files.debugDividerLines.first.map { abs($0 - edge) < 1 } == true,
+              "after dragging the tree's divider the hairline moves with it (\(files.debugDividerLines), tree ends \(Int(edge)))")
+
+        // The open file's menu: reveal it in the tree (shown again), Finder, copy.
+        let menuFile = repo.appendingPathComponent("src/app.py")
+        files.open(menuFile)
+        files.setTreeShown(false)
+        await wait(0.4)
+        let fileMenu = files.editor.debugFileMenu
+        check(fileMenu.items.map(\.title).filter { !$0.isEmpty } == ["Reveal in File Tree", "Show in Finder", "Copy", "Copy Path", "Copy Relative Path"],
+              "the open file's menu (\(fileMenu.items.map(\.title)))")
+        func run(_ title: String) { (fileMenu.items.first { $0.title == title }).map { fileMenu.performActionForItem(at: fileMenu.index(of: $0)) } }
+        run("Reveal in File Tree")
+        await wait(0.5)
+        check(files.isTreeShown && files.tree.selectedURLs.map(\.realPath) == [menuFile.realPath],
+              "Reveal in File Tree shows the tree with the file selected (\(files.tree.selectedURLs.map(\.lastPathComponent)))")
+        run("Copy")
+        let copied = NSPasteboard.general.readObjects(forClasses: [NSURL.self]) as? [URL]
+        check(copied?.first?.realPath == menuFile.realPath, "Copy puts the file on the pasteboard (Finder pastes a copy)")
+        run("Copy Relative Path")
+        check(NSPasteboard.general.string(forType: .string) == "src/app.py", "Copy Relative Path: src/app.py")
 
         // The diff column: the open file's changes beside its text.
         files.open(repo.appendingPathComponent("src/app.py"))
@@ -2190,6 +2329,15 @@ enum SelfTest {
         check(window.debugShowSandboxAccess(), "which opens the sandbox access popover")
         window.debugCloseSandboxAccess()
 
+        // A working chat's turn with a plan: how far through it, in place of the model.
+        rt = ws.runtime(working.id) ?? SessionRuntime()
+        rt.planProgress = PlanProgress(["completed", "completed", "completed", "in_progress", "pending", "pending"]
+            .map { ChatItem.PlanEntry(content: "step", status: $0) })
+        ws.debugSetRuntime(working.id, rt)
+        await wait(0.5)
+        check(sidebar.debugCell(working.id)?.debugWord == "Working" && sidebar.debugCell(working.id)?.debugDetail == "· 3/6",
+              "a working row with a plan reads “Working · 3/6” (“\(sidebar.debugCell(working.id)?.debugDetail ?? "-")”)")
+
         // Nothing wraps at the narrowest sidebar (220 pt).
         if let split = w.contentViewController as? NSSplitViewController, let side = split.splitViewItems.first {
             let minimum = side.minimumThickness
@@ -2913,6 +3061,14 @@ enum SelfTest {
               "each queued message shows above the composer, in order (\(cards().map(\.prompt.text)))")
         check(c.queue.items.map(\.text) == [first, removed, edited], "and waits in that order")
         check(v.debugStatusText.contains("together"), "the status line says they go together (“\(v.debugStatusText)”)")
+        // The turn's plan (as the agent would set it) pins above the queued messages.
+        c.debugApply(planUpdate([("Count to 75", "completed"), ("Count to 150", "in_progress")]))
+        let pin = v.debugPlanView
+        v.layoutSubtreeIfNeeded()
+        let queued = v.debugQueuedView.convert(v.debugQueuedView.bounds, to: v)
+        let pinned = pin.convert(pin.bounds, to: v)
+        check(!pin.isHidden && pin.debugCount == "1 of 2" && pinned.minY > queued.maxY
+              && abs(pinned.width - queued.width) < 1, "the turn's plan pins above them, as wide (\(pinned) over \(queued))")
         snapshot(window, "queue-waiting")
         // Remove drops one; the others keep their order.
         cards().first { $0.prompt.text == removed }?.removeButton.performClick(nil)
@@ -2929,6 +3085,7 @@ enum SelfTest {
         check(c.phase == .running, "all while the turn still runs")
         snapshot(window, "queue-edited")
         check(await until(240) { c.phase == .ready && said().contains("QUEUED") }, "then goes when the turn ends")
+        check(v.debugPlanView.isHidden, "and the turn's pinned plan with it")
         let lastPrompt = c.items.last { if case .user = $0 { true } else { false } }
         if case .user(_, let text, _)? = lastPrompt {
             check(text == first + "\n\n" + reworded, "as one prompt, in order (“\(text)”)")
@@ -3411,6 +3568,7 @@ enum SelfTest {
         check(window.debugIdentity == ws.displayName(of: a), "the title bar names the session (\(window.debugIdentity))")
         check(window.debugSandboxLabel == ws.containerName(for: a.containerAgentKind),
               "the Sandbox group names the session's sandbox (\(window.debugSandboxLabel))")
+        check(window.debugSandboxLabelWhole, "its name shows whole, not cut off")
         let shellStrip = tree.focused.debugStrip
         check(shellStrip.stopSession == true && shellStrip.restartSession == true,
               "a running shell's strip has its own Stop and Restart (\(String(describing: shellStrip.stopSession)), \(String(describing: shellStrip.restartSession)))")

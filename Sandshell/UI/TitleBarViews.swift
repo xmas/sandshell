@@ -154,9 +154,10 @@ final class SandboxActionsView: NSView {
             .withSymbolConfiguration(.role(.meta))
         labelIcon.setAccessibilityElement(false)
         labelText.font = .role(.meta)
-        labelText.lineBreakMode = .byTruncatingMiddle
-        labelText.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        labelText.widthAnchor.constraint(lessThanOrEqualToConstant: 140).isActive = true
+        // The sandbox's name shows whole, always (the session's name gives way).
+        labelText.lineBreakMode = .byClipping
+        labelText.setContentCompressionResistancePriority(.required, for: .horizontal)
+        labelText.setContentHuggingPriority(.required, for: .horizontal)
         labelChevron.image = NSImage(systemSymbolName: "chevron.down", accessibilityDescription: nil)?
             .withSymbolConfiguration(.init(pointSize: 9, weight: .semibold))
         labelChevron.setAccessibilityElement(false)
@@ -271,6 +272,8 @@ final class SandboxActionsView: NSView {
     }
 
     var debugLabel: String { labelText.stringValue }
+    /// The name has the room it needs (nothing truncated or clipped).
+    var debugLabelWhole: Bool { labelText.frame.width + 0.5 >= ceil(labelText.intrinsicContentSize.width) }
 
     private static let stopTip = "Stop the sandbox (every session in it stops)"
 

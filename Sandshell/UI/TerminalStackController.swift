@@ -404,6 +404,7 @@ final class SessionSurfaces {
         chat.removeFromSuperview()
         controller.setLive(id, false)
         controller.setWaiting(id, false)   // its question went with it
+        controller.setPlanProgress(id, nil)   // and its turn's plan
         NotificationManager.shared.withdrawNeedsInput(sessionID: id)
         controller.setStopped(id, nil)   // a stopped chat's reason doesn't follow it to Terminal
     }
@@ -1518,6 +1519,7 @@ final class TerminalStackController: NSViewController {
                 // Answered (or cancelled): "needs you" is old news.
                 if !waiting { NotificationManager.shared.withdrawNeedsInput(sessionID: id) }
             }
+            chat.onPlanProgress = { [controller] progress in controller.setPlanProgress(id, progress) }
             chat.onNeedsInput = { [controller, surfaces] text in
                 guard !surfaces.isVisible(id), let s = controller.session(id: id) else { return }
                 NotificationManager.shared.sendNeedsInput(sessionID: id, agentName: s.agent.displayName,

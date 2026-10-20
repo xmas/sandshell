@@ -122,6 +122,13 @@ final class FilesPaneController: NSViewController, NSSplitViewDelegate {
             self?.editor.updateGit(status)
             self?.header.update(status)
         }
+        // The open file's Reveal in File Tree: the tree (shown if hidden) selects it.
+        editor.onRevealInTree = { [weak self] url in
+            guard let self else { return }
+            if !self.isTreeShown { self.setTreeShown(true) }
+            if self.tree.changedOnly { self.tree.showChanges(false) }
+            self.tree.reveal(url)
+        }
         // Unsaved edits are changes too: the tree, header and diff count them.
         editor.onEditedChange = { [weak self] paths in self?.tree.editedPaths = paths }
         tree.onFilesChanged = { [weak self] in self?.editor.filesChangedOnDisk() }
@@ -179,7 +186,6 @@ final class FilesPaneController: NSViewController, NSSplitViewDelegate {
         }
         let frames = columnFrames(treeShown: column === treeColumn ? shown : !treeColumn.isHidden,
                                   diffShown: column === diffColumn ? shown : !diffColumn.isHidden)
-        columns.lines = []
         NSAnimationContext.runAnimationGroup({ context in
             context.duration = 0.22
             context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
@@ -227,8 +233,7 @@ final class FilesPaneController: NSViewController, NSSplitViewDelegate {
         treeColumn.frame = frames.tree
         editor.view.frame = frames.editor
         diffColumn.frame = frames.diff
-        // A hairline where two shown columns meet; none for a hidden one.
-        columns.lines = (treeShown ? [frames.tree.maxX] : []) + (diffShown ? [frames.editor.maxX] : [])
+        columns.needsDisplay = true   // the hairlines where shown columns meet
     }
 
     private func columnFrames(treeShown: Bool, diffShown: Bool) -> (tree: NSRect, editor: NSRect, diff: NSRect) {
@@ -279,6 +284,7 @@ final class FilesPaneController: NSViewController, NSSplitViewDelegate {
     }
 
     func splitViewDidResizeSubviews(_ notification: Notification) {
+        columns.needsDisplay = true   // a dragged divider: the hairline follows
         // A divider dragged to the edge (or double-clicked) collapses its
         // column: NSSplitView hides it.
         if UserDefaults.standard.bool(forKey: treeHiddenKey) != treeColumn.isHidden
@@ -428,12 +434,27 @@ extension FilesPaneController: NSMenuItemValidation {
 /// column's old edge.
 @MainActor
 final class ColumnsSplitView: NSSplitView {
-    var lines: [CGFloat] = [] { didSet { if lines != oldValue { needsDisplay = true } } }
+    /// Where shown columns meet, from their frames as they are now (a divider
+    /// dragged moves them without telling anyone).
+    var lines: [CGFloat] {
+        let shown = arrangedSubviews.filter { !$0.isHidden && $0.frame.width > 0 }
+        return shown.dropLast().map(\.frame.maxX)
+    }
 
     override func drawDivider(in rect: NSRect) {}
 
     override func draw(_ dirtyRect: NSRect) {
         NSColor.separatorColor.setFill()
         for x in lines { NSRect(x: x, y: 0, width: 1, height: bounds.height).fill() }
+    }
+
+    override func resizeSubviews(withOldSize oldSize: NSSize) {
+        super.resizeSubviews(withOldSize: oldSize)
+        needsDisplay = true
+    }
+
+    override func didAddSubview(_ subview: NSView) {
+        super.didAddSubview(subview)
+        needsDisplay = true
     }
 }
