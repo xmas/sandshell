@@ -125,6 +125,8 @@ final class SandboxActionsView: NSView {
     private let label = NSStackView()
     private let labelIcon = NSImageView()
     private let labelChevron = NSImageView()
+    /// What the sandbox can do with the folder: a lock, open (read-write) or shut (read-only).
+    private let accessIcon = NSImageView()
     private var labelHover = false { didSet { updateLabelFill() } }
     private var colors = ThemeColors.lightBase
     private let labelText = NSTextField(labelWithString: "Sandbox")
@@ -158,7 +160,9 @@ final class SandboxActionsView: NSView {
         labelChevron.image = NSImage(systemSymbolName: "chevron.down", accessibilityDescription: nil)?
             .withSymbolConfiguration(.init(pointSize: 9, weight: .semibold))
         labelChevron.setAccessibilityElement(false)
-        label.setViews([labelIcon, labelText, labelChevron], in: .leading)
+        accessIcon.setAccessibilityElement(false)
+        accessIcon.isHidden = true
+        label.setViews([labelIcon, labelText, accessIcon, labelChevron], in: .leading)
         label.orientation = .horizontal
         label.spacing = 5
         label.edgeInsets = NSEdgeInsets(top: 0, left: 9, bottom: 0, right: 9)
@@ -224,21 +228,46 @@ final class SandboxActionsView: NSView {
         layer?.borderColor = colors.chromeLine.cgColor
         self.colors = colors
         updateLabelFill()
-        labelIcon.contentTintColor = colors.text2
+        labelIcon.contentTintColor = sandboxStateColor ?? colors.text2
         labelChevron.contentTintColor = colors.text2
+        accessIcon.contentTintColor = colors.text2
         labelText.textColor = colors.text2
         for divider in dividers { divider.layer?.backgroundColor = colors.chromeInnerLine.cgColor }
         stopButton.apply(colors)
         rebuildButton.apply(colors)
     }
 
-    /// The focused session's sandbox ("Sandbox" when no session is focused).
-    func setSandboxName(_ name: String?) {
+    /// The focused session's sandbox ("Sandbox" when no session is focused):
+    /// its name, its state (the cube's colour) and what it can do with the
+    /// folder (the lock).
+    func setSandbox(name: String?, access: SandboxAccess.Mode?, stateColor: NSColor?, tip: String?) {
         let shown = name ?? "Sandbox"
-        guard labelText.stringValue != shown else { return }
-        labelText.stringValue = shown
-        toolTip = name.map { "Sandbox \($0)" }
-        setAccessibilityLabel(name.map { "Sandbox \($0)" } ?? "Sandbox")
+        if labelText.stringValue != shown { labelText.stringValue = shown }
+        sandboxStateColor = stateColor
+        labelIcon.contentTintColor = stateColor ?? colors.text2
+        let symbol: String? = switch access {
+        case .readWrite?: "lock.open"
+        case .readOnly?: "lock"
+        case .notShared?: "eye.slash"
+        case nil: nil
+        }
+        accessIcon.isHidden = symbol == nil
+        if let symbol {
+            accessIcon.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?
+                .withSymbolConfiguration(.role(.meta))
+        }
+        toolTip = tip
+        setAccessibilityLabel(tip ?? "Sandbox")
+    }
+    private var sandboxStateColor: NSColor?
+
+    /// The sandbox's access popover, under the pill.
+    func showAccess(_ access: SandboxAccess) -> NSPopover {
+        let popover = NSPopover()
+        popover.behavior = .transient
+        popover.contentViewController = .hosting(SandboxAccessPopover(access: access))
+        popover.show(relativeTo: label.bounds, of: label, preferredEdge: .minY)
+        return popover
     }
 
     var debugLabel: String { labelText.stringValue }

@@ -2087,12 +2087,14 @@ enum SelfTest {
 
         // Header and footer.
         check(sidebar.debugSearchHint == SidebarListController.filterShortcut, "the search field shows ⌥⌘F")
-        check(await until(10) { sidebar.debugFooterText.hasPrefix("Sandbox · read-") && sidebar.debugFooterText.hasSuffix("main") },
-              "the footer: \(sidebar.debugFooterText)")
-        check(sidebar.debugOpenFooterPopover(), "the footer opens the sandbox access popover")
         check(sidebar.debugFooterButtons == ["sidebar-terminal", "sidebar-debug"],
-              "beside it: the Mac terminal and Status Debug buttons (\(sidebar.debugFooterButtons))")
-        sidebar.debugCloseFooterPopover()
+              "the footer: the Mac terminal and Status Debug buttons (\(sidebar.debugFooterButtons))")
+        // What the sandbox can see of the folder is the title bar's sandbox pill now.
+        check(await until(10) { window.debugSandboxAccess.contains("the folder") },
+              "the title bar's sandbox says its access (\(window.debugSandboxAccess))")
+        check(window.debugSandboxMenuTitles.contains("Folder Access…"), "and its menu has Folder Access…")
+        check(window.debugShowSandboxAccess(), "which opens the sandbox access popover")
+        window.debugCloseSandboxAccess()
 
         // Nothing wraps at the narrowest sidebar (220 pt).
         if let split = w.contentViewController as? NSSplitViewController, let side = split.splitViewItems.first {
@@ -3151,7 +3153,7 @@ enum SelfTest {
             let long = window.debugToolbarName("New Claude Session with a long name, longer than the toolbar has room for")
             log("long name at \(Int(width)): label ends at \(Int(long.label)) of \(Int(long.identity))")
             check(long.label <= long.identity + 1 && long.identity <= 361, "at \(Int(width)) a long session name stays inside the identity item")
-            check(long.label >= long.identity - 4 && long.identity >= 199,
+            check(long.label >= long.identity - 4 && long.identity >= 139,
                   "at \(Int(width)) the name uses the identity's whole width (\(Int(long.label)) of \(Int(long.identity)))")
             // A name that fits shows whole.
             _ = window.debugToolbarName("New Claude Session")
@@ -3257,7 +3259,7 @@ enum SelfTest {
         group = window.debugSandboxGroup
         check(group.shown && group.stop && group.rebuild, "a running session focused: Stop and Rebuild enabled (\(group))")
         let menu = window.debugSandboxMenuTitles
-        check(menu == ["Inspect…", "Keep What Was Added as a Kit…", "", "Stop", "Restart", "Rebuild…"],
+        check(menu == ["Inspect…", "Folder Access…", "Keep What Was Added as a Kit…", "", "Stop", "Restart", "Rebuild…"],
               "the sandbox's name opens its menu (\(menu))")
         // What was added in it: the probe runs in the real sandbox and reads back.
         let box = ws.containerName(for: a.containerAgentKind)

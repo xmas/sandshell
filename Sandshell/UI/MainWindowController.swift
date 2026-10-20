@@ -16,6 +16,8 @@ final class MainWindowController: NSWindowController {
     private var selectionObserver: AnyCancellable?
     /// The Sandbox group follows its sandbox (running, stopped, busy).
     private var sandboxObserver: AnyCancellable?
+    /// Sandbox ▸ Folder Access…'s popover.
+    private var accessPopover: NSPopover?
     /// Whether this window's Files inspector is open (per folder and window).
     private var filesVisibleKey = "filesPaneVisible"
     private var detail: PaneTreeController?
@@ -429,6 +431,10 @@ final class MainWindowController: NSWindowController {
     var debugSandboxMenuTitles: [String] { sandboxMenu()?.items.map { $0.isSeparatorItem ? "" : $0.title } ?? [] }
     /// Self-test: Inspect, as the sandbox menu does it.
     func debugInspectSandbox() { inspectSandboxFromMenu() }
+    /// Self-test: the sandbox pill's tooltip (its state and access).
+    var debugSandboxAccess: String { sandboxActions.toolTip ?? "" }
+    func debugShowSandboxAccess() -> Bool { showSandboxAccessFromMenu(); return accessPopover?.isShown == true }
+    func debugCloseSandboxAccess() { accessPopover?.close(); accessPopover = nil }
     /// Self-test: what the Sandbox group's label says.
     var debugSandboxLabel: String { sandboxActions.debugLabel }
     /// Self-test: the Files toggle shows pressed; the sidebar's header shows.
@@ -900,8 +906,26 @@ extension MainWindowController: NSToolbarDelegate {
             item.isHidden = !anySession
         }
         let box = focusedSandbox
-        sandboxActions.setSandboxName(box?.name)
         let phase = box.flatMap { workspace?.containerPhases[$0.agent] }
+        let access = focusedSandboxAccess
+        let (color, state): (NSColor?, String) = switch phase {
+        case .running?: (.systemBlue, "running")
+        case .creating?, .rebuilding?: (.sessionWorking, "being built")
+        case .failed?: (.systemRed, "failed")
+        case .stopped?: (nil, "stopped")
+        case .absent?, nil: (nil, "not created yet")
+        }
+        sandboxActions.setSandbox(name: box?.name, access: access?.mode, stateColor: color,
+                                  tip: box.map { box in
+            let folder = access.map { a in
+                switch a.mode {
+                case .readWrite: " · reads and writes the folder"
+                case .readOnly: " · reads the folder"
+                case .notShared: " · can’t see the folder"
+                }
+            } ?? ""
+            return "Sandbox “\(box.name)” (\(state))\(folder)"
+        })
         sandboxActions.setSandboxRunning(phase != .stopped)
         // Not while it's being made or acted on, or before it exists.
         let busy = box.map { workspace?.sandboxBusy.contains($0.name) ?? false } ?? true
@@ -998,12 +1022,26 @@ extension MainWindowController: NSToolbarDelegate {
             menu.addItem(item)
         }
         add("Inspect…", #selector(inspectSandboxFromMenu), symbol: "info.circle")
+        add("Folder Access…", #selector(showSandboxAccessFromMenu), symbol: "lock.open")
         add("Keep What Was Added as a Kit…", #selector(inspectSandboxFromMenu), symbol: "shippingbox")
         menu.addItem(.separator())
         add(stopped ? "Start" : "Stop", #selector(stopFromToolbar), symbol: stopped ? "play.fill" : "stop.fill")
         add("Restart", #selector(restartSandboxFromMenu), symbol: "arrow.clockwise", enabled: !stopped)
         add("Rebuild…", #selector(rebuildFromToolbar), symbol: "hammer")
         return menu
+    }
+
+    /// What the focused session's sandbox can do with its folder.
+    private var focusedSandboxAccess: SandboxAccess? {
+        guard let workspace, let id = detail?.focused?.shownSession, let session = workspace.session(id: id) else { return nil }
+        return workspace.sandboxAccess(for: URL(filePath: session.workdir, directoryHint: .isDirectory),
+                                       agent: session.containerAgentKind)
+    }
+    /// Sandbox ▸ Folder Access…: what it can do with the folder, under the pill.
+    @objc private func showSandboxAccessFromMenu() {
+        guard let access = focusedSandboxAccess else { return }
+        accessPopover?.close()
+        accessPopover = sandboxActions.showAccess(access)
     }
 
     /// The focused session's sandbox (its container name and agent).

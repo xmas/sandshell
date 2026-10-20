@@ -1,4 +1,4 @@
--- The redesigned chrome: the sidebar's one-line footer (no gear / terminal /
+-- The redesigned chrome: the sidebar footer's terminal and Status Debug buttons (no gear /
 -- bug / Search buttons), the title bar's Sandbox group and Files button, and
 -- the pane strip's breadcrumb. (How the strip condenses as a pane narrows is
 -- checked by the title-strip self-test, which can resize panes.)
@@ -11,7 +11,7 @@ on run argv
 	set Helpers to load script POSIX file (thisDir & "/lib/Helpers.scpt")
 	tell Helpers to waitUntilRunning(bundleID, 20)
 
-	repeat with ident in {"sidebar-footer", "toolbar-sandbox", "toolbar-files", "context-folder"}
+	repeat with ident in {"sidebar-terminal", "sidebar-debug", "toolbar-sandbox", "toolbar-files", "context-folder"}
 		Helpers's axWaitForIdentifier(windowTitle, ident as text, 30)
 	end repeat
 	set ids to Helpers's axIdentifiers(windowTitle)

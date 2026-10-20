@@ -80,8 +80,8 @@ final class SidebarTableView: NSTableView {
 
 /// The workspace sidebar: a header (workspace switcher, +, search field), a
 /// flat list of sessions — whatever needs you, then what's working, then the
-/// rest by recency, forks under their source — and a footer saying what the
-/// sandbox can do with the folder. Every row reads `<glyph> Status · detail`
+/// rest by recency, forks under their source — and a footer with a terminal
+/// on this Mac and Status Debug. Every row reads `<glyph> Status · detail`
 /// (`SessionRowStatus`); its views are in SidebarRows.swift.
 /// Mutations route through `WorkspaceController`; the view reloads on changes.
 @MainActor
@@ -232,19 +232,16 @@ final class SidebarListController: NSViewController {
     private let headerChevron = NSImageView()
     private let rightBorder = NSView()
     /// `● Sandbox · read-write  main`: opens the sandbox access popover.
-    private let footer = SidebarFooterButton()
-    /// Beside the footer: a terminal on this Mac, and the Status Debug window.
+    /// The footer: a terminal on this Mac, and the Status Debug window. (What
+    /// the sandbox can see of the folder is the title bar's sandbox pill.)
+    private let footer = NSStackView()
     private lazy var terminalButton = NSButton.symbol(
-        "apple.terminal", label: "Open a Terminal on This Mac", pointSize: TypeRole.meta.symbolPointSize,
-        size: NSSize(width: 26, height: 26), target: self, action: #selector(openHostTerminal), id: "sidebar-terminal")
+        "apple.terminal", label: "Open a Terminal on This Mac", pointSize: TypeRole.body.symbolPointSize,
+        size: NSSize(width: 32, height: 30), target: self, action: #selector(openHostTerminal), id: "sidebar-terminal")
     private lazy var debugButton = NSButton.symbol(
-        "ladybug", label: "Status Debug", pointSize: TypeRole.meta.symbolPointSize,
-        size: NSSize(width: 26, height: 26), target: self, action: #selector(statusDebugClicked), id: "sidebar-debug")
+        "ladybug", label: "Status Debug", pointSize: TypeRole.body.symbolPointSize,
+        size: NSSize(width: 32, height: 30), target: self, action: #selector(statusDebugClicked), id: "sidebar-debug")
     private let footerBorder = NSView()
-    private var footerPopover: NSPopover?
-    /// The workspace folder's branch, for the footer (nil: not a repo, or not read yet).
-    private var footerBranch: String?
-    private var footerGitTask: Task<Void, Never>?
     /// A host (Mac) shell terminal window, kept open across re-clicks.
     private var hostTerminal: HostTerminalWindowController?
     /// Terminal opened to the most-recent changed-drops staging directory.
@@ -404,10 +401,12 @@ final class SidebarListController: NSViewController {
 
         rightBorder.translatesAutoresizingMaskIntoConstraints = false
         rightBorder.wantsLayer = true
-        // ── Footer: one button, the sandbox's access to the folder + its branch.
+        // ── Footer: its buttons, roomy.
         footer.translatesAutoresizingMaskIntoConstraints = false
-        footer.target = self
-        footer.action = #selector(footerClicked)
+        footer.orientation = .horizontal
+        footer.spacing = 6
+        footer.edgeInsets = NSEdgeInsets(top: 0, left: 10, bottom: 0, right: 10)
+        footer.setViews([terminalButton, debugButton], in: .leading)
         footer.setAccessibilityIdentifier("sidebar-footer")
         footerBorder.translatesAutoresizingMaskIntoConstraints = false
         footerBorder.wantsLayer = true
@@ -425,8 +424,7 @@ final class SidebarListController: NSViewController {
         emptyStateStack.addArrangedSubview(emptyStateSpinner)
         emptyStateStack.addArrangedSubview(emptyStateLabel)
 
-        for v in [header, newSessionButton, searchField, scroll, emptyStateStack, footer, footerBorder, rightBorder,
-                  terminalButton, debugButton] as [NSView] {
+        for v in [header, newSessionButton, searchField, scroll, emptyStateStack, footer, footerBorder, rightBorder] as [NSView] {
             container.addSubview(v)
         }
         NSLayoutConstraint.activate([
@@ -466,13 +464,9 @@ final class SidebarListController: NSViewController {
             footerBorder.bottomAnchor.constraint(equalTo: footer.topAnchor),
             footerBorder.heightAnchor.constraint(equalToConstant: 1),
             footer.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            footer.trailingAnchor.constraint(equalTo: terminalButton.leadingAnchor),
+            footer.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             footer.bottomAnchor.constraint(equalTo: container.bottomAnchor),
-            footer.heightAnchor.constraint(equalToConstant: 38),
-            terminalButton.centerYAnchor.constraint(equalTo: footer.centerYAnchor),
-            terminalButton.trailingAnchor.constraint(equalTo: debugButton.leadingAnchor),
-            debugButton.centerYAnchor.constraint(equalTo: footer.centerYAnchor),
-            debugButton.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -8),
+            footer.heightAnchor.constraint(equalToConstant: 40),
 
             rightBorder.topAnchor.constraint(equalTo: container.topAnchor),
             rightBorder.trailingAnchor.constraint(equalTo: container.trailingAnchor),
@@ -505,7 +499,6 @@ final class SidebarListController: NSViewController {
         view.layer?.backgroundColor = c.sidebar.cgColor
         rightBorder.layer?.backgroundColor = c.border.cgColor
         footerBorder.layer?.backgroundColor = p.separator.cgColor
-        footer.applyPalette(p)
         terminalButton.contentTintColor = p.muted
         debugButton.contentTintColor = p.muted
         titleLabel.textColor = p.foreground
@@ -515,55 +508,6 @@ final class SidebarListController: NSViewController {
         newSessionButton.contentTintColor = p.foreground
         newSessionButton.restingBackgroundColor = p.selectedFill
         newSessionButton.hoverBackgroundColor = p.background.mixed(with: p.foreground, 0.16)
-        updateFooter()
-    }
-
-    // MARK: Footer
-
-    /// The sandbox the footer speaks for: the shown session's, else the workspace's agent's.
-    private var footerAgent: AgentKind {
-        shownSession.flatMap { controller.session(id: $0)?.containerAgentKind } ?? controller.primaryAgent
-    }
-
-    private func updateFooter() {
-        let agent = footerAgent
-        let access = controller.sandboxAccess(for: controller.workspace.rootURL, agent: agent)
-        let p = palette
-        let (color, dimmed, state): (NSColor, Bool, String) = switch controller.containerPhases[agent] {
-        case .running: (p.color(for: .fresh), false, "running")
-        case .creating, .rebuilding: (p.color(for: .working), false, "being built")
-        case .failed: (p.color(for: .error), false, "failed")
-        case .stopped: (p.muted, true, "stopped")
-        case .absent, nil: (p.muted, true, "not created yet")
-        }
-        footer.update(text: access.summary, branch: footerBranch, dot: color, dimmed: dimmed,
-                      tip: "Sandbox “\(access.sandbox)” (\(state)) — click for what it can access")
-    }
-
-    /// Re-read the workspace folder's branch (cheap; on load and a slow tick).
-    private func refreshFooterBranch() {
-        guard footerGitTask == nil else { return }
-        let root = controller.workspace.rootURL
-        footerGitTask = Task(priority: .utility) { [weak self] in
-            let status = await GitStatus.load(for: root)
-            guard let self else { return }
-            self.footerGitTask = nil
-            let branch = status.repoRoot == nil ? nil : (status.branch ?? "detached")
-            guard branch != self.footerBranch else { return }
-            self.footerBranch = branch
-            self.updateFooter()
-        }
-    }
-
-    /// The footer: the same sandbox access popover as a pane's sandbox crumb, above it.
-    @objc private func footerClicked() {
-        if let open = footerPopover, open.isShown { open.close(); footerPopover = nil; return }
-        let access = controller.sandboxAccess(for: controller.workspace.rootURL, agent: footerAgent)
-        let popover = NSPopover()
-        popover.behavior = .transient
-        popover.contentViewController = .hosting(SandboxAccessPopover(access: access))
-        popover.show(relativeTo: footer.bounds, of: footer, preferredEdge: footer.isFlipped ? .minY : .maxY)
-        footerPopover = popover
     }
 
     override func viewDidLoad() {
@@ -605,7 +549,6 @@ final class SidebarListController: NSViewController {
             self.refreshActive(self.lastActiveSession)
             // Which rows are open in another pane follows the focused pane.
             self.refreshRowFills()
-            self.updateFooter()
         }.store(in: &cancellables)
         // The subagents row counts running background tasks: reload when that
         // count changes (not on every write their output gets).
@@ -618,11 +561,6 @@ final class SidebarListController: NSViewController {
         NotificationCenter.default.publisher(for: SidebarDensity.didChange)
             .sink { [weak self] _ in self?.reload() }
             .store(in: &cancellables)
-        // The footer's dot is the sandbox's state.
-        controller.$containerPhases.dropFirst().removeDuplicates()
-            .sink { [weak self] _ in self?.updateFooter() }
-            .store(in: &cancellables)
-        refreshFooterBranch()
         // Only when a row would change: a running subagent's or workflow's
         // transcripts are written all the time, and every poll would rebuild
         // the list. (One reload for a poll that changes both.)
@@ -639,13 +577,9 @@ final class SidebarListController: NSViewController {
         controller.clockTick.dropFirst()
             .sink { [weak self] _ in self?.tickWorkingTimers() }
             .store(in: &cancellables)
-        // Tick the relative "3m" labels on idle rows, and re-read the footer's
-        // branch. Cheap and low-frequency.
+        // Tick the relative "3m" labels on idle rows. Cheap and low-frequency.
         Timer.publish(every: 30, on: .main, in: .common).autoconnect()
-            .sink { [weak self] _ in
-                self?.refreshRelativeTimes()
-                self?.refreshFooterBranch()
-            }
+            .sink { [weak self] _ in self?.refreshRelativeTimes() }
             .store(in: &cancellables)
         // The build-status placeholder tracks activity text directly — it must
         // update the moment a build starts/finishes, not wait for a `revision`
@@ -1318,12 +1252,6 @@ final class SidebarListController: NSViewController {
     func debugClickSummary(_ id: UUID) { summaryClicked(id) }
     var debugPalette: SidebarPalette { palette }
     var debugSearchHint: String? { searchField.hintText }
-    var debugFooterText: String { footer.text }
-    func debugOpenFooterPopover() -> Bool {
-        footerClicked()
-        return footerPopover?.isShown == true
-    }
-    func debugCloseFooterPopover() { footerPopover?.close(); footerPopover = nil }
     #endif
 
     private func pasteboardText(_ ids: [UUID]) -> String {
