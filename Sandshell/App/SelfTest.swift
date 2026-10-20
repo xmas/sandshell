@@ -298,6 +298,7 @@ enum SelfTest {
         check(await until(180) { chat.phase == .ready && agentText(chat).contains("PONG") }, "a prompt streams back text")
         check(chat.usage != nil, "usage reported for the ctx/cost footer (\(String(describing: chat.usage)))")
         snapshot(window, "chat-pong")
+        if let view = tree.surfaces.chats[s.id] { await composerKeys(view, chat, window) }
 
         // A shell command: asks permission unless the mode/settings allow it.
         let marker = URL(fileURLWithPath: chat.workdir).appendingPathComponent("sandshell-selftest.txt")
@@ -314,6 +315,7 @@ enum SelfTest {
             log("no permission prompt (mode \(chat.currentMode ?? "-") allowed it)")
         }
         check(await until(180) { chat.phase == .ready }, "turn with the tool call finishes")
+        if let view = tree.surfaces.chats[s.id] { await suggestion(view, chat, window) }
         let tools = chat.items.compactMap { if case .tool(let t) = $0 { t } else { nil } }
         check(tools.contains { $0.status == "completed" }, "tool call card completed (\(tools.map(\.status)))")
         check(FileManager.default.fileExists(atPath: marker.path), "the command ran in the sandbox (file on the host mount)")
@@ -334,17 +336,104 @@ enum SelfTest {
         view.debugClickSendButton()
         check(await until(60) { chat.phase == .running }, "Send starts the long turn")
         check(view.debugSendMode == .stop, "while it runs the round button is Stop")
+        if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            check(!view.debugSendButton.debugOrbiting, "with Reduce Motion its ring stands still")
+        } else {
+            check(view.debugSendButton.debugOrbiting, "its arc orbits the ring while the turn works")
+        }
         snapshot(window, "chat-stop")
+        snapshotLayers(view.debugComposer, "chat-stop-button")
         await wait(3)
         let stopAt = Date()
         view.debugClickSendButton()
         check(await until(20) { chat.phase == .ready }, "Stop stops the turn")
         check(await until(2) { view.debugSendMode == .send }, "and turns back into Send")
+        check(!view.debugSendButton.debugOrbiting, "and the orbit stops")
         log(String(format: "stopped in %.1fs", Date().timeIntervalSince(stopAt)))
         let countAtStop = chat.items.count
         await wait(3)
         check(chat.items.count == countAtStop, "nothing streams in after Stop (\(chat.items.count - countAtStop) late items)")
         snapshot(window, "chat-final")
+    }
+
+    /// The composer's keys after a sent message: ↑ brings it back (↓ and ⎋
+    /// put back the empty draft); a half-typed `/command` shows the rest
+    /// greyed, which Tab takes.
+    private static func composerKeys(_ view: ChatSessionView, _ chat: ChatSession, _ window: MainWindowController) async {
+        let composer = view.debugComposer
+        let up = #selector(NSResponder.moveUp(_:)), down = #selector(NSResponder.moveDown(_:))
+        let tab = #selector(NSResponder.insertTab(_:)), escape = #selector(NSResponder.cancelOperation(_:))
+        let sent = chat.items.compactMap { if case .user(_, let t, _) = $0 { t } else { nil } }
+        composer.debugType("")
+        composer.debugCommand(up)
+        check(composer.debugText == sent.last, "↑ in the empty composer brings back the last sent (“\(composer.debugText)”)")
+        composer.debugCommand(down)
+        check(composer.debugText.isEmpty, "↓ past the newest puts back the empty draft")
+        composer.debugCommand(up)
+        composer.debugCommand(escape)
+        check(composer.debugText.isEmpty && chat.phase == .ready, "⎋ does too (and stops nothing)")
+
+        // Ghost text: the rest of a command, which Tab takes.
+        if let name = chat.commands.map(\.name).sorted().first(where: { $0.count > 3 && $0.first?.isLetter == true }) {
+            let typed = "/" + name.prefix(2)
+            composer.debugTypeKeys(typed)
+            let ghost = composer.debugGhost
+            check(ghost.map { (typed + $0).lowercased().hasPrefix(typed.lowercased()) } == true,
+                  "typing \(typed) shows the rest of a command greyed (“\(ghost ?? "-")”)")
+            snapshot(window, "chat-ghost")
+            composer.debugCommand(tab)
+            check(composer.debugText == typed + (ghost ?? "") + " ", "Tab takes it (“\(composer.debugText)”)")
+            check(composer.debugGhost == nil, "and the ghost goes")
+            composer.debugType("")
+        } else {
+            check(false, "a command to complete (\(chat.commands.map(\.name)))")
+        }
+    }
+
+    /// Claude Code's suggested next message (after any turn but the first) is
+    /// the composer's placeholder, which Tab takes; sending clears it.
+    private static func suggestion(_ view: ChatSessionView, _ chat: ChatSession, _ window: MainWindowController) async {
+        let composer = view.debugComposer
+        composer.debugType("")
+        // It comes a moment after the turn's result (and not at all near a plan's usage limit).
+        if await until(30, { chat.suggestedPrompt != nil }) {
+            log("Claude Code suggests “\(chat.suggestedPrompt ?? "")”")
+        } else {
+            log("no suggestion from Claude Code after the turn; simulating one")
+            chat.debugSuggest("Now reply with PING")
+        }
+        let suggestion = chat.suggestedPrompt ?? ""
+        check(!suggestion.isEmpty && composer.debugPlaceholder == suggestion,
+              "the suggestion is the placeholder (“\(composer.debugPlaceholder)”)")
+        snapshot(window, "chat-suggestion")
+        composer.debugCommand(#selector(NSResponder.insertTab(_:)))
+        check(composer.debugText == suggestion, "Tab takes the suggestion (“\(composer.debugText)”)")
+        composer.debugType("")
+    }
+
+    /// The layer tree under `view` (Core Animation sublayers such as the Stop
+    /// button's arc included, which `snapshot` doesn't draw), at 3×.
+    private static func snapshotLayers(_ view: NSView, _ name: String) {
+        guard let layer = view.layer, let space = CGColorSpace(name: CGColorSpace.sRGB) else { return }
+        let scale: CGFloat = 3
+        let size = view.bounds.size
+        guard let ctx = CGContext(data: nil, width: Int(size.width * scale), height: Int(size.height * scale),
+                                  bitsPerComponent: 8, bytesPerRow: 0, space: space,
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return }
+        view.effectiveAppearance.performAsCurrentDrawingAppearance {
+            ctx.setFillColor(NSColor.windowBackgroundColor.cgColor)
+        }
+        ctx.fill(CGRect(x: 0, y: 0, width: size.width * scale, height: size.height * scale))
+        ctx.scaleBy(x: scale, y: scale)
+        if layer.contentsAreFlipped() {
+            ctx.translateBy(x: 0, y: size.height)
+            ctx.scaleBy(x: 1, y: -1)
+        }
+        (layer.presentation() ?? layer).render(in: ctx)
+        guard let image = ctx.makeImage() else { return }
+        try? NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])?
+            .write(to: URL(fileURLWithPath: out + "/\(name).png"))
+        log("snapshot \(name).png")
     }
 
     // MARK: Custom agents + Codex/Gemini chats
@@ -2798,18 +2887,51 @@ enum SelfTest {
         guard let c = chat() else { return }
         func said() -> String { c.items.compactMap { if case .agentText(_, let t) = $0 { t } else { nil } }.joined(separator: "\n") }
         guard let v = tree.surfaces.chats[s.id] else { return check(false, "the chat's view") }
-        c.send(text: "Count from 1 to 40, one number per line, nothing else.", attachments: [])
+        c.send(text: "Count from 1 to 150, one number per line, nothing else.", attachments: [])
         check(await until(60) { c.phase == .running }, "a turn is running")
         check(v.debugSendMode == .stop, "the round button is Stop while it runs")
-        // Typed and sent from the composer as Return does: it queues.
-        v.debugSetDraft("Now reply with exactly the word QUEUED and nothing else.")
-        v.debugComposer.submitFromButton()
+        // Typed and sent from the composer as Return does: they queue, in order.
+        // (No awaits from here until the edit is re-queued: the turn can't end meanwhile.)
+        let first = "Reply with exactly two words and nothing else. The first word is QUEUED."
+        let removed = "The second word is REMOVED."
+        let edited = "The second word is DRAFT."
+        let reworded = "The second word is EDITED."
+        for text in [first, removed, edited] {
+            v.debugSetDraft(text)
+            v.debugComposer.submitFromButton()
+        }
         check(c.hasQueued, "a message sent mid-turn waits its turn")
         check(v.debugComposer.debugDraftIsEmpty, "and leaves the composer")
         check(v.debugSendMode == .stop, "Stop stays Stop (the turn is still running)")
+        let cards = { v.debugQueuedView.debugCards }
+        check(cards().map(\.prompt.text) == [first, removed, edited] && !v.debugQueuedView.isHidden,
+              "each queued message shows above the composer, in order (\(cards().map(\.prompt.text)))")
+        check(c.queue.items.map(\.text) == [first, removed, edited], "and waits in that order")
+        check(v.debugStatusText.contains("together"), "the status line says they go together (“\(v.debugStatusText)”)")
         snapshot(window, "queue-waiting")
+        // Remove drops one; the others keep their order.
+        cards().first { $0.prompt.text == removed }?.removeButton.performClick(nil)
+        check(c.queue.items.map(\.text) == [first, edited] && cards().map(\.prompt.text) == [first, edited],
+              "Remove drops it (\(c.queue.items.map(\.text)))")
+        // Edit pulls one back into the composer; sending it again queues it (last).
+        cards().first { $0.prompt.text == edited }?.editButton.performClick(nil)
+        check(v.debugComposer.debugText == edited, "Edit puts it back in the composer (“\(v.debugComposer.debugText)”)")
+        check(c.queue.items.map(\.text) == [first] && cards().count == 1, "and out of the queue")
+        snapshot(window, "queue-editing")
+        v.debugSetDraft(reworded)
+        v.debugComposer.submitFromButton()
+        check(c.queue.items.map(\.text) == [first, reworded], "sent again, it queues again (\(c.queue.items.map(\.text)))")
+        check(c.phase == .running, "all while the turn still runs")
+        snapshot(window, "queue-edited")
         check(await until(240) { c.phase == .ready && said().contains("QUEUED") }, "then goes when the turn ends")
-        check(!c.hasQueued, "and nothing is left waiting")
+        let lastPrompt = c.items.last { if case .user = $0 { true } else { false } }
+        if case .user(_, let text, _)? = lastPrompt {
+            check(text == first + "\n\n" + reworded, "as one prompt, in order (“\(text)”)")
+        } else {
+            check(false, "the queued prompt is in the transcript")
+        }
+        check(said().contains("EDITED") && !said().contains("REMOVED"), "the edit went, the removed one didn't (“\(said().suffix(80))”)")
+        check(!c.hasQueued && cards().isEmpty && v.debugQueuedView.isHidden, "and nothing is left waiting")
         check(await until(2) { v.debugSendMode == .send }, "and the round button is Send again")
         ws.closeSession(s.id)
     }

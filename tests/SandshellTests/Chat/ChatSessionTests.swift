@@ -60,6 +60,31 @@ struct ChatSessionTests {
         #expect(session.items.first == .agentText(id: "m1", text: "Agent's"))
     }
 
+    // MARK: Prompt suggestions
+
+    @Test func aForwardedPromptSuggestionIsRead() {
+        let params: JSONValue = ["sessionId": "s1", "message": [
+            "type": "prompt_suggestion", "suggestion": "  Run the tests\n", "uuid": "u", "session_id": "s1"]]
+        #expect(ChatSession.promptSuggestion(inSDKMessage: params) == "Run the tests")
+    }
+
+    @Test(arguments: [
+        ["message": ["type": "result", "suggestion": "no"]],
+        ["message": ["type": "prompt_suggestion", "suggestion": "  "]],
+        ["message": ["type": "prompt_suggestion"]],
+        [:],
+    ] as [JSONValue])
+    func otherSDKMessagesSuggestNothing(params: JSONValue) {
+        #expect(ChatSession.promptSuggestion(inSDKMessage: params) == nil)
+    }
+
+    /// The adapter drops the SDK's suggestions unless it's asked to forward them.
+    @Test func claudeSessionsAskForSuggestionsAndTheirForwarding() {
+        let meta = ChatSession.claudeSessionMeta["claudeCode"]
+        #expect(meta?["options"]?["promptSuggestions"]?.bool == true)
+        #expect(meta?["emitRawSDKMessages"]?.array?.first?["type"]?.string == "prompt_suggestion")
+    }
+
     // MARK: A mode, model or effort change whose request fails
 
     enum Change: String, CaseIterable, CustomTestStringConvertible {

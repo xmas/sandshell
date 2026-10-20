@@ -96,11 +96,10 @@ final class ChatSession: ObservableObject {
             if oldValue == .running, phase == .ready, let next = afterTurn {
                 afterTurn = nil
                 Task { next() }
-            } else if oldValue == .running, phase == .ready, queued != nil {
-                // A message sent while the turn ran goes now.
+            } else if oldValue == .running, phase == .ready, !queue.isEmpty {
+                // Messages sent while the turn ran go now, in order, as one prompt.
                 Task { [weak self] in
-                    guard let self, self.phase == .ready, let (text, files) = self.queued else { return }
-                    self.queued = nil
+                    guard let self, self.phase == .ready, let (text, files) = self.queue.takeAll() else { return }
                     self.send(text: text, attachments: files)
                 }
             }
@@ -147,6 +146,9 @@ final class ChatSession: ObservableObject {
     /// Slash commands and skills the agent advertises (`available_commands_update`).
     struct Command: Equatable { let name: String; let description: String; let hint: String? }
     @Published private(set) var commands: [Command] = []
+    /// Claude Code's guess at your next message, after a turn (the composer's
+    /// placeholder, which Tab takes); gone once anything is sent.
+    @Published private(set) var suggestedPrompt: String?
     /// Unrecognized `session/update` kinds seen (spike: what else the adapter sends).
     @Published private(set) var unknownUpdates: Set<String> = []
     /// Restarting the agent so it sees turns another app added (`.starting` meanwhile).
@@ -372,8 +374,7 @@ final class ChatSession: ObservableObject {
                 phase = .ready
                 warmSpare()
                 startFollowing()
-                if let (text, attachments) = queued {
-                    queued = nil
+                if let (text, attachments) = queue.takeAll() {
                     send(text: text, attachments: attachments)
                 }
             } catch {
@@ -437,10 +438,14 @@ final class ChatSession: ObservableObject {
     /// Resume the prior conversation when there is one (`session/load` replays
     /// it as updates), else start fresh.
     private func openSession(_ conn: ACPConnection) async throws -> JSONValue {
+        // Claude: ask for its prompt suggestions too (other agents get no `_meta`).
+        func params(_ base: [String: JSONValue]) -> JSONValue {
+            .object(agent == .claude ? base.merging(["_meta": Self.claudeSessionMeta]) { $1 } : base)
+        }
         if let resumeID {
             do {
-                let result = try await conn.request("session/load", [
-                    "sessionId": .string(resumeID), "cwd": .string(workdir), "mcpServers": []])
+                let result = try await conn.request("session/load", params([
+                    "sessionId": .string(resumeID), "cwd": .string(workdir), "mcpServers": []]))
                 sessionID = resumeID
                 return result
             } catch {
@@ -448,9 +453,28 @@ final class ChatSession: ObservableObject {
                 notice("Couldn’t restore the earlier conversation — started a new one.", isError: false)
             }
         }
-        let result = try await conn.request("session/new", ["cwd": .string(workdir), "mcpServers": []])
+        let result = try await conn.request("session/new", params(["cwd": .string(workdir), "mcpServers": []]))
         sessionID = result["sessionId"]?.string
         return result
+    }
+
+    /// Claude Code's prompt suggestions (a predicted next message after each
+    /// turn but the first): the adapter drops the SDK's `prompt_suggestion`
+    /// messages, so ask for them and for those raw messages, which it then
+    /// forwards as `_claude/sdkMessage` notifications.
+    static let claudeSessionMeta: JSONValue = [
+        "claudeCode": [
+            "options": ["promptSuggestions": true],
+            "emitRawSDKMessages": [["type": "prompt_suggestion"]],
+        ],
+    ]
+
+    /// The suggestion in a forwarded SDK message, if that's what it is.
+    static func promptSuggestion(inSDKMessage params: JSONValue) -> String? {
+        guard let message = params["message"], message["type"]?.string == "prompt_suggestion",
+              let text = message["suggestion"]?.string?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !text.isEmpty else { return nil }
+        return text
     }
 
     /// We declare two of the JetBrains AIR extensions the Claude adapter
@@ -484,7 +508,7 @@ final class ChatSession: ObservableObject {
         // still finishing would otherwise report "finished" or "stopped").
         onSessionID = nil; onWorkingChange = nil; onPrompt = nil
         onClosed = nil; onUnexpectedExit = nil; onOtherAppIdle = nil; onNeedsInput = nil; onWaitingChange = nil
-        queued = nil
+        queue = PromptQueue()
         stopFollowing()
         pumpTask?.cancel()
         let wasRunning = connection != nil
@@ -507,6 +531,7 @@ final class ChatSession: ObservableObject {
             return
         }
         inExternalRun = false
+        suggestedPrompt = nil
         sawOwnTurn = true   // however short the turn, the follower skips past it
         items.append(.user(id: UUID(), text: trimmed, attachments: attachments.map(\.displayName)))
         if !trimmed.isEmpty, !retryingTurn { onPrompt?(trimmed) }
@@ -593,22 +618,22 @@ final class ChatSession: ObservableObject {
     /// "send now"); sends immediately if it already is.
     func sendWhenReady(text: String, attachments: [ChatAttachment]) {
         if phase == .ready { send(text: text, attachments: attachments); return }
-        if let (earlier, files) = queued {
-            queued = ([earlier, text].filter { !$0.isEmpty }.joined(separator: "\n\n"), files + attachments)
-        } else {
-            queued = (text, attachments)
-        }
-    }
-    private var queued: (String, [ChatAttachment])? { didSet { hasQueued = queued != nil } }
-    /// Hand over the message waiting to be sent (a reconnect carries it over).
-    func takeQueued() -> (text: String, attachments: [ChatAttachment])? {
-        guard let (text, attachments) = queued else { return nil }
-        queued = nil
-        return (text, attachments)
+        queue.append(text: text, attachments: attachments)
     }
 
+    /// Messages waiting for the turn (or the start) to finish, shown above
+    /// the composer; they go together, in order, when it does.
+    @Published private(set) var queue = PromptQueue()
+
     /// A message is waiting for the turn (or the start) to finish.
-    @Published private(set) var hasQueued = false
+    var hasQueued: Bool { !queue.isEmpty }
+
+    /// Hand over the messages waiting to be sent, as one (a reconnect carries them over).
+    func takeQueued() -> (text: String, attachments: [ChatAttachment])? { queue.takeAll() }
+
+    /// Take one waiting message back out: Remove drops it, Edit puts it in the composer.
+    @discardableResult
+    func unqueue(_ id: QueuedPrompt.ID) -> QueuedPrompt? { queue.remove(id) }
 
     /// From the composer: send now, or queue it behind the running turn (or a
     /// start); false when the chat can't take it (closed), so the draft stays.
@@ -617,9 +642,9 @@ final class ChatSession: ObservableObject {
         case .ready:
             // A message still waiting to go (its drain is a tick behind) goes
             // first, with this one after it in the same prompt.
-            if let (earlier, files) = queued {
-                queued = nil
-                send(text: [earlier, text].filter { !$0.isEmpty }.joined(separator: "\n\n"), attachments: files + attachments)
+            if !queue.isEmpty {
+                queue.append(text: text, attachments: attachments)
+                if let (all, files) = queue.takeAll() { send(text: all, attachments: files) }
             } else {
                 send(text: text, attachments: attachments)
             }
@@ -662,6 +687,8 @@ final class ChatSession: ObservableObject {
     func debugAsk(_ q: AgentQuestion?) { question = q }
     /// Tests: the agent sends this `session/update`.
     func debugApply(_ update: JSONValue) { apply(update) }
+    /// Tests: Claude Code suggests a next message (as `_claude/sdkMessage` brings it).
+    func debugSuggest(_ text: String?) { suggestedPrompt = text }
     /// Tests: talk to `connection` as session `sessionID` (nil and nil: as a
     /// reload or close leaves it, with the old agent going away).
     func debugAttach(_ connection: ACPConnection?, sessionID: String?) {
@@ -1201,7 +1228,7 @@ final class ChatSession: ObservableObject {
         agentIsBehind = false
         inExternalRun = false
         stopFollowing()
-        queued = message
+        queue.prepend(text: message.0, attachments: message.1)
         isCatchingUp = true
         // What the reload must replay: the other app's last prompt.
         catchUpExpect = lastExternalPrompt.map { String($0.prefix(40)) }
@@ -1253,6 +1280,10 @@ final class ChatSession: ObservableObject {
         switch event {
         case .notification("session/update", let params):
             if let update = params["update"] { apply(update) }
+        case .notification("_claude/sdkMessage", let params):
+            guard params["sessionId"]?.string == sessionID, phase == .ready,
+                  let suggestion = Self.promptSuggestion(inSDKMessage: params) else { return }
+            suggestedPrompt = suggestion
         case .notification(let method, _):
             if !method.hasPrefix("_") { Log.info(.sbx, "chat: unhandled notification \(method)") }
         case .request(let id, "session/request_permission", let params):
