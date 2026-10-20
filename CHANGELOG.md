@@ -2,6 +2,10 @@
 
 A running log of what changed, newest first. Yes, we actually write these.
 
+## v0.2.31 — "Fade Out"
+- **The chat fades into the composer.** While there's more conversation below, the transcript's bottom edge fades out above the message field, and a round ↓ button jumps to the newest message (and follows it again).
+- **Context is back under the chat.** The composer's readout leads with how full the context window is — a small bar (green, orange past 70 %, red past 90 %) and "38% context" — then the cost; the token counts are in its tooltip, and a click opens Session details.
+
 ## v0.2.30 — "Less Chrome"
 - **Less chrome, one place for everything.** The window was redesigned around one rule: each action lives in one place.
 - **Type:** the whole interface uses four text styles — title, body, small and code — instead of fourteen sizes. Weight means unread; colour means status. Chat text is 13 pt.
