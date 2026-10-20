@@ -212,7 +212,7 @@ def kitdirs(root):
         'sandbox:\n  image: docker/sandbox-templates:shell-docker\n  entrypoint:\n    - bash\n')
     return out
 
-def rm_sandboxes(d):
+def rm_sandboxes(d, twins_only=False):
     real = os.path.realpath(d)
     try:
         boxes = json.loads(sh("sbx", "ls", "--json", check=False) or "[]")
@@ -221,9 +221,16 @@ def rm_sandboxes(d):
     if isinstance(boxes, dict): boxes = boxes.get("sandboxes", [])
     for b in boxes:
         spaces = [w.split(":")[0] for w in (b.get("workspaces") or [])]
-        if any(os.path.realpath(w) == real for w in spaces):
+        mine = any(os.path.realpath(w) == real for w in spaces)
+        # The same fixture made from another self-test root (two runs side by
+        # side: SANDSHELL_SELFTEST_ROOT): same sandbox name, another /tmp
+        # folder. Left there, this run would attach to it and fail to cd.
+        main = os.path.realpath(spaces[0]) if spaces else ""
+        twin = (main.startswith("/private/tmp/") and os.path.basename(main) == os.path.basename(real)
+                and main != real)
+        if twin or (mine and not twins_only):
             sh("sbx", "rm", "--force", b["name"], check=False)
-            print(f"removed sandbox {b['name']}")
+            print(f"removed sandbox {b['name']}" + (f" (made from {main})" if twin else ""))
 
 def main():
     root, cmd = sys.argv[1], sys.argv[2]
@@ -235,6 +242,7 @@ def main():
     d = os.path.join(root, name)
     if cmd == "prepare":
         FIXTURES[name](d)
+        rm_sandboxes(d, twins_only=True)
         print(d)
     elif cmd == "config":
         p = os.path.join(d, ".sandshell", "config.json")
