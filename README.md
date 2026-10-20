@@ -19,9 +19,23 @@ brew install --cask docker/tap/sbx xmas/xmas/sandshell
 ```
 
 This installs the `sbx` CLI (if you don't have it) and Sandshell, and links the
-`sandshell` command-line helper. Naming `docker/tap/sbx` lets Homebrew tap and
-trust Docker's tap on a Mac that has never installed sbx; if you already have
-sbx from Homebrew, `brew install --cask xmas/xmas/sandshell` is enough.
+`sandshell` command-line helper.
+
+**Why both names:** Homebrew 7 only loads casks from third-party taps you trust.
+Naming a cask in full on `brew install` taps its tap and trusts that cask, so
+name both — Sandshell's and sbx's, which Sandshell depends on — even if sbx is
+already installed. If Homebrew says *Refusing to load cask … from untrusted
+tap*, trust them yourself and install again:
+
+```bash
+brew trust --cask docker/tap/sbx xmas/xmas/sandshell
+```
+
+(`brew trust xmas/xmas` trusts everything in the tap instead.)
+
+**Gatekeeper:** Sandshell isn't code-signed or notarized yet. The cask clears
+the download's quarantine flag, so it opens normally; if macOS still refuses,
+Control-click Sandshell in Applications, choose **Open**, and confirm once.
 
 Then sign in to sbx once, and open Sandshell:
 

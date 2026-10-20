@@ -35,7 +35,7 @@ scripts/release.sh --dry-run <version>   # rehearse: real build + DMG, prints pu
 scripts/release.sh <version>             # e.g. scripts/release.sh 0.2.20
 ```
 
-Distributed via the Homebrew tap `xmas/xmas` (public repo `xmas/homebrew-xmas`; this repo is private): `brew install --cask xmas/xmas/sandshell`. The script preflights (main, clean tree, gh auth, tap clone at `../homebrew-xmas` clean on main) → bumps `MARKETING_VERSION` → regenerates → Release build → DMG via `scripts/make-dmg.sh` → sha256 → `gh release create sandshell-v<version> -R xmas/homebrew-xmas` with the DMG → updates + pushes `Casks/sandshell.rb` in the tap → commits the bump, tags `v<version>`, pushes. Release notes come from the `## v<version>` section of `CHANGELOG.md`. Requires `xcodegen` and `gh`. The in-app updater (`Sandshell/Update/Updater.swift`) reads the version from the raw cask on GitHub. Details: `RELEASING.md`.
+Distributed via the Homebrew tap `xmas/xmas` (public repo `xmas/homebrew-xmas`): `brew install --cask xmas/xmas/sandshell`. The script preflights (main, clean tree, gh auth, tap clone at `../homebrew-xmas` clean on main) → bumps `MARKETING_VERSION` → regenerates → Release build → DMG via `scripts/make-dmg.sh` → sha256 → `gh release create sandshell-v<version> -R xmas/homebrew-xmas` with the DMG → updates + pushes `Casks/sandshell.rb` in the tap → commits the bump, tags `v<version>`, pushes. Release notes come from the `## v<version>` section of `CHANGELOG.md`. Requires `xcodegen` and `gh`. The in-app updater (`Sandshell/Update/Updater.swift`) reads the version from the raw cask on GitHub. Details: `RELEASING.md`.
 
 ## Tests
 

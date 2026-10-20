@@ -1,8 +1,8 @@
 # Releasing Sandshell
 
 Sandshell ships through the Homebrew tap **`xmas/xmas`** (public repo
-[xmas/homebrew-xmas](https://github.com/xmas/homebrew-xmas)). This repo is
-private, so the DMGs live as release assets on the tap repo:
+[xmas/homebrew-xmas](https://github.com/xmas/homebrew-xmas)). The DMGs live
+as release assets on the tap repo:
 
 | What | Where |
 |------|-------|
@@ -18,9 +18,11 @@ brew install --cask xmas/xmas/sandshell
 brew upgrade --cask xmas/xmas/sandshell
 ```
 
-The cask `depends_on cask: "docker/tap/sbx"`. Homebrew only auto-taps (and
-trusts) taps named on the command line, so on a Mac that has never installed
-sbx through Homebrew, name both: `brew install --cask docker/tap/sbx xmas/xmas/sandshell`.
+The cask `depends_on cask: "docker/tap/sbx"`. Homebrew 7 only loads casks from
+trusted taps; `brew install` taps and trusts the casks it's given by full name
+(and `brew upgrade` the ones named), but not a dependency, so name both:
+`brew install --cask docker/tap/sbx xmas/xmas/sandshell`. Otherwise
+`brew trust --cask docker/tap/sbx xmas/xmas/sandshell` (see README.md).
 
 ## Cut a release
 
