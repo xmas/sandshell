@@ -99,12 +99,18 @@ struct ComposerBarTests {
         #expect(abs(composer.bounds.maxX - button.maxX - 13) <= 0.5, "14 pt in from the right, less the border")
     }
 
-    /// The composer and its controls never hold a pane wide: a chat goes
-    /// down to 380 pt, the controls giving way in turn.
-    @Test(arguments: [CGFloat(380), 300])
-    func aChatGoesNarrow(width: CGFloat) {
+    /// The composer and its controls (and messages queued above it) never
+    /// hold a pane wide: a chat goes down to 380 pt, the controls giving way
+    /// in turn. In a wide pane the composer takes the readable width, queue
+    /// or no queue.
+    @Test(arguments: [(CGFloat(380), false), (300, true), (1200, false), (1200, true)])
+    func aChatGoesNarrow(width: CGFloat, queued: Bool) {
         let session = ChatSession(title: "Claude", containerName: "test-sandbox", workdir: "/nonexistent/work",
                                   home: "/nonexistent/home", mcpURL: nil)
+        if queued {
+            // Not started: it waits, as it would behind a turn.
+            session.sendWhenReady(text: "A long queued message " + String(repeating: "that goes on ", count: 40), attachments: [])
+        }
         let view = ChatSessionView(session: session)
         view.debugTranscript.debugApplyNow([
             .user(id: UUID(), text: "A question with a_very_long_unbreakable_identifier_in_it_that_goes_on_and_on", attachments: []),
@@ -127,6 +133,14 @@ struct ComposerBarTests {
         let bar = view.debugBarFrame
         #expect(bar.minX >= 0 && bar.maxX <= width, "the controls stay inside (\(bar))")
         #expect(view.debugComposer.frame.maxX <= width)
+        let composer = view.debugComposer.frame.width
+        if width > ChatTranscriptView.readableWidth + 32 {
+            #expect(composer == ChatTranscriptView.readableWidth, "the readable width, less its margins (\(composer))")
+        }
+        if queued {
+            #expect(!view.debugQueuedView.isHidden)
+            #expect(view.debugQueuedView.debugCards.allSatisfy { $0.frame.width == composer }, "cards as wide as the composer")
+        }
     }
 
     /// Every control, at a width: what still shows fits, in the shedding order.
@@ -147,6 +161,90 @@ struct ComposerBarTests {
         #expect(bar.debugShown == shown)
         #expect(bar.debugShownFrames.allSatisfy { $0.maxX <= width + 0.5 }, "\(bar.debugShownFrames)")
     }
+
+    #if DEBUG
+    // MARK: Keys in the composer
+
+    private static let up = #selector(NSResponder.moveUp(_:))
+    private static let down = #selector(NSResponder.moveDown(_:))
+    private static let tab = #selector(NSResponder.insertTab(_:))
+    private static let escape = #selector(NSResponder.cancelOperation(_:))
+
+    @Test func upAndDownWalkWhatWasSent() {
+        let composer = ChatComposerView(frame: NSRect(x: 0, y: 0, width: 600, height: 48))
+        composer.sentHistory = { ["first", "second"] }
+        composer.debugCommand(Self.up)
+        #expect(composer.debugText == "second")
+        composer.debugCommand(Self.up)
+        #expect(composer.debugText == "first")
+        composer.debugCommand(Self.down)
+        #expect(composer.debugText == "second")
+        composer.debugCommand(Self.down)
+        #expect(composer.debugText.isEmpty, "past the newest: the empty draft again")
+    }
+
+    @Test func escapeLeavesTheHistory() {
+        let composer = ChatComposerView(frame: NSRect(x: 0, y: 0, width: 600, height: 48))
+        composer.sentHistory = { ["first"] }
+        var escaped = false
+        composer.onEscape = { escaped = true; return true }
+        composer.debugCommand(Self.up)
+        composer.debugCommand(Self.escape)
+        #expect(composer.debugText.isEmpty)
+        #expect(!escaped, "⎋ went to the history, not the chat (it would stop a turn)")
+    }
+
+    @Test func upInADraftIsTheCaretsNotTheHistorys() {
+        let composer = ChatComposerView(frame: NSRect(x: 0, y: 0, width: 600, height: 48))
+        composer.sentHistory = { ["first"] }
+        composer.setDraft("my draft")
+        composer.debugCommand(Self.up)
+        #expect(composer.debugText == "my draft")
+    }
+
+    @Test func anEditedRecallStopsTheWalk() {
+        let composer = ChatComposerView(frame: NSRect(x: 0, y: 0, width: 600, height: 48))
+        composer.sentHistory = { ["first", "second"] }
+        composer.debugCommand(Self.up)
+        composer.debugType("second, edited")
+        composer.debugCommand(Self.up)
+        #expect(composer.debugText == "second, edited")
+    }
+
+    @Test func theSuggestionIsThePlaceholderAndTabTakesIt() {
+        let composer = ChatComposerView(frame: NSRect(x: 0, y: 0, width: 600, height: 48))
+        #expect(composer.debugPlaceholder.hasPrefix("Message Claude…"))
+        composer.suggestion = "Run the tests"
+        #expect(composer.debugPlaceholder == "Run the tests")
+        composer.debugCommand(Self.tab)
+        #expect(composer.debugText == "Run the tests")
+        composer.suggestion = nil
+        #expect(composer.debugPlaceholder.hasPrefix("Message Claude…"))
+    }
+
+    @Test func editingAQueuedMessagePutsItAheadOfTheDraft() {
+        let composer = ChatComposerView(frame: NSRect(x: 0, y: 0, width: 600, height: 48))
+        composer.setDraft("typed")
+        composer.edit(QueuedPrompt(text: "queued"))
+        #expect(composer.debugText == "queued\n\ntyped")
+    }
+
+    /// Stop's arc orbits only in a window, while a turn runs.
+    @Test func theOrbitRunsOnlyForStopInAWindow() {
+        let button = ComposerSendButton()
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 100, height: 100), styleMask: [], backing: .buffered, defer: true)
+        window.isReleasedWhenClosed = false
+        window.contentView?.addSubview(button)
+        #expect(!button.debugOrbiting, "Send doesn't orbit")
+        button.mode = .stop
+        #expect(button.debugOrbiting == !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
+        button.mode = .send
+        #expect(!button.debugOrbiting)
+        button.mode = .stop
+        button.removeFromSuperview()
+        #expect(!button.debugOrbiting, "out of the window it stops")
+    }
+    #endif
 
     @Test(arguments: [
         (ComposerSendButton.Mode.send, "Send"),

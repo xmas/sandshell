@@ -6,7 +6,11 @@ import UniformTypeIdentifiers
 /// substitutions, Writing Tools, dictation, Services and undo. Return sends;
 /// Shift/Option-Return inserts a newline. Files, folders and images dropped or
 /// pasted become attachment chips above the text. `/` at the start opens the
-/// agent's commands; `@` opens the workspace's files (inserted as chips).
+/// agent's commands (the rest of the highlighted one shows greyed after the
+/// caret; Tab takes it); `@` opens the workspace's files (inserted as chips).
+/// ↑ in an empty composer brings back what you sent (↑/↓ walk it, ⎋ puts
+/// back the draft); a next message the agent suggests is the placeholder,
+/// which Tab takes.
 final class ChatComposerView: NSView, NSTextViewDelegate {
     /// Send (or queue) a message; false keeps the draft (nothing took it).
     var onSubmit: ((String, [ChatAttachment]) -> Bool)?
@@ -20,6 +24,15 @@ final class ChatComposerView: NSView, NSTextViewDelegate {
     var commands: () -> [ChatSession.Command] = { [] }
     /// Workspace folder (host path) for `@` file completion.
     var fileRoot: String?
+    /// What this chat sent, oldest first, for ↑.
+    var sentHistory: () -> [String] = { [] }
+    /// The walk through `sentHistory` under way (↑ starts it; sending ends it).
+    private var history: ComposerHistory?
+    /// A next message the agent suggests: the placeholder, which Tab takes.
+    var suggestion: String? {
+        get { textView.suggestion }
+        set { textView.suggestion = newValue?.isEmpty == false ? newValue : nil }
+    }
 
     private let completion = CompletionPanel()
     /// The `/…` or `@…` token being completed.
@@ -192,16 +205,32 @@ final class ChatComposerView: NSView, NSTextViewDelegate {
     func textView(_ textView: NSTextView, doCommandBy selector: Selector) -> Bool {
         if completion.isVisible {
             switch selector {
-            case #selector(NSResponder.moveDown(_:)): completion.move(1); return true
-            case #selector(NSResponder.moveUp(_:)): completion.move(-1); return true
+            case #selector(NSResponder.moveDown(_:)): completion.move(1); updateGhost(); return true
+            case #selector(NSResponder.moveUp(_:)): completion.move(-1); updateGhost(); return true
             case #selector(NSResponder.insertNewline(_:)), #selector(NSResponder.insertTab(_:)):
                 if let item = completion.selected { accept(item) }
                 return true
-            case #selector(NSResponder.cancelOperation(_:)): completion.hide(); return true
+            case #selector(NSResponder.cancelOperation(_:)): hideCompletion(); updateGhost(); return true
             default: break
             }
         }
-        if selector == #selector(NSResponder.cancelOperation(_:)) { return onEscape?() ?? false }
+        switch selector {
+        case #selector(NSResponder.insertTab(_:)):
+            return acceptGhostOrSuggestion()
+        case #selector(NSResponder.moveUp(_:)):
+            return recallOlder()
+        case #selector(NSResponder.moveDown(_:)):
+            return recallNewer()
+        case #selector(NSResponder.cancelOperation(_:)):
+            // Walking the history: back to the draft. Otherwise the chat's ⎋.
+            if shownHistoryEntry != nil, var walk = history {
+                show(walk.cancel() ?? "")
+                history = walk
+                return true
+            }
+            return onEscape?() ?? false
+        default: break
+        }
         guard selector == #selector(NSResponder.insertNewline(_:)) else { return false }
         let mods = NSApp.currentEvent?.modifierFlags ?? []
         if mods.contains(.shift) || mods.contains(.option) {
@@ -215,10 +244,108 @@ final class ChatComposerView: NSView, NSTextViewDelegate {
     func textDidChange(_ notification: Notification) {
         resize()
         updateCompletion()
+        updateGhost()
     }
 
     func textViewDidChangeSelection(_ notification: Notification) {
         if completion.isVisible { updateCompletion() }
+        updateGhost()
+    }
+
+    // MARK: Sent history (↑/↓)
+
+    /// The recalled message the composer shows, as it was (nil once edited).
+    private var shownHistoryEntry: String? {
+        guard let history, history.isShowingEntry(textView.string) else { return nil }
+        return textView.string
+    }
+
+    /// ↑: in an empty composer, the last message sent; on a recalled one
+    /// (unchanged, caret on its first line), the one before. Otherwise the
+    /// caret moves as usual.
+    private func recallOlder() -> Bool {
+        let text = textView.string
+        var walk: ComposerHistory
+        if text.isEmpty, attachments.isEmpty {
+            walk = ComposerHistory(sent: sentHistory())
+        } else if shownHistoryEntry != nil, let current = history,
+                  ComposerHistory.caretOnFirstLine(of: text, caret: textView.selectedRange()) {
+            walk = current
+        } else {
+            return false
+        }
+        // Nothing (further) back: the key does nothing.
+        guard let older = walk.older(current: text) else { return true }
+        history = walk
+        show(older)
+        return true
+    }
+
+    /// ↓ on a recalled message (unchanged, caret on its last line): the next
+    /// one sent, or past the newest the draft from before.
+    private func recallNewer() -> Bool {
+        guard shownHistoryEntry != nil, var walk = history,
+              ComposerHistory.caretOnLastLine(of: textView.string, caret: textView.selectedRange()),
+              let newer = walk.newer() else { return false }
+        history = walk
+        show(newer)
+        return true
+    }
+
+    /// Put `text` in the field for the history walk, caret at the end.
+    private func show(_ text: String) {
+        hideCompletion()
+        textView.string = text
+        textView.setSelectedRange(NSRange(location: (text as NSString).length, length: 0))
+        textView.needsDisplay = true
+        resize()
+        updateGhost()
+    }
+
+    // MARK: Ghost text and suggestions (Tab)
+
+    /// The rest of the `/command` being typed, greyed after the caret: the
+    /// completion list's highlighted one while it's open (Tab takes that
+    /// either way), else the one it would list first.
+    private func updateGhost() {
+        let ns = textView.string as NSString
+        let caret = textView.selectedRange()
+        guard caret.length == 0, caret.location == ns.length, ns.hasPrefix("/") else {
+            textView.ghost = nil
+            return
+        }
+        var selected: String?
+        if completion.isVisible, case .command(let name)? = completion.selected?.kind { selected = name }
+        textView.ghost = CommandGhost.suffix(for: textView.string, commands: commands().map(\.name), selected: selected)
+    }
+
+    /// Tab with the completion list closed: the ghost command, or the agent's
+    /// suggestion in an empty composer. Otherwise a tab as usual.
+    private func acceptGhostOrSuggestion() -> Bool {
+        let length = (textView.string as NSString).length
+        if let ghost = textView.ghost {
+            // As picking it from the list does: the command and a space.
+            textView.insertText("\(textView.string)\(ghost) ", replacementRange: NSRange(location: 0, length: length))
+            hideCompletion()
+            textView.ghost = nil
+            return true
+        }
+        if length == 0, attachments.isEmpty, let suggestion {
+            textView.insertText(suggestion, replacementRange: NSRange(location: 0, length: 0))
+            return true
+        }
+        return false
+    }
+
+    // MARK: Queued messages
+
+    /// A queued message's Edit: back into the composer (ahead of anything
+    /// already typed), caret at the end. Sending it queues it again.
+    func edit(_ queued: QueuedPrompt) {
+        setDraft([queued.text, textView.string].filter { !$0.isEmpty }.joined(separator: "\n\n"))
+        attachments += queued.attachments
+        history = nil
+        focus()
     }
 
     // MARK: Completion
@@ -317,6 +444,8 @@ final class ChatComposerView: NSView, NSTextViewDelegate {
         guard onSubmit?(text, attachments + files) == true else { return }
         textView.string = ""
         attachments = []
+        history = nil
+        textView.ghost = nil
         resize()
     }
 
@@ -325,6 +454,20 @@ final class ChatComposerView: NSView, NSTextViewDelegate {
     func debugType(_ text: String) { textView.string = text; resize() }
     var debugFieldHeight: CGFloat { heightConstraint.constant }
     var debugDraftIsEmpty: Bool { textView.string.isEmpty && attachments.isEmpty }
+    var debugText: String { textView.string }
+    var debugGhost: String? { textView.ghost }
+    var debugPlaceholder: String { textView.shownPlaceholder }
+    /// Self-test: type as the keyboard does (completion and ghost follow).
+    func debugTypeKeys(_ text: String) {
+        focus()
+        textView.insertText(text, replacementRange: textView.selectedRange())
+    }
+    /// Self-test: a key's command as the text system sends it (↑ moveUp:,
+    /// ↓ moveDown:, ⇥ insertTab:, ⎋ cancelOperation:).
+    func debugCommand(_ selector: Selector) {
+        focus()
+        textView.doCommand(by: selector)
+    }
     #endif
 
     /// How tall the field may grow before it scrolls (the chat sets it to about
@@ -404,7 +547,19 @@ final class ComposerTextView: NSTextView {
     var onResign: (() -> Void)?
     /// Find actions, which should search the transcript rather than the draft.
     var onFind: ((Any?) -> Void)?
-    var placeholder = "" { didSet { needsDisplay = true } }
+    var placeholder = "" { didSet { placeholderChanged() } }
+    /// The agent's suggested next message: shown in place of the placeholder.
+    var suggestion: String? { didSet { if suggestion != oldValue { placeholderChanged() } } }
+    /// Greyed text after the caret that Tab would add (a command's rest).
+    var ghost: String? { didSet { if ghost != oldValue { needsDisplay = true } } }
+
+    /// What an empty field shows.
+    var shownPlaceholder: String { suggestion ?? placeholder }
+
+    private func placeholderChanged() {
+        setAccessibilityPlaceholderValue(shownPlaceholder)
+        needsDisplay = true
+    }
 
     override func performTextFinderAction(_ sender: Any?) {
         // "Use Selection for Find" keeps working on the draft's selection.
@@ -421,13 +576,27 @@ final class ComposerTextView: NSTextView {
 
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
-        guard string.isEmpty, !placeholder.isEmpty else { return }
-        let inset = textContainerInset
-        let padding = textContainer?.lineFragmentPadding ?? 0
-        (placeholder as NSString).draw(at: NSPoint(x: inset.width + padding, y: inset.height),
-                                       withAttributes: [.font: font ?? .role(.body),
-
-                                                        .foregroundColor: NSColor.placeholderTextColor])
+        let font = font ?? .role(.body)
+        let grey: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.placeholderTextColor]
+        if string.isEmpty, !shownPlaceholder.isEmpty {
+            let inset = textContainerInset
+            let padding = textContainer?.lineFragmentPadding ?? 0
+            // A suggestion can be long: one line, cut short at its end.
+            let style = NSMutableParagraphStyle()
+            style.lineBreakMode = .byTruncatingTail
+            let line = NSRect(x: inset.width + padding, y: inset.height,
+                              width: max(bounds.width - 2 * (inset.width + padding), 0),
+                              height: ceil(font.ascender - font.descender + font.leading))
+            (shownPlaceholder as NSString).draw(with: line, options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine],
+                                                attributes: grey.merging([.paragraphStyle: style]) { $1 })
+        }
+        // The ghost: right after the last character (it only shows with the caret there).
+        if let ghost, !ghost.isEmpty, let window {
+            let end = firstRect(forCharacterRange: NSRange(location: (string as NSString).length, length: 0), actualRange: nil)
+            guard end != .zero else { return }
+            let caret = convert(window.convertFromScreen(end), from: nil)
+            (ghost as NSString).draw(at: NSPoint(x: caret.minX, y: caret.minY), withAttributes: grey)
+        }
     }
 
     override func didChangeText() {

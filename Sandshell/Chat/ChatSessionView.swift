@@ -14,6 +14,10 @@ final class ChatSessionView: NSView {
     private lazy var emptyState = NSHostingView(rootView: ChatEmptyState(
         agent: session.title.capitalized, folder: (session.workdir as NSString).lastPathComponent))
     private let composer = ChatComposerView()
+    /// Messages typed while a turn runs, above the composer until they go.
+    private let queuedView = QueuedPromptsView()
+    /// How many messages wait (the status line's wording).
+    private var queuedCount = 0
     private let permissionBar = NSStackView()
     private let permissionLabel = NSTextField(wrappingLabelWithString: "")
     private let permissionButtons = NSStackView()
@@ -73,6 +77,9 @@ final class ChatSessionView: NSView {
     var debugTranscript: ChatTranscriptView { transcript }
     var debugComposer: ChatComposerView { composer }
     var debugComposerEnabled: Bool { composer.isEnabled }
+    var debugQueuedView: QueuedPromptsView { queuedView }
+    var debugStatusText: String { statusLabel.stringValue }
+    var debugSendButton: ComposerSendButton { sendButton }
     func debugSetDraft(_ text: String) { composer.setDraft(text) }
     /// The round button in the pill: its mode, and a click on it.
     var debugSendMode: ComposerSendButton.Mode { sendButton.mode }
@@ -163,6 +170,14 @@ final class ChatSessionView: NSView {
         }
         composer.shouldSubmit = { [weak self] in self?.confirmSendWhileOtherAppWorks() ?? true }
         composer.commands = { [weak session] in session?.commands ?? [] }
+        composer.sentHistory = { [weak session] in
+            session?.items.compactMap { if case .user(_, let text, _) = $0 { text } else { nil } } ?? []
+        }
+        queuedView.onEdit = { [weak self] prompt in
+            guard let self, self.session.unqueue(prompt.id) != nil else { return }
+            self.composer.edit(prompt)
+        }
+        queuedView.onRemove = { [weak self] prompt in self?.session.unqueue(prompt.id) }
         composer.onFind = { [weak self] sender in self?.transcript.performFind(sender) }
         composer.fileRoot = session.workdir
         transcript.workdir = session.workdir
@@ -189,7 +204,7 @@ final class ChatSessionView: NSView {
         updatePieces()
 
         // Permission bar + composer stack: a hidden bar collapses (no blank band).
-        let bottom = NSStackView(views: [permissionBar, composer])
+        let bottom = NSStackView(views: [permissionBar, queuedView, composer])
         bottomStack = bottom
         bottom.orientation = .vertical
         bottom.alignment = .width
@@ -274,12 +289,13 @@ final class ChatSessionView: NSView {
         session.$permission.sink { [weak self] in self?.showPermission($0) }.store(in: &bag)
         session.$question.sink { [weak self] in self?.showQuestion($0) }.store(in: &bag)
         session.$mcpServers.sink { [weak self] in self?.showMCPSummary($0) }.store(in: &bag)
-        session.$hasQueued.dropFirst().sink { [weak self] _ in
-            // @Published sends before it stores: read it on the next turn.
-            Task { [weak self] in
-                guard let self else { return }
-                self.showPhase(self.session.phase)
-            }
+        session.$suggestedPrompt.sink { [weak self] in self?.composer.suggestion = $0 }.store(in: &bag)
+        session.$queue.sink { [weak self] queue in
+            guard let self else { return }
+            // @Published sends before it stores: go by the value sent.
+            self.queuedView.show(queue.items)
+            self.queuedCount = queue.items.count
+            if case .running = self.session.phase { self.showPhase(.running) }
         }.store(in: &bag)
         session.$hasExtras.dropFirst().sink { [weak self] on in
             // Published before it's stored: the pieces read it next turn.
@@ -352,7 +368,11 @@ final class ChatSessionView: NSView {
             if window?.firstResponder === window { composer.focus() }
         case .running:
             // Return still sends: the message waits for the turn.
-            statusLabel.stringValue = session.hasQueued ? "Your message sends when this turn ends" : ""
+            statusLabel.stringValue = switch queuedCount {
+            case 0: ""
+            case 1: "Your message sends when this turn ends"
+            default: "Your messages send together when this turn ends"
+            }
             sendButton.mode = .stop; sendButton.isEnabled = true
         case .closed(let why):
             statusLabel.stringValue = why
