@@ -2,6 +2,16 @@
 
 A running log of what changed, newest first. Yes, we actually write these.
 
+## v0.2.33 — "Queued"
+- **See what you've queued.** Messages you type while Claude is working show as cards above the message field, in order — Edit pulls one back into the field, × drops it — and send together when the turn ends.
+- **↑ brings back what you sent.** In an empty message field, ↑ recalls your last message (keep going for earlier ones); ↓ past the newest, or Esc, gives your draft back.
+- **Tab to accept.** Typing a /command shows the rest of the best match greyed after the cursor; Tab takes it. After a turn, Claude Code's suggested next message is the field's placeholder; Tab puts it in.
+- **A lighter Stop,** with a short arc orbiting its ring while the turn works (a steady ring with Reduce Motion).
+- **The sandbox, in the title bar.** Its pill shows the sandbox's state (the cube's colour) and what it can do with the folder (a lock, open for read-write); Folder Access… in its menu opens the details. The sidebar's footer is now just a terminal on this Mac and Status Debug, with room for both.
+- **Double-click a session to rename it,** in a field that matches the sidebar.
+- **Fixes:** the sandbox Inspect window can't get so narrow its buttons cut off.
+- **README** with how to install, update and uninstall.
+
 ## v0.2.32 — "One Toggle"
 - **Files sidebar:** one column toggle — the tree's, at the left of the header (the diff column is View ▸ Diff Column, ⌥⌘2); columns slide in and out; hiding the tree no longer leaves a line across the open file.
 
