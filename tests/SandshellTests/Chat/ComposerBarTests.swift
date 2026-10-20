@@ -8,13 +8,13 @@ import Testing
 struct ComposerBarTests {
     // MARK: Readout
 
-    @Test func theReadoutIsCostThenContext() {
+    @Test func theReadoutIsContextThenCost() {
         let text = ClaudeReadout.text(cost: 0.47, percent: 38)
-        #expect(text == "\(ClaudeStatsFormat.usd(0.47)) · \(38.formatted(.percent))")
+        #expect(text == "\(38.formatted(.percent)) context · \(ClaudeStatsFormat.usd(0.47))")
     }
 
     @Test func theReadoutShowsWhicheverHalfItHas() {
-        #expect(ClaudeReadout.text(cost: nil, percent: 38) == 38.formatted(.percent))
+        #expect(ClaudeReadout.text(cost: nil, percent: 38) == "\(38.formatted(.percent)) context")
         #expect(ClaudeReadout.text(cost: 1.5, percent: nil) == ClaudeStatsFormat.usd(1.5))
         #expect(ClaudeReadout.text(cost: nil, percent: nil).isEmpty)
     }

@@ -974,7 +974,8 @@ enum SelfTest {
         v.session.send(text: "Reply with exactly the word PONG and nothing else.", attachments: [])
         check(await until(180) { v.session.phase == .ready && v.session.usage != nil }, "a turn gives it usage to show")
         // The composer's readout: cost and context, opening Session details.
-        check(await until(5) { v.debugReadoutText.contains("%") }, "the readout shows the context (“\(v.debugReadoutText)”)")
+        check(await until(5) { v.debugReadoutText.contains("% context") }, "the readout shows the context (“\(v.debugReadoutText)”)")
+        check(v.debugContextGaugeShown, "with its gauge beside it")
         v.debugClickReadout()
         check(await until(3) { v.debugDetailsShown }, "clicking the readout opens Session details")
         await wait(0.5)
@@ -991,6 +992,16 @@ enum SelfTest {
         await wait(0.5)
         check(v.debugTranscript.debugViewportReachesEnd, "a long conversation shows its end once scrolled there")
         snapshot(window, "long-transcript")
+        check(!v.debugTranscript.debugEndCuesShown, "at the end: no fade and no ↓")
+        v.debugTranscript.debugScroll(toY: 0)
+        await wait(0.3)
+        check(v.debugTranscript.debugEndCuesShown && v.debugTranscript.debugFadeEdge == "bottom",
+              "scrolled up: the text fades out at the bottom (\(v.debugTranscript.debugFadeEdge)) and ↓ shows")
+        snapshot(window, "long-transcript-scrolled-up")
+        v.debugTranscript.debugJumpToNewest()
+        await wait(0.3)
+        check(!v.debugTranscript.debugEndCuesShown && v.debugTranscript.debugViewportReachesEnd,
+              "↓ jumps to the newest, and the cues go")
         v.debugComposer.debugType((1...60).map { "line \($0)" }.joined(separator: "\n"))
         v.layoutSubtreeIfNeeded()
         let field = v.debugComposer.debugFieldHeight

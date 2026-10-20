@@ -83,6 +83,7 @@ final class ChatSessionView: NSView {
     var debugBarShown: [String] { bar.debugShown }
     var debugBarFrame: NSRect { bar.convert(bar.bounds, to: self) }
     var debugReadoutText: String { bar.readoutText }
+    var debugContextGaugeShown: Bool { !bar.gauge.isHidden && bar.contextFraction != nil }
     var debugMCPTitle: String { mcpButton.attributedTitle.string }
     var debugModelTitle: String { bar.claude.modelButton.item(at: 0)?.attributedTitle?.string ?? "" }
     var debugEffortTitle: String { bar.claude.effortButton.item(at: 0)?.attributedTitle?.string ?? "" }
@@ -483,6 +484,7 @@ final class ChatSessionView: NSView {
         updatePieces()
         let usage = session.usage
         let percent = usage.flatMap { ClaudeReadout.percent(used: $0.used, size: $0.size) }
+        bar.contextFraction = usage.flatMap { $0.size > 0 ? Double($0.used) / Double($0.size) : nil }
         var tip = usage.map { "Context: \($0.used.formatted()) of \($0.size.formatted()) tokens" }
         if session.agent == .claude {
             let status = session.claudeStatus

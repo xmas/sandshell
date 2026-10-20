@@ -21,8 +21,13 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
     private var items: [ChatItem] = []
     private var expanded: Set<String> = []
     private var pending = false
-    private var stickToBottom = true
+    private var stickToBottom = true { didSet { if stickToBottom != oldValue { updateEndCues() } } }
     private var programmaticScroll = false
+    /// While there's more below: the text fades out at the bottom edge (into
+    /// the composer), and a round ↓ button jumps to the newest.
+    private let fade = CAGradientLayer()
+    private let jumpButton = NSButton()
+    private static let fadeHeight: CGFloat = 36
 
     /// The session's folder: relative paths in the text resolve against it.
     var workdir: String?
@@ -96,6 +101,30 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
         tv.isOverControls = { [weak self] point in self?.isOverActions(point) ?? false }
         tv.replyMenuItems = { [weak self] point in self?.replyMenuItems(at: point) ?? [] }
 
+        scrollView.wantsLayer = true
+        fade.colors = [NSColor.black.cgColor, NSColor.black.cgColor]
+        fade.actions = ["colors": NSNull(), "locations": NSNull(), "bounds": NSNull(), "position": NSNull()]
+        scrollView.layer?.mask = fade
+
+        jumpButton.configureSymbol("arrow.down", label: "Jump to the Newest", pointSize: 13, weight: .semibold,
+                                   tint: .labelColor, target: self, action: #selector(jumpToNewest),
+                                   id: "chat-jump-to-newest")
+        jumpButton.wantsLayer = true
+        jumpButton.layer?.cornerRadius = Self.jumpSize / 2
+        jumpButton.layer?.borderWidth = 1
+        jumpButton.layer?.shadowOpacity = 0.12
+        jumpButton.layer?.shadowRadius = 4
+        jumpButton.layer?.shadowOffset = CGSize(width: 0, height: -1)
+        jumpButton.isHidden = true
+        jumpButton.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(jumpButton)
+        NSLayoutConstraint.activate([
+            jumpButton.centerXAnchor.constraint(equalTo: centerXAnchor),
+            jumpButton.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -10),
+            jumpButton.widthAnchor.constraint(equalToConstant: Self.jumpSize),
+            jumpButton.heightAnchor.constraint(equalToConstant: Self.jumpSize),
+        ])
+
         scrollView.contentView.postsBoundsChangedNotifications = true
         NotificationCenter.default.addObserver(self, selector: #selector(scrolled),
                                                name: NSView.boundsDidChangeNotification, object: scrollView.contentView)
@@ -130,6 +159,37 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
         }
         let x = ((clipWidth - width) / 2).rounded()
         if textView.frame.minX != x { textView.setFrameOrigin(NSPoint(x: x, y: 0)) }
+        fade.frame = scrollView.bounds
+        updateEndCues()
+    }
+
+    private static let jumpSize: CGFloat = 30
+
+    /// More below than shows: the fade and the ↓ button; at the end, neither.
+    private func updateEndCues() {
+        let doc = document.frame.height, clip = scrollView.contentView.bounds
+        let more = !stickToBottom && doc > clip.height + 1 && clip.maxY < doc - 24
+        let height = max(scrollView.bounds.height, 1)
+        let edge = min(Self.fadeHeight / height, 0.5)
+        // The mask's alpha: opaque, then fading to nothing over the bottom edge
+        // (location 0 at the bottom: y 0 there, or 1 in a flipped layer).
+        let bottom: CGFloat = scrollView.layer?.contentsAreFlipped() == true ? 1 : 0
+        fade.startPoint = CGPoint(x: 0.5, y: bottom)
+        fade.endPoint = CGPoint(x: 0.5, y: 1 - bottom)
+        fade.colors = [more ? NSColor.clear.cgColor : NSColor.black.cgColor, NSColor.black.cgColor, NSColor.black.cgColor]
+        fade.locations = [0, NSNumber(value: Double(edge)), 1]
+        if jumpButton.isHidden == more {
+            jumpButton.isHidden = !more
+            jumpButton.setAccessibilityElement(more)
+        }
+        jumpButton.layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
+        jumpButton.layer?.borderColor = NSColor.separatorColor.cgColor
+    }
+
+    /// ↓: to the newest, and follow it again.
+    @objc private func jumpToNewest() {
+        stickToBottom = true
+        scrollToBottom()
     }
 
     /// The document is as tall as the text.
@@ -137,6 +197,7 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
         let height = textView.frame.height
         if document.frame.height != height { document.setFrameSize(NSSize(width: document.frame.width, height: height)) }
         layoutVisibleText()
+        updateEndCues()
     }
 
     /// Once per runloop turn, however many times layout asks.
@@ -163,6 +224,18 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
         return viewport.endLocation.compare(tlm.documentRange.endLocation) != .orderedAscending
     }
     func debugScrollToBottom() { scrollToBottom() }
+    /// The fade and the ↓ button show (more below).
+    var debugEndCuesShown: Bool { !jumpButton.isHidden }
+    /// Where the fade's clear end is, on screen: "bottom" or "top".
+    var debugFadeEdge: String {
+        let flipped = scrollView.layer?.contentsAreFlipped() ?? false
+        return (fade.startPoint.y == 0) != flipped ? "bottom" : "top"
+    }
+    func debugScroll(toY y: CGFloat) {
+        scrollView.contentView.scroll(to: NSPoint(x: 0, y: y))
+        scrollView.reflectScrolledClipView(scrollView.contentView)
+    }
+    func debugJumpToNewest() { jumpToNewest() }
     var debugClipOrigin: NSPoint { scrollView.contentView.bounds.origin }
     var debugDocHeight: CGFloat { textView.frame.height }
     #endif
@@ -299,6 +372,7 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
         guard !programmaticScroll, let doc = scrollView.documentView else { return }
         let clip = scrollView.contentView.bounds
         stickToBottom = clip.maxY >= doc.frame.height - 24
+        updateEndCues()
     }
 
     /// Run a find action (⌘F/⌘G…) against the transcript, from anywhere in

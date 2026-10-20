@@ -2,7 +2,7 @@ import AppKit
 
 // MARK: - What the composer shows (pure)
 
-/// The composer's readout, `$0.47 · 38%`, and the choosers' titles.
+/// The composer's readout, `38% context · $0.47` (beside its gauge), and the choosers' titles.
 enum ClaudeReadout {
     /// The conversation's cost: its transcript priced (that survives
     /// `--resume`), else Claude Code's figure for this run.
@@ -22,9 +22,9 @@ enum ClaudeReadout {
         return Int((Double(max(used, 0)) / Double(size) * 100).rounded(.down))
     }
 
-    /// `$0.47 · 38%`; either half alone; empty with neither.
+    /// `38% context · $0.47`; either half alone; empty with neither.
     static func text(cost: Double?, percent: Int?) -> String {
-        [cost.map { ClaudeStatsFormat.usd($0) }, percent.map { $0.formatted(.percent) }]
+        [percent.map { "\($0.formatted(.percent)) context" }, cost.map { ClaudeStatsFormat.usd($0) }]
             .compactMap { $0 }
             .joined(separator: " · ")
     }
@@ -246,6 +246,8 @@ final class ComposerBar: NSView {
     let modelPopup = ChoicePopUp(tip: "Model", font: .role(.body))
     let modePopup = ChoicePopUp(tip: "Approval mode", font: .role(.body))
     let readoutButton = NSButton()
+    /// How full the context window is, as a small bar beside the readout.
+    let gauge = ContextGauge()
 
     private let stack = NSStackView()
     private lazy var attachChip = HoverChip(attachButton)
@@ -257,8 +259,12 @@ final class ComposerBar: NSView {
     private lazy var readoutChip = HoverChip(readoutButton)
 
     var pieces = ComposerPieces() { didSet { if pieces != oldValue { drawReadout(); needsLayout = true; fit() } } }
-    /// The readout's text (`$0.47 · 38%`); in a narrow pane only its ⓘ shows.
+    /// The readout's text (`38% context · $0.47`); in a narrow pane only its ⓘ shows.
     var readoutText = "" { didSet { if readoutText != oldValue { drawReadout(); needsLayout = true } } }
+    /// The context window's fill (0…1; nil: not known yet).
+    var contextFraction: Double? {
+        didSet { if contextFraction != oldValue { gauge.fraction = contextFraction ?? 0; needsLayout = true; fit() } }
+    }
     /// How many of the controls a narrow pane has shed (see `fit`).
     private var shed = 0
 
@@ -315,8 +321,10 @@ final class ComposerBar: NSView {
         stack.spacing = 2
         stack.detachesHiddenViews = true
         stack.translatesAutoresizingMaskIntoConstraints = false
-        stack.setViews([attachChip, mcpChip, statusLabel, claudeModelChip, modelChip, effortChip, modeChip, readoutChip],
+        gauge.setAccessibilityElement(false)   // the readout says it
+        stack.setViews([attachChip, mcpChip, statusLabel, claudeModelChip, modelChip, effortChip, modeChip, gauge, readoutChip],
                        in: .leading)
+        stack.setCustomSpacing(4, after: gauge)
         stack.setCustomSpacing(8, after: mcpChip)
         stack.setCustomSpacing(8, after: statusLabel)
         addSubview(stack)
@@ -388,6 +396,7 @@ final class ComposerBar: NSView {
         show(modelChip, pieces.agentModel && !modelPopup.choices.isEmpty && level < 4)
         show(mcpChip, pieces.mcp && level < 5)
         show(readoutChip, pieces.readout && (pieces.readoutOpensDetails || !readoutText.isEmpty))
+        show(gauge, pieces.readout && contextFraction != nil && level < Self.compactReadoutLevel)
         readoutChip.isInteractive = pieces.readoutOpensDetails
         // The approval mode stands a little apart from the model and effort.
         let beforeMode = [effortChip, claudeModelChip, modelChip].first { !$0.isHidden }
@@ -413,4 +422,25 @@ final class ComposerBar: NSView {
         stack.arrangedSubviews.filter { !$0.isHidden && $0 is HoverChip }.map { $0.convert($0.bounds, to: self) }
     }
     #endif
+}
+
+/// A context window's fill: a short rounded bar, green, then orange past
+/// 70 %, red past 90 % (where auto-compact comes).
+@MainActor
+final class ContextGauge: NSView {
+    var fraction: Double = 0 { didSet { needsDisplay = true } }
+
+    override var intrinsicContentSize: NSSize { NSSize(width: 28, height: 6) }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let rect = NSRect(x: 0, y: (bounds.height - 6) / 2, width: bounds.width, height: 6)
+        NSColor.secondaryLabelColor.withAlphaComponent(0.2).setFill()
+        NSBezierPath(roundedRect: rect, xRadius: 3, yRadius: 3).fill()
+        let f = min(max(fraction, 0), 1)
+        guard f > 0 else { return }
+        var fill = rect
+        fill.size.width = max(rect.height, rect.width * f)
+        (f >= 0.9 ? NSColor.systemRed : f >= 0.7 ? NSColor.systemOrange : NSColor.systemGreen).setFill()
+        NSBezierPath(roundedRect: fill, xRadius: 3, yRadius: 3).fill()
+    }
 }
