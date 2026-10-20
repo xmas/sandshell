@@ -25,12 +25,13 @@ final class SandboxInspectWindowController: NSWindowController, NSWindowDelegate
 
     private init(sandbox: String, agent: AgentKind, workspace: WorkspaceController) {
         model = SandboxInspectModel(sandbox: sandbox, agent: agent, workspace: workspace)
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 640),
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 680, height: 640),
                               styleMask: [.titled, .closable, .resizable, .miniaturizable], backing: .buffered, defer: true)
         window.title = sandbox
         window.subtitle = "Sandbox"
         window.isReleasedWhenClosed = false
-        window.minSize = NSSize(width: 420, height: 320)
+        // Wide enough for the changes header's title and its three buttons whole.
+        window.minSize = NSSize(width: 640, height: 360)
         super.init(window: window)
         window.delegate = self
         window.contentViewController = NSHostingController(rootView: SandboxInspectView(model: model))
@@ -138,6 +139,8 @@ struct SandboxInspectView: View {
         }
         .formStyle(.grouped)
         .font(.role(.body))
+        // The window's least size (the hosting controller sets it from this).
+        .frame(minWidth: 640, minHeight: 360)
     }
 
     private func folder(_ path: String, readOnly: Bool) -> some View {
@@ -176,14 +179,16 @@ struct SandboxInspectView: View {
             }
         } header: {
             HStack {
-                Text("Added since it was made")
-                Spacer()
-                Button("Check Again", action: model.refresh).disabled(model.checking)
+                Text("Added since it was made").lineLimit(1).layoutPriority(-1)
+                Spacer(minLength: 8)
+                Button("Check Again", action: model.refresh).disabled(model.checking).fixedSize()
                 Button(model.savedKit == nil ? "Keep as Kit" : "Kept", action: model.keepAsKit)
                     .disabled(model.checking || model.changes?.isEmpty != false || model.savedKit != nil)
                     .help("Save what was added as a kit in this workspace, so a rebuilt sandbox installs it again")
+                    .fixedSize()
                 Button("Rebuild…", action: model.rebuild).disabled(model.checking)
                     .help("Make the sandbox again from its image and the workspace’s kits")
+                    .fixedSize()
             }
         }
     }

@@ -59,8 +59,8 @@ The toolbar is a fixed set (no customization).
   in other panes a quieter fill. Background fills only.
 - **Density** — View ▸ Comfortable / Compact (the only sidebar setting).
 - **Footer** — one button, `● Sandbox · read-write  main`: opens the sandbox
-  access popover. Settings is ⌘,; Status Debug and the host terminal live in
-  the Help menu.
+  access popover; beside it, a terminal on this Mac and the Status Debug
+  window (also in the Help menu). Settings is ⌘,.
 
 ## Content area (`UI/PaneTreeController.swift`)
 

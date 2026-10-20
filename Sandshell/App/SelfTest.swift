@@ -2090,6 +2090,8 @@ enum SelfTest {
         check(await until(10) { sidebar.debugFooterText.hasPrefix("Sandbox · read-") && sidebar.debugFooterText.hasSuffix("main") },
               "the footer: \(sidebar.debugFooterText)")
         check(sidebar.debugOpenFooterPopover(), "the footer opens the sandbox access popover")
+        check(sidebar.debugFooterButtons == ["sidebar-terminal", "sidebar-debug"],
+              "beside it: the Mac terminal and Status Debug buttons (\(sidebar.debugFooterButtons))")
         sidebar.debugCloseFooterPopover()
 
         // Nothing wraps at the narrowest sidebar (220 pt).
@@ -3268,6 +3270,14 @@ enum SelfTest {
         window.debugInspectSandbox()
         let inspected = await until(30) { SandboxInspectWindowController.debugWindow(box)?.model.details != nil }
         check(inspected, "Inspect opens the sandbox's window with its details")
+        if let w = SandboxInspectWindowController.debugWindow(box)?.window {
+            w.setContentSize(w.minSize)   // as narrow as it goes
+            w.contentView?.layoutSubtreeIfNeeded()
+            let fitting = w.contentViewController?.view.fittingSize.width ?? 0
+            log("inspect window at its minimum \(Int(w.minSize.width)); content wants \(Int(fitting))")
+            check(w.frame.width >= 640 && fitting <= w.contentLayoutRect.width + 1,
+                  "the Inspect window's least width fits its content (\(Int(fitting)) in \(Int(w.contentLayoutRect.width)))")
+        }
         SandboxInspectWindowController.debugWindow(box)?.close()
         check(window.debugIdentity == ws.displayName(of: a), "the title bar names the session (\(window.debugIdentity))")
         check(window.debugSandboxLabel == ws.containerName(for: a.containerAgentKind),

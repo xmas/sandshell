@@ -233,6 +233,13 @@ final class SidebarListController: NSViewController {
     private let rightBorder = NSView()
     /// `● Sandbox · read-write  main`: opens the sandbox access popover.
     private let footer = SidebarFooterButton()
+    /// Beside the footer: a terminal on this Mac, and the Status Debug window.
+    private lazy var terminalButton = NSButton.symbol(
+        "apple.terminal", label: "Open a Terminal on This Mac", pointSize: TypeRole.meta.symbolPointSize,
+        size: NSSize(width: 26, height: 26), target: self, action: #selector(openHostTerminal), id: "sidebar-terminal")
+    private lazy var debugButton = NSButton.symbol(
+        "ladybug", label: "Status Debug", pointSize: TypeRole.meta.symbolPointSize,
+        size: NSSize(width: 26, height: 26), target: self, action: #selector(statusDebugClicked), id: "sidebar-debug")
     private let footerBorder = NSView()
     private var footerPopover: NSPopover?
     /// The workspace folder's branch, for the footer (nil: not a repo, or not read yet).
@@ -418,7 +425,8 @@ final class SidebarListController: NSViewController {
         emptyStateStack.addArrangedSubview(emptyStateSpinner)
         emptyStateStack.addArrangedSubview(emptyStateLabel)
 
-        for v in [header, newSessionButton, searchField, scroll, emptyStateStack, footer, footerBorder, rightBorder] as [NSView] {
+        for v in [header, newSessionButton, searchField, scroll, emptyStateStack, footer, footerBorder, rightBorder,
+                  terminalButton, debugButton] as [NSView] {
             container.addSubview(v)
         }
         NSLayoutConstraint.activate([
@@ -458,9 +466,13 @@ final class SidebarListController: NSViewController {
             footerBorder.bottomAnchor.constraint(equalTo: footer.topAnchor),
             footerBorder.heightAnchor.constraint(equalToConstant: 1),
             footer.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            footer.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            footer.trailingAnchor.constraint(equalTo: terminalButton.leadingAnchor),
             footer.bottomAnchor.constraint(equalTo: container.bottomAnchor),
             footer.heightAnchor.constraint(equalToConstant: 38),
+            terminalButton.centerYAnchor.constraint(equalTo: footer.centerYAnchor),
+            terminalButton.trailingAnchor.constraint(equalTo: debugButton.leadingAnchor),
+            debugButton.centerYAnchor.constraint(equalTo: footer.centerYAnchor),
+            debugButton.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -8),
 
             rightBorder.topAnchor.constraint(equalTo: container.topAnchor),
             rightBorder.trailingAnchor.constraint(equalTo: container.trailingAnchor),
@@ -494,6 +506,8 @@ final class SidebarListController: NSViewController {
         rightBorder.layer?.backgroundColor = c.border.cgColor
         footerBorder.layer?.backgroundColor = p.separator.cgColor
         footer.applyPalette(p)
+        terminalButton.contentTintColor = p.muted
+        debugButton.contentTintColor = p.muted
         titleLabel.textColor = p.foreground
         headerChevron.contentTintColor = p.muted
         searchField.style(p)
@@ -1049,6 +1063,15 @@ final class SidebarListController: NSViewController {
     }
 
     private var statusDebugWindow: StatusDebugWindowController?
+
+    @objc private func statusDebugClicked() { openStatusDebugWindow() }
+    #if DEBUG
+    /// Self-test: the buttons beside the footer that show, left to right.
+    var debugFooterButtons: [String] {
+        let shown: [NSButton] = [terminalButton, debugButton].filter { !$0.isHidden && $0.frame.width > 0 }
+        return shown.sorted { $0.frame.minX < $1.frame.minX }.map { $0.accessibilityIdentifier() }
+    }
+    #endif
 
     func openStatusDebugWindow() {
         if statusDebugWindow == nil {
