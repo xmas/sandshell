@@ -98,9 +98,12 @@ struct LineChanges: Equatable {
     var deletedAfter: Set<Int> = []
 
     /// Off the caller's actor (git runs to completion).
-    @concurrent static func load(file: URL, repoRoot: String?, untracked: Bool, lineCount: Int) async -> LineChanges {
+    /// `text`: the file's unsaved edits, diffed instead of what's on disk.
+    @concurrent static func load(file: URL, repoRoot: String?, untracked: Bool, lineCount: Int,
+                                 text: String? = nil) async -> LineChanges {
         guard let repoRoot else { return LineChanges() }
         if untracked { return LineChanges(added: Set(1...max(lineCount, 1))) }
+        if let text { return LineChanges(unifiedDiff: GitStatus.bufferDiff(path: file.plainPath, text: text, against: "HEAD", context: 0)) }
         guard let diff = GitStatus.git(["-C", repoRoot, "diff", "--no-color", "--no-ext-diff", "-U0", "HEAD", "--", file.plainPath])
         else { return LineChanges() }
         return LineChanges(unifiedDiff: diff)
@@ -560,6 +563,8 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
         editor.insertText(text, replacementRange: editor.selectedRange())
     }
     var debugCaret: Int { editor.selectedRange().location }
+    /// The change bars' lines (nil: none loaded).
+    var debugLineChanges: Set<Int> { changes.added.union(changes.modified) }
     var debugEditorText: String { editor.string }
     func debugCloseCurrent() {
         if let current, let i = files.firstIndex(where: { $0 === current }) { close(i) }
@@ -770,9 +775,10 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
         let repo = git.repoRoot
         let path = file.url.plainPath
         let text = file.text
+        let dirty = file.isDirty
         let target = changesView
         Task { [weak self] in
-            let (unstaged, staged) = await Self.loadDiffs(repo: repo, path: path, text: text, untracked: untracked)
+            let (unstaged, staged) = await Self.loadDiffs(repo: repo, path: path, text: text, untracked: untracked, dirty: dirty)
             guard let self, self.showsChanges(of: file, in: target) else { return }
             if untracked {
                 self.shownPatches = nil
@@ -794,12 +800,14 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
 
     /// The file's diffs off the main actor: unstaged (working tree vs the
     /// index) and staged (index vs HEAD); an untracked file's text, all added.
+    /// With unsaved edits (`dirty`), the unstaged diff is the editor's text against the index.
     @concurrent nonisolated private static func loadDiffs(repo: String?, path: String, text: String,
-                                                          untracked: Bool) async -> (unstaged: String, staged: String) {
+                                                          untracked: Bool, dirty: Bool) async -> (unstaged: String, staged: String) {
         if untracked { return (untrackedDiff(text), "") }
         guard let repo else { return ("", "") }
         let base = ["-C", repo, "diff", "--no-color", "--no-ext-diff"]
-        return (GitStatus.git(base + ["--", path]) ?? "", GitStatus.git(base + ["--cached", "--", path]) ?? "")
+        let unstaged = dirty ? GitStatus.bufferDiff(path: path, text: text, against: "") : GitStatus.git(base + ["--", path]) ?? ""
+        return (unstaged, GitStatus.git(base + ["--cached", "--", path]) ?? "")
     }
 
     /// An untracked file's text as a diff with every line added, one per
@@ -1133,9 +1141,11 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
     private func refreshChanges(for file: OpenFile) {
         guard file.mode == .source else { return }
         let lines = Self.lineCount(of: file.text)
+        let edits = file.isDirty ? file.text : nil
         Task { [weak self] in
             let c = await LineChanges.load(file: file.url, repoRoot: self?.git.repoRoot,
-                                           untracked: self?.git.change(for: file.url) == .untracked, lineCount: lines)
+                                           untracked: self?.git.change(for: file.url) == .untracked, lineCount: lines,
+                                           text: edits)
             guard let self, self.current === file else { return }
             self.changes = c
             self.ruler.changes = c
@@ -1144,7 +1154,20 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
 
     // MARK: Tabs
 
+    /// Files with unsaved edits changed (real paths): the tree counts them as changes.
+    var onEditedChange: ((Set<String>) -> Void)?
+    private var reportedEdited: Set<String> = []
+    private var liveDiff: Task<Void, Never>?
+
+    private func reportEdited() {
+        let edited = Set(files.filter(\.isDirty).map(\.url.realPath))
+        guard edited != reportedEdited else { return }
+        reportedEdited = edited
+        onEditedChange?(edited)
+    }
+
     private func rebuildTabs() {
+        reportEdited()
         tabBar.arrangedSubviews.forEach { $0.removeFromSuperview() }
         for (i, file) in files.enumerated() {
             let tab = EditorTab(title: file.url.lastPathComponent, icon: NSWorkspace.shared.icon(forFile: file.url.plainPath),
@@ -1201,6 +1224,19 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
         }
         ruler.lineCountChanged()
         scheduleHighlight()
+        scheduleLiveDiff()
+    }
+
+    /// While you type: the change bars and the diff column follow the edits
+    /// (a moment after the last keystroke).
+    private func scheduleLiveDiff() {
+        liveDiff?.cancel()
+        liveDiff = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(350))
+            guard !Task.isCancelled, let self, let file = self.current else { return }
+            self.refreshChanges(for: file)
+            self.updateDiffColumn()
+        }
     }
 
     private func scheduleHighlight() {

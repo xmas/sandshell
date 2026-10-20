@@ -123,6 +123,8 @@ final class FilesPaneController: NSViewController, NSSplitViewDelegate {
             self?.editor.updateGit(status)
             self?.header.update(status)
         }
+        // Unsaved edits are changes too: the tree, header and diff count them.
+        editor.onEditedChange = { [weak self] paths in self?.tree.editedPaths = paths }
         tree.onFilesChanged = { [weak self] in self?.editor.filesChangedOnDisk() }
         tree.onFileMoved = { [weak self] from, to in self?.editor.fileMoved(from: from, to: to) }
         tree.onFilesTrashed = { [weak self] urls in self?.editor.filesTrashed(urls) }

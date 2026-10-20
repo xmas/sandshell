@@ -877,6 +877,29 @@ enum SelfTest {
         snapshot(window, "files-diff-column")
         log("window content \(before) → \(w.contentLayoutRect.width)")
 
+        // Editing a clean file makes it a change, before it's saved: the tree's
+        // badge, the header's count, the diff column and the change bars.
+        let readme = repo.appendingPathComponent("README.md")
+        let countBefore = files.tree.git.changes.count
+        files.open(readme)
+        files.editor.setMode(.source)   // Markdown opens in Preview; edits happen in Source
+        await wait(0.4)
+        check(files.tree.git.change(for: readme) == nil, "README.md starts clean")
+        files.editor.debugType("EDITED ", at: 0)
+        check(await until(5) { files.tree.git.change(for: readme) == .modified },
+              "typing in it marks it modified in the tree")
+        check(files.tree.git.changes.count == countBefore + 1 && files.header.branch.stringValue.contains("\(countBefore + 1) changed"),
+              "and counts it in the header (\(files.header.branch.stringValue))")
+        check(await until(5) { (files.editor.diffColumnText?.string ?? "").contains("+EDITED # Scratch Notes") },
+              "the diff column shows the unsaved edit")
+        check(await until(5) { !files.editor.debugLineChanges.isEmpty }, "the change bars mark the edited line")
+        snapshot(window, "files-live-edit")
+        files.editor.revertDocumentToSaved(nil)   // asks; the automated run answers Revert
+        check(await until(5) { files.tree.git.change(for: readme) == nil && files.tree.git.changes.count == countBefore },
+              "reverting takes it off the changes again")
+        files.open(repo.appendingPathComponent("src/app.py"))
+        await wait(0.4)
+
         // As wide as you like: well past the old 480.
         if let split = w.contentViewController as? NSSplitViewController {
             let sv = split.splitView

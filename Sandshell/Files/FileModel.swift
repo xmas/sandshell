@@ -101,7 +101,7 @@ struct GitStatus: Sendable, Equatable {
     }
 
     /// Run git and return stdout, or nil on failure.
-    nonisolated static func git(_ args: [String]) -> String? {
+    nonisolated static func git(_ args: [String], accepting ok: Set<Int32> = [0]) -> String? {
         let p = Process()
         p.executableURL = URL(filePath: "/usr/bin/git")
         p.arguments = args
@@ -114,7 +114,42 @@ struct GitStatus: Sendable, Equatable {
         do { data = try out.fileHandleForReading.readToEnd() ?? Data() }   // nil: nothing written
         catch { p.terminate(); p.waitUntilExit(); return nil }   // unread, git could block on a full pipe
         p.waitUntilExit()
-        return p.terminationStatus == 0 ? String(decoding: data, as: UTF8.self) : nil
+        return ok.contains(p.terminationStatus) ? String(decoding: data, as: UTF8.self) : nil
+    }
+
+    /// `git diff` of `text` — a file's unsaved edits — against the file as git
+    /// has it at `base` (`""`: the index, `"HEAD"`: the last commit; nothing
+    /// there: an empty file), with git's usual headers for `path`.
+    nonisolated static func bufferDiff(path: String, text: String, against base: String, context: Int = 3) -> String {
+        let file = URL(filePath: path)
+        let old = git(["-C", file.deletingLastPathComponent().path, "show", "\(base):./\(file.lastPathComponent)"]) ?? ""
+        let dir = FileManager.default.temporaryDirectory.appending(path: "sandshell-diff-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let a = dir.appending(path: "a"), b = dir.appending(path: "b")
+        guard (try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)) != nil,
+              (try? old.write(to: a, atomically: false, encoding: .utf8)) != nil,
+              (try? text.write(to: b, atomically: false, encoding: .utf8)) != nil,
+              let diff = git(["diff", "--no-index", "--no-color", "--no-ext-diff", "-U\(context)", a.path, b.path],
+                             accepting: [0, 1]),
+              let hunks = diff.range(of: "\n@@") else { return "" }
+        let name = file.lastPathComponent
+        return "--- a/\(name)\n+++ b/\(name)" + diff[hunks.lowerBound...]
+    }
+
+    /// This status with `edited` files (unsaved edits, by real path) counted
+    /// as modified where git has nothing for them yet — they're changes too.
+    func with(edited: Set<String>) -> GitStatus {
+        guard let repoRoot, !edited.isEmpty else { return self }
+        var status = self
+        for path in edited where path.hasPrefix(repoRoot + "/") && change(for: URL(filePath: path)) == nil {
+            status.changes[path] = .modified
+            var dir = (path as NSString).deletingLastPathComponent
+            while dir.count >= repoRoot.count {
+                status.dirtyFolders.insert(dir)
+                dir = (dir as NSString).deletingLastPathComponent
+            }
+        }
+        return status
     }
 
     /// Run a git command that changes the repo; nil on success, else git's message.

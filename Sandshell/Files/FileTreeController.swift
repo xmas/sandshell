@@ -25,7 +25,15 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
     var onFilesTrashed: (([URL]) -> (@MainActor () -> Void)?)?
 
     private(set) var root: URL?
+    /// What the tree shows: git's status, with files that have unsaved edits
+    /// counted as modified.
     private(set) var git = GitStatus.empty
+    /// What git itself says.
+    private var diskGit = GitStatus.empty
+    /// Files open with unsaved edits (real paths): changes, as the tree shows them.
+    var editedPaths: Set<String> = [] {
+        didSet { if editedPaths != oldValue { applyGit(diskGit) } }
+    }
     private var rootNode: FileNode?
     private var watcher: FileWatcher?
     /// The repo's .git, when the root is a folder inside the repo (commits and
@@ -223,6 +231,7 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
         // The last root's status and scope mean nothing here (and the editor
         // mustn't keep diffing the old repo's commit).
         git = .empty
+        diskGit = .empty
         onGitStatus?(.empty)
         onScope?(.uncommitted, [])
         guard let url else {
@@ -308,6 +317,22 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
         return path == url.path ? url : URL(filePath: path, directoryHint: .checkFileSystem)
     }
 
+    /// Show `status` (with the unsaved edits counted) where it changed anything.
+    private func applyGit(_ status: GitStatus) {
+        diskGit = status
+        let shown = status.with(edited: editedPaths)
+        if shown != git {
+            git = shown
+            if renaming { refreshAfterRename = true } else {
+                reloadOutline { if self.changedOnly && self.filter.stringValue.isEmpty { self.showChangedList() } }
+            }
+            onGitStatus?(shown)
+        }
+        updateChangedTitle()
+        changedButton.toolTip = shown.repoRoot == nil ? "Not a git repository"
+            : "Show only changed files (\(shown.changes.count))"
+    }
+
     private func refreshGit() {
         guard let root else { return }
         Task { [weak self] in
@@ -318,18 +343,9 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
                 self.gitWatcherPath = repo + "/.git"
                 self.gitWatcher = FileWatcher(path: repo + "/.git") { [weak self] in self?.scheduleRefresh() }
             }
-            if status != self.git {
-                self.git = status
-                if self.renaming { self.refreshAfterRename = true } else {
-                    self.reloadOutline { if self.changedOnly && self.filter.stringValue.isEmpty { self.showChangedList() } }
-                }
-                self.onGitStatus?(status)
-            }
-            self.updateChangedTitle()
+            self.applyGit(status)
             self.changedButton.imagePosition = .imageLeading
             self.changedButton.isEnabled = status.repoRoot != nil
-            self.changedButton.toolTip = status.repoRoot == nil ? "Not a git repository"
-                : "Show only changed files (\(status.changes.count))"
             self.updateBranchLabel()
             self.refreshHistory()
             if let wanted = self.wantsChanges, status.repoRoot != nil { self.showChanges(true, scope: wanted) }
