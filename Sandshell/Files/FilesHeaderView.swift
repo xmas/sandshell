@@ -2,8 +2,9 @@ import AppKit
 
 /// The Files sidebar's header, in the title bar above it: the file tree's
 /// toggle, "Files", then the folder's branch and how many files changed
-/// ("main · 6 changed"; click for the changed files), and at its end the diff
-/// column's toggle. The sidebar's close button sits at the bar's far end.
+/// ("main · 6 changed"; click for the changed files). The sidebar's close
+/// button sits at the bar's far end; the diff column toggles from View ▸ Diff
+/// Column (⌥⌘2).
 @MainActor
 final class FilesHeaderView: NSStackView {
     private let title = NSTextField(labelWithString: "Files")
@@ -12,13 +13,9 @@ final class FilesHeaderView: NSStackView {
     var onBranchClick: (() -> Void)?
     /// Show or hide the file tree's column / the diff column.
     var onToggleTree: (() -> Void)?
-    var onToggleDiff: (() -> Void)?
     private(set) lazy var treeToggle = NSButton.symbol(
         "sidebar.left", label: "Hide the File Tree (⌥⌘1)", pointSize: TypeRole.meta.symbolPointSize,
         size: NSSize(width: 24, height: 22), target: self, action: #selector(treeClicked), id: "files-tree-toggle")
-    private(set) lazy var diffToggle = NSButton.symbol(
-        "sidebar.right", label: "Show the Diff Column (⌥⌘2)", pointSize: TypeRole.meta.symbolPointSize,
-        size: NSSize(width: 24, height: 22), target: self, action: #selector(diffClicked), id: "files-diff-toggle")
 
     init() {
         super.init(frame: .zero)
@@ -40,7 +37,6 @@ final class FilesHeaderView: NSStackView {
         labels.setClippingResistancePriority(.init(45), for: .horizontal)
         labels.setContentCompressionResistancePriority(.init(40), for: .horizontal)
         setViews([treeToggle, labels], in: .leading)
-        setViews([diffToggle], in: .trailing)
         edgeInsets = NSEdgeInsets(top: 0, left: 0, bottom: 0, right: 0)
         setClippingResistancePriority(.init(45), for: .horizontal)
         setAccessibilityIdentifier("files-header")
@@ -75,20 +71,22 @@ final class FilesHeaderView: NSStackView {
         title.textColor = colors.text
         branch.textColor = colors.text2
         treeToggle.contentTintColor = colors.text2
-        diffToggle.contentTintColor = colors.text2
     }
 
     /// The toggles say what they'll do.
-    func update(treeShown: Bool, diffShown: Bool) {
+    func update(treeShown: Bool) {
         let tree = treeShown ? "Hide the File Tree (⌥⌘1)" : "Show the File Tree (⌥⌘1)"
-        let diff = diffShown ? "Hide the Diff Column (⌥⌘2)" : "Show the Diff Column (⌥⌘2)"
         treeToggle.toolTip = tree
         treeToggle.setAccessibilityLabel(tree)
-        diffToggle.toolTip = diff
-        diffToggle.setAccessibilityLabel(diff)
     }
+
+    #if DEBUG
+    /// Self-test: the header's buttons that show or hide a column.
+    var debugToggles: [String] {
+        views.compactMap { ($0 as? NSButton)?.accessibilityIdentifier() }.filter { $0.hasSuffix("-toggle") }
+    }
+    #endif
 
     @objc private func branchClicked() { onBranchClick?() }
     @objc private func treeClicked() { onToggleTree?() }
-    @objc private func diffClicked() { onToggleDiff?() }
 }

@@ -837,6 +837,8 @@ enum SelfTest {
         check(cols.editor.width >= files.debugColumnsWidth - 3,
               "the open file takes the sidebar's width (\(width(cols.editor)) of \(Int(files.debugColumnsWidth)))")
         check(validate(#selector(AppDelegate.toggleFileTree(_:))) == "Show File Tree", "and the menu says Show File Tree")
+        check(files.debugDividerLines.isEmpty, "no line is left where the tree was (\(files.debugDividerLines))")
+        check(files.header.debugToggles == ["files-tree-toggle"], "the header has one column toggle, the tree's")
         snapshot(window, "files-tree-hidden")
         // …and comes back from the header's button.
         files.header.treeToggle.performClick(nil)
@@ -919,9 +921,9 @@ enum SelfTest {
         await wait(0.4)
         check(!files.isDiffColumnShown && files.debugColumns.diff == nil, "dragging the diff column's divider to the edge collapses it")
         check(files.editor.debugChangesModeEnabled, "then the open file's Changes mode is back")
-        files.header.diffToggle.performClick(nil)
+        files.toggleDiffColumn()
         await wait(0.6)
-        check(files.isDiffColumnShown && files.debugColumns.diff != nil, "the header's diff button expands it again")
+        check(files.isDiffColumnShown && files.debugColumns.diff != nil, "View ▸ Show Diff Column expands it again")
         check(await until(5) { files.editor.diffColumnText?.string.contains("CHANGED-HEAD") == true }, "with the changes")
     }
 

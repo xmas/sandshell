@@ -29,7 +29,7 @@ final class FilesPaneController: NSViewController, NSSplitViewDelegate {
     /// A plain, frame-based split (tree | editor | diff): dragging a divider
     /// moves only its own two sides. (A nested NSSplitViewController's Auto
     /// Layout drag pushed every split in the window around.)
-    private let columns = NSSplitView()
+    private let columns = ColumnsSplitView()
     /// The tree with Commits under it.
     private let treeColumn = NSView()
     private var diffColumn: NSView { editor.diffColumn }
@@ -106,8 +106,7 @@ final class FilesPaneController: NSViewController, NSSplitViewDelegate {
             self.tree.showChanges(!self.tree.changedOnly)
         }
         header.onToggleTree = { [weak self] in self?.toggleTree() }
-        header.onToggleDiff = { [weak self] in self?.toggleDiffColumn() }
-        header.update(treeShown: !treeColumn.isHidden, diffShown: !diffColumn.isHidden)
+        header.update(treeShown: !treeColumn.isHidden)
         view = sidebar
     }
 
@@ -158,13 +157,47 @@ final class FilesPaneController: NSViewController, NSSplitViewDelegate {
     func setTreeShown(_ show: Bool) { setColumn(treeColumn, shown: show) }
     func setDiffColumnShown(_ show: Bool) { setColumn(diffColumn, shown: show) }
 
+    /// Slides the column in or out (at once under Reduce Motion, or before
+    /// the sidebar is on screen).
     private func setColumn(_ column: NSView, shown: Bool) {
         _ = view
-        guard column.isHidden == shown else { return }
-        column.isHidden = !shown
-        layoutColumns()
-        columnsChanged()
+        guard column.isHidden == shown, !animatingColumns else { return }
+        let animate = view.window != nil && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        guard animate else {
+            column.isHidden = !shown
+            layoutColumns()
+            return columnsChanged()
+        }
+        animatingColumns = true
+        if shown {
+            // In from nothing: shown at no width, then opened to its own.
+            column.isHidden = false
+            var start = column.frame
+            start.size.width = 0
+            if column === diffColumn { start.origin.x = columns.bounds.width }
+            column.frame = start
+        }
+        let frames = columnFrames(treeShown: column === treeColumn ? shown : !treeColumn.isHidden,
+                                  diffShown: column === diffColumn ? shown : !diffColumn.isHidden)
+        columns.lines = []
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = 0.22
+            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            context.allowsImplicitAnimation = true
+            treeColumn.animator().frame = frames.tree
+            editor.view.animator().frame = frames.editor
+            diffColumn.animator().frame = frames.diff
+        }, completionHandler: { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                column.isHidden = !shown
+                self.animatingColumns = false
+                self.layoutColumns()
+                self.columnsChanged()
+            }
+        })
     }
+    private var animatingColumns = false
 
     /// A column showed or hid (a button, the menu, a divider): remember it,
     /// and tell the editor, the header and the window (its least width).
@@ -173,7 +206,7 @@ final class FilesPaneController: NSViewController, NSSplitViewDelegate {
         UserDefaults.standard.set(!treeShown, forKey: treeHiddenKey)
         UserDefaults.standard.set(diffShown, forKey: diffShownKey)
         editor.diffColumnShown = diffShown
-        header.update(treeShown: treeShown, diffShown: diffShown)
+        header.update(treeShown: treeShown)
         onMinimumWidthChange?(minimumWidth)
     }
 
@@ -188,8 +221,18 @@ final class FilesPaneController: NSViewController, NSSplitViewDelegate {
     /// editor the rest. Short of room the diff column, then the tree, gives
     /// way down to its minimum; a hidden column is collapsed (no width).
     private func layoutColumns() {
-        let size = columns.bounds.size, t = columns.dividerThickness
+        guard !animatingColumns else { return }
         let treeShown = !treeColumn.isHidden, diffShown = !diffColumn.isHidden
+        let frames = columnFrames(treeShown: treeShown, diffShown: diffShown)
+        treeColumn.frame = frames.tree
+        editor.view.frame = frames.editor
+        diffColumn.frame = frames.diff
+        // A hairline where two shown columns meet; none for a hidden one.
+        columns.lines = (treeShown ? [frames.tree.maxX] : []) + (diffShown ? [frames.editor.maxX] : [])
+    }
+
+    private func columnFrames(treeShown: Bool, diffShown: Bool) -> (tree: NSRect, editor: NSRect, diff: NSRect) {
+        let size = columns.bounds.size, t = columns.dividerThickness
         var tw = treeShown ? treeWidth : 0
         var dw = diffShown ? diffWidth : 0
         let room = size.width - 2 * t
@@ -200,11 +243,11 @@ final class FilesPaneController: NSViewController, NSSplitViewDelegate {
             over -= give
         }
         if over > 0, treeShown { tw -= min(over, max(0, tw - Self.treeMin)) }
-        let ew = max(0, room - tw - dw)
-        treeColumn.frame = NSRect(x: 0, y: 0, width: tw, height: size.height)
-        editor.view.frame = NSRect(x: tw + t, y: 0, width: ew, height: size.height)
-        diffColumn.frame = NSRect(x: tw + t + ew + t, y: 0, width: dw, height: size.height)
-        columns.needsDisplay = true
+        let lead = treeShown ? tw + t : 0
+        let ew = max(0, size.width - lead - (diffShown ? dw + t : 0))
+        return (NSRect(x: 0, y: 0, width: tw, height: size.height),
+                NSRect(x: lead, y: 0, width: ew, height: size.height),
+                NSRect(x: lead + ew + (diffShown ? t : 0), y: 0, width: dw, height: size.height))
     }
 
     // MARK: NSSplitViewDelegate
@@ -320,6 +363,8 @@ final class FilesPaneController: NSViewController, NSSplitViewDelegate {
         columns.setPosition(position, ofDividerAt: index)
     }
     var debugColumnsWidth: CGFloat { columns.bounds.width }
+    /// Where hairlines are drawn between the columns.
+    var debugDividerLines: [CGFloat] { columns.lines }
     /// Self-test: where the content starts (its top, in window coordinates).
     var debugContentTop: CGFloat { columns.convert(columns.bounds, to: nil).maxY }
     var openQuicklyController: OpenQuicklyController? {
@@ -375,5 +420,20 @@ extension FilesPaneController: NSMenuItemValidation {
         guard item.action == #selector(closeSessionOrWindow(_:)) else { return true }
         if editor.hasOpenTab { item.title = "Close Tab"; return true }
         return (NSApp.delegate as? AppDelegate)?.validateMenuItem(item) ?? true
+    }
+}
+
+/// The Files columns' split: the hairlines are drawn where shown columns meet
+/// (`lines`), not by NSSplitView — its own left one behind at a hidden
+/// column's old edge.
+@MainActor
+final class ColumnsSplitView: NSSplitView {
+    var lines: [CGFloat] = [] { didSet { if lines != oldValue { needsDisplay = true } } }
+
+    override func drawDivider(in rect: NSRect) {}
+
+    override func draw(_ dirtyRect: NSRect) {
+        NSColor.separatorColor.setFill()
+        for x in lines { NSRect(x: x, y: 0, width: 1, height: bounds.height).fill() }
     }
 }
