@@ -15,6 +15,7 @@ A running log of what changed, newest first. Yes, we actually write these.
 - **Composer:** the message field is a pill with one round button — Send, or Stop while Claude is working (the only place a turn stops). Model, effort, approval mode, MCP and the cost/context readout sit under it, so everything about the next turn is in one place.
 - **Chats and sessions start faster.** A chat's agent is up in about 3.3 s instead of 4.6 s on a running sandbox (launch to ready 0.4–0.75 s, was 1.0–1.3 s), and three windows restored together are ready in about 2 s instead of 5–6 s: launches go first and the window's other sandbox reads wait for them, and windows share `sbx ls` / `sbx secret ls` calls.
 - **Watch a sandbox being made.** While a sandbox is built, its pane shows what sbx prints — settings, the image pulled layer by layer, kit installs — and keeps it beside a failure.
+- **Tables in chats are tables,** however wide: columns fit the chat's width and long cells wrap inside them (a wide table used to turn into a list of records); tables without outer pipes, in quotes, after a line of text or still arriving all render as grids, re-fitting when the pane is resized.
 - **Fixes:** hidden pieces of a pane (the build log, the kit banner) no longer stop the window from getting smaller.
 
 ## v0.2.29 — "Steady"
