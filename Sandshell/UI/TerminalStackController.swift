@@ -925,6 +925,7 @@ final class TerminalStackController: NSViewController {
         kitBanner.applyTheme(c)
         buildLogView.applyTheme(c)
         titleStrip.applyTheme(c)
+        for chat in chats.values { chat.applyTheme(c) }
         updateFocusRing()
     }
 
@@ -1517,6 +1518,7 @@ final class TerminalStackController: NSViewController {
                 }
             }
             let view = ChatSessionView(session: chat)
+            view.applyTheme(theme)
             attachInspector(to: view, chat: chat, sessionID: id)
             // None of these is this pane's: the chat moves to whichever pane shows it.
             view.onReconnect = { [weak surfaces = self.surfaces] in surfaces?.paneShowing(id)?.reconnectChat(id) }

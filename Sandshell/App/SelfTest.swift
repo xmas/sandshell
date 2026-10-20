@@ -329,6 +329,7 @@ enum SelfTest {
               "under the composer: attach, model, effort and the readout")
         check(chat.modes.isEmpty || view.debugBarShown.contains("chat-mode"), "and the approval mode")
         check(view.debugSendMode == .send && view.debugSendEnabled, "idle: the round button is Send")
+        check(view.debugSendAccent == window.theme?.colors.accent, "in the window theme's accent colour")
         let send = view.debugSendButtonFrame, pill = view.debugComposer.convert(view.debugComposer.bounds, to: view)
         check(pill.contains(send) && send.width == 24, "it sits inside the pill (\(send) in \(pill))")
         check(view.debugBarFrame.minY >= 0 && view.debugBarFrame.maxY <= pill.minY, "the controls sit below the pill")

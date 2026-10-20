@@ -14,6 +14,12 @@ final class ChatSessionView: NSView {
     private lazy var emptyState = NSHostingView(rootView: ChatEmptyState(
         agent: session.title.capitalized, folder: (session.workdir as NSString).lastPathComponent))
     private let composer = ChatComposerView()
+
+    /// The window's theme: Send takes its accent.
+    func applyTheme(_ c: ThemeColors) { composer.sendButton.accent = (c.accent, c.accentFg) }
+    #if DEBUG
+    var debugSendAccent: NSColor? { composer.sendButton.accent?.fill }
+    #endif
     /// Messages typed while a turn runs, above the composer until they go.
     private let queuedView = QueuedPromptsView()
     /// How many messages wait (the status line's wording).

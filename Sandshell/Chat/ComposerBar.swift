@@ -221,6 +221,9 @@ final class ComposerSendButton: NSButton {
     var debugOrbiting: Bool { !orbit.isHidden && orbit.animation(forKey: Self.orbitKey) != nil }
     #endif
 
+    /// Send's fill and its arrow: the window theme's accent (nil: the composer's ink).
+    var accent: (fill: NSColor, ink: NSColor)? { didSet { needsDisplay = true } }
+
     override var intrinsicContentSize: NSSize { NSSize(width: Self.diameter, height: Self.diameter) }
     override var isEnabled: Bool { didSet { needsDisplay = true } }
     override var isHighlighted: Bool { didSet { needsDisplay = true } }
@@ -252,11 +255,11 @@ final class ComposerSendButton: NSButton {
             stopInk.withAlphaComponent(alpha).setFill()
             NSBezierPath(roundedRect: square, xRadius: 1.5, yRadius: 1.5).fill()
         case .send, .reconnect:
-            ink.setFill()
+            (accent.map { $0.fill.withAlphaComponent(alpha) } ?? ink).setFill()
             NSBezierPath(ovalIn: circle).fill()
             let name = mode == .send ? "arrow.up" : "arrow.clockwise"
             let config = NSImage.SymbolConfiguration(pointSize: TypeRole.meta.symbolPointSize, weight: .bold)
-                .applying(.init(paletteColors: [.composerPaper]))
+                .applying(.init(paletteColors: [accent?.ink ?? .composerPaper]))
             guard let glyph = NSImage(systemSymbolName: name, accessibilityDescription: nil)?
                 .withSymbolConfiguration(config) else { return }
             let size = glyph.size
