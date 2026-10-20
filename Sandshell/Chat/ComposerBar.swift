@@ -95,6 +95,11 @@ extension NSColor {
     static let composerFill = NSColor(name: nil) { a in
         a.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? NSColor(white: 1, alpha: 0.07) : .white
     }
+    /// The Stop button: a quiet secondary-label grey, not the Send button's
+    /// near-black (opaque, so its ring can be a fainter share of it).
+    static let composerStopInk = NSColor(name: nil) { a in
+        a.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? .hex("#A39D97") : .hex("#8A847E")
+    }
     /// The pill's 1 pt border (#DCD3C9).
     static let composerBorder = NSColor(name: nil) { a in
         a.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? NSColor(white: 1, alpha: 0.16) : .hex("#DCD3C9")
@@ -104,8 +109,9 @@ extension NSColor {
 // MARK: - Send / Stop
 
 /// The round button inside the composer: Send (a filled circle, arrow up)
-/// while idle; Stop (a 2 pt ring around a filled square) while a turn runs —
-/// the only chat-turn stop there is; Reconnect after the agent went away.
+/// while idle; Stop (a square in a faint ring, a short bright arc orbiting it
+/// while the turn works) while a turn runs — the only chat-turn stop there
+/// is; Reconnect after the agent went away.
 final class ComposerSendButton: NSButton {
     enum Mode: Equatable { case send, stop, reconnect }
 
@@ -114,8 +120,16 @@ final class ComposerSendButton: NSButton {
             guard mode != oldValue else { return }
             needsDisplay = true
             describe()
+            updateOrbit()
         }
     }
+
+    /// The Stop ring's bright arc, turned about the button's centre.
+    private let orbit = CAShapeLayer()
+    /// One trip round, in seconds.
+    static let orbitPeriod: CFTimeInterval = 1.2
+    private static let orbitKey = "orbit"
+    private var reduceMotionObserver: NSObjectProtocol?
 
     static let diameter: CGFloat = 24
 
@@ -129,9 +143,83 @@ final class ComposerSendButton: NSButton {
         translatesAutoresizingMaskIntoConstraints = false
         setAccessibilityIdentifier("chat-send-stop")
         describe()
+        wantsLayer = true
+        orbit.fillColor = nil
+        orbit.lineWidth = Self.ringWidth
+        orbit.lineCap = .round
+        orbit.isHidden = true
+        layer?.addSublayer(orbit)
+        reduceMotionObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil, queue: .main
+        ) { [weak self] _ in MainActor.assumeIsolated { self?.updateOrbit() } }
     }
 
     required init?(coder: NSCoder) { fatalError() }
+
+    isolated deinit {
+        if let reduceMotionObserver { NSWorkspace.shared.notificationCenter.removeObserver(reduceMotionObserver) }
+    }
+
+    private static let ringWidth: CGFloat = 2
+
+    /// The arc travels round the ring (unless Reduce Motion is on: the ring
+    /// stands still). Shown only in Stop.
+    private func updateOrbit() {
+        let animate = mode == .stop && window != nil && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        if orbit.isHidden == animate { needsDisplay = true }   // the ring under it fades or firms
+        orbit.isHidden = !animate
+        guard animate else { return orbit.removeAnimation(forKey: Self.orbitKey) }
+        layoutOrbit()
+        guard orbit.animation(forKey: Self.orbitKey) == nil else { return }
+        let spin = CABasicAnimation(keyPath: "transform.rotation.z")
+        spin.fromValue = 0
+        spin.toValue = -2 * Double.pi   // clockwise
+        spin.duration = Self.orbitPeriod
+        spin.repeatCount = .infinity
+        spin.timingFunction = CAMediaTimingFunction(name: .linear)
+        spin.isRemovedOnCompletion = false
+        orbit.add(spin, forKey: Self.orbitKey)
+    }
+
+    /// A quarter of the ring, starting at the top, in a layer centred on the button.
+    private func layoutOrbit() {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        let side = Self.diameter
+        orbit.bounds = CGRect(x: 0, y: 0, width: side, height: side)
+        orbit.position = CGPoint(x: bounds.midX, y: bounds.midY)
+        let radius = side / 2 - Self.ringWidth / 2   // on the drawn ring's centre line
+        let path = CGMutablePath()
+        path.addArc(center: CGPoint(x: side / 2, y: side / 2), radius: radius,
+                    startAngle: .pi / 2, endAngle: 0, clockwise: true)
+        orbit.path = path
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            orbit.strokeColor = NSColor.composerStopInk.cgColor
+        }
+        CATransaction.commit()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        // Off screen it stops; back in a window it picks up again.
+        orbit.removeAnimation(forKey: Self.orbitKey)
+        updateOrbit()
+    }
+
+    override func layout() {
+        super.layout()
+        if !orbit.isHidden { layoutOrbit() }
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        if !orbit.isHidden { layoutOrbit() }
+    }
+
+    #if DEBUG
+    /// The arc is going round.
+    var debugOrbiting: Bool { !orbit.isHidden && orbit.animation(forKey: Self.orbitKey) != nil }
+    #endif
 
     override var intrinsicContentSize: NSSize { NSSize(width: Self.diameter, height: Self.diameter) }
     override var isEnabled: Bool { didSet { needsDisplay = true } }
@@ -148,17 +236,20 @@ final class ComposerSendButton: NSButton {
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        let ink = NSColor.composerInk.withAlphaComponent(isEnabled ? (isHighlighted ? 0.7 : 1) : 0.3)
+        let alpha: CGFloat = isEnabled ? (isHighlighted ? 0.7 : 1) : 0.3
+        let ink = NSColor.composerInk.withAlphaComponent(alpha)
         let circle = bounds.insetBy(dx: (bounds.width - Self.diameter) / 2, dy: (bounds.height - Self.diameter) / 2)
         switch mode {
         case .stop:
+            // A faint ring the arc orbits (with Reduce Motion, a steady one).
+            let stopInk = NSColor.composerStopInk
             let ring = NSBezierPath(ovalIn: circle.insetBy(dx: 1, dy: 1))
-            ring.lineWidth = 2
-            ink.setStroke()
+            ring.lineWidth = Self.ringWidth
+            stopInk.withAlphaComponent(alpha * (orbit.isHidden ? 1 : 0.25)).setStroke()
             ring.stroke()
             let side: CGFloat = 9
             let square = NSRect(x: circle.midX - side / 2, y: circle.midY - side / 2, width: side, height: side)
-            ink.setFill()
+            stopInk.withAlphaComponent(alpha).setFill()
             NSBezierPath(roundedRect: square, xRadius: 1.5, yRadius: 1.5).fill()
         case .send, .reconnect:
             ink.setFill()
