@@ -245,6 +245,27 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
     private let blocks = BlockFragmentProvider()
     private let quickLook = QLPreviewView(frame: .zero, style: .normal)!
 
+    /// The diff column: the open file's Changes beside its text (the Files
+    /// sidebar places it to the editor's right and shows or hides it).
+    let diffColumn = NSView()
+    private let diffTitle = NSTextField(labelWithString: "Diff")
+    private let diffScroll = NSScrollView()
+    private let diffText = TranscriptTextView(usingTextLayoutManager: true)
+    private let diffBlocks = BlockFragmentProvider()
+    private let diffEmpty = NSTextField(wrappingLabelWithString: "")
+    /// Whether the diff column shows: the open file's changes go there, and
+    /// the editor keeps its text (its Changes mode is for when it's hidden).
+    var diffColumnShown = false {
+        didSet {
+            guard oldValue != diffColumnShown, isViewLoaded else { return }
+            commitEditorText()
+            if !diffColumnShown { diffText.textStorage?.setAttributedString(NSAttributedString()) }
+            show(current)
+        }
+    }
+    /// Where Changes render: the diff column while it shows, the editor otherwise.
+    private var changesView: TranscriptTextView { diffColumnShown ? diffText : preview }
+
     static let codeFont = NSFont.monospacedSystemFont(ofSize: 12.5, weight: .regular)
 
     override func loadView() {
@@ -282,6 +303,7 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
 
         setUpEditor()
         setUpPreview()
+        setUpDiffColumn()
         emptyLabel.textColor = .tertiaryLabelColor
         emptyLabel.font = .role(.body)
         // A read error is a sentence with the reason in its middle: it wraps,
@@ -377,6 +399,68 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
         previewScroll.drawsBackground = false
     }
 
+    private func setUpDiffColumn() {
+        diffText.minSize = .zero
+        diffText.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: .greatestFiniteMagnitude)
+        diffText.isVerticallyResizable = true
+        diffText.autoresizingMask = [.width]
+        diffText.textContainer?.widthTracksTextView = true
+        diffText.isEditable = false
+        diffText.drawsBackground = false
+        diffText.usesFindBar = true
+        diffText.textContainerInset = NSSize(width: 10, height: 8)
+        diffText.textLayoutManager?.delegate = diffBlocks
+        diffText.delegate = self   // per-hunk action links, line numbers to ask about
+        // Hunk actions read as buttons, not web links.
+        diffText.linkTextAttributes = [.cursor: NSCursor.pointingHand]
+        diffText.setAccessibilityIdentifier("files-diff")
+        diffScroll.documentView = diffText
+        diffScroll.hasVerticalScroller = true
+        diffScroll.drawsBackground = false
+
+        diffTitle.font = .role(.bodyEmphasis)
+        diffTitle.textColor = .secondaryLabelColor
+        diffEmpty.font = .role(.body)
+        diffEmpty.textColor = .tertiaryLabelColor
+        diffEmpty.alignment = .center
+        diffEmpty.isSelectable = false
+        diffColumn.setAccessibilityIdentifier("files-diff-column")
+        for v in [diffTitle, diffScroll, diffEmpty] as [NSView] {
+            v.translatesAutoresizingMaskIntoConstraints = false
+            diffColumn.addSubview(v)
+        }
+        NSLayoutConstraint.activate([
+            // Its title on the editor's tab row.
+            diffTitle.centerYAnchor.constraint(equalTo: diffColumn.topAnchor, constant: 15),
+            diffTitle.leadingAnchor.constraint(equalTo: diffColumn.leadingAnchor, constant: 12),
+            diffTitle.trailingAnchor.constraint(lessThanOrEqualTo: diffColumn.trailingAnchor, constant: -10),
+            diffScroll.topAnchor.constraint(equalTo: diffColumn.topAnchor, constant: 30),
+            diffScroll.leadingAnchor.constraint(equalTo: diffColumn.leadingAnchor),
+            diffScroll.trailingAnchor.constraint(equalTo: diffColumn.trailingAnchor),
+            diffScroll.bottomAnchor.constraint(equalTo: diffColumn.bottomAnchor),
+            diffEmpty.leadingAnchor.constraint(equalTo: diffColumn.leadingAnchor, constant: 16),
+            diffEmpty.trailingAnchor.constraint(equalTo: diffColumn.trailingAnchor, constant: -16),
+            diffEmpty.centerYAnchor.constraint(equalTo: diffColumn.centerYAnchor),
+        ])
+    }
+
+    /// The diff column, for the file showing: its changes, or why there are none.
+    private func updateDiffColumn() {
+        guard diffColumnShown, isViewLoaded else { return }
+        guard let file = current, file.isText, hasChanges(file.url) else {
+            shownPatches = nil
+            diffText.textStorage?.setAttributedString(NSAttributedString())
+            diffEmpty.stringValue = current == nil ? "No file open"
+                : current?.isText == false ? "No diff for this file" : "No changes"
+            diffEmpty.isHidden = false
+            diffScroll.isHidden = true
+            return
+        }
+        diffEmpty.isHidden = true
+        diffScroll.isHidden = false
+        showDiff(file)
+    }
+
     // MARK: Opening
 
     func open(_ url: URL) {
@@ -464,6 +548,11 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
     /// What shows in place of an editor ("Select a file", why a file couldn't be read); nil when hidden.
     var debugEmptyMessage: String? { emptyLabel.isHidden ? nil : emptyLabel.stringValue }
     var debugMode: OpenFile.Mode? { current?.mode }
+    /// The diff column's text, and what it says when it has none (nil: it has a diff).
+    var diffColumnText: NSAttributedString? { diffText.textStorage }
+    var debugDiffColumnEmpty: String? { diffEmpty.isHidden ? nil : diffEmpty.stringValue }
+    /// Whether the editor's Changes mode can be picked.
+    var debugChangesModeEnabled: Bool { modeControl.isEnabled(forSegment: OpenFile.Mode.changes.rawValue) }
     /// Type at the caret, as a person would.
     func debugType(_ text: String, at location: Int) {
         view.window?.makeFirstResponder(editor)
@@ -499,7 +588,8 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
         // a file being edited only gets its Changes button updated.
         commitEditorText()
         if current.mode == .source, current.isText, hasChanges(current.url) {
-            modeControl.setEnabled(true, forSegment: OpenFile.Mode.changes.rawValue)
+            modeControl.setEnabled(!diffColumnShown, forSegment: OpenFile.Mode.changes.rawValue)
+            updateDiffColumn()
         } else {
             show(current)
         }
@@ -522,7 +612,10 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
         git = status
         rebuildTabs()
         guard let current else { return }
-        if current.mode == .changes { show(current) } else { refreshChanges(for: current) }
+        if current.mode == .changes { show(current) } else {
+            refreshChanges(for: current)
+            updateDiffColumn()
+        }
     }
 
     /// Files changed on disk (FSEvents via the tree): reload clean files,
@@ -588,6 +681,9 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
     /// scope) never pull it away from where you're typing.
     private func show(_ file: OpenFile?, focus: Bool = false) {
         current = file
+        // The diff column (when it shows) has the file's changes; the editor its text.
+        if diffColumnShown, let file, file.mode == .changes { file.mode = .source }
+        defer { updateDiffColumn() }
         banner.isHidden = true
         rebuildTabs()
         editorScroll.isHidden = true
@@ -617,7 +713,7 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
         let changed = hasChanges(file.url)
         modeControl.isHidden = false
         modeControl.setEnabled(OpenFile.isMarkdown(file.url), forSegment: OpenFile.Mode.preview.rawValue)
-        modeControl.setEnabled(changed, forSegment: OpenFile.Mode.changes.rawValue)
+        modeControl.setEnabled(changed && !diffColumnShown, forSegment: OpenFile.Mode.changes.rawValue)
         if file.mode == .changes && !changed { file.mode = .source }
         modeControl.selectedSegment = file.mode.rawValue
 
@@ -646,6 +742,7 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
             // Hunk actions read as buttons, not web links.
             // Links color themselves (accent actions, quiet line numbers).
             preview.linkTextAttributes = [.cursor: NSCursor.pointingHand]
+            previewScroll.isHidden = false
             showDiff(file)
         }
     }
@@ -668,25 +765,31 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
     /// (index vs HEAD), each with Stage / Revert or Unstage; an untracked file
     /// shows as all added, with Stage File.
     private func showDiff(_ file: OpenFile) {
-        previewScroll.isHidden = false
         if scope != .uncommitted { return showScopedDiff(file) }
         let untracked = git.change(for: file.url) == .untracked
         let repo = git.repoRoot
         let path = file.url.plainPath
         let text = file.text
+        let target = changesView
         Task { [weak self] in
             let (unstaged, staged) = await Self.loadDiffs(repo: repo, path: path, text: text, untracked: untracked)
-            guard let self, self.current === file, file.mode == .changes else { return }
+            guard let self, self.showsChanges(of: file, in: target) else { return }
             if untracked {
                 self.shownPatches = nil
-                self.preview.textStorage?.setAttributedString(Self.renderDiff(unstaged, untracked: true, editable: !file.isDirty))
+                target.textStorage?.setAttributedString(Self.renderDiff(unstaged, untracked: true, editable: !file.isDirty))
                 return
             }
             let patches = (file: file, unstaged: FilePatch(unstaged), staged: FilePatch(staged))
             self.shownPatches = patches
-            self.preview.textStorage?.setAttributedString(
+            target.textStorage?.setAttributedString(
                 Self.renderChanges(unstaged: patches.unstaged, staged: patches.staged, editable: !file.isDirty))
         }
+    }
+
+    /// Whether `file`'s changes still belong in `target`: it's the file
+    /// showing, and its changes show there (the diff column, or Changes mode).
+    private func showsChanges(of file: OpenFile, in target: TranscriptTextView) -> Bool {
+        current === file && changesView === target && (diffColumnShown || file.mode == .changes)
     }
 
     /// The file's diffs off the main actor: unstaged (working tree vs the
@@ -715,9 +818,10 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
         let scope = scope
         let path = scopeFiles.contains(file.url.plainPath) ? file.url.plainPath : file.url.realPath
         shownPatches = nil
+        let target = changesView
         Task { [weak self] in
             let diff = await Self.scopedDiff(repo: repo, scope: scope, path: path)
-            guard let self, self.current === file, file.mode == .changes, self.scope == scope else { return }
+            guard let self, self.showsChanges(of: file, in: target), self.scope == scope else { return }
             let out = NSMutableAttributedString()
             switch scope {
             case .commit(let c): out.append(Self.sectionTitle("\(c.short) \(c.subject)"))
@@ -725,7 +829,7 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
             case .uncommitted: break
             }
             out.append(Self.renderDiff(diff))
-            self.preview.textStorage?.setAttributedString(out)
+            target.textStorage?.setAttributedString(out)
         }
     }
 
@@ -898,7 +1002,8 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
     /// A line number in a diff was clicked: a box under it for what to change.
     private func askAboutLine(_ line: Int, removed: Bool, at charIndex: Int) {
         guard let file = current, onAskAgent != nil else { return NSSound.beep() }
-        let text = (preview.string as NSString)
+        let shown = changesView
+        let text = (shown.string as NSString)
         let paragraph = text.substring(with: text.paragraphRange(for: NSRange(location: charIndex, length: 0)))
         // Drop the gutter and the +/-/space marker.
         var code = String(paragraph.dropFirst(6))
@@ -913,12 +1018,12 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
             let message = "At \(place) `\(path)`:\n```\n\(code)\n```\n\(comment)"
             self.onAskAgent?(message)
         }
-        var rect = preview.firstRect(forCharacterRange: NSRange(location: charIndex, length: 5), actualRange: nil)
-        rect = preview.window?.convertFromScreen(rect) ?? rect
-        rect = preview.convert(rect, from: nil)
+        var rect = shown.firstRect(forCharacterRange: NSRange(location: charIndex, length: 5), actualRange: nil)
+        rect = shown.window?.convertFromScreen(rect) ?? rect
+        rect = shown.convert(rect, from: nil)
         askPopover?.close()
         askPopover = nil
-        NSPopover.toggle(&askPopover, below: preview, rect: rect) { field }
+        NSPopover.toggle(&askPopover, below: shown, rect: rect) { field }
         field.focus()
     }
 
@@ -928,9 +1033,9 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
 
     /// Self-test: ask about a line as if its number was clicked and submitted.
     func debugAsk(line: Int, _ comment: String) -> Bool {
-        let ns = preview.string as NSString
+        let ns = changesView.string as NSString
         var found: Int?
-        preview.textStorage?.enumerateAttribute(.link, in: NSRange(location: 0, length: ns.length)) { value, range, stop in
+        changesView.textStorage?.enumerateAttribute(.link, in: NSRange(location: 0, length: ns.length)) { value, range, stop in
             if let url = value as? URL, url.scheme == Self.askScheme, url.host() == "new", Int(url.lastPathComponent) == line {
                 found = range.location; stop.pointee = true
             }
@@ -945,12 +1050,12 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
     // MARK: Hunk actions
 
     func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
-        if textView === preview, let url = link as? URL, url.scheme == Self.askScheme,
+        if textView === changesView, let url = link as? URL, url.scheme == Self.askScheme,
            let line = Int(url.lastPathComponent) {
             askAboutLine(line, removed: url.host() == "old", at: charIndex)
             return true
         }
-        guard textView === preview, let url = link as? URL ?? (link as? String).flatMap(URL.init(string:)),
+        guard textView === changesView, let url = link as? URL ?? (link as? String).flatMap(URL.init(string:)),
               url.scheme == Self.hunkScheme, let host = url.host(),
               let index = Int(url.lastPathComponent) else { return false }
         Task { [weak self] in
@@ -1090,7 +1195,10 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
         guard let file = current else { return }
         let wasDirty = file.isDirty
         file.text = editor.string
-        if wasDirty != file.isDirty { rebuildTabs() }
+        if wasDirty != file.isDirty {
+            rebuildTabs()
+            updateDiffColumn()   // its hunk actions only work on a saved file
+        }
         ruler.lineCountChanged()
         scheduleHighlight()
     }
@@ -1147,6 +1255,7 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
             if file === current { banner.isHidden = true }
             rebuildTabs()
             refreshChanges(for: file)
+            if file === current { updateDiffColumn() }
         } catch {
             NSAlert(error: error).runModal()
         }

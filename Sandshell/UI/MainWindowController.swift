@@ -196,7 +196,7 @@ final class MainWindowController: NSWindowController {
 
         // Its tabs are this window's, whichever session's folder it shows
         // (not shared with a split Files pane on the same folder).
-        let files = FilesPaneController(tabsKey: "filesTabs:inspector:" + thisWindow)
+        let files = FilesPaneController(tabsKey: "filesTabs:inspector:" + thisWindow, layoutKey: thisWindow)
         self.filesPane = files
         files.onAddToChat = { [weak self] urls in
             guard let self, case .session(let id)? = self.workspace?.selection else { return }
@@ -207,10 +207,12 @@ final class MainWindowController: NSWindowController {
             self.detail?.askAgent(text, on: id)
         }
         // Files is the window's right sidebar: full height (its header sits in
-        // the title bar, over its own background), 300–480 pt, never a pane.
+        // the title bar, over its own background), never a pane. As wide as
+        // you like; at least what its shown columns need.
         let filesItem = NSSplitViewItem(inspectorWithViewController: files)
-        filesItem.minimumThickness = 300
-        filesItem.maximumThickness = 480
+        filesItem.minimumThickness = files.minimumWidth
+        filesItem.maximumThickness = NSSplitViewItem.unspecifiedDimension
+        files.onMinimumWidthChange = { [weak self] width in self?.filesMinimumWidthChanged(width) }
         filesItem.canCollapse = true
         filesItem.allowsFullHeightLayout = true
         filesItem.titlebarSeparatorStyle = .none
@@ -532,6 +534,33 @@ final class MainWindowController: NSWindowController {
     }
 
     @objc func toggleFilesFromToolbar() { toggleFiles() }
+
+    /// View ▸ File Tree / Diff Column: that column of the Files sidebar,
+    /// showing the sidebar too if it's hidden.
+    func toggleFileTree() {
+        guard let files = filesPane else { return }
+        if !isFilesShown { files.setTreeShown(true); return setFilesShown(true) }
+        files.toggleTree()
+    }
+    func toggleDiffColumn() {
+        guard let files = filesPane else { return }
+        if !isFilesShown { files.setDiffColumnShown(true); return setFilesShown(true) }
+        files.toggleDiffColumn()
+    }
+    var isFileTreeShown: Bool { isFilesShown && filesPane?.isTreeShown == true }
+    var isDiffColumnShown: Bool { isFilesShown && filesPane?.isDiffColumnShown == true }
+
+    /// A Files column showed or hid: the sidebar needs at least this much now
+    /// (growing into the panes, and the window, if it's narrower).
+    private func filesMinimumWidthChanged(_ width: CGFloat) {
+        guard let filesItem else { return }
+        filesItem.minimumThickness = width
+        guard isFilesShown, let files = filesPane?.view, files.frame.width < width - 0.5,
+              let split = window?.contentViewController as? NSSplitViewController else { return }
+        let view = split.splitView
+        view.setPosition(view.bounds.width - width - view.dividerThickness, ofDividerAt: split.splitViewItems.count - 2)
+        fitFilesInWindow()
+    }
 
     /// The Files sidebar showed or hid (however it happened): the toggle's
     /// pressed state, its header in the title bar, the window's saved state,

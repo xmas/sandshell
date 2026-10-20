@@ -743,8 +743,14 @@ enum SelfTest {
             let whole = inspector.view.convert(inspector.view.bounds, to: nil)
             log("Files sidebar frame \(whole), window \(w.frame.size)")
             check(whole.maxY >= w.frame.height - 1, "the Files sidebar runs the window's full height")
-            check(whole.width >= 299 && whole.width <= 481, "it is 300–480 pt wide (\(Int(whole.width)))")
-            check(inspector.debugEditorBelowTree, "its editor sits under the tree")
+            check(whole.width >= inspector.minimumWidth - 1,
+                  "it is at least as wide as its columns need (\(Int(whole.width)) ≥ \(Int(inspector.minimumWidth)))")
+            let cols = inspector.debugColumns
+            log("Files columns: tree \(String(describing: cols.tree)) editor \(cols.editor) diff \(String(describing: cols.diff)) commits \(String(describing: cols.commits))")
+            check(inspector.debugEditorRightOfTree, "the open file is a column right of the tree, full height")
+            if let t = cols.tree, let c = cols.commits {
+                check(c.minX >= t.minX - 0.5 && c.maxX <= t.maxX + 0.5 && c.maxY <= t.maxY, "Commits sits in the tree's column, at its foot")
+            }
             check(inspector.editor.debugEditorFillsColumn, "the sidebar's editor fills its column")
             check(await until(5) { inspector.header.branch.stringValue.contains(" changed") },
                   "the header says the branch and how many files changed (\(inspector.header.branch.stringValue))")
@@ -797,6 +803,103 @@ enum SelfTest {
               && (try? String(contentsOf: lockedFile, encoding: .utf8)) == "edit keep me\n", "then it saves and closes")
         try? FileManager.default.removeItem(at: locked)
         try? FileManager.default.removeItem(at: typed)
+
+        await filesColumns(window, files: files, repo: repo)
+    }
+
+    /// The Files sidebar's columns: the tree and the diff column hide and show
+    /// (buttons, View menu, a divider dragged to the edge), and the sidebar
+    /// grows as wide as you like. Leaves the diff column showing, for
+    /// `files-relaunch` to find it back.
+    private static func filesColumns(_ window: MainWindowController, files: FilesPaneController, repo: URL) async {
+        guard let w = window.window, let app = NSApp.delegate as? AppDelegate else { return check(false, "a window") }
+        func validate(_ action: Selector) -> String {
+            let item = NSMenuItem("", action: action)
+            _ = app.validateMenuItem(item)
+            return item.title
+        }
+        func width(_ r: NSRect?) -> Int { r.map { Int($0.width) } ?? -1 }
+        // Room for three columns.
+        w.setFrame(NSRect(x: w.frame.minX, y: w.frame.minY, width: 1900, height: max(w.frame.height, 700)), display: true)
+        await wait(0.6)
+        if files.isDiffColumnShown { files.setDiffColumnShown(false) }
+        if !files.isTreeShown { files.setTreeShown(true) }
+        await wait(0.3)
+        check(validate(#selector(AppDelegate.toggleFileTree(_:))) == "Hide File Tree"
+                && validate(#selector(AppDelegate.toggleDiffColumn(_:))) == "Show Diff Column",
+              "View says what the File Tree and Diff Column items will do")
+
+        // The tree hides (View ▸ Hide File Tree): the open file takes the width.
+        app.toggleFileTree(nil)
+        await wait(0.4)
+        var cols = files.debugColumns
+        check(!files.isTreeShown && cols.tree == nil, "View ▸ Hide File Tree hides the tree's column")
+        check(cols.editor.width >= files.debugColumnsWidth - 3,
+              "the open file takes the sidebar's width (\(width(cols.editor)) of \(Int(files.debugColumnsWidth)))")
+        check(validate(#selector(AppDelegate.toggleFileTree(_:))) == "Show File Tree", "and the menu says Show File Tree")
+        snapshot(window, "files-tree-hidden")
+        // …and comes back from the header's button.
+        files.header.treeToggle.performClick(nil)
+        await wait(0.4)
+        cols = files.debugColumns
+        check(files.isTreeShown && files.debugEditorRightOfTree && width(cols.tree) >= Int(FilesPaneController.treeMin),
+              "the header's tree button brings it back, left of the open file (\(width(cols.tree)))")
+        // Dragging its divider to the edge collapses it, as in any Mac app.
+        files.debugDragDivider(0, to: 0)
+        await wait(0.4)
+        check(!files.isTreeShown && files.debugColumns.tree == nil, "dragging the tree's divider to the edge collapses it")
+        files.setTreeShown(true)
+        await wait(0.3)
+        check(files.isTreeShown && files.debugEditorRightOfTree, "and it shows again")
+
+        // The diff column: the open file's changes beside its text.
+        files.open(repo.appendingPathComponent("src/app.py"))
+        await wait(0.4)
+        let before = w.contentLayoutRect.width
+        app.toggleDiffColumn(nil)
+        await wait(0.8)
+        cols = files.debugColumns
+        log("with the diff column: \(cols), sidebar \(files.view.frame.width), min \(files.minimumWidth)")
+        check(files.isDiffColumnShown && cols.diff != nil, "View ▸ Show Diff Column shows it")
+        if let d = cols.diff {
+            check(d.minX >= cols.editor.maxX - 0.5 && abs(d.height - cols.editor.height) < 1,
+                  "it is a column right of the open file, as tall")
+            check(d.width >= FilesPaneController.diffMin - 1 && cols.editor.width >= FilesPaneController.editorMin - 1,
+                  "both have room (\(width(cols.editor)), \(Int(d.width)))")
+        }
+        check(files.view.frame.width >= files.minimumWidth - 1, "the sidebar widened to fit three columns (\(Int(files.view.frame.width)))")
+        check(await until(5) { files.editor.diffColumnText?.string.contains("CHANGED-HEAD") == true },
+              "it shows the open file's changes")
+        check(files.editor.hunkCounts.map { $0 == (1, 0) } ?? false, "with its hunk (\(String(describing: files.editor.hunkCounts)))")
+        check(files.editor.debugMode == .source && !files.editor.debugChangesModeEnabled,
+              "the open file shows its text (Changes mode is the diff column's now)")
+        check(validate(#selector(AppDelegate.toggleDiffColumn(_:))) == "Hide Diff Column", "the menu says Hide Diff Column")
+        snapshot(window, "files-diff-column")
+        log("window content \(before) → \(w.contentLayoutRect.width)")
+
+        // As wide as you like: well past the old 480.
+        if let split = w.contentViewController as? NSSplitViewController {
+            let sv = split.splitView
+            sv.setPosition(sv.bounds.width - 760 - sv.dividerThickness, ofDividerAt: split.splitViewItems.count - 2)
+            await wait(0.6)
+            log("Files sidebar dragged wide: \(files.view.frame.width); split \(sv.arrangedSubviews.map { Int($0.frame.width) }) "
+                + "window \(Int(w.frame.width)); detail fitting \(sv.arrangedSubviews.dropFirst().first.map { Int($0.fittingSize.width) } ?? -1)")
+            check(files.view.frame.width > 740, "the Files sidebar grows well past 480 (\(Int(files.view.frame.width)))")
+            cols = files.debugColumns
+            check(files.debugEditorRightOfTree && (cols.diff.map { $0.minX >= cols.editor.maxX - 0.5 } ?? false),
+                  "its columns stay side by side (\(width(cols.tree)) | \(width(cols.editor)) | \(width(cols.diff)))")
+            snapshot(window, "files-wide")
+        }
+
+        // Its divider dragged to the edge collapses the diff column; the header brings it back.
+        files.debugDragDivider(1, to: files.debugColumnsWidth)
+        await wait(0.4)
+        check(!files.isDiffColumnShown && files.debugColumns.diff == nil, "dragging the diff column's divider to the edge collapses it")
+        check(files.editor.debugChangesModeEnabled, "then the open file's Changes mode is back")
+        files.header.diffToggle.performClick(nil)
+        await wait(0.6)
+        check(files.isDiffColumnShown && files.debugColumns.diff != nil, "the header's diff button expands it again")
+        check(await until(5) { files.editor.diffColumnText?.string.contains("CHANGED-HEAD") == true }, "with the changes")
     }
 
     /// Clone mode (`sbx create --clone`): the sandbox works on a private clone
@@ -1332,6 +1435,18 @@ enum SelfTest {
         check(window.isFilesShown, "the Files sidebar comes back open")
         if let files = window.inspectorFiles {
             check(files.tree.root?.standardizedFileURL.path == ws.rootURL.standardizedFileURL.path, "restored Files shows the session's folder")
+            // `files` left the tree and the diff column showing.
+            check(files.isTreeShown && files.isDiffColumnShown, "its tree and diff column come back as they were")
+            check(files.debugEditorRightOfTree, "the open file is a column right of the tree")
+            let cols = files.debugColumns
+            check(cols.diff.map { $0.minX >= cols.editor.maxX - 0.5 } ?? false, "the diff column right of the open file")
+            check(files.view.frame.width >= files.minimumWidth - 1, "the sidebar has room for them (\(Int(files.view.frame.width)))")
+            await wait(1.5)
+            snapshot(window, "files-relaunch")
+            files.setDiffColumnShown(false)
+            await wait(0.3)
+            check(!files.isDiffColumnShown && files.debugColumns.diff == nil, "the diff column hides again")
+            return
         }
         await wait(1.5)
         snapshot(window, "files-relaunch")

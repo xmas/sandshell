@@ -93,7 +93,13 @@ empty pane offers New Session / Close.
 
 ## Files sidebar (`Files/FilesPaneController.swift`, `Files/FilesHeaderView.swift`)
 
-The window's trailing split item: full height, 300–480 pt, one per window,
-its visibility saved per window. Header `Files · main · 6 changed` and a
-close button; then the filter, the tree, the editor (tabs) under the tree,
-and Commits at the bottom.
+The window's trailing split item: full height, one per window, its
+visibility saved per window. No maximum width; its minimum is what its shown
+columns need. Header `◧ Files · main · 6 changed … ◨` and a close button.
+Below it three columns side by side: the tree (filter, tree, Commits at its
+foot) · the open file (tabs, editor) · the diff column (the open file's
+changes, with Stage / Revert). The tree (◧, View ▸ File Tree ⌥⌘1) and the
+diff column (◨, View ▸ Diff Column ⌥⌘2, hidden at first) hide and show, also
+by double-clicking or dragging their divider to the edge; which show is saved
+per window, their widths for every window. With the diff column showing, the
+editor's Changes mode is off (the column has them).

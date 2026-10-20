@@ -1,8 +1,11 @@
 import AppKit
 
-/// The window's Files sidebar: the session folder's tree with an editor
-/// stacked under it, Commits at its foot, and its header (`header`) in the
-/// title bar above it. Trailing, full height, following the active session.
+/// The window's Files sidebar: three columns side by side — the session
+/// folder's tree (Commits at its foot), the open file (tabs, editor), and the
+/// diff column (the open file's changes) — with its header (`header`) in the
+/// title bar above them. Trailing, full height, following the active session.
+/// The tree and the diff column hide and show (header buttons, View menu, a
+/// divider double-clicked or dragged to the edge); the editor always shows.
 @MainActor
 final class FilesPaneController: NSViewController, NSSplitViewDelegate {
     let tree = FileTreeController()
@@ -20,57 +23,91 @@ final class FilesPaneController: NSViewController, NSSplitViewDelegate {
         get { tree.onAddToChat }
         set { tree.onAddToChat = newValue }
     }
+    /// The least width the shown columns need changed (a column showed or hid).
+    var onMinimumWidthChange: ((CGFloat) -> Void)?
 
-    /// A plain, frame-based split (tree above, editor below): dragging its
-    /// divider moves only its own two sides. (A nested NSSplitViewController's
-    /// Auto Layout drag pushed every split in the window around.)
-    private let split = NSSplitView()
-    private var placedDivider = false
-    /// The tree's and the editor's least heights.
-    private let treeMin: CGFloat = 120
-    private let editorMin: CGFloat = 140
-    /// The last tree height the user dragged to.
-    private let treeHeightKey = "filesSidebarTreeHeight"
+    /// A plain, frame-based split (tree | editor | diff): dragging a divider
+    /// moves only its own two sides. (A nested NSSplitViewController's Auto
+    /// Layout drag pushed every split in the window around.)
+    private let columns = NSSplitView()
+    /// The tree with Commits under it.
+    private let treeColumn = NSView()
+    private var diffColumn: NSView { editor.diffColumn }
+    /// Each column's least width.
+    static let treeMin: CGFloat = 150
+    static let editorMin: CGFloat = 220
+    static let diffMin: CGFloat = 220
+    /// The tree's and the diff column's widths (the editor takes the rest),
+    /// as last dragged; every Files sidebar starts from them.
+    private var treeWidth: CGFloat
+    private var diffWidth: CGFloat
+    private static let treeWidthKey = "filesSidebarTreeWidth"
+    private static let diffWidthKey = "filesSidebarDiffWidth"
+    /// Whether the tree / the diff column show, per window.
+    private let treeHiddenKey: String
+    private let diffShownKey: String
     /// Where the editor's open tabs are remembered: the window's own, so its
     /// tabs stay as it follows the selected session from folder to folder.
     private let tabsKey: String?
 
-    init(tabsKey: String? = nil) {
+    /// `layoutKey` names the window, for which columns show.
+    init(tabsKey: String? = nil, layoutKey: String = "") {
         self.tabsKey = tabsKey
+        treeHiddenKey = "filesTreeHidden:" + layoutKey
+        diffShownKey = "filesDiffShown:" + layoutKey
+        let defaults = UserDefaults.standard
+        let tree = CGFloat(defaults.double(forKey: Self.treeWidthKey))
+        let diff = CGFloat(defaults.double(forKey: Self.diffWidthKey))
+        treeWidth = tree > 0 ? max(Self.treeMin, tree) : 220
+        diffWidth = diff > 0 ? max(Self.diffMin, diff) : 320
         super.init(nibName: nil, bundle: nil)
     }
 
     @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
 
     override func loadView() {
-        split.isVertical = false
-        split.dividerStyle = .thin
-        split.delegate = self
+        columns.isVertical = true
+        columns.dividerStyle = .thin
+        columns.delegate = self
         addChild(tree)
         addChild(editor)
-        split.addArrangedSubview(tree.view)
-        split.addArrangedSubview(editor.view)
+        for v in [tree.view, tree.commits] as [NSView] {
+            v.translatesAutoresizingMaskIntoConstraints = false
+            treeColumn.addSubview(v)
+        }
+        NSLayoutConstraint.activate([
+            tree.view.topAnchor.constraint(equalTo: treeColumn.topAnchor),
+            tree.view.leadingAnchor.constraint(equalTo: treeColumn.leadingAnchor),
+            tree.view.trailingAnchor.constraint(equalTo: treeColumn.trailingAnchor),
+            tree.commits.topAnchor.constraint(equalTo: tree.view.bottomAnchor, constant: 4),
+            tree.commits.leadingAnchor.constraint(equalTo: treeColumn.leadingAnchor),
+            tree.commits.trailingAnchor.constraint(equalTo: treeColumn.trailingAnchor),
+            tree.commits.bottomAnchor.constraint(equalTo: treeColumn.bottomAnchor, constant: -8),
+        ])
+        treeColumn.setAccessibilityIdentifier("files-tree-column")
+        for v in [treeColumn, editor.view, diffColumn] { columns.addArrangedSubview(v) }
+        treeColumn.isHidden = UserDefaults.standard.bool(forKey: treeHiddenKey)
+        diffColumn.isHidden = !UserDefaults.standard.bool(forKey: diffShownKey)
+        editor.diffColumnShown = !diffColumn.isHidden
 
         // Full height: the background runs up under the title bar (where the
         // header's toolbar items sit); the content starts below it.
         let sidebar = FilesSidebarView()
-        for v in [split, tree.commits] as [NSView] {
-            v.translatesAutoresizingMaskIntoConstraints = false
-            sidebar.addSubview(v)
-        }
+        columns.translatesAutoresizingMaskIntoConstraints = false
+        sidebar.addSubview(columns)
         NSLayoutConstraint.activate([
-            split.topAnchor.constraint(equalTo: sidebar.safeAreaLayoutGuide.topAnchor),
-            split.leadingAnchor.constraint(equalTo: sidebar.leadingAnchor, constant: 1),
-            split.trailingAnchor.constraint(equalTo: sidebar.trailingAnchor),
-            tree.commits.topAnchor.constraint(equalTo: split.bottomAnchor, constant: 4),
-            tree.commits.leadingAnchor.constraint(equalTo: sidebar.leadingAnchor, constant: 1),
-            tree.commits.trailingAnchor.constraint(equalTo: sidebar.trailingAnchor),
-            tree.commits.bottomAnchor.constraint(equalTo: sidebar.bottomAnchor, constant: -8),
+            columns.topAnchor.constraint(equalTo: sidebar.safeAreaLayoutGuide.topAnchor),
+            columns.leadingAnchor.constraint(equalTo: sidebar.leadingAnchor, constant: 1),
+            columns.trailingAnchor.constraint(equalTo: sidebar.trailingAnchor),
+            columns.bottomAnchor.constraint(equalTo: sidebar.bottomAnchor),
         ])
         header.onBranchClick = { [weak self] in
             guard let self, !self.tree.git.changes.isEmpty || self.tree.changedOnly else { return }
             self.tree.showChanges(!self.tree.changedOnly)
         }
+        header.onToggleTree = { [weak self] in self?.toggleTree() }
+        header.onToggleDiff = { [weak self] in self?.toggleDiffColumn() }
+        header.update(treeShown: !treeColumn.isHidden, diffShown: !diffColumn.isHidden)
         view = sidebar
     }
 
@@ -100,38 +137,120 @@ final class FilesPaneController: NSViewController, NSSplitViewDelegate {
     override func viewDidLayout() {
         super.viewDidLayout()
         if view.bounds.width > 0 { header.fit(sidebarWidth: view.bounds.width) }
-        guard !placedDivider, split.bounds.height >= treeMin + editorMin + split.dividerThickness else { return }
-        placedDivider = true
-        let saved = CGFloat(UserDefaults.standard.double(forKey: treeHeightKey))
-        split.setPosition(clampTree(saved > 0 ? saved : (split.bounds.height * 0.45).rounded()), ofDividerAt: 0)
     }
 
-    /// The tree can take all but the editor's minimum.
-    private var treeMax: CGFloat { split.bounds.height - editorMin - split.dividerThickness }
+    // MARK: Columns
 
-    private func clampTree(_ height: CGFloat) -> CGFloat { max(treeMin, min(height, treeMax)) }
+    var isTreeShown: Bool {
+        isViewLoaded ? !treeColumn.isHidden : !UserDefaults.standard.bool(forKey: treeHiddenKey)
+    }
+    var isDiffColumnShown: Bool {
+        isViewLoaded ? !diffColumn.isHidden : UserDefaults.standard.bool(forKey: diffShownKey)
+    }
+
+    /// View ▸ File Tree (⌥⌘1), the header's tree button.
+    @objc func toggleTree() { setTreeShown(!isTreeShown) }
+    /// View ▸ Diff Column (⌥⌘2), the header's diff button.
+    @objc func toggleDiffColumn() { setDiffColumnShown(!isDiffColumnShown) }
+
+    func setTreeShown(_ show: Bool) { setColumn(treeColumn, shown: show) }
+    func setDiffColumnShown(_ show: Bool) { setColumn(diffColumn, shown: show) }
+
+    private func setColumn(_ column: NSView, shown: Bool) {
+        _ = view
+        guard column.isHidden == shown else { return }
+        column.isHidden = !shown
+        layoutColumns()
+        columnsChanged()
+    }
+
+    /// A column showed or hid (a button, the menu, a divider): remember it,
+    /// and tell the editor, the header and the window (its least width).
+    private func columnsChanged() {
+        let treeShown = !treeColumn.isHidden, diffShown = !diffColumn.isHidden
+        UserDefaults.standard.set(!treeShown, forKey: treeHiddenKey)
+        UserDefaults.standard.set(diffShown, forKey: diffShownKey)
+        editor.diffColumnShown = diffShown
+        header.update(treeShown: treeShown, diffShown: diffShown)
+        onMinimumWidthChange?(minimumWidth)
+    }
+
+    /// The least width of the sidebar with the columns that show (and its
+    /// leading hairline): each at its minimum.
+    var minimumWidth: CGFloat {
+        let t = columns.dividerThickness > 0 ? columns.dividerThickness : 1
+        return 1 + Self.editorMin + (isTreeShown ? Self.treeMin : 0) + (isDiffColumnShown ? Self.diffMin : 0) + 2 * t
+    }
+
+    /// The columns' frames: the tree and the diff column at their widths, the
+    /// editor the rest. Short of room the diff column, then the tree, gives
+    /// way down to its minimum; a hidden column is collapsed (no width).
+    private func layoutColumns() {
+        let size = columns.bounds.size, t = columns.dividerThickness
+        let treeShown = !treeColumn.isHidden, diffShown = !diffColumn.isHidden
+        var tw = treeShown ? treeWidth : 0
+        var dw = diffShown ? diffWidth : 0
+        let room = size.width - 2 * t
+        var over = tw + dw + Self.editorMin - room
+        if over > 0, diffShown {
+            let give = min(over, max(0, dw - Self.diffMin))
+            dw -= give
+            over -= give
+        }
+        if over > 0, treeShown { tw -= min(over, max(0, tw - Self.treeMin)) }
+        let ew = max(0, room - tw - dw)
+        treeColumn.frame = NSRect(x: 0, y: 0, width: tw, height: size.height)
+        editor.view.frame = NSRect(x: tw + t, y: 0, width: ew, height: size.height)
+        diffColumn.frame = NSRect(x: tw + t + ew + t, y: 0, width: dw, height: size.height)
+        columns.needsDisplay = true
+    }
 
     // MARK: NSSplitViewDelegate
 
+    /// The sidebar itself resized: the editor takes the change.
+    func splitView(_ splitView: NSSplitView, resizeSubviewsWithOldSize oldSize: NSSize) {
+        layoutColumns()
+    }
+
+    func splitView(_ splitView: NSSplitView, canCollapseSubview subview: NSView) -> Bool {
+        subview === treeColumn || subview === diffColumn
+    }
+
+    /// Double-clicking a divider collapses the column at its outer side.
+    nonisolated func splitView(_ splitView: NSSplitView, shouldCollapseSubview subview: NSView,
+                               forDoubleClickOnDividerAt dividerIndex: Int) -> Bool {
+        MainActor.assumeIsolated {
+            (dividerIndex == 0 && subview === treeColumn) || (dividerIndex == 1 && subview === diffColumn)
+        }
+    }
+
     func splitView(_ splitView: NSSplitView, constrainMinCoordinate proposed: CGFloat, ofSubviewAt index: Int) -> CGFloat {
-        treeMin
+        index == 0 ? Self.treeMin : editor.view.frame.minX + Self.editorMin
     }
 
     func splitView(_ splitView: NSSplitView, constrainMaxCoordinate proposed: CGFloat, ofSubviewAt index: Int) -> CGFloat {
-        treeMax
-    }
-
-    /// When the sidebar itself resizes, the editor takes the change; the tree keeps its height.
-    func splitView(_ splitView: NSSplitView, shouldAdjustSizeOfSubview view: NSView) -> Bool {
-        view !== tree.view
+        index == 0 ? editor.view.frame.maxX - splitView.dividerThickness - Self.editorMin
+            : splitView.bounds.width - splitView.dividerThickness - Self.diffMin
     }
 
     func splitViewDidResizeSubviews(_ notification: Notification) {
-        // Only the user's drags (AppKit tags them with the divider index) set the default.
-        guard placedDivider, notification.userInfo?["NSSplitViewDividerIndex"] != nil else { return }
-        UserDefaults.standard.set(Double(tree.view.frame.height), forKey: treeHeightKey)
+        // A divider dragged to the edge (or double-clicked) collapses its
+        // column: NSSplitView hides it.
+        if UserDefaults.standard.bool(forKey: treeHiddenKey) != treeColumn.isHidden
+            || UserDefaults.standard.bool(forKey: diffShownKey) == diffColumn.isHidden {
+            columnsChanged()
+        }
+        // Only the user's drags (AppKit tags them with the divider index) set the widths.
+        guard notification.userInfo?["NSSplitViewDividerIndex"] != nil else { return }
+        if !treeColumn.isHidden, treeColumn.frame.width >= Self.treeMin {
+            treeWidth = treeColumn.frame.width
+            UserDefaults.standard.set(Double(treeWidth), forKey: Self.treeWidthKey)
+        }
+        if !diffColumn.isHidden, diffColumn.frame.width >= Self.diffMin {
+            diffWidth = diffColumn.frame.width
+            UserDefaults.standard.set(Double(diffWidth), forKey: Self.diffWidthKey)
+        }
     }
-
 
     /// Only the changed files (git), as a flat list.
     func showChanges() { _ = view; tree.showChanges(true) }
@@ -182,13 +301,25 @@ final class FilesPaneController: NSViewController, NSSplitViewDelegate {
     }
 
     #if DEBUG
-    /// Self-test: the editor sits under the tree (the sidebar), not beside it.
-    var debugEditorBelowTree: Bool {
-        let t = tree.view.convert(tree.view.bounds, to: nil), e = editor.view.convert(editor.view.bounds, to: nil)
-        return e.maxY <= t.minY + 1
+    /// Self-test: the columns' frames in window coordinates (nil: hidden).
+    var debugColumns: (tree: NSRect?, editor: NSRect, diff: NSRect?, commits: NSRect?) {
+        func frame(_ v: NSView) -> NSRect? { v.isHidden ? nil : v.convert(v.bounds, to: nil) }
+        return (frame(treeColumn), editor.view.convert(editor.view.bounds, to: nil), frame(diffColumn),
+                tree.commits.isHidden ? nil : frame(tree.commits))
     }
+    /// Self-test: the editor is a column to the tree's right, as tall as it.
+    var debugEditorRightOfTree: Bool {
+        let c = debugColumns
+        guard let t = c.tree else { return false }
+        return c.editor.minX >= t.maxX - 0.5 && abs(c.editor.minY - t.minY) < 1 && abs(c.editor.maxY - t.maxY) < 1
+    }
+    /// Self-test: a divider dragged to `position` (as a person would drag it).
+    func debugDragDivider(_ index: Int, to position: CGFloat) {
+        columns.setPosition(position, ofDividerAt: index)
+    }
+    var debugColumnsWidth: CGFloat { columns.bounds.width }
     /// Self-test: where the content starts (its top, in window coordinates).
-    var debugContentTop: CGFloat { split.convert(split.bounds, to: nil).maxY }
+    var debugContentTop: CGFloat { columns.convert(columns.bounds, to: nil).maxY }
     var openQuicklyController: OpenQuicklyController? {
         openQuicklyPopover?.contentViewController as? OpenQuicklyController
     }
