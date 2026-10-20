@@ -52,6 +52,11 @@ final class RemoteHub: ObservableObject {
     /// Something wants the server up (a session with Remote Control on, a
     /// pairing, the check session).
     private var servingWanted = false
+    /// Remote Control at all (Settings ▸ General): off, nothing is served, no
+    /// chat shows its antenna, and sessions' switches are left as they were.
+    @Published private(set) var isEnabled = UserDefaults.standard.object(forKey: "remoteControlEnabled") as? Bool ?? true
+    /// Posted when `isEnabled` changes (panes show or hide the antenna).
+    static let enabledChanged = Notification.Name("SandshellRemoteControlEnabledChanged")
     /// Listen on the home network too (paired devices only), not just this Mac.
     @Published private(set) var homeNetwork = UserDefaults.standard.bool(forKey: "remoteHomeNetwork")
     /// Answer on the tailnet too (paired devices only): reach a chat from anywhere.
@@ -82,10 +87,28 @@ final class RemoteHub: ObservableObject {
         }
     }
 
+    /// Turn Remote Control on or off for the whole app. Off: the server stops
+    /// now (devices are cut off), pairing ends; each chat's switch keeps its
+    /// state for when it's back on.
+    func setEnabled(_ on: Bool) {
+        guard on != isEnabled else { return }
+        isEnabled = on
+        UserDefaults.standard.set(on, forKey: "remoteControlEnabled")
+        Log.info(.app, "remote: Remote Control \(on ? "enabled" : "disabled")")
+        if !on {
+            RemotePairing.shared.cancel()
+            refresh()
+            stopServer()
+        } else {
+            refresh()
+        }
+        NotificationCenter.default.post(name: Self.enabledChanged, object: self)
+    }
+
     func refresh() {
         var found: [UUID: Source] = [:]
         var anyRemote = false
-        for surfaces in SessionSurfaces.live {
+        for surfaces in SessionSurfaces.live where isEnabled {
             let controller = surfaces.controller
             anyRemote = anyRemote || !controller.remoteSessions.isEmpty
             for (id, view) in surfaces.chats {
@@ -102,7 +125,7 @@ final class RemoteHub: ObservableObject {
             }
         }
         #if DEBUG
-        if let checkChat {
+        if let checkChat, isEnabled {
             let id = checkID
             found[id] = Source(chat: checkChat, summary: { [weak checkChat] in
                 RemoteWire.SessionSummary(id: id, name: "Remote check", agent: AgentKind.claude.rawValue,
@@ -128,7 +151,7 @@ final class RemoteHub: ObservableObject {
         }
         sources = found
         broadcastSummaries()
-        servingWanted = !found.isEmpty || anyRemote || RemotePairing.shared.current != nil
+        servingWanted = isEnabled && (!found.isEmpty || anyRemote || RemotePairing.shared.current != nil)
         setServing(servingWanted)
     }
 

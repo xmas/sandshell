@@ -42,6 +42,7 @@ struct GeneralPaneView: View {
                 .onChange(of: archiveMinutes) { _, new in controller.setArchiveInterval(new * 60) }
                 .onChange(of: controller.archiveInterval) { _, new in archiveMinutes = Self.minutes(new) }
             }
+            RemoteControlSettingsSection(hub: .shared, devices: .shared)
             Section("Appearance — \(editing.name)") {
                 AppearanceEditor(folderName: editing.name,
                                  icon: bind(\.icon), colorHex: bind(\.colorHex),

@@ -14,6 +14,9 @@ extension SelfTest {
         defaults.set(0, forKey: "SandshellRemotePort")
         defer { defaults.removeObject(forKey: "SandshellRemotePort") }
         let hub = RemoteHub.shared
+        let wasEnabled = hub.isEnabled
+        hub.setEnabled(true)
+        defer { hub.setEnabled(wasEnabled) }
         hub.setCheckSession(true)
         defer { hub.setCheckSession(false) }
         guard await until(10, { hub.port != nil }), let base = hub.localURL else {
@@ -143,6 +146,20 @@ extension SelfTest {
 
         // Off: devices following it are told. (A fresh device: switching the
         // home network on and off restarted the server, which drops streams.)
+        // The master switch (Settings ▸ General): off, nothing is served at all.
+        _ = await until(10) { hub.port != nil }
+        if let before = hub.localURL {
+            hub.setEnabled(false)
+            check(hub.port == nil && hub.summaries.isEmpty, "turning Remote Control off stops the server at once")
+            check(await RemoteTestClient(base: before).get("api/info").status == 0, "its port is closed")
+            hub.startPairing()
+            check(hub.port == nil, "nothing (not even a pairing) brings it back while it's off")
+            hub.cancelPairing()
+            hub.setEnabled(true)
+            check(await until(10) { hub.port != nil && hub.summaries.contains { $0.isCheck } },
+                  "turned back on, it serves again")
+        }
+
         _ = await until(10) { hub.port != nil && !hub.homeNetwork }
         guard let local = hub.localURL else { return check(false, "the server is back on this Mac only") }
         let lastDevice = RemoteTestDevice(base: local, session: checkID)

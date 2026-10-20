@@ -860,6 +860,8 @@ final class TerminalStackController: NSViewController {
         super.viewDidLoad()
         NotificationCenter.default.addObserver(self, selector: #selector(systemDidWake),
                                                name: SystemSleep.didWake, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(remoteControlEnabledChanged),
+                                               name: RemoteHub.enabledChanged, object: nil)
         // Intercept Cmd+V (image paste) and Cmd+F (search) before AppTerminalView
         // processes them. Both actions need a focused terminal view to activate.
         // Must not use `?? event` here: returning nil is how we consume the event;
@@ -1238,7 +1240,13 @@ final class TerminalStackController: NSViewController {
             return titleStrip.setSessionControls(stop: nil, restart: nil)
         }
         titleStrip.setSessionControls(stop: chats[id] != nil ? nil : terminals[id] != nil, restart: true)
-        titleStrip.setRemote(session.isChat ? session.isRemote : nil)
+        titleStrip.setRemote(session.isChat && RemoteHub.shared.isEnabled ? session.isRemote : nil)
+    }
+
+    /// Remote Control was turned on or off for the app: the antenna shows or goes.
+    @objc private func remoteControlEnabledChanged() {
+        if !RemoteHub.shared.isEnabled { remotePopover?.close() }
+        updateSessionControls()
     }
 
     /// The strip's Remote Control button: a popover with the chat's switch and,

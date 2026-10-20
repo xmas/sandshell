@@ -1003,6 +1003,8 @@ extension AppDelegate: NSMenuItemValidation {
         switch item.action {
         case #selector(openRemoteControl(_:)):
             return RemoteHub.shared.localURL != nil
+        case #selector(showRemoteDevices(_:)):
+            return RemoteHub.shared.isEnabled
         #if DEBUG
         case #selector(toggleRemoteCheck(_:)):
             item.state = RemoteHub.shared.checkChat != nil ? .on : .off
