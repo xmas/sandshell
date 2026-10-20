@@ -423,6 +423,9 @@ final class SessionSurfaces {
     /// Every window's surfaces: a session runs in one window at a time.
     private static let all = NSHashTable<SessionSurfaces>.weakObjects()
 
+    /// Every open window's surfaces (Remote Control lists their chats).
+    static var live: [SessionSurfaces] { all.allObjects.filter { !$0.isTornDown } }
+
     /// This window has the session's terminal or chat up, or starting.
     func isRunning(_ id: UUID) -> Bool { terminals[id] != nil || chats[id] != nil || pending.contains(id) }
 
@@ -717,6 +720,7 @@ final class TerminalStackController: NSViewController {
         titleStrip.onClose = { [weak self] in self?.onClosePane?() }
         titleStrip.onStopSession = { [weak self] in self?.stopClicked() }
         titleStrip.onRestartSession = { [weak self] in self?.headerRestartClicked() }
+        titleStrip.onToggleRemote = { [weak self] in self?.toggleRemote() }
         frameView.addSubview(titleStrip)
         frameView.addSubview(titleLine)
         frameView.addSubview(host)
@@ -1227,8 +1231,22 @@ final class TerminalStackController: NSViewController {
     /// The strip's session controls: Stop while a terminal runs (a chat's turn
     /// stops in its composer), Restart for any session; none in an empty pane.
     private func updateSessionControls() {
-        guard let id = activeSessionID else { return titleStrip.setSessionControls(stop: nil, restart: nil) }
+        guard let id = activeSessionID, let session = controller.session(id: id) else {
+            titleStrip.setRemote(nil)
+            return titleStrip.setSessionControls(stop: nil, restart: nil)
+        }
         titleStrip.setSessionControls(stop: chats[id] != nil ? nil : terminals[id] != nil, restart: true)
+        titleStrip.setRemote(session.isChat ? session.isRemote : nil)
+    }
+
+    /// The strip's Remote Control switch: devices see the chat, or stop seeing it.
+    @objc func toggleRemote() {
+        guard let id = activeSessionID, let session = controller.session(id: id), session.isChat else { return }
+        controller.setRemote(id, !session.isRemote)
+        updateSessionControls()
+        if !session.isRemote, let url = RemoteHub.shared.localURL {
+            Log.info(.app, "remote: “\(controller.displayName(of: session))” is shared at \(url)")
+        }
     }
 
     private func updateHeaderStatus(_ id: UUID) {

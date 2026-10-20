@@ -119,6 +119,7 @@ echo ""
 prepare chat
 run tables         chat   quick
 run tool-groups    chat   quick
+run remote         chat   quick
 run links          chat   quick
 run open-quickly   chat   quick
 run sea            chat   quick

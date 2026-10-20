@@ -40,6 +40,11 @@ targets:
       - path: kits
         type: folder
         buildPhase: resources
+      # Remote Control: the web client devices load (remote/web), and the fake
+      # ACP agent the DEBUG check session runs.
+      - path: remote
+        type: folder
+        buildPhase: resources
     info:
       path: Sandshell/Resources/Info.plist
       properties:

@@ -189,6 +189,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // What the app was opened with (a file dropped on the Dock icon) goes
         // to the windows now back, rather than opening ahead of them.
         finishedLaunching = true
+        // Serve Remote Control if a window's sessions have it on.
+        RemoteHub.shared.setNeedsRefresh()
+        #if DEBUG
+        if UserDefaults.standard.bool(forKey: "SandshellRemoteCheck") { RemoteHub.shared.setCheckSession(true) }
+        #endif
         if !openedAtLaunch.isEmpty {
             let urls = openedAtLaunch
             openedAtLaunch = []
@@ -844,6 +849,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @MainActor @objc func showSandshellLog(_ sender: Any?) { activeController?.sidebarController?.openSandshellLog() }
     @MainActor @objc func showDaemonLog(_ sender: Any?) { activeController?.sidebarController?.openDaemonLog() }
     @MainActor @objc func showStatusDebug(_ sender: Any?) { activeController?.sidebarController?.openStatusDebugWindow() }
+    /// Remote Control's web client, in this Mac's browser (while it's serving).
+    @MainActor @objc func openRemoteControl(_ sender: Any?) {
+        guard let url = RemoteHub.shared.localURL else { return NSSound.beep() }
+        NSWorkspace.shared.open(url)
+    }
+    #if DEBUG
+    /// The Remote check session (a fake agent for devices' /check page).
+    @MainActor @objc func toggleRemoteCheck(_ sender: Any?) {
+        RemoteHub.shared.setCheckSession(RemoteHub.shared.checkChat == nil)
+    }
+    #endif
     @MainActor @objc func showReleaseNotes(_ sender: Any?) {
         NSWorkspace.shared.open(URL(string: "https://github.com/xmas/homebrew-xmas/releases")!)
     }
@@ -978,6 +994,13 @@ extension AppDelegate: NSMenuItemValidation {
     @MainActor func validateMenuItem(_ item: NSMenuItem) -> Bool {
         let controller = activeController
         switch item.action {
+        case #selector(openRemoteControl(_:)):
+            return RemoteHub.shared.localURL != nil
+        #if DEBUG
+        case #selector(toggleRemoteCheck(_:)):
+            item.state = RemoteHub.shared.checkChat != nil ? .on : .off
+            return true
+        #endif
         case #selector(toggleFiles(_:)):
             item.title = controller?.isFilesShown == true ? "Hide Files" : "Show Files"
             return controller != nil
