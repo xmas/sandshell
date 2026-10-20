@@ -2,6 +2,10 @@
 
 A running log of what changed, newest first. Yes, we actually write these.
 
+## v0.2.34 — "Accent"
+- **Send wears your theme.** The chat's round Send button (and Reconnect) takes the window theme's accent colour.
+- **README:** Homebrew 7 only loads casks from taps you trust — install with both names (`brew install --cask docker/tap/sbx xmas/xmas/sandshell`), or `brew trust` them if Homebrew refuses; and what to do if Gatekeeper still blocks the unsigned app.
+
 ## v0.2.33 — "Queued"
 - **See what you've queued.** Messages you type while Claude is working show as cards above the message field, in order — Edit pulls one back into the field, × drops it — and send together when the turn ends.
 - **↑ brings back what you sent.** In an empty message field, ↑ recalls your last message (keep going for earlier ones); ↓ past the newest, or Esc, gives your draft back.
