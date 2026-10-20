@@ -54,8 +54,13 @@ final class RemoteHub: ObservableObject {
     private var servingWanted = false
     /// Listen on the home network too (paired devices only), not just this Mac.
     @Published private(set) var homeNetwork = UserDefaults.standard.bool(forKey: "remoteHomeNetwork")
-    /// This Mac's tailnet names, when Tailscale serves it.
-    @Published private(set) var tailnetNames: [String] = []
+    /// Answer on the tailnet too (paired devices only): reach a chat from anywhere.
+    @Published private(set) var tailscaleOn = UserDefaults.standard.bool(forKey: "remoteTailscale")
+    /// This Mac on Tailscale, last read (nil: not installed, or not read yet).
+    @Published private(set) var tailscale: Tailscale.Status?
+    /// The tailnet's names for this Mac, while Tailscale is on and connected.
+    var tailnetNames: [String] { tailscaleOn ? tailscale?.hosts ?? [] : [] }
+    private var tailscaleTimer: Timer?
     private var routes: RemoteRoutes?
 
     #if DEBUG
@@ -379,10 +384,55 @@ final class RemoteHub: ObservableObject {
         setServing(servingWanted)
     }
 
+    /// Answer on the tailnet too (or stop): a running server starts again
+    /// listening the new way.
+    func setTailscale(_ on: Bool) {
+        guard on != tailscaleOn else { return }
+        tailscaleOn = on
+        UserDefaults.standard.set(on, forKey: "remoteTailscale")
+        Log.info(.app, "remote: Tailscale \(on ? "on" : "off")")
+        refreshTailscale()
+        guard server != nil else { return }
+        stopServer()
+        setServing(servingWanted)
+    }
+
+    /// Read Tailscale's state again (and again every half minute while it's on:
+    /// it connects and disconnects on its own).
+    func refreshTailscale() {
+        tailscaleTimer?.invalidate()
+        tailscaleTimer = nil
+        Task {
+            let status = await Tailscale.status()
+            guard status != tailscale else { return }
+            tailscale = status
+            routes?.tailnetNames = tailnetNames
+            Log.info(.app, "remote: Tailscale " + (status.map { $0.running ? "connected as \($0.dnsName ?? "?")" : "not connected" }
+                                                    ?? "not installed"))
+        }
+        guard tailscaleOn else { return }
+        tailscaleTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.refreshTailscaleQuietly() }
+        }
+    }
+
+    private func refreshTailscaleQuietly() {
+        Task {
+            let status = await Tailscale.status()
+            guard status != tailscale else { return }
+            tailscale = status
+            routes?.tailnetNames = tailnetNames
+        }
+    }
+
+    /// Listen beyond this Mac (the home network, or the tailnet).
+    private var listensBeyondLoopback: Bool { homeNetwork || tailscaleOn }
+
     /// Where devices can open the server now (nil: not serving).
     var addresses: [RemoteAddresses.Address] {
         guard let port else { return [] }
-        return RemoteAddresses.current(port: port, homeNetwork: homeNetwork, tailnet: tailnetNames)
+        return RemoteAddresses.current(port: port, homeNetwork: homeNetwork,
+                                       tailnet: tailscale?.dnsName.flatMap { tailscaleOn && tailscale?.running == true ? [$0] : nil } ?? [])
     }
 
     private func startServer() async {
@@ -394,11 +444,12 @@ final class RemoteHub: ObservableObject {
         // Another Sandshell may hold the usual port: take the next one.
         let candidates: [UInt16] = first == 0 ? [0] : (0..<10).map { first &+ $0 } + [0]
         let routes = RemoteRoutes(hub: self)
-        let lan = homeNetwork
+        let lan = homeNetwork, wide = listensBeyondLoopback
         routes.homeNetwork = lan
         routes.tailnetNames = tailnetNames
+        if tailscaleOn, tailscale == nil { refreshTailscale() }
         for candidate in candidates {
-            let server = HTTPServer(loopbackOnly: !lan, bonjourName: lan ? Self.hostName : nil) { routes.handle($0) }
+            let server = HTTPServer(loopbackOnly: !wide, bonjourName: lan ? Self.hostName : nil) { routes.handle($0) }
             do {
                 let port = try await server.start(port: candidate)
                 self.server = server
@@ -409,7 +460,7 @@ final class RemoteHub: ObservableObject {
                 onServing?(port)
                 // Nothing to serve any more (turned off while it started), or
                 // the home network was switched meanwhile.
-                if !servingWanted || lan != homeNetwork {
+                if !servingWanted || lan != homeNetwork || wide != listensBeyondLoopback {
                     stopServer()
                     setServing(servingWanted)
                 }

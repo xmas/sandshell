@@ -64,7 +64,8 @@ enum RemoteAddresses {
                 URL(string: "http://\(host):\(port)/").map { Address(kind: .homeNetwork, url: $0) }
             }
         }
-        list += tailnet.compactMap { host in URL(string: "https://\(host)/").map { Address(kind: .tailnet, url: $0) } }
+        // Plain HTTP: the tailnet's WireGuard tunnel already encrypts it.
+        list += tailnet.compactMap { host in URL(string: "http://\(host):\(port)/").map { Address(kind: .tailnet, url: $0) } }
         return list
     }
 

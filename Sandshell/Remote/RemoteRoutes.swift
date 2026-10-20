@@ -28,7 +28,7 @@ final class RemoteRoutes {
     var port: UInt16 = RemoteHub.defaultPort
     /// Listening on the home network: its names for this Mac are this server's too.
     var homeNetwork = false
-    /// This Mac's tailnet names (`tailscale serve` forwards to us under them).
+    /// This Mac's tailnet names and IPs, while Tailscale is on.
     var tailnetNames: [String] = []
 
     static let cookieName = "sandshell_device"
@@ -130,10 +130,9 @@ final class RemoteRoutes {
     private func hostAllowed(_ header: String?) -> Bool {
         guard let header else { return false }
         let (name, port) = RemoteAddresses.hostName(header)
-        if RemoteAddresses.loopbackNames.contains(name) { return port == nil || port == self.port }
-        if tailnetNames.contains(name) { return true }   // via `tailscale serve`: its own port
-        guard homeNetwork else { return false }
-        return (port == nil || port == self.port) && homeHosts.contains(name)
+        guard port == nil || port == self.port else { return false }
+        if RemoteAddresses.loopbackNames.contains(name) || tailnetNames.contains(name) { return true }
+        return homeNetwork && homeHosts.contains(name)
     }
 
     /// The home network's names for this Mac (re-read every few seconds: the

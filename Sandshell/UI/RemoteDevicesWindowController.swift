@@ -52,24 +52,52 @@ struct RemoteDevicesView: View {
 
     // MARK: Pairing
 
-    /// Where a device opens the pairing link: the home network's (or the
-    /// tailnet's) first address — this Mac's own would only work here.
+    /// Which address the device pairs at — it stays paired at that one only
+    /// (a browser keeps its pairing per address): Tailscale for a phone that
+    /// goes out, the home network for a computer that stays.
+    @State private var pairOver: RemoteAddresses.Address.Kind?
+
+    /// The kinds of address other devices can use now, Tailscale first.
+    private var reachable: [RemoteAddresses.Address.Kind] {
+        [.tailnet, .homeNetwork].filter { kind in hub.addresses.contains { $0.kind == kind } }
+    }
+
+    /// Where a device opens the pairing link (this Mac's own address would only work here).
     private var pairBase: URL? {
-        hub.addresses.first { $0.kind == .tailnet }?.url ?? hub.addresses.first { $0.kind == .homeNetwork }?.url
+        let kind = pairOver.flatMap { reachable.contains($0) ? $0 : nil } ?? reachable.first
+        return hub.addresses.first { $0.kind == kind }?.url
     }
 
     @ViewBuilder private var pairSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Pair a Device").font(.role(.title))
-            if !hub.homeNetwork, hub.tailnetNames.isEmpty {
-                VStack(alignment: .leading, spacing: 6) {
-                    Toggle("Home network", isOn: Binding(get: { hub.homeNetwork }, set: { hub.setHomeNetwork($0) }))
-                        .toggleStyle(.switch)
-                    Text("Turn this on so your phone and other computers on this Wi-Fi can reach this Mac. "
-                         + "Only devices you pair can use it.")
-                        .font(.role(.meta)).foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+            if !hub.homeNetwork || !hub.tailscaleOn {
+                VStack(alignment: .leading, spacing: 10) {
+                    if !hub.homeNetwork {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Toggle(isOn: Binding(get: { hub.homeNetwork }, set: { hub.setHomeNetwork($0) })) {
+                                Text("Home network").font(.role(.bodyEmphasis))
+                            }
+                            .toggleStyle(.switch).controlSize(.small)
+                            Text("For computers and phones on this Wi-Fi. Only devices you pair can use it.")
+                                .font(.role(.meta)).foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    if !hub.tailscaleOn { RemoteTailscaleRow(hub: hub) }
                 }
+            }
+            if reachable.count > 1 {
+                Picker("Pair over", selection: Binding(get: { pairOver ?? reachable[0] }, set: { pairOver = $0 })) {
+                    ForEach(reachable, id: \.self) { kind in
+                        Text(kind == .tailnet ? "Tailscale" : "Home network").tag(kind)
+                    }
+                }
+                .pickerStyle(.segmented)
+                Text((pairOver ?? reachable[0]) == .tailnet
+                     ? "For a device with Tailscale: it reaches your chats at home or away."
+                     : "For a device that stays on this Wi-Fi.")
+                    .font(.role(.meta)).foregroundStyle(.secondary)
             }
             TimelineView(.periodic(from: .now, by: 1)) { context in
                 if let offer = pairing.offer, offer.expires > context.date {

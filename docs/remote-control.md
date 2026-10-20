@@ -67,6 +67,21 @@ gets a revocable token (an HttpOnly cookie). A hosted relay and public tunnels
 - Static files (the client) are public; every `/api` call but `/api/pair`
   needs a caller.
 
+### Tailscale (built: plain HTTP on the tailnet)
+
+- The popover's **Tailscale** switch (`remoteTailscale`): the server listens
+  beyond loopback and accepts this Mac's MagicDNS name and tailnet IPv4 in
+  `Host` — `http://<mac>.<tailnet>.ts.net:47820/`. WireGuard encrypts it;
+  pairing still applies. Status comes from `tailscale status --json`
+  (`Tailscale.swift`), re-read every 30 s while on.
+- A browser keeps its pairing per address, so the pairing window asks which
+  to pair over: Tailscale (a phone that leaves the house) or Home network.
+- A Mac can't reach its own tailnet IP (Tailscale on macOS doesn't loop it
+  back): the self-test carries tailnet-named requests over the Wi-Fi address;
+  the tunnel itself is checked from a real device.
+- Next: HTTPS through `tailscale serve --https` once the tailnet has HTTPS
+  certificates on (needed for Web Push and a proper Home Screen app).
+
 ## Testing on every device, all the time
 
 1. **Fake agent** (`remote/fake-acp-agent.py`, DEBUG): a scripted ACP agent

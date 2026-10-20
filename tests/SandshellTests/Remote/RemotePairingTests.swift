@@ -223,7 +223,8 @@ struct RemoteAddressTests {
     @Test func addressesListThisMacFirst() {
         let list = RemoteAddresses.current(port: 47820, homeNetwork: false, tailnet: ["mac.tail1.ts.net"])
         #expect(list.first?.url.absoluteString == "http://127.0.0.1:47820/")
-        #expect(list.last?.url.absoluteString == "https://mac.tail1.ts.net/")
+        #expect(list.last?.url.absoluteString == "http://mac.tail1.ts.net:47820/")
+        #expect(list.last?.kind == .tailnet)
         #expect(!list.contains { $0.kind == .homeNetwork })
     }
 }

@@ -139,6 +139,7 @@ extension SelfTest {
         stripSwitch()
         await popoverPlacement()
         await homeNetworkPairing(hub: hub, checkID: checkID)
+        await tailnetPairing(hub: hub, checkID: checkID)
 
         // Off: devices following it are told. (A fresh device: switching the
         // home network on and off restarted the server, which drops streams.)
@@ -314,6 +315,60 @@ extension SelfTest {
             : "NOTE not advertised over Bonjour (found \(found)) — allow Local Network access for this build in System Settings")
     }
 
+    /// Tailscale, when this Mac is on a tailnet: a device there pairs and gets
+    /// in at the Mac's tailnet name — and not at all while it's off. This Mac
+    /// can't reach its own tailnet IP (Tailscale on macOS doesn't loop it back),
+    /// so requests travel over its Wi-Fi address naming the tailnet host, as a
+    /// tailnet device's browser does; the tunnel itself takes a second device.
+    private static func tailnetPairing(hub: RemoteHub, checkID: UUID) async {
+        guard let status = await Tailscale.status(), status.running, let dns = status.dnsName,
+              let tailnetIP = status.ips.first(where: { !$0.contains(":") }) else {
+            return log("NOTE Tailscale isn't connected on this Mac: skipping the tailnet checks")
+        }
+        guard let lanIP = RemoteAddresses.lanIPv4().first else {
+            return log("NOTE no Wi-Fi or Ethernet address to carry the tailnet checks: skipping them")
+        }
+        let wasOn = hub.tailscaleOn, wasHome = hub.homeNetwork
+        hub.setHomeNetwork(false)
+        hub.setTailscale(false)
+        defer {
+            hub.cancelPairing()
+            hub.setTailscale(wasOn)
+            hub.setHomeNetwork(wasHome)
+            for d in RemoteDevices.shared.devices where d.name.hasPrefix("SelfTest") { hub.revoke(d.id) }
+        }
+        _ = await until(10) { hub.port != nil }
+        if let port = hub.port, let lan = URL(string: "http://\(lanIP):\(port)/") {
+            check(await RemoteTestClient(base: lan, headers: ["Host": "\(dns):\(port)"]).get("").status == 0,
+                  "with Tailscale (and the home network) off the server is on this Mac only")
+        }
+
+        hub.setTailscale(true)
+        guard await until(15, { hub.addresses.contains { $0.kind == .tailnet } }), let port = hub.port,
+              let lan = URL(string: "http://\(lanIP):\(port)/") else {
+            return check(false, "with Tailscale on, the server comes back up with a tailnet address")
+        }
+        check(hub.addresses.contains { $0.url.absoluteString == "http://\(dns):\(port)/" },
+              "with Tailscale on, it lists http://\(dns):\(port)/")
+        let tailnetHost = ["Host": "\(dns):\(port)"]
+        let stranger = RemoteTestClient(base: lan, headers: tailnetHost)
+        check(await stranger.get("api/info").status == 401, "a device on the tailnet has to pair")
+        let offer = hub.startPairing()
+        let paired = await stranger.post("api/pair", ["code": .string(offer.code), "name": "SelfTest Tailnet"])
+        let cookie = paired.headers["set-cookie"]?.split(separator: ";").first.map(String.init)
+        check(paired.status == 200 && cookie != nil, "it pairs at the tailnet name")
+        let phone = RemoteTestClient(base: lan, cookie: cookie, headers: tailnetHost)
+        check(await phone.get("api/info").status == 200, "and then gets in there")
+        check(await RemoteTestClient(base: lan, cookie: cookie, headers: ["Host": "\(tailnetIP):\(port)"]).get("api/info").status == 200,
+              "and at the tailnet IP")
+        check(await phone.post("api/sessions/\(checkID.uuidString)/send", ["text": "hello over tailscale"]).status == 200,
+              "and drives the chat")
+        let home = RemoteTestClient(base: lan, cookie: cookie, headers: ["Host": "\(lanIP):\(port)"])
+        check(await home.get("api/info").status == 403, "the home network's names stay refused while it's off")
+        let looped = await RemoteTestClient(base: URL(string: "http://\(tailnetIP):\(port)/")!).get("")
+        log("NOTE this Mac reaching its own tailnet IP: \(looped.status == 0 ? "no (expected: test from another device)" : "HTTP \(looped.status)")")
+    }
+
     /// The devices window's content as it is now.
     private static func snapshotDevicesWindow(_ name: String) {
         let view = NSHostingView(rootView: RemoteDevicesView(hub: .shared, devices: .shared, pairing: .shared))
@@ -394,6 +449,7 @@ private extension NSView {
     config.httpShouldSetCookies = false
     config.httpCookieAcceptPolicy = .never
     config.requestCachePolicy = .reloadIgnoringLocalCacheData
+    config.timeoutIntervalForRequest = 15   // event streams ping every 20 s; a dead route fails fast
     return URLSession(configuration: config)
 }()
 

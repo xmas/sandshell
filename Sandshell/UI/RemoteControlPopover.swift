@@ -50,6 +50,7 @@ struct RemoteControlPopover: View {
                         .font(.role(.meta)).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
+                RemoteTailscaleRow(hub: hub)
                 HStack(spacing: 8) {
                     Button("Pair a Device…") { RemoteDevicesWindowController.shared.show(pair: true) }
                     if !devices.devices.isEmpty {

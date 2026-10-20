@@ -624,13 +624,43 @@ async function submit() {
 }
 
 el.file.addEventListener("change", async () => {
-  for (const file of el.file.files) {
-    try { state.pending.push(await shrink(file)); } catch (err) { flash("Couldn’t read " + file.name); }
-  }
+  await attach([...el.file.files]);
   el.file.value = "";
+});
+
+// Images pasted into the message box (a screenshot, a copied photo) attach;
+// text pastes as usual.
+el.input.addEventListener("paste", (e) => {
+  const images = [...(e.clipboardData?.items || [])]
+    .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
+    .map((item) => item.getAsFile())
+    .filter(Boolean);
+  if (!images.length) return;
+  e.preventDefault();
+  const text = e.clipboardData.getData("text/plain");
+  if (text) document.execCommand("insertText", false, text);
+  attach(images);
+});
+
+// …and images dropped anywhere on the chat.
+el.chatPane.addEventListener("dragover", (e) => {
+  if ([...(e.dataTransfer?.items || [])].some((i) => i.kind === "file")) e.preventDefault();
+});
+el.chatPane.addEventListener("drop", (e) => {
+  const files = [...(e.dataTransfer?.files || [])].filter((f) => f.type.startsWith("image/"));
+  if (!files.length) return;
+  e.preventDefault();
+  attach(files);
+});
+
+async function attach(files) {
+  for (const file of files) {
+    try { state.pending.push(await shrink(file)); } catch { flash("Couldn’t read " + (file.name || "the image")); }
+  }
   renderAttachments();
   renderStatus();
-});
+  el.input.focus();
+}
 
 // Photos from a phone are big: send at most 2048 px, as JPEG.
 function shrink(file) {
@@ -647,7 +677,9 @@ function shrink(file) {
       const type = keepPNG ? "image/png" : "image/jpeg";
       const dataURL = canvas.toDataURL(type, 0.85);
       URL.revokeObjectURL(url);
-      resolve({ name: file.name || "Photo", mimeType: type, data: dataURL.split(",")[1], url: dataURL });
+      // A pasted image has a generic name ("image.png"): call it what it is.
+      const name = !file.name || /^image\.\w+$/.test(file.name) ? "Pasted image" : file.name;
+      resolve({ name, mimeType: type, data: dataURL.split(",")[1], url: dataURL });
     };
     img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("not an image")); };
     img.src = url;
