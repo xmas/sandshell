@@ -2830,8 +2830,13 @@ enum SelfTest {
 
     // MARK: Tables
 
-    /// Markdown tables: a small one is a grid in the prose face; a wide one
-    /// becomes a record per row. Either way, no stray ** or table pipes.
+    /// Markdown tables render as grids fitted to the column: header semibold
+    /// over a rule, long cells wrapping inside their column, rules between
+    /// rows; no stray ** or table pipes. Covers the shapes replies use: no
+    /// outer pipes, alignment rows, escaped pipes, code/bold/links in cells,
+    /// wide tables, a table right under a paragraph line, in a list item or a
+    /// quote, a table streamed in chunks, and one refitted to a narrower pane.
+    /// Only a table with more columns than can fit becomes records.
     private static func tables() async {
         let small = """
             | Size | Price | Note |
@@ -2841,29 +2846,93 @@ enum SelfTest {
             """
         let wide = """
             What each one is
-
             | | **Unsloth Studio** | **Hatch** (`feat/approval-gate`) |
             |---|---|---|
             | **Problem** | A local model runs shell and Python tool calls on the user's machine. Contain the blast radius. | A sandboxed agent (Docker `sbx`) needs host-native tools (xcodebuild, GUI automation, screen capture). Control what crosses the boundary. |
             | **Where the boundary sits** | Around the tool process, on the same machine as the user's files. | Between the sandbox and the host, at the MCP `tools/call` layer. |
             | **Default posture** | Run, but confined. | Ask, except for inspect-only tools. If no approver answers within 120 s, deny. |
-            | **Escaped \\| pipe** | a \\| b | |
+            | **Escaped \\| pipe** | a \\| b | see [the docs](https://example.com/docs) |
             """
-        let view = ChatTranscriptView(frame: NSRect(x: 0, y: 0, width: 720, height: 560))
+        let shapes = """
+            Bare pipes, centered:
+
+            Key | Value | Count
+            :-- | :-: | --:
+            alpha | one | 1
+            beta | two<br>lines | 22
+
+            - Results, in a list item:
+
+              | Suite | Tests |
+              |-|-|
+              | Chat | 12 |
+
+            > | Quoted | Table |
+            > |---|---|
+            > | q1 | q2 |
+            """
+        let six = """
+            | Scenario | Result | Time | Fixture | Notes | Owner |
+            |---|---|---|---|---|---|
+            | files | PASS | 12 s | git repo with README.md and src/app.py | Changes view shows both hunks; Markdown preview renders the code block | files |
+            | chat | FAIL | 48 s | one Claude session | The second turn never arrived because the sandbox was still starting | chat |
+            """
+        let many = "| " + (1...16).map { "Column \($0)" }.joined(separator: " | ") + " |\n|"
+            + String(repeating: "---|", count: 16) + "\n| " + (1...16).map { "value \($0)" }.joined(separator: " | ") + " |"
+
+        let view = ChatTranscriptView(frame: NSRect(x: 0, y: 0, width: 720, height: 1500))
         let host = NSWindow(contentRect: view.frame, styleMask: [.borderless], backing: .buffered, defer: false)
         host.isReleasedWhenClosed = false
         host.alphaValue = 0
         host.contentView = view
-        view.update([.agentText(id: "s", text: small), .agentText(id: "w", text: wide)])
+        view.update([.agentText(id: "s", text: small), .agentText(id: "w", text: wide),
+                     .agentText(id: "x", text: shapes), .agentText(id: "6", text: six)])
         await wait(0.4)
-        let text = view.debugText
+        var text = view.debugText
         log("rendered:\n\(text)")
-        check(!text.contains("**") && !text.contains("|---"), "no raw Markdown in tables")
+        check(!text.contains("**") && !text.contains("|---") && !text.contains("|-|") && !text.contains(":-:"),
+              "no raw Markdown in tables")
         check(text.contains("S\t$1\tcheap") && text.contains("Size\tPrice\tNote"), "a small table is a grid on tab stops")
-        check(text.contains("Problem\nUnsloth Studio\tA local model runs"), "a wide table reads as records: heading, then labelled values")
-        check(text.contains("Hatch (feat/approval-gate)\tA sandboxed agent"), "labels keep their inline code")
-        check(text.contains("Escaped | pipe") && text.contains("a | b"), "escaped pipes stay in their cell")
+        check(text.contains("Problem\tA local model runs"), "a wide table stays a grid: its long cells wrap")
+        check(text.contains("Unsloth Studio\tHatch (feat/approval-gate)"), "headers keep their inline code")
+        check(text.contains("Escaped | pipe\ta | b\tsee the docs"), "escaped pipes stay in their cell; links render")
+        check(text.contains("What each one is\n") && !text.contains("What each one is\t"),
+              "a table right under a paragraph line")
+        check(text.contains("Key\tValue\tCount") && text.contains("alpha\tone\t1"), "a table without outer pipes")
+        check(text.contains("beta\ttwo\t22\n\tlines\t\n"), "<br> breaks a cell's line")
+        check(text.contains("Suite\tTests") && text.contains("Chat\t12"), "a table in a list item")
+        check(text.contains("Quoted\tTable") && text.contains("q1\tq2"), "a table in a quote")
+        check(text.contains("Scenario\tResult\tTime\tFixture\tNotes\tOwner") && text.contains("files\tPASS\t12 s"),
+              "six columns with long cells stay a grid")
         snapshot(view, "tables")
+
+        // Streamed: the header first (text until its delimiter row arrives), then rows.
+        let streamed = "Here you go:\n\n| Name | Status |\n|---|---|\n| one | done |\n| two | running |"
+        let cut = streamed.range(of: "|---")!.lowerBound
+        view.update([.agentText(id: "t", text: String(streamed[..<cut]))])
+        await wait(0.3)
+        check(view.debugText.contains("| Name | Status |"), "mid-stream, a lone header row is text")
+        view.update([.agentText(id: "t", text: String(streamed.prefix(streamed.count - 12)))])
+        await wait(0.3)
+        check(view.debugText.contains("Name\tStatus") && view.debugText.contains("one\tdone"),
+              "once its delimiter row arrives, it's a table")
+        view.update([.agentText(id: "t", text: streamed), .agentText(id: "m", text: many)])
+        await wait(0.3)
+        text = view.debugText
+        check(text.contains("two\trunning"), "the finished table has every row")
+        check(text.contains("Column 2\tvalue 2"), "a table with more columns than fit becomes records")
+        snapshot(view, "tables-streamed")
+
+        // A narrower pane refits the tables: the long cells wrap onto more lines.
+        view.update([.agentText(id: "w", text: wide)])
+        await wait(0.3)
+        let lines = view.debugText.split(separator: "\n").count
+        host.setContentSize(NSSize(width: 460, height: 1500))
+        view.layoutSubtreeIfNeeded()
+        await wait(0.4)
+        check(view.debugText.split(separator: "\n").count > lines, "a narrower pane wraps the table's cells onto more lines")
+        check(view.debugText.contains("Problem\tA local model"), "and it's still a grid")
+        snapshot(view, "tables-narrow")
         host.close()
     }
 

@@ -1007,40 +1007,52 @@ struct ChatRendererTests {
     struct MarkdownTables {
         private static let long = Array(repeating: "wide", count: 60).joined(separator: " ")
         private let grid = "| a | b |\n|---|---|\n| 1 | 2 |"
+        /// Too narrow for any grid of three columns: tables become records.
+        private static let cramped: CGFloat = 100
 
         @Test func narrowTableIsAGridOnACard() throws {
             let rendered = ChatRenderer.markdown(grid)
             let runs = CRFixture.blockRuns(rendered)
-            try #require(runs.count == 3)
+            try #require(runs.count == 2)
             #expect(runs[0].text == "a\tb\n")
-            #expect(runs[2].text == "1\t2\n")
-            #expect(runs.map(\.kind) == [.card, .card, .card])
-            #expect(runs.map(\.position) == [.first, .middle, .last])
+            #expect(runs[1].text == "1\t2\n")
+            #expect(runs.map(\.kind) == [.card, .card])
+            #expect(runs.map(\.position) == [.first, .last])
             #expect(rendered.string.hasPrefix("\n"), "A spacer above the card")
             #expect(rendered.string.hasSuffix("1\t2\n\n"), "And one below")
         }
 
         @Test func aRuleSeparatesTheHeaderFromTheRows() throws {
-            let rendered = ChatRenderer.markdown(grid)
+            let rendered = ChatRenderer.markdown("| a | b |\n|---|---|\n| 1 | 2 |\n| 3 | 4 |")
             let runs = CRFixture.blockRuns(rendered)
             try #require(runs.count == 3)
-            let rule = runs[1].text
-            let dashes = rule.dropLast()
-            let onlyDashes = dashes.allSatisfy { $0 == "─" }
-            #expect(rule.hasSuffix("\n"))
-            #expect(dashes.isEmpty == false)
-            #expect(onlyDashes, "The rule is a row of box-drawing dashes")
-            #expect(CRFixture.color(in: rendered, at: runs[1].range.location) == NSColor.tertiaryLabelColor)
+            #expect(CRFixture.value(.chatTableRule, in: rendered, at: runs[0].range.location) == nil,
+                    "Nothing above the header")
+            let header = try #require(CRFixture.value(.chatTableRule, in: rendered, at: runs[1].range.location) as? TableRule)
+            let between = try #require(CRFixture.value(.chatTableRule, in: rendered, at: runs[2].range.location) as? TableRule)
+            #expect(header.isHeader && !between.isHeader)
+            #expect(header.color == NSColor.tertiaryLabelColor)
+            #expect(header.thickness > between.thickness, "The header's rule is the stronger one")
+            #expect(header.leading == ChatRenderer.pad, "Rules start where the table's text does")
+            #expect(header.width == between.width && header.width > 0)
         }
 
         @Test func headerIsSemiboldAndRowsRegular() throws {
             let rendered = ChatRenderer.markdown(grid)
             let runs = CRFixture.blockRuns(rendered)
-            try #require(runs.count == 3)
+            try #require(runs.count == 2)
             CRFixture.verifyFace(CRFixture.font(in: rendered, at: runs[0].range.location),
                                  matches: .role(.bodyEmphasis))
-            CRFixture.verifyFace(CRFixture.font(in: rendered, at: runs[2].range.location),
+            CRFixture.verifyFace(CRFixture.font(in: rendered, at: runs[1].range.location),
                                  matches: .role(.body))
+        }
+
+        @Test func tableTextIsMarkedForRefitting() throws {
+            let rendered = ChatRenderer.markdown("before\n\n\(grid)\n\nafter")
+            let row = try #require(CRFixture.range(of: "1\t2", in: rendered))
+            let after = try #require(CRFixture.range(of: "after", in: rendered))
+            #expect(CRFixture.value(.chatTable, in: rendered, at: row.location) as? Bool == true)
+            #expect(CRFixture.value(.chatTable, in: rendered, at: after.location) == nil)
         }
 
         @Test func separatorColonsAlignTheColumns() throws {
@@ -1048,8 +1060,16 @@ struct ChatRendererTests {
             let header = try #require(CRFixture.blockRuns(rendered).first)
             let style = try #require(CRFixture.paragraphStyle(in: rendered, at: header.range.location))
             #expect(style.tabStops.map(\.alignment) == [.right, .center],
-                    "The first column starts the line; every other column gets a tab stop")
+                    "A left-aligned first column starts the line; every other column gets a tab stop")
             #expect(style.lineBreakMode == .byTruncatingTail)
+        }
+
+        @Test func aFirstColumnThatIsntLeftAlignedStartsOnATab() throws {
+            let rendered = ChatRenderer.markdown("| n | b |\n|--:|---|\n| 10 | x |")
+            let runs = CRFixture.blockRuns(rendered)
+            #expect(runs.map(\.text) == ["\tn\tb\n", "\t10\tx\n"])
+            let style = try #require(CRFixture.paragraphStyle(in: rendered, at: runs[0].range.location))
+            #expect(style.tabStops.map(\.alignment) == [.right, .left])
         }
 
         @Test func tabStopsAdvanceAcrossTheRow() throws {
@@ -1063,11 +1083,10 @@ struct ChatRendererTests {
             #expect(pastInset, "Stops are past the block inset")
         }
 
-        @Test func headerOnlyTableIsTheHeaderAndItsRule() {
+        @Test func headerOnlyTableIsTheHeaderAlone() {
             let runs = CRFixture.blockRuns(ChatRenderer.markdown("| a | b |\n|---|---|"))
-            #expect(runs.count == 2)
-            #expect(runs.first?.text == "a\tb\n")
-            #expect(runs.map(\.position) == [.first, .last])
+            #expect(runs.map(\.text) == ["a\tb\n"])
+            #expect(runs.map(\.position) == [.single])
         }
 
         @Test(.tags(.edgeCase))
@@ -1093,15 +1112,26 @@ struct ChatRendererTests {
             #expect(runs.first?.text == "a|b\tc\n")
         }
 
-        @Test(arguments: ["|---|---|", "| --- | --- |", "|:--|--:|", "| :---: | :---: |", "|--|--|", "  |---|---|  "])
-        func separatorRowsThatMakeATable(separator: String) {
-            let runs = CRFixture.blockRuns(ChatRenderer.markdown("| a | b |\n\(separator)\n| 1 | 2 |"))
-            #expect(runs.map(\.text).first == "a\tb\n")
-            #expect(runs.map(\.text).last == "1\t2\n")
-            #expect(runs.count == 3)
+        @Test func inlineMarkdownRendersInCells() throws {
+            let rendered = ChatRenderer.markdown("| k | v |\n|---|---|\n| **bold** | [docs](https://example.com) `x` |")
+            #expect(CRFixture.blockRuns(rendered).last?.text == "bold\tdocs x\n")
+            let bold = try #require(CRFixture.range(of: "bold", in: rendered))
+            #expect(CRFixture.traits(in: rendered, at: bold.location)?.contains(.bold) == true)
+            let docs = try #require(CRFixture.range(of: "docs", in: rendered))
+            #expect(CRFixture.link(in: rendered, at: docs.location)?.absoluteString == "https://example.com")
+            let code = try #require(CRFixture.range(of: "x\n", in: rendered))
+            #expect(CRFixture.font(in: rendered, at: code.location)?.isFixedPitch == true)
         }
 
-        @Test(.tags(.edgeCase), arguments: ["|-|-|", "| x | y |", "|===|===|"])
+        @Test(arguments: ["|---|---|", "| --- | --- |", "|:--|--:|", "| :---: | :---: |", "|--|--|", "  |---|---|  ",
+                          "|-|-|", "--- | ---", "|---|---"])
+        func separatorRowsThatMakeATable(separator: String) {
+            let runs = CRFixture.blockRuns(ChatRenderer.markdown("| a | b |\n\(separator)\n| 1 | 2 |"))
+            // A centered or right-aligned first column starts its lines on a tab.
+            #expect(runs.map { String($0.text.drop { $0 == "\t" }) } == ["a\tb\n", "1\t2\n"])
+        }
+
+        @Test(.tags(.edgeCase), arguments: ["| x | y |", "|===|===|", "|---|", "|---|---|---|", "---"])
         func rowsThatAreNoSeparatorLeaveTheLinesAsText(separator: String) {
             let rendered = ChatRenderer.markdown("| a | b |\n\(separator)\n| 1 | 2 |")
             #expect(CRFixture.blockRuns(rendered).isEmpty)
@@ -1116,39 +1146,114 @@ struct ChatRendererTests {
 
         @Test func tableEndsAtTheFirstLineWithoutAPipe() throws {
             let rendered = ChatRenderer.markdown("| a |\n|---|\n| 1 |\nafter")
-            #expect(CRFixture.blockRuns(rendered).count == 3)
+            #expect(CRFixture.blockRuns(rendered).count == 2)
             #expect(rendered.string.hasSuffix("1\n\nafter\n"))
             let after = try #require(CRFixture.range(of: "after", in: rendered))
             #expect(CRFixture.hasBlock(in: rendered, at: after.location) == false)
         }
 
-        @Test func wideTableBecomesOneRecordPerRow() throws {
-            let rendered = ChatRenderer.markdown("| Name | Notes |\n|---|---|\n| alpha | \(Self.long) |\n| beta | short |")
+        /// The shapes replies put tables in: each renders the same grid.
+        @Test(arguments: [
+            "| a | b |\n|---|---|\n| 1 | 2 |",
+            "a | b\n--- | ---\n1 | 2",
+            "| a | b |\n| :-: | --: |\n| 1 | 2 |",
+            "Intro line\n| a | b |\n|---|---|\n| 1 | 2 |",
+            "- In a list:\n\n  | a | b |\n  |---|---|\n  | 1 | 2 |",
+            "> | a | b |\n> |---|---|\n> | 1 | 2 |",
+            "> > | a | b |\n> > |---|---|\n> > | 1 | 2 |",
+        ])
+        func tablesInEveryShapeAreGrids(source: String) {
+            let runs = CRFixture.blockRuns(ChatRenderer.markdown(source))
+            let texts = runs.map { $0.text.trimmingCharacters(in: CharacterSet(charactersIn: "\t")) }
+            #expect(texts == ["a\tb\n", "1\t2\n"])
+            #expect(runs.allSatisfy { $0.kind == .card })
+        }
+
+        @Test func aQuotedTableEndsWhereTheQuoteDoes() {
+            let rendered = ChatRenderer.markdown("> | a |\n> |---|\n> | 1 |\n| 2 |")
+            #expect(CRFixture.blockRuns(rendered).map(\.text) == ["a\n", "1\n"])
+            #expect(rendered.string.hasSuffix("| 2 |\n"))
+        }
+
+        /// A reply streams in: text until the delimiter row is whole, then a
+        /// table that gains rows (a half-arrived row is a row already).
+        @Test(arguments: [
+            ("| a | b |", nil),
+            ("| a | b |\n|--", nil),
+            ("| a | b |\n|---|-", ["a\tb\n"]),
+            ("| a | b |\n|---|---|\n| 1", ["a\tb\n", "1\t\n"]),
+            ("| a | b |\n|---|---|\n| 1 | 2 |\n", ["a\tb\n", "1\t2\n"]),
+        ] as [(String, [String]?)])
+        func streamedTablesBecomeTablesOnceTheirDelimiterRowArrives(prefix: String, rows: [String]?) {
+            let rendered = ChatRenderer.markdown(prefix)
+            let runs = CRFixture.blockRuns(rendered).map(\.text)
+            if let rows {
+                #expect(runs == rows)
+            } else {
+                #expect(runs.isEmpty)
+                #expect(rendered.string.hasPrefix("| a | b |"))
+            }
+        }
+
+        @Test func longCellsWrapInsideTheirColumn() throws {
+            let rendered = ChatRenderer.markdown("| Name | Notes |\n|---|---|\n| alpha | \(Self.long) |\n| beta | short |",
+                                                 width: 600)
+            let runs = CRFixture.blockRuns(rendered).map(\.text)
+            try #require(runs.count > 4)
+            #expect(runs[0] == "Name\tNotes\n")
+            #expect(runs[1].hasPrefix("alpha\twide wide"))
+            #expect(runs[2].hasPrefix("\twide"), "The row's next line leaves the first column empty")
+            #expect(runs.last == "beta\tshort\n")
+            let words = runs.dropFirst().dropLast().map { $0.split(separator: "\t").last ?? "" }
+                .flatMap { $0.split(whereSeparator: \.isWhitespace) }
+            #expect(words.count == 60, "Every word is there, none cut off")
+        }
+
+        @Test func aNarrowerColumnWrapsOntoMoreLines() {
+            let source = "| Name | Notes |\n|---|---|\n| alpha | \(Self.long) |"
+            let wide = CRFixture.blockRuns(ChatRenderer.markdown(source, width: 800)).count
+            let narrow = CRFixture.blockRuns(ChatRenderer.markdown(source, width: 400)).count
+            #expect(narrow > wide)
+        }
+
+        @Test func onlyTheFirstLineOfARowCarriesItsRule() throws {
+            let rendered = ChatRenderer.markdown("| Name | Notes |\n|---|---|\n| alpha | \(Self.long) |", width: 400)
             let runs = CRFixture.blockRuns(rendered)
-            #expect(runs.map(\.text) == ["alpha\n", "Notes\t\(Self.long)\n", "\n", "beta\n", "Notes\tshort\n"])
-            #expect(runs.map(\.position) == [.first, .middle, .middle, .middle, .last])
+            let rules = runs.map { CRFixture.value(.chatTableRule, in: rendered, at: $0.range.location) != nil }
+            #expect(rules.first == false && rules.dropFirst().first == true)
+            #expect(rules.dropFirst(2).allSatisfy { !$0 })
+        }
+
+        @Test(arguments: ["one<br>two", "one<br/>two", "one<BR />two"])
+        func lineBreaksInCellsBreakTheRow(cell: String) {
+            let rendered = ChatRenderer.markdown("| Key | Value |\n|---|---|\n| k | \(cell) |")
+            #expect(CRFixture.blockRuns(rendered).map(\.text) == ["Key\tValue\n", "k\tone\n", "\ttwo\n"])
+        }
+
+        @Test func tooManyColumnsBecomeOneRecordPerRow() throws {
+            let rendered = ChatRenderer.markdown("| Name | Notes | More |\n|---|---|---|\n| alpha | n1 | m1 |\n| beta | n2 | m2 |",
+                                                 width: Self.cramped)
+            let runs = CRFixture.blockRuns(rendered)
+            #expect(runs.map(\.text) == ["alpha\n", "Notes\tn1\n", "More\tm1\n", "\n", "beta\n", "Notes\tn2\n", "More\tm2\n"])
             #expect(rendered.string.contains("Name") == false, "The first column heads each record instead of labelling it")
             let title = try #require(runs.first)
             CRFixture.verifyFace(CRFixture.font(in: rendered, at: title.range.location),
                                  matches: .role(.bodyEmphasis))
             let label = try #require(CRFixture.range(of: "Notes", in: rendered))
             #expect(CRFixture.color(in: rendered, at: label.location) == NSColor.secondaryLabelColor)
+            #expect(CRFixture.value(.chatTable, in: rendered, at: title.range.location) as? Bool == true)
         }
 
         @Test func longColumnHeadingsStackAboveTheirValues() {
             let heading = "A rather long column heading that has to wrap"
-            let rendered = ChatRenderer.markdown("| Name | \(heading) |\n|---|---|\n| alpha | short value |")
+            let rendered = ChatRenderer.markdown("| Name | \(heading) | x |\n|---|---|---|\n| alpha | short value | |",
+                                                 width: Self.cramped)
             #expect(CRFixture.blockRuns(rendered).map(\.text) == ["alpha\n", "\(heading)\u{2028}short value\n"])
         }
 
-        @Test(arguments: ["one<br>two", "one<br/>two", "one<BR />two"])
-        func lineBreaksInCellsForceRecords(cell: String) {
-            let rendered = ChatRenderer.markdown("| Key | Value |\n|---|---|\n| k | \(cell) |")
-            #expect(CRFixture.blockRuns(rendered).map(\.text) == ["k\n", "Value\tone\u{2028}two\n"])
-        }
-
         @Test func emptyValuesAreLeftOutOfRecords() {
-            let rendered = ChatRenderer.markdown("| Name | Notes | Extra |\n|---|---|---|\n| alpha | \(Self.long) | |")
+            let rendered = ChatRenderer.markdown("| Name | Notes | Extra |\n|---|---|---|\n| alpha | \(Self.long) | |",
+                                                 width: Self.cramped)
             #expect(CRFixture.blockRuns(rendered).map(\.text) == ["alpha\n", "Notes\t\(Self.long)\n"])
             #expect(rendered.string.contains("Extra") == false)
         }

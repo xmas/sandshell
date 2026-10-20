@@ -6,6 +6,30 @@ extension NSAttributedString.Key {
     /// Paragraph-level block styling (`BlockStyle`): drawn as a rounded
     /// background behind consecutive paragraphs by `BlockBackgroundFragment`.
     static let chatBlock = NSAttributedString.Key("SandshellChatBlock")
+    /// A `TableRule` drawn above a table row's first line by `BlockBackgroundFragment`.
+    static let chatTableRule = NSAttributedString.Key("SandshellChatTableRule")
+    /// Marks a table's text: it was laid out for a width, so the transcript
+    /// lays it out again when its own width changes.
+    static let chatTable = NSAttributedString.Key("SandshellChatTable")
+}
+
+/// The line above a table row: under the header, or between body rows.
+final class TableRule: NSObject, @unchecked Sendable {
+    let isHeader: Bool
+    /// Where the table's text starts (the block's inset) and how wide it is.
+    let leading: CGFloat
+    let width: CGFloat
+    /// How far above the row's first line the rule sits (half the gap between rows).
+    let offset: CGFloat
+    init(isHeader: Bool, leading: CGFloat, width: CGFloat, offset: CGFloat) {
+        self.isHeader = isHeader
+        self.leading = leading
+        self.width = width
+        self.offset = offset
+    }
+
+    var color: NSColor { isHeader ? .tertiaryLabelColor : .quaternaryLabelColor }
+    var thickness: CGFloat { isHeader ? 1 : 0.5 }
 }
 
 /// Which background a paragraph sits on, and where it falls in its block (so
@@ -44,6 +68,7 @@ final class BlockStyle: NSObject, @unchecked Sendable {
 /// container width (minus a margin) so consecutive paragraphs form one block.
 final class BlockBackgroundFragment: NSTextLayoutFragment {
     var style: BlockStyle?
+    var rule: TableRule?
     static let margin: CGFloat = 4
     static let radius: CGFloat = 8
 
@@ -55,9 +80,30 @@ final class BlockBackgroundFragment: NSTextLayoutFragment {
         return CGRect(x: x, y: 0, width: width - 2 * (margin + inset), height: layoutFragmentFrame.height)
     }
 
-    override var renderingSurfaceBounds: CGRect { super.renderingSurfaceBounds.union(backgroundRect) }
+    /// The table rule, in fragment coordinates: across the table, `offset`
+    /// above the row's first line.
+    private var ruleRect: CGRect? {
+        guard let rule else { return nil }
+        let inset = textLayoutManager?.textContainer?.lineFragmentPadding ?? 0
+        let top = textLineFragments.first?.typographicBounds.minY ?? 0
+        return CGRect(x: inset + rule.leading - layoutFragmentFrame.minX, y: top - rule.offset - rule.thickness / 2,
+                      width: rule.width, height: rule.thickness)
+    }
+
+    override var renderingSurfaceBounds: CGRect {
+        let bounds = super.renderingSurfaceBounds.union(backgroundRect)
+        return ruleRect.map { bounds.union($0) } ?? bounds
+    }
 
     override func draw(at point: CGPoint, in context: CGContext) {
+        defer {
+            if let rule, let rect = ruleRect {
+                context.saveGState()
+                context.setFillColor(rule.color.cgColor)
+                context.fill(rect.offsetBy(dx: point.x, dy: point.y))
+                context.restoreGState()
+            }
+        }
         if let style {
             let rect = backgroundRect.offsetBy(dx: point.x, dy: point.y)
             let r = style.isFullWidth ? 0 : Self.radius
@@ -100,6 +146,7 @@ final class BlockFragmentProvider: NSObject, NSTextLayoutManagerDelegate {
            let style = paragraph.attributedString.attribute(.chatBlock, at: 0, effectiveRange: nil) as? BlockStyle {
             let fragment = BlockBackgroundFragment(textElement: textElement, range: textElement.elementRange)
             fragment.style = style
+            fragment.rule = paragraph.attributedString.attribute(.chatTableRule, at: 0, effectiveRange: nil) as? TableRule
             return fragment
         }
         return NSTextLayoutFragment(textElement: textElement, range: textElement.elementRange)
@@ -116,13 +163,16 @@ enum ChatRenderer {
     static let mono = NSFont.role(.code)
     static let pad: CGFloat = 14           // text inset inside a block
     static let maxImageWidth: CGFloat = 520
+    /// The text column a table fits when its view doesn't say (the Files preview).
+    static let defaultWidth: CGFloat = 560
 
     static func toggleURL(_ id: String) -> URL {
         URL(string: "sandshell-chat://toggle/\(id.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? id)")!
     }
 
-    /// `isExpanded` answers for the cards inside a tool group.
-    static func render(_ item: ChatItem, expanded: Bool,
+    /// `isExpanded` answers for the cards inside a tool group; `width` is the
+    /// text column's (tables are laid out to fit it).
+    static func render(_ item: ChatItem, expanded: Bool, width: CGFloat = defaultWidth,
                        isExpanded: (String) -> Bool = { _ in false }) -> NSAttributedString {
         switch item {
         case .user(_, let text, let attachments):
@@ -131,7 +181,7 @@ enum ChatRenderer {
             if paras.isEmpty { return NSAttributedString() }
             return spaced(blocked(paras, .user), before: 14, after: 6)
         case .agentText(_, let text):
-            return spaced(markdown(text), before: 4, after: 4)
+            return spaced(markdown(text, width: width), before: 4, after: 4)
         case .thought(let id, let text):
             return spaced(thought(id: id, text: text, expanded: expanded), before: 2, after: 2)
         case .tool(let call):
@@ -211,11 +261,9 @@ enum ChatRenderer {
             style.firstLineHeadIndent += pad
             style.headIndent += pad
             style.tailIndent = -pad
-            style.paragraphSpacing = 0
-            style.paragraphSpacingBefore = 0
-            // Top/bottom padding inside the block.
-            if position == .first || position == .single { style.paragraphSpacingBefore = 7 }
-            if position == .last || position == .single { style.paragraphSpacing = 7 }
+            // Top/bottom padding inside the block, on top of the paragraph's own.
+            if position == .first || position == .single { style.paragraphSpacingBefore += 7 }
+            if position == .last || position == .single { style.paragraphSpacing += 7 }
             m.addAttribute(.paragraphStyle, value: style, range: range)
             m.addAttribute(.chatBlock, value: BlockStyle(kind, position), range: range)
             out.append(m)
@@ -452,10 +500,11 @@ enum ChatRenderer {
         }
     }
 
-    /// Line-oriented markdown: fenced code (highlighted, on a block), tables,
-    /// ATX headings, bullet/numbered lists with hanging indents, quotes and
-    /// rules; inline bold/italic/code/links via Foundation.
-    static func markdown(_ text: String, prose: Prose = .chat) -> NSAttributedString {
+    /// Line-oriented markdown: fenced code (highlighted, on a block), tables
+    /// (fitted to `width`, the text column), ATX headings, bullet/numbered
+    /// lists with hanging indents, quotes and rules; inline
+    /// bold/italic/code/links via Foundation.
+    static func markdown(_ text: String, prose: Prose = .chat, width: CGFloat = defaultWidth) -> NSAttributedString {
         let out = NSMutableAttributedString()
         // "\r\n" is one Character, not a "\n" (a file saved on Windows).
         let lines = text.split(omittingEmptySubsequences: false) { $0 == "\n" || $0 == "\r\n" }.map(String.init)
@@ -473,13 +522,9 @@ enum ChatRenderer {
                 out.append(codeBlock(code, language: lang))
                 continue
             }
-            if trimmed.hasPrefix("|"), i + 1 < lines.count, isTableSeparator(lines[i + 1]) {
-                var rows: [String] = [lines[i], lines[i + 1]]
-                i += 2
-                while i < lines.count, lines[i].trimmingCharacters(in: .whitespaces).hasPrefix("|") {
-                    rows.append(lines[i]); i += 1
-                }
-                out.append(table(rows, prose: prose))
+            if let found = MarkdownTable.parse(lines, at: i) {
+                out.append(table(found.table, prose: prose, width: width))
+                i = found.end
                 continue
             }
             out.append(block(lines[i], trimmed: trimmed, prose: prose))
@@ -511,90 +556,107 @@ enum ChatRenderer {
         return out
     }
 
-    private static func isTableSeparator(_ s: String) -> Bool {
-        let t = s.trimmingCharacters(in: .whitespaces)
-        return t.hasPrefix("|") && t.range(of: #"^\|?(\s*:?-{2,}:?\s*\|)+\s*:?-*:?\s*\|?$"#, options: .regularExpression) != nil
-    }
+    /// Space between a table's columns, and above and below each row's text
+    /// (a rule sits in the middle of the gap between rows).
+    static let tableGap: CGFloat = 18
+    static let tableRowPad: CGFloat = 4
 
-    /// A Markdown table on a card. One that fits a narrow transcript is a grid
-    /// on tab stops in the prose face, header in semibold above a rule; a wider
-    /// one (long cells, many columns) becomes one record per row, its first cell
-    /// as a heading over "header  value" lines that wrap on their own, since
-    /// cells can't wrap inside a grid of tab stops. Inline Markdown renders in
-    /// both; the text stays selectable and findable.
-    private static func table(_ rows: [String], prose: Prose) -> NSAttributedString {
-        let cells = rows.map(tableCells)
-        let separator = rows.count > 1 ? tableCells(rows[1]) : []
-        let body = Array(cells.dropFirst(2))
-        let header = cells.first ?? []
-        let columns = cells.map(\.count).max() ?? 0
+    /// A Markdown table on a card, as a grid fitted to `width` (the text
+    /// column): columns on tab stops in the prose face, the header semibold,
+    /// rules under the header and between rows, `:--:` alignments honored.
+    /// Cells that don't fit their column wrap onto more lines of the row (and
+    /// `<br>` breaks one); inline Markdown renders. Only a table with more
+    /// columns than can fit at all becomes one record per row. Either way the
+    /// text stays selectable and findable.
+    private static func table(_ table: MarkdownTable, prose: Prose, width: CGFloat) -> NSAttributedString {
+        let columns = table.columns
         guard columns > 0 else { return NSAttributedString() }
-        let headFont = prose.font(.bodyEmphasis)
-        let lineBreak = /<br\s*\/?>/.ignoresCase()
-        func render(_ cell: String, _ font: NSFont, _ color: NSColor = .labelColor) -> NSAttributedString {
-            inline(cell.replacing(lineBreak, with: "\u{2028}"), font: font, color: color)
+        let headFont = prose.font(.bodyEmphasis), bodyFont = prose.font()
+        let head = (0..<columns).map { tableCell(cell(table.header, $0), headFont) }
+        let body = table.rows.map { row in (0..<columns).map { tableCell(cell(row, $0), bodyFont) } }
+        let all = [head] + body
+        let natural = (0..<columns).map { c in
+            all.map { MarkdownTable.wrap($0[c], width: .greatestFiniteMagnitude).map { ceil($0.size().width) + 1 }.max() ?? 0 }
+                .max() ?? 0
         }
-        func cell(_ row: [String], _ c: Int) -> String { c < row.count ? row[c] : "" }
+        // A long word (a path, a URL) may break rather than widen its column past this.
+        let minimum = (0..<columns).map { c in min(all.map { MarkdownTable.widestWord($0[c]) + 1 }.max() ?? 0, 160) }
+        let available = width - 2 * pad - tableGap * CGFloat(columns - 1)
+        guard let widths = MarkdownTable.columnWidths(natural: natural, minimum: minimum, available: available) else {
+            return records(table, prose: prose)
+        }
+        let alignments = (0..<columns).map { $0 < table.alignments.count ? table.alignments[$0] : .left }
+        let total = widths.reduce(0, +) + tableGap * CGFloat(columns - 1)
 
-        // Measure each column as one line; a grid only if it all fits.
-        let gap: CGFloat = 18
-        var widths = [CGFloat](repeating: 0, count: columns)
-        var breaks = false
-        for (r, row) in ([header] + body).enumerated() {
-            for c in 0..<columns {
-                let text = cell(row, c)
-                breaks = breaks || text.contains(lineBreak)
-                widths[c] = max(widths[c], ceil(render(text, r == 0 ? headFont : prose.font()).size().width))
+        // Every column's stop: left at its start, right at its end, center in its middle.
+        // The first column needs one only when it isn't left-aligned (lines then start with a tab).
+        let leadingTab = alignments[0] != .left
+        var stops: [NSTextTab] = []
+        var x = pad
+        for c in 0..<columns {
+            switch alignments[c] {
+            case .right: stops.append(NSTextTab(textAlignment: .right, location: x + widths[c]))
+            case .center: stops.append(NSTextTab(textAlignment: .center, location: x + widths[c] / 2))
+            case .left: if c > 0 { stops.append(NSTextTab(textAlignment: .left, location: x)) }
             }
+            x += widths[c] + tableGap
         }
-        let total = widths.reduce(0, +) + gap * CGFloat(columns - 1)
+
         var paras: [NSAttributedString] = []
-        if !breaks, total <= 520, widths.allSatisfy({ $0 <= 260 }) {
-            let alignments = (0..<columns).map { c -> NSTextAlignment in
-                let spec = cell(separator, c)
-                return spec.hasSuffix(":") ? (spec.hasPrefix(":") ? .center : .right) : .left
-            }
-            let para = NSMutableParagraphStyle()
-            var x = pad
-            para.tabStops = (0..<columns).compactMap { c -> NSTextTab? in
-                defer { x += widths[c] + gap }
-                guard c > 0 else { return nil }
-                switch alignments[c] {
-                case .right: return NSTextTab(textAlignment: .right, location: x + widths[c])
-                case .center: return NSTextTab(textAlignment: .center, location: x + widths[c] / 2)
-                default: return NSTextTab(textAlignment: .left, location: x)
-                }
-            }
-            para.lineBreakMode = .byTruncatingTail
-            func gridRow(_ row: [String], _ font: NSFont) -> NSAttributedString {
+        for (r, row) in all.enumerated() {
+            let font = r == 0 ? headFont : bodyFont
+            let wrapped = (0..<columns).map { MarkdownTable.wrap(row[$0], width: widths[$0]) }
+            let height = wrapped.map(\.count).max() ?? 1
+            for l in 0..<height {
                 let line = NSMutableAttributedString()
                 for c in 0..<columns {
-                    if c > 0 { line.append(NSAttributedString(string: "\t", attributes: [.font: font])) }
-                    line.append(render(cell(row, c), font))
+                    if c > 0 || leadingTab { line.append(NSAttributedString(string: "\t", attributes: [.font: font])) }
+                    if l < wrapped[c].count { line.append(wrapped[c][l]) }
                 }
                 line.append(NSAttributedString(string: "\n", attributes: [.font: font]))
-                line.addAttribute(.paragraphStyle, value: para, range: NSRange(location: 0, length: line.length))
-                return line
+                let para = NSMutableParagraphStyle()
+                para.tabStops = stops
+                para.defaultTabInterval = 0
+                para.lineBreakMode = .byTruncatingTail
+                para.lineSpacing = 1.5
+                if l == 0, r > 0 { para.paragraphSpacingBefore = tableRowPad }
+                if l == height - 1, r < all.count - 1 { para.paragraphSpacing = tableRowPad }
+                let range = NSRange(location: 0, length: line.length)
+                line.addAttribute(.paragraphStyle, value: para, range: range)
+                line.addAttribute(.chatTable, value: true, range: range)
+                if l == 0, r > 0 {
+                    line.addAttribute(.chatTableRule, value: TableRule(isHeader: r == 1, leading: pad, width: total,
+                                                                      offset: tableRowPad), range: range)
+                }
+                paras.append(line)
             }
-            paras.append(gridRow(header, headFont))
-            let ruleFont = NSFont.mark(7)
-
-            let dash = max(1, ("─" as NSString).size(withAttributes: [.font: ruleFont]).width)
-            paras.append(line(String(repeating: "─", count: max(1, Int((total / dash).rounded(.up)))), font: ruleFont, color: .tertiaryLabelColor))
-            paras += body.map { gridRow($0, prose.font()) }
-            return spacedBlock(paras)
         }
+        return spacedBlock(paras)
+    }
 
-        // Records: the first cell heads each row; the other columns follow as
-        // labelled lines, values hanging past the widest label.
+    private static func cell(_ row: [String], _ c: Int) -> String { c < row.count ? row[c] : "" }
+
+    /// A cell's inline Markdown; `<br>` becomes a line separator.
+    private static func tableCell(_ text: String, _ font: NSFont, _ color: NSColor = .labelColor) -> NSAttributedString {
+        inline(text.replacing(/<br\s*\/?>/.ignoresCase(), with: "\u{2028}"), font: font, color: color)
+    }
+
+    /// A table with more columns than fit: the first cell heads each row; the
+    /// other columns follow as labelled lines, values hanging past the widest label.
+    private static func records(_ table: MarkdownTable, prose: Prose) -> NSAttributedString {
+        let columns = table.columns
+        let headFont = prose.font(.bodyEmphasis)
         let labelFont = prose.font(.meta)
-        let labels = (0..<columns).map { render(cell(header, $0).trimmingCharacters(in: .whitespaces), labelFont, .secondaryLabelColor) }
+        let labels = (0..<columns).map {
+            tableCell(cell(table.header, $0).trimmingCharacters(in: .whitespaces), labelFont, .secondaryLabelColor)
+        }
         let labelWidth = labels.dropFirst().map { ceil($0.size().width) }.max() ?? 0
         let stacked = labelWidth > 170
         let gapLine = NSAttributedString(string: "\n", attributes: [.font: NSFont.spacer(6)])
-        for (r, row) in body.enumerated() {
+        var paras: [NSAttributedString] = []
+        for (r, row) in table.rows.enumerated() {
             if r > 0 { paras.append(gapLine) }
-            let title = NSMutableAttributedString(attributedString: render(cell(row, 0), headFont))
+            let title = NSMutableAttributedString(attributedString: tableCell(cell(row, 0), headFont))
             if title.length > 0 {
                 title.append(NSAttributedString(string: "\n", attributes: [.font: headFont]))
                 let p = NSMutableParagraphStyle()
@@ -622,13 +684,15 @@ enum ChatRenderer {
                     p.headIndent = labelWidth + 12
                     p.tabStops = [NSTextTab(textAlignment: .left, location: pad + labelWidth + 12)]
                 }
-                field.append(render(value, prose.font()))
+                field.append(tableCell(value, prose.font()))
                 field.append(NSAttributedString(string: "\n", attributes: [.font: prose.font()]))
                 field.addAttribute(.paragraphStyle, value: p, range: NSRange(location: 0, length: field.length))
                 paras.append(field)
             }
         }
-        return spacedBlock(paras)
+        let out = NSMutableAttributedString(attributedString: spacedBlock(paras))
+        out.addAttribute(.chatTable, value: true, range: NSRange(location: 0, length: out.length))
+        return out
     }
 
     private static func spacedBlock(_ paras: [NSAttributedString]) -> NSAttributedString {
@@ -637,26 +701,6 @@ enum ChatRenderer {
         out.append(blocked(paras, .card))
         out.append(spacer(4))
         return out
-    }
-
-    /// A table row's cells: split on pipes that aren't escaped or in code.
-    private static func tableCells(_ row: String) -> [String] {
-        var t = row.trimmingCharacters(in: .whitespaces)
-        if t.hasPrefix("|") { t.removeFirst() }
-        if t.hasSuffix("|"), !t.hasSuffix("\\|") { t.removeLast() }
-        var cells: [String] = [], current = "", inCode = false, escaped = false
-        for ch in t {
-            if escaped { current.append(ch == "|" ? "|" : "\\\(ch)"); escaped = false; continue }
-            switch ch {
-            case "\\": escaped = true
-            case "`": inCode.toggle(); current.append(ch)
-            case "|" where !inCode: cells.append(current); current = ""
-            default: current.append(ch)
-            }
-        }
-        if escaped { current.append("\\") }
-        cells.append(current)
-        return cells.map { $0.trimmingCharacters(in: .whitespaces) }
     }
 
     private static func block(_ raw: String, trimmed: String, prose: Prose) -> NSAttributedString {
