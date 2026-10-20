@@ -11,7 +11,7 @@ import AppKit
 /// `BlockBackgroundFragment`. The view stays pinned to the bottom unless the
 /// user scrolls up.
 final class ChatTranscriptView: NSView, NSTextViewDelegate {
-    private struct Segment { let id: String; var item: ChatItem; var length: Int }
+    private struct Segment { let id: String; var item: ChatItem; var length: Int; var hasTable: Bool }
 
     private let scrollView = NSScrollView()
     private let textView = TranscriptTextView(usingTextLayoutManager: true)
@@ -126,6 +126,7 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
             let keep = stickToBottom
             textView.setFrameSize(NSSize(width: width, height: textView.frame.height))
             if keep { scrollToBottomSoon() }
+            refitTablesSoon()
         }
         let x = ((clipWidth - width) / 2).rounded()
         if textView.frame.minX != x { textView.setFrameOrigin(NSPoint(x: x, y: 0)) }
@@ -208,12 +209,12 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
                 if segments[i].item != item || force.contains(item.id) || Self.contains(item, force) {
                     let rendered = render(item)
                     storage.replaceCharacters(in: NSRange(location: location, length: segments[i].length), with: rendered)
-                    segments[i] = Segment(id: item.id, item: item, length: rendered.length)
+                    segments[i] = Segment(id: item.id, item: item, length: rendered.length, hasTable: Self.hasTable(rendered))
                 }
             } else {
                 let rendered = render(item)
                 storage.append(rendered)
-                segments.append(Segment(id: item.id, item: item, length: rendered.length))
+                segments.append(Segment(id: item.id, item: item, length: rendered.length, hasTable: Self.hasTable(rendered)))
             }
             location += segments[i].length
         }
@@ -222,8 +223,42 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
     }
 
     private func render(_ item: ChatItem) -> NSAttributedString {
-        linkify(ChatRenderer.render(item, expanded: expanded.contains(item.id),
-                                    isExpanded: { [expanded] in expanded.contains($0) }))
+        renderedTableWidth = tableWidth
+        return linkify(ChatRenderer.render(item, expanded: expanded.contains(item.id), width: renderedTableWidth,
+                                           isExpanded: { [expanded] in expanded.contains($0) }))
+    }
+
+    // MARK: Tables
+
+    /// The width tables are fitted to: the text column inside the margins
+    /// (the readable column before the first layout).
+    private var tableWidth: CGFloat {
+        let padding = textView.textContainer?.lineFragmentPadding ?? 0
+        let width = (textView.frame.width - 2 * (textView.textContainerInset.width + padding)).rounded(.down)
+        return width > 100 ? width : Self.readableWidth
+    }
+    private var renderedTableWidth: CGFloat = 0
+    private var tablesPending = false
+
+    static func hasTable(_ rendered: NSAttributedString) -> Bool {
+        var found = false
+        rendered.enumerateAttribute(.chatTable, in: NSRange(location: 0, length: rendered.length)) { value, _, stop in
+            if value != nil { found = true; stop.pointee = true }
+        }
+        return found
+    }
+
+    /// The column's width changed: lay out the tables again to fit it (once
+    /// per runloop turn, however many times layout asks).
+    private func refitTablesSoon() {
+        guard !tablesPending, abs(tableWidth - renderedTableWidth) >= 1, segments.contains(where: \.hasTable) else { return }
+        tablesPending = true
+        Task { [weak self] in
+            guard let self else { return }
+            self.tablesPending = false
+            guard abs(self.tableWidth - self.renderedTableWidth) >= 1 else { return }
+            self.apply(self.items, force: Set(self.segments.filter(\.hasTable).map(\.id)))
+        }
     }
 
     /// A group holding one of `ids` (a card inside it was toggled).
