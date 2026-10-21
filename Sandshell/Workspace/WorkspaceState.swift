@@ -318,6 +318,10 @@ struct WorkspaceState: Codable {
     /// `WorkspaceBootstrap.openReportingProblems`).
     static let currentSchemaVersion = 3
 
+    /// Where the workspace was when this was last saved: opened somewhere
+    /// else (the folder moved or was renamed), its sessions follow it.
+    var rootPath: String?
+
     init(schemaVersion: Int = WorkspaceState.currentSchemaVersion,
          folders: [Folder] = [],
          sessions: [Session] = [],
@@ -338,7 +342,7 @@ struct WorkspaceState: Codable {
 
     enum CodingKeys: String, CodingKey {
         case schemaVersion, folders, sessions, expandedFolderIDs
-        case archiveWatermarks, appliedMountSignatures, ignoredKitDrift, slugAgent
+        case archiveWatermarks, appliedMountSignatures, ignoredKitDrift, slugAgent, rootPath
         // Legacy keys (pre-folders model).
         case projects, expandedProjectIDs
     }
@@ -355,6 +359,7 @@ struct WorkspaceState: Codable {
         appliedMountSignatures = try c.decodeIfPresent([String: String].self, forKey: .appliedMountSignatures) ?? [:]
         ignoredKitDrift = try c.decodeIfPresent([String: [String]].self, forKey: .ignoredKitDrift) ?? [:]
         slugAgent = try c.decodeIfPresent(AgentKind.self, forKey: .slugAgent)
+        rootPath = try c.decodeIfPresent(String.self, forKey: .rootPath)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -367,6 +372,7 @@ struct WorkspaceState: Codable {
         try c.encode(appliedMountSignatures, forKey: .appliedMountSignatures)
         if !ignoredKitDrift.isEmpty { try c.encode(ignoredKitDrift, forKey: .ignoredKitDrift) }
         try c.encodeIfPresent(slugAgent, forKey: .slugAgent)
+        try c.encodeIfPresent(rootPath, forKey: .rootPath)
     }
 
     /// Schema 3 names a session by its first prompt (`Session.firstPrompt`)
@@ -415,8 +421,30 @@ struct WorkspaceState: Codable {
         }
     }
 
+    static func plainPath(_ url: URL) -> String {
+        let path = url.path(percentEncoded: false)
+        return path.count > 1 && path.hasSuffix("/") ? String(path.dropLast()) : path
+    }
+
+    /// The workspace was saved at `old` and opened at `new` (moved or
+    /// renamed): sessions under the old path move to the same place under the
+    /// new one, and keep the old path as `transcriptWorkdir` (their Claude
+    /// conversations move along before they next launch). True when any moved.
+    @discardableResult
+    mutating func followMovedRoot(from old: String, to new: String) -> Bool {
+        var changed = false
+        for i in sessions.indices {
+            guard let moved = Session.workdir(sessions[i].workdir, movedFrom: old, to: new) else { continue }
+            if sessions[i].transcriptWorkdir == nil { sessions[i].transcriptWorkdir = sessions[i].workdir }
+            sessions[i].workdir = moved
+            if sessions[i].transcriptWorkdir == moved { sessions[i].transcriptWorkdir = nil }
+            changed = true
+        }
+        return changed
+    }
+
     /// The workspace folder moved or was renamed on disk (its state came
-    /// along): sessions still name the old path, where their agents can't
+    /// along, from before the state said where it was saved): sessions still name the old path, where their agents can't
     /// start. A session whose `workdir` no longer exists moves under its
     /// folder's path now — keeping the longest tail of the old path that
     /// exists there (a subdirectory), else the folder itself — and keeps the
@@ -426,9 +454,13 @@ struct WorkspaceState: Codable {
     @discardableResult
     mutating func rebaseMissingWorkdirs(root: URL, exists: (String) -> Bool) -> Bool {
         var changed = false
+        // Only paths outside the root moved with it: one inside that's gone
+        // (a subfolder deleted) stays as it is.
+        let rootPaths = Set([root.path(percentEncoded: false), root.realPath].map { $0.hasSuffix("/") ? String($0.dropLast()) : $0 })
+        func insideRoot(_ path: String) -> Bool { rootPaths.contains { path == $0 || path.hasPrefix($0 + "/") } }
         for i in sessions.indices {
             let old = sessions[i].workdir
-            guard !old.isEmpty, !exists(old),
+            guard !old.isEmpty, !insideRoot(old), !exists(old),
                   let folder = folders.first(where: { $0.id == sessions[i].folderID }) ?? folders.first(where: \.isRoot)
             else { continue }
             let base = root.appending(path: folder.relativePath, directoryHint: .isDirectory).path(percentEncoded: false)
@@ -493,7 +525,9 @@ struct WorkspaceState: Codable {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
-        try encoder.encode(self).write(to: Self.stateURL(root: root), options: .atomic)
+        var saved = self
+        saved.rootPath = Self.plainPath(root)
+        try encoder.encode(saved).write(to: Self.stateURL(root: root), options: .atomic)
     }
 }
 
@@ -645,8 +679,15 @@ enum WorkspaceBootstrap {
             state.schemaVersion = 3
         }
 
-        // 5d. The workspace folder moved or was renamed: sessions follow it.
-        state.rebaseMissingWorkdirs(root: root) { FileManager.default.fileExists(atPath: $0) }
+        // 5d. The workspace folder moved or was renamed: sessions follow it —
+        // exactly, from where the state says it was saved; from older states
+        // (no record), sessions whose folder is gone move under the root.
+        let here = WorkspaceState.plainPath(root)
+        if let was = state.rootPath {
+            if was != here, !FileManager.default.fileExists(atPath: was) { state.followMovedRoot(from: was, to: here) }
+        } else {
+            state.rebaseMissingWorkdirs(root: root) { FileManager.default.fileExists(atPath: $0) }
+        }
 
         // 6. Persist (creates state.json on first run; idempotent thereafter).
         try state.save(root: root)

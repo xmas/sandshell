@@ -28,12 +28,35 @@ struct MovedWorkspaceTests {
                                                            "/Users/me/Code/xmas-sandshell/app", nil])
     }
 
+    @Test func aRecordedRootMovesExactlyThePathsUnderIt() {
+        var state = Self.state(["/old/repo", "/old/repo/sub/dir", "/elsewhere"])
+        let moved = state.followMovedRoot(from: "/old/repo", to: "/new/repo")
+        #expect(moved)
+        #expect(state.sessions.map(\.workdir) == ["/new/repo", "/new/repo/sub/dir", "/elsewhere"])
+        #expect(state.sessions.map(\.transcriptWorkdir) == ["/old/repo", "/old/repo/sub/dir", nil])
+    }
+
+    @Test func savingRecordsWhereTheWorkspaceIs() throws {
+        let dir = FileManager.default.temporaryDirectory.appending(path: "moved-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try WorkspaceState().save(root: dir)
+        let loaded = try WorkspaceState.load(root: dir)
+        #expect(loaded?.rootPath == WorkspaceState.plainPath(dir))
+    }
+
     @Test func aSessionInAFolderMovesUnderThatFolder() {
         let docs = Folder(relativePath: "docs", order: 1)
         let existing: Set<String> = ["/Users/me/Code/sandshell", "/Users/me/Code/sandshell/docs"]
         var state = Self.state(["/old/place/docs"], folders: [docs])
         state.rebaseMissingWorkdirs(root: Self.root) { existing.contains($0) }
         #expect(state.sessions[0].workdir == "/Users/me/Code/sandshell/docs")
+    }
+
+    @Test(.tags(.edgeCase))
+    func aMissingFolderInsideTheWorkspaceIsLeftAlone() {
+        var state = Self.state(["/Users/me/Code/sandshell/deleted/sub"])
+        #expect(!state.rebaseMissingWorkdirs(root: Self.root) { $0 == "/Users/me/Code/sandshell" })
+        #expect(state.sessions[0].workdir == "/Users/me/Code/sandshell/deleted/sub")
     }
 
     @Test(.tags(.edgeCase))
