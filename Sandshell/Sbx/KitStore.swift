@@ -46,6 +46,8 @@ enum KitStore {
     private static let key = "kitRegistry"
     private static let seededKey = "kitRegistrySeededOfficialDefaults.v1"
     private static let sandshellSeededKey = "kitRegistrySeededSandshell.v1"
+    private static let codeServerOffKey = "kitRegistryCodeServerNotDefault.v1"
+    static let codeServerRef = "docker.io/sbx/code-server-kit:latest"
 
     /// Sandshell's own kits (`kits/` in the repo, bundled in the app, published
     /// at github.com/xmas/sandshell-kits): the chat adapters preinstalled, and
@@ -79,10 +81,12 @@ enum KitStore {
         return dir.path(percentEncoded: false)
     }
 
-    /// Official kits worth having in every sandbox: cheap, no ports, and they
-    /// fix real gaps (unsigned in-sandbox commits, SSH host-key prompts). Seeded
-    /// into the registry once, as defaults; removing or un-defaulting them sticks.
-    static let officialDefaults: [KitRef] = [
+    /// Official kits seeded into the registry once; removing or (un)defaulting
+    /// them sticks. The two defaults are worth having in every sandbox: cheap,
+    /// no ports, and they fix real gaps (unsigned in-sandbox commits, SSH
+    /// host-key prompts). code-server is listed but off: its install takes
+    /// minutes, which every new sandbox would wait on.
+    static let officialKits: [KitRef] = [
         KitRef(ref: "docker.io/sbx/git-ssh-sign-kit:latest", displayName: "Git SSH Commit Signing",
                summary: "Signs commits with the SSH key forwarded from your Mac's agent, so in-sandbox commits are Verified like host commits.",
                isDefault: true),
@@ -90,8 +94,9 @@ enum KitStore {
                summary: "Pre-populates GitHub's SSH host keys so clone/push/pull over SSH never stops on a host-verification prompt.",
                isDefault: true),
         KitRef(ref: "docker.io/sbx/code-server-kit:latest", displayName: "code-server (web VS Code)",
-               summary: "VS Code in the browser on port 8080, opened on the workspace, with the Claude Code extension preinstalled.",
-               isDefault: true),
+               summary: "VS Code in the browser on port 8080, opened on the workspace, with the Claude Code extension preinstalled. "
+                   + "Installing it adds a few minutes to making a sandbox.",
+               isDefault: false),
     ]
 
     // MARK: Agent requirements
@@ -104,7 +109,7 @@ enum KitStore {
     /// asked again.
     private static let requirementsKey = "kitRequirements.v3"
     private static let staleRequirementsKeys = ["kitRequiredAgents", "kitRequiredAgents.v2", "kitDefinesAgent"]
-    /// Known up front, so the official default works offline.
+    /// Known up front, so the official kit works offline.
     private static let knownRequirements = ["docker.io/sbx/code-server-kit:latest": "claude",
                                             "sandshell-claude": "claude", "sandshell-codex": "codex"]
 
@@ -165,7 +170,7 @@ enum KitStore {
     static var defaults: [KitRef] { all.filter(\.isDefault) }
     static var defaultRefs: [String] { defaults.map(\.ref) }
 
-    /// One-time: register the official default kits (runs at launch).
+    /// One-time: register the official kits (runs at launch).
     static func seedSandshellKitsIfNeeded() {
         guard !UserDefaults.standard.bool(forKey: sandshellSeededKey) else { return }
         var kits = all
@@ -177,11 +182,20 @@ enum KitStore {
     static func seedOfficialDefaultsIfNeeded() {
         guard !UserDefaults.standard.bool(forKey: seededKey) else { return }
         var kits = all
-        for kit in officialDefaults where !kits.contains(where: { $0.ref == kit.ref }) {
+        for kit in officialKits where !kits.contains(where: { $0.ref == kit.ref }) {
             kits.append(kit)
         }
         save(kits)
         UserDefaults.standard.set(true, forKey: seededKey)
+    }
+
+    /// Once: code-server was seeded as a default until 0.2.38, and its
+    /// minutes-long install held up every new sandbox. Turned off where it's
+    /// still on (a workspace that has it keeps it); starring it again sticks.
+    static func undefaultCodeServerIfNeeded() {
+        guard !UserDefaults.standard.bool(forKey: codeServerOffKey) else { return }
+        setDefault(codeServerRef, false)
+        UserDefaults.standard.set(true, forKey: codeServerOffKey)
     }
 
     static func setDefault(_ ref: String, _ isDefault: Bool) {

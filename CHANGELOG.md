@@ -2,6 +2,10 @@
 
 A running log of what changed, newest first. Yes, we actually write these.
 
+## v0.2.38 — "On Demand"
+- **No sandbox until you start a session.** Opening a folder used to build its sandbox right away — image, kits and all — before you'd asked for anything. Now a window only attaches to a sandbox that already exists; a new one is made by the first session you start.
+- **code-server is no longer a default kit.** Installing it took minutes, and every new sandbox waited on it. It's still in Settings ▸ Kits — star it to have it again. Workspaces that already have it keep it; remove it there to make their sandboxes faster to build.
+
 ## v0.2.37 — "Remote"
 - **Remote Control: drive your chats from a browser.** Turn it on per chat (the antenna in the pane strip) and open the chat on another device: the transcript, permission and question cards, Stop, the mode chooser and image attach (pasted or dropped too). This Mac's own browser just works; any other device pairs once — a 6-digit code or a link/QR code, for five minutes — and can be revoked. It answers on the home network and, if you use Tailscale, over your tailnet. Settings ▸ General ▸ Remote Control turns it off entirely.
 - **A workspace folder you rename or move keeps its sessions.** Sessions follow the folder to its new path (they used to start in the old one, where the agent couldn't run — "exited (127)"), and their Claude conversations move along so they resume.

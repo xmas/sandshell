@@ -760,11 +760,17 @@ enum SelfTest {
 
     // MARK: New session mid-build
 
-    /// Needs a workspace whose sandbox doesn't exist yet: a session added while
-    /// it's being created must launch once it's up.
+    /// Needs a workspace whose sandbox doesn't exist yet: opening it makes
+    /// none, the first session does, and a session added while it's being
+    /// created must launch once it's up.
     private static func building(_ window: MainWindowController) async {
         guard let tree = window.paneTree, let ws = window.workspaceController else { return log("no window") }
-        check(await until(30) { ws.isBuilding }, "fresh workspace starts building its sandbox")
+        check(await until(30) { ws.containerPhases[ws.primaryAgent] == .absent && !ws.busy },
+              "a fresh workspace finds no sandbox (\(ws.containerPhases[ws.primaryAgent].map { "\($0)" } ?? "unknown"))")
+        await wait(3)
+        check(!ws.isBuilding, "opening it makes no sandbox before a session asks for one")
+        guard ws.newSessionInCurrentContext() != nil else { return log("no folder for a session") }
+        check(await until(30) { ws.isBuilding }, "the first session starts building its sandbox")
         guard let s = ws.newSessionInCurrentContext() else { return log("no folder for a session") }
         check(ws.isBuilding, "New Session added while building")
         await wait(0.5)
@@ -1739,6 +1745,10 @@ enum SelfTest {
         func sandboxID() async -> String? { try? await SbxClient.shared.status(name: name)?.id }
         func settle() async -> Bool { await until(300) { !ws.busy && !ws.isBuilding } }
 
+        // Opening the window attaches to (or rebuilds) one left from an earlier
+        // run but makes none: then bring it up as a session would.
+        _ = await until(120) { !ws.busy }
+        if ws.containerPhases[agent] != .running { _ = await ws.ensureContainerReady(for: agent) }
         check(await until(300) { ws.containerPhases[agent] == .running && !ws.busy }, "container '\(name)' comes up")
         check(await actualKits() == [a], "sbx inspect reports the configured kit [a]")
         ws.refreshKitDrift(for: agent)

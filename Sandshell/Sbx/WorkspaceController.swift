@@ -306,12 +306,12 @@ final class WorkspaceController: ObservableObject {
         config.policy = policy
         config.configured = true
         saveConfig()
-        // Rebuild the primary plus any other agent that already has a container.
-        // No prompt — the caller (first-run / Settings ▸ Apply & Rebuild) already
-        // confirmed via its own UI.
-        var agents = Set(containers.keys)
-        agents.insert(workspace.primaryAgent)
-        for agent in agents { rebuildContainer(for: agent) }
+        // Rebuild every agent that already has a container — the primary's
+        // too, if it has one (nothing knew yet on a first open). No prompt —
+        // the caller (first-run / Settings ▸ Apply & Rebuild) already
+        // confirmed via its own UI. None is made: a session's launch does that.
+        for agent in containers.keys { rebuildContainer(for: agent) }
+        if containers[workspace.primaryAgent] == nil { bringUpIfMade(workspace.primaryAgent, onMismatch: .rebuild) }
     }
 
     /// Take mounts set from outside (`sandshell://open`) into this open
@@ -1008,9 +1008,29 @@ final class WorkspaceController: ObservableObject {
 
     // MARK: - Lifecycle
 
-    /// Ensure the primary agent's container exists with the current mounts.
+    /// Opening the window: attach to the primary agent's sandbox if it was
+    /// made already (offering a rebuild if its mounts changed). One that
+    /// doesn't exist yet waits for the first session that needs it — building
+    /// it (an image pull, kits) is too slow to do before anyone asked.
     func openPrimaryContainer() {
-        ensureContainer(for: workspace.primaryAgent)
+        bringUpIfMade(workspace.primaryAgent, onMismatch: .prompt)
+    }
+
+    /// Bring up `agent`'s sandbox only if it exists (or a bring-up of it is
+    /// under way); otherwise just record that it's absent.
+    private func bringUpIfMade(_ agent: AgentKind, onMismatch: MismatchAction) {
+        runAction { @MainActor in
+            let name = self.containerName(for: agent)
+            if Self.bringUps[name] == nil, try await SbxClient.shared.status(name: name) == nil {
+                // A session's launch may have started making it meanwhile.
+                guard Self.bringUps[name] == nil else { return }
+                self.containers[agent] = nil
+                self.containerPhases[agent] = .absent
+                Log.info(.workspace, "no sandbox '\(name)' yet: made when a session needs it")
+                return
+            }
+            try await self.bringUpContainer(for: agent, onMismatch: onMismatch)
+        }
     }
 
     /// Keep the window's live state current: container phases, subagents and

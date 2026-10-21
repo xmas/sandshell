@@ -269,8 +269,9 @@ final class MainWindowController: NSWindowController {
         if let warning = UnreadableWorkspaceFile.warning(for: controller.takeOpenProblems()) {
             Alerts.inform(warning.title, warning.message, style: .warning, in: window)
         }
-        // First open: configure mounts before bringing the container up
-        // (scripted runs take the defaults: nobody's there to answer).
+        // First open: configure mounts first (scripted runs take the defaults:
+        // nobody's there to answer). Either way an existing sandbox is
+        // attached to, and a missing one waits for the first session.
         if controller.needsConfiguration, AutomatedRun.isActive {
             controller.applyConfiguration(policy: controller.policy)
         } else if controller.needsConfiguration {

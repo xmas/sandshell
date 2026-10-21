@@ -35,12 +35,12 @@ fileprivate enum KitStoreFixture {
 
     /// Every kit in the built-in catalogs. Computed rather than stored, and tests
     /// are parameterized over `builtInRefs`, so nothing here needs `KitRef: Sendable`.
-    static var builtInKits: [KitRef] { KitStore.sandshellKits + KitStore.officialDefaults }
+    static var builtInKits: [KitRef] { KitStore.sandshellKits + KitStore.officialKits }
     static var builtInRefs: [String] { builtInKits.map(\.ref) }
 
     /// Each built-in ref, paired with whether it is one of Sandshell's own kits.
     static var builtInMembership: [(String, Bool)] {
-        KitStore.sandshellKits.map { ($0.ref, true) } + KitStore.officialDefaults.map { ($0.ref, false) }
+        KitStore.sandshellKits.map { ($0.ref, true) } + KitStore.officialKits.map { ($0.ref, false) }
     }
 
     static func builtInKit(_ ref: String, sourceLocation: SourceLocation = #_sourceLocation) throws -> KitRef {
@@ -212,27 +212,27 @@ struct KitStoreCatalogTests {
         #expect(KitStore.sandshellKits.map(\.ref) == ["sandshell-claude", "sandshell-codex"])
     }
 
-    @Test("The official defaults are the three docker.io kits, in that order")
-    func officialDefaultRefs() {
-        #expect(KitStore.officialDefaults.map(\.ref) == [
+    @Test("The official kits are the three docker.io kits, in that order")
+    func officialKitRefs() {
+        #expect(KitStore.officialKits.map(\.ref) == [
             "docker.io/sbx/git-ssh-sign-kit:latest",
             "docker.io/sbx/github-ssh-kit:latest",
             "docker.io/sbx/code-server-kit:latest",
         ])
     }
 
-    @Test("Every built-in kit is a default with a display name and summary, and is titled by its display name",
+    @Test("Every built-in kit but code-server is a default; each has a display name and summary, and is titled by it",
           arguments: KitStoreFixture.builtInRefs)
     func builtInKitIsDescribedDefault(ref: String) throws {
         let kit = try KitStoreFixture.builtInKit(ref)
-        #expect(kit.isDefault, "built-in kits are on by default")
+        #expect(kit.isDefault == (ref != KitStore.codeServerRef), "only code-server (minutes to install) is off by default")
         #expect(kit.displayName?.isEmpty == false, "a built-in kit needs a display name")
         #expect(kit.summary?.isEmpty == false, "a built-in kit needs a summary")
         #expect(kit.title == kit.displayName, "a built-in kit is titled by its display name")
     }
 
-    @Test("The official defaults come from docker.io, a source sbx allows without configuration",
-          arguments: KitStore.officialDefaults.map(\.ref))
+    @Test("The official kits come from docker.io, a source sbx allows without configuration",
+          arguments: KitStore.officialKits.map(\.ref))
     func officialDefaultUsesAllowedSource(ref: String) {
         #expect(ref.hasPrefix("docker.io/"))
     }
@@ -243,7 +243,7 @@ struct KitStoreCatalogTests {
         #expect(Set(refs).count == refs.count, "each built-in ref should appear once in \(refs)")
     }
 
-    @Test("Sandshell's kits are recognized as Sandshell kits; the official defaults are not",
+    @Test("Sandshell's kits are recognized as Sandshell kits; the official kits are not",
           arguments: KitStoreFixture.builtInMembership)
     func catalogMembership(ref: String, isSandshellKit: Bool) {
         #expect(KitStore.isSandshellKit(ref) == isSandshellKit)
