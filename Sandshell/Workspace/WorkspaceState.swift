@@ -415,6 +415,40 @@ struct WorkspaceState: Codable {
         }
     }
 
+    /// The workspace folder moved or was renamed on disk (its state came
+    /// along): sessions still name the old path, where their agents can't
+    /// start. A session whose `workdir` no longer exists moves under its
+    /// folder's path now — keeping the longest tail of the old path that
+    /// exists there (a subdirectory), else the folder itself — and keeps the
+    /// old path as `transcriptWorkdir`, so its Claude conversation is moved
+    /// along before it next launches (`WorkspaceController.settleConversation`).
+    /// `exists` is FileManager's, injectable for tests. True when anything moved.
+    @discardableResult
+    mutating func rebaseMissingWorkdirs(root: URL, exists: (String) -> Bool) -> Bool {
+        var changed = false
+        for i in sessions.indices {
+            let old = sessions[i].workdir
+            guard !old.isEmpty, !exists(old),
+                  let folder = folders.first(where: { $0.id == sessions[i].folderID }) ?? folders.first(where: \.isRoot)
+            else { continue }
+            let base = root.appending(path: folder.relativePath, directoryHint: .isDirectory).path(percentEncoded: false)
+            let folderPath = base.hasSuffix("/") ? String(base.dropLast()) : base
+            guard exists(folderPath), folderPath != old else { continue }
+            let parts = old.split(separator: "/").map(String.init)
+            // The longest tail of the old path (short of all of it) that's there now.
+            var target = folderPath
+            for start in 1..<max(parts.count, 1) {
+                let candidate = folderPath + "/" + parts[start...].joined(separator: "/")
+                if exists(candidate) { target = candidate; break }
+            }
+            if sessions[i].transcriptWorkdir == nil { sessions[i].transcriptWorkdir = old }
+            sessions[i].workdir = target
+            if sessions[i].transcriptWorkdir == target { sessions[i].transcriptWorkdir = nil }
+            changed = true
+        }
+        return changed
+    }
+
     // MARK: - Persistence
 
     /// Control directory holding Sandshell's per-workspace files.
@@ -610,6 +644,9 @@ enum WorkspaceBootstrap {
             state.migrateLegacyNames()
             state.schemaVersion = 3
         }
+
+        // 5d. The workspace folder moved or was renamed: sessions follow it.
+        state.rebaseMissingWorkdirs(root: root) { FileManager.default.fileExists(atPath: $0) }
 
         // 6. Persist (creates state.json on first run; idempotent thereafter).
         try state.save(root: root)
