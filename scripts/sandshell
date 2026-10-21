@@ -65,4 +65,21 @@ for m in "${rw_mounts[@]}"; do
     url="${url}&rw=$(urlencode "$abs")"
 done
 
+# Which Sandshell: the installed release — the app this script ships in
+# (Homebrew links it from Sandshell.app/Contents/Resources), else
+# /Applications/Sandshell.app — never a Debug build from source, which shares
+# the bundle id and could otherwise take the sandshell:// URL.
+# SANDSHELL_APP=/path/to/Sandshell.app picks one explicitly.
+app="${SANDSHELL_APP:-}"
+if [[ -z "$app" ]]; then
+    self="$(python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$0")"
+    case "$self" in
+        */Sandshell.app/Contents/Resources/sandshell) app="${self%/Contents/Resources/sandshell}" ;;
+    esac
+fi
+if [[ -z "$app" && -d /Applications/Sandshell.app ]]; then app=/Applications/Sandshell.app; fi
+
+if [[ -n "$app" ]]; then
+    exec open -a "$app" "$url"
+fi
 exec open "$url"
