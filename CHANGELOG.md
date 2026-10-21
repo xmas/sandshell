@@ -2,6 +2,11 @@
 
 A running log of what changed, newest first. Yes, we actually write these.
 
+## v0.2.37 — "Remote"
+- **Remote Control: drive your chats from a browser.** Turn it on per chat (the antenna in the pane strip) and open the chat on another device: the transcript, permission and question cards, Stop, the mode chooser and image attach (pasted or dropped too). This Mac's own browser just works; any other device pairs once — a 6-digit code or a link/QR code, for five minutes — and can be revoked. It answers on the home network and, if you use Tailscale, over your tailnet. Settings ▸ General ▸ Remote Control turns it off entirely.
+- **A workspace folder you rename or move keeps its sessions.** Sessions follow the folder to its new path (they used to start in the old one, where the agent couldn't run — "exited (127)"), and their Claude conversations move along so they resume.
+- **The `sandshell` command opens the installed app,** not a development build of Sandshell that happens to be around.
+
 ## v0.2.36 — "Checklist"
 - **Claude's to-do list, like the Claude app's.** When Claude plans its work, the chat shows a checklist — a filled check for done steps (muted), a spinner ring on the one in progress, empty rings for the rest. While the turn runs, the list is pinned above the message field as one line — the current step, "3 of 6" and a turning spinner — that opens to the whole list; and the session's sidebar row reads *Working · 3/6*.
 - **The open file's menu in Files** (⋯ beside its path, or right-click the path or a tab): Reveal in File Tree, Show in Finder, Copy (the file itself, for pasting in Finder), Copy Path and Copy Relative Path.
