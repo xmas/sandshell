@@ -2,7 +2,7 @@
 
 A running log of what changed, newest first. Yes, we actually write these.
 
-## Unreleased
+## v0.2.39 — "Pointed"
 - **Popovers point at what opened them.** On macOS 27, popovers with SwiftUI content landed far from their control — the sandbox's Folder Access one even above the window. They're sized before they're placed now, so they hang right under it.
 - **A chat that finished while you weren't looking shows its reply.** The chat lays out what's on screen again when it comes back into view (another Space, uncovered, another session or the terminal in the pane), when it gets taller without a resize drag (the plan or a long draft going away, a tiled window), and when a message changes while you're scrolled up. Before, a reply could stay blank until you scrolled.
 
