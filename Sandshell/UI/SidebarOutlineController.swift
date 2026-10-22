@@ -1252,6 +1252,14 @@ final class SidebarListController: NSViewController {
     func debugSummaryCell(_ id: UUID) -> SubagentSummaryCellView? {
         rows.firstIndex(of: .summary(id)).flatMap { outline.view(atColumn: 0, row: $0, makeIfNecessary: true) as? SubagentSummaryCellView }
     }
+    /// Self-test: what dragging `id`'s row carries, on a pasteboard of its own.
+    func debugDragPasteboard(_ id: UUID) -> NSPasteboard? {
+        guard let row = row(of: id), let item = tableView(outline, pasteboardWriterForRow: row) else { return nil }
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name("sandshell-selftest-drag-\(UUID().uuidString)"))
+        pasteboard.clearContents()
+        pasteboard.writeObjects([item])
+        return pasteboard
+    }
     func debugRowView(_ id: UUID) -> SidebarRowView? {
         row(of: id).flatMap { outline.rowView(atRow: $0, makeIfNecessary: true) as? SidebarRowView }
     }

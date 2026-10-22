@@ -37,6 +37,9 @@ enum Tailscale {
                       httpsCertificates: !(value["CertDomains"]?.array ?? []).isEmpty)
     }
 
+    /// How long the CLI gets to answer.
+    static let timeout: TimeInterval = 5
+
     /// The status now (nil: not installed, or the CLI couldn't say).
     @concurrent static func status() async -> Status? {
         guard let cli = cliPath() else { return nil }
@@ -47,8 +50,19 @@ enum Tailscale {
         process.standardOutput = out
         process.standardError = FileHandle.nullDevice
         do { try process.run() } catch { return nil }
+        // A CLI that doesn't answer (Tailscale switching accounts or tailnets,
+        // its daemon busy) is stopped after a few seconds: otherwise this read
+        // never ends, and Remote Control keeps saying what it last knew.
+        nonisolated(unsafe) let running = process
+        DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
+            if running.isRunning { running.terminate() }
+        }
         let data = out.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
-        return parse(data)
+        guard let status = parse(data) else {
+            Log.info(.app, "remote: tailscale status --json gave no status (exit \(process.terminationStatus), \(data.count) bytes)")
+            return nil
+        }
+        return status
     }
 }

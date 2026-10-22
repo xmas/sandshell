@@ -271,6 +271,51 @@ enum SelfTest {
         await wait(1.0)
         let key = tree.layoutKey
         check(UserDefaults.standard.data(forKey: key) != nil, "layout saved for the window")
+
+        // A session dragged from the sidebar onto an empty pane shows there
+        // (the pane itself takes text and files: it hands sessions on).
+        window.splitRight()
+        await wait()
+        if let empty = tree.panes.first(where: { $0.shownSession == nil }),
+           let pasteboard = window.sidebarController?.debugDragPasteboard(b) {
+            let center = empty.view.convert(NSPoint(x: empty.view.bounds.midX, y: empty.view.bounds.midY), to: nil)
+            let drag = FakeDrag(pasteboard: pasteboard, location: center, window: window.window)
+            let op = empty.view.draggingEntered(drag)
+            check(op != [], "an empty pane takes a session dragged from the sidebar (\(op.rawValue))")
+            check(empty.view.performDragOperation(drag), "and dropping it there succeeds")
+            empty.view.concludeDragOperation(drag)
+            await wait()
+            check(empty.shownSession == b, "the empty pane shows the dropped session")
+        } else { check(false, "an empty pane and the sidebar's drag of B") }
+
+        // A file dragged over a chat: it says it'll attach.
+        guard let folder = ws.folders.first, let c = ws.addSession(folderID: folder.id, agent: .claude, chat: true) else {
+            return check(false, "a chat session")
+        }
+        let dir = FileManager.default.temporaryDirectory.appending(path: "sandshell-attach-drop")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let chat = ChatSession(title: "Fake", agent: .claude, containerName: "attach-drop", workdir: dir.path,
+                               home: dir.path, mcpURL: nil, sessionID: c.id)
+        if let script = RemoteHub.fakeAgentScript { chat.launchOverride = ("/usr/bin/python3", ["-I", script.path]) }
+        tree.surfaces.chats[c.id] = ChatSessionView(session: chat)
+        ws.setLive(c.id, true)
+        chat.start()
+        defer { chat.close(); tree.surfaces.chats[c.id] = nil; ws.setLive(c.id, false); ws.closeSession(c.id) }
+        guard let pane = tree.focused else { return check(false, "a focused pane") }
+        pane.show(c.id)
+        await wait()
+        let image = dir.appending(path: "dot.png")
+        try? Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=")?.write(to: image)
+        let files = NSPasteboard(name: NSPasteboard.Name("sandshell-selftest-files-\(UUID().uuidString)"))
+        files.clearContents()
+        files.writeObjects([image as NSURL])
+        let middle = pane.view.convert(NSPoint(x: pane.view.bounds.midX, y: pane.view.bounds.midY), to: nil)
+        let fileDrag = FakeDrag(pasteboard: files, location: middle, window: window.window)
+        check(pane.view.draggingEntered(fileDrag) == .copy && pane.debugAttachDropZoneShown,
+              "a file dragged over a chat shows where it'll attach")
+        snapshot(window, "panes-attach-drop")
+        pane.view.draggingExited(fileDrag)
+        check(!pane.debugAttachDropZoneShown, "and the zone goes when the drag leaves")
     }
 
     // MARK: Chat
@@ -3828,5 +3873,30 @@ enum SelfTest {
         check(spacedLinks.contains { $0.0 == file.path }, "a bare absolute path with spaces links whole")
         check(!spacedLinks.contains { $0.0.contains("Nope") }, "a quoted path that doesn't exist doesn't")
     }
+}
+/// A drag for the self-tests: what AppKit hands a drop target.
+@MainActor final class FakeDrag: NSObject, @MainActor NSDraggingInfo {
+    let draggingPasteboard: NSPasteboard
+    let draggingLocation: NSPoint
+    weak var draggingDestinationWindow: NSWindow?
+    init(pasteboard: NSPasteboard, location: NSPoint, window: NSWindow?) {
+        draggingPasteboard = pasteboard
+        draggingLocation = location
+        draggingDestinationWindow = window
+    }
+    var draggingSourceOperationMask: NSDragOperation { [.copy, .move, .generic] }
+    var draggedImageLocation: NSPoint { draggingLocation }
+    var draggedImage: NSImage? { nil }
+    var draggingSource: Any? { nil }
+    var draggingSequenceNumber: Int { 1 }
+    func slideDraggedImage(to screenPoint: NSPoint) {}
+    var draggingFormation: NSDraggingFormation = .default
+    var animatesToDestination = false
+    var numberOfValidItemsForDrop = 1
+    func enumerateDraggingItems(options enumOpts: NSDraggingItemEnumerationOptions = [], for view: NSView?,
+                                classes classArray: [AnyClass], searchOptions: [NSPasteboard.ReadingOptionKey: Any] = [:],
+                                using block: (NSDraggingItem, Int, UnsafeMutablePointer<ObjCBool>) -> Void) {}
+    var springLoadingHighlight: NSSpringLoadingHighlight { .none }
+    func resetSpringLoading() {}
 }
 #endif

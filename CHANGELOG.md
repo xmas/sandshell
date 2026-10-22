@@ -2,6 +2,11 @@
 
 A running log of what changed, newest first. Yes, we actually write these.
 
+## Unreleased
+- **Drag sessions onto any pane again,** an empty one included: a pane handed the drag to its terminal or chat (which took the session's folder as text) instead of placing the session.
+- **Dragging a file or image over a chat says so:** the chat is outlined, with "Drop to attach" in the middle.
+- **Remote Control reads Tailscale more reliably:** a `tailscale status` that doesn't answer (Tailscale switching accounts or tailnets) is stopped after 5 seconds, so it can't leave the switch saying "not connected" for good.
+
 ## v0.2.39 — "Pointed"
 - **Popovers point at what opened them.** On macOS 27, popovers with SwiftUI content landed far from their control — the sandbox's Folder Access one even above the window. They're sized before they're placed now, so they hang right under it.
 - **A chat that finished while you weren't looking shows its reply.** The chat lays out what's on screen again when it comes back into view (another Space, uncovered, another session or the terminal in the pane), when it gets taller without a resize drag (the plan or a long draft going away, a tiled window), and when a message changes while you're scrolled up. Before, a reply could stay blank until you scrolled.

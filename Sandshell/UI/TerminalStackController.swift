@@ -453,6 +453,12 @@ final class SessionSurfaces {
 /// kit banner. `PaneTreeController` arranges several of these in splits.
 @MainActor
 final class TerminalStackController: NSViewController {
+    /// Over a chat while files or an image are dragged onto it.
+    private let attachDropZone = DropZoneOverlay()
+    #if DEBUG
+    var debugAttachDropZoneShown: Bool { !attachDropZone.isHidden }
+    #endif
+
     private static let terminalPasteboardTypes: [NSPasteboard.PasteboardType] = [
         .fileURL, .URL, .string, .tiff, .png
     ]
@@ -700,11 +706,18 @@ final class TerminalStackController: NSViewController {
             self?.applyTheme()
         }
         container.onPasteboardDrag = { [weak self] pasteboard in
-            self?.canInsertPasteboard(pasteboard) == true
+            guard let self else { return false }
+            let ok = canInsertPasteboard(pasteboard)
+            // A chat says what a drop does: attach (a terminal types the path).
+            let showZone = ok && activeSessionID.map { chats[$0] != nil } == true
+            if attachDropZone.isHidden == showZone { attachDropZone.isHidden = !showZone }
+            return ok
         }
         container.onPasteboardDrop = { [weak self] pasteboard in
-            self?.insertPasteboard(pasteboard) == true
+            self?.attachDropZone.isHidden = true
+            return self?.insertPasteboard(pasteboard) == true
         }
+        container.onPasteboardDragEnd = { [weak self] in self?.attachDropZone.isHidden = true }
         container.registerForDraggedTypes(Self.terminalPasteboardTypes)
         container.wantsLayer = true   // so the panel background actually paints
         for v in [frameView, titleStrip, titleLine, host] {
@@ -726,6 +739,17 @@ final class TerminalStackController: NSViewController {
         frameView.addSubview(titleStrip)
         frameView.addSubview(titleLine)
         frameView.addSubview(host)
+        attachDropZone.setTitle("Drop to attach", symbol: "paperclip")
+        attachDropZone.isHidden = true
+        attachDropZone.translatesAutoresizingMaskIntoConstraints = false
+        attachDropZone.setAccessibilityIdentifier("chat-attach-drop-zone")
+        frameView.addSubview(attachDropZone)
+        NSLayoutConstraint.activate([
+            attachDropZone.leadingAnchor.constraint(equalTo: host.leadingAnchor, constant: 8),
+            attachDropZone.trailingAnchor.constraint(equalTo: host.trailingAnchor, constant: -8),
+            attachDropZone.topAnchor.constraint(equalTo: host.topAnchor, constant: 8),
+            attachDropZone.bottomAnchor.constraint(equalTo: host.bottomAnchor, constant: -8),
+        ])
 
         // Centered status.
         statusLabel.alignment = .center
@@ -2068,22 +2092,47 @@ private final class AppearanceReactiveView: NSView {
     var onAppearanceChange: ((NSAppearance) -> Void)?
     var onPasteboardDrag: ((NSPasteboard) -> Bool)?
     var onPasteboardDrop: ((NSPasteboard) -> Bool)?
+    /// A drag of files/text left or ended (not a session's: the pane tree's).
+    var onPasteboardDragEnd: (() -> Void)?
 
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
         onAppearanceChange?(effectiveAppearance)
     }
 
+    /// A session from the sidebar is the pane tree's to place (beside this
+    /// pane, or in it): it carries its folder as text too, which this view
+    /// would otherwise take — and an empty pane refuse.
+    private var paneTree: PaneDropContainer? {
+        sequence(first: superview, next: { $0?.superview }).lazy.compactMap { $0 as? PaneDropContainer }.first
+    }
+    private static func isSession(_ sender: NSDraggingInfo?) -> Bool {
+        sender?.draggingPasteboard.types?.contains(.sandshellSession) == true
+    }
+
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
-        onPasteboardDrag?(sender.draggingPasteboard) == true ? .copy : []
+        if Self.isSession(sender), let tree = paneTree { return tree.draggingEntered(sender) }
+        return onPasteboardDrag?(sender.draggingPasteboard) == true ? .copy : []
     }
 
     override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
-        onPasteboardDrag?(sender.draggingPasteboard) == true ? .copy : []
+        if Self.isSession(sender), let tree = paneTree { return tree.draggingUpdated(sender) }
+        return onPasteboardDrag?(sender.draggingPasteboard) == true ? .copy : []
+    }
+
+    override func draggingExited(_ sender: NSDraggingInfo?) {
+        if Self.isSession(sender), let tree = paneTree { return tree.draggingExited(sender) }
+        onPasteboardDragEnd?()
     }
 
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
-        onPasteboardDrop?(sender.draggingPasteboard) == true
+        if Self.isSession(sender), let tree = paneTree { return tree.performDragOperation(sender) }
+        return onPasteboardDrop?(sender.draggingPasteboard) == true
+    }
+
+    override func concludeDragOperation(_ sender: NSDraggingInfo?) {
+        if Self.isSession(sender), let tree = paneTree { return tree.concludeDragOperation(sender) }
+        onPasteboardDragEnd?()
     }
 }
 

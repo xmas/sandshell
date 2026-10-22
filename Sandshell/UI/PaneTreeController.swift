@@ -645,8 +645,34 @@ final class DropZoneOverlay: NSView {
     private func updateColors() {
         layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.15).cgColor
         layer?.borderColor = NSColor.controlAccentColor.withAlphaComponent(0.6).cgColor
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            titlePill?.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
+        }
     }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    /// What dropping does, centered in the zone ("Drop to attach").
+    func setTitle(_ title: String, symbol: String) {
+        let label = NSTextField(labelWithString: title)
+        label.font = .role(.bodyEmphasis)
+        label.textColor = .controlAccentColor
+        let icon = NSImageView(image: NSImage(systemSymbolName: symbol, accessibilityDescription: nil) ?? NSImage())
+        icon.symbolConfiguration = .role(.bodyEmphasis)
+        icon.contentTintColor = .controlAccentColor
+        let stack = NSStackView(views: [icon, label])
+        stack.spacing = 6
+        stack.edgeInsets = NSEdgeInsets(top: 8, left: 14, bottom: 8, right: 14)
+        // On a pill of its own: it reads over whatever the zone covers.
+        stack.wantsLayer = true
+        stack.layer?.cornerRadius = 16
+        titlePill = stack
+        updateColors()
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(stack)
+        NSLayoutConstraint.activate([stack.centerXAnchor.constraint(equalTo: centerXAnchor),
+                                     stack.centerYAnchor.constraint(equalTo: centerYAnchor)])
+    }
+    private var titlePill: NSView?
 }
 
 /// A window's pane layout as saved: a split (axis, children, their shares) or
