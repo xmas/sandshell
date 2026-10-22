@@ -11,10 +11,21 @@ extension NSPopover {
         if let open = slot, open.isShown { open.close(); slot = nil; return nil }
         let popover = NSPopover()
         popover.behavior = behavior
-        popover.contentViewController = content()
-        popover.show(relativeTo: rect ?? anchor.bounds, of: anchor, preferredEdge: anchor.isFlipped ? .maxY : .minY)
+        popover.show(content(), relativeTo: rect ?? anchor.bounds, of: anchor, preferredEdge: anchor.isFlipped ? .maxY : .minY)
         slot = popover
         return popover
+    }
+
+    /// Show `controller` at `rect` in `anchor`, sized to its content first.
+    /// SwiftUI content (an `NSHostingController`) has no size until after the
+    /// popover is placed, and the macOS 27 popover then lands far from its
+    /// anchor (a few hundred points off), so size it before it's placed.
+    @MainActor
+    func show(_ controller: NSViewController, relativeTo rect: NSRect, of anchor: NSView, preferredEdge: NSRectEdge) {
+        contentViewController = controller
+        let fit = controller.view.fittingSize
+        if fit.width > 0, fit.height > 0 { contentSize = fit }
+        show(relativeTo: rect, of: anchor, preferredEdge: preferredEdge)
     }
 }
 

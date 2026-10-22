@@ -266,12 +266,12 @@ final class SandboxActionsView: NSView {
     func showAccess(_ access: SandboxAccess) -> NSPopover {
         let popover = NSPopover()
         popover.behavior = .transient
-        popover.contentViewController = .hosting(SandboxAccessPopover(access: access))
-        popover.show(relativeTo: label.bounds, of: label, preferredEdge: .minY)
+        popover.show(.hosting(SandboxAccessPopover(access: access)), relativeTo: label.bounds, of: label, preferredEdge: .minY)
         return popover
     }
 
     var debugLabel: String { labelText.stringValue }
+    var debugLabelScreenRect: NSRect { window?.convertToScreen(label.convert(label.bounds, to: nil)) ?? .zero }
     /// The name has the room it needs (nothing truncated or clipped).
     var debugLabelWhole: Bool { labelText.frame.width + 0.5 >= ceil(labelText.intrinsicContentSize.width) }
 

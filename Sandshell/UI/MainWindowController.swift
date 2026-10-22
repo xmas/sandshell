@@ -436,6 +436,11 @@ final class MainWindowController: NSWindowController {
     var debugSandboxAccess: String { sandboxActions.toolTip ?? "" }
     func debugShowSandboxAccess() -> Bool { showSandboxAccessFromMenu(); return accessPopover?.isShown == true }
     func debugCloseSandboxAccess() { accessPopover?.close(); accessPopover = nil }
+    /// Self-test: the access popover's content and its anchor, on screen.
+    var debugAccessPopoverFrames: (popover: NSRect, anchor: NSRect)? {
+        guard let view = accessPopover?.contentViewController?.view, let pop = view.window else { return nil }
+        return (pop.convertToScreen(view.convert(view.bounds, to: nil)), sandboxActions.debugLabelScreenRect)
+    }
     /// Self-test: collapse or expand Files as a person's click does (animated).
     func debugSetFilesShownAnimated(_ show: Bool) {
         guard let item = filesItem, item.isCollapsed == show else { return }

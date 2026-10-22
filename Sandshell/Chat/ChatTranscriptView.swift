@@ -160,7 +160,54 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
         let x = ((clipWidth - width) / 2).rounded()
         if textView.frame.minX != x { textView.setFrameOrigin(NSPoint(x: x, y: 0)) }
         fade.frame = scrollView.bounds
+        // Taller or shorter (the plan pin or a long draft going, a tiled or
+        // zoomed window — no live resize): lay out what now shows, or the strip
+        // it uncovered stays blank.
+        if scrollView.contentSize != laidOutClipSize {
+            laidOutClipSize = scrollView.contentSize
+            layoutVisibleText()
+            layoutVisibleTextSoon()   // and once the scroll view has tiled its clip
+        }
         updateEndCues()
+    }
+    private var laidOutClipSize: NSSize = .zero
+
+    /// Shown again (another session was in the pane, or the terminal view) or
+    /// put back in a window: TextKit 2 laid out nothing while it didn't show,
+    /// and nothing else asks it to now.
+    override func viewDidUnhide() {
+        super.viewDidUnhide()
+        layoutVisibleTextSoon()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if let occlusionObserver { NotificationCenter.default.removeObserver(occlusionObserver) }
+        occlusionObserver = nil
+        guard let window else { return }
+        layoutVisibleTextSoon()
+        // The window back in view (another Space, uncovered): it may have
+        // missed laying out the turn that streamed in meanwhile.
+        occlusionObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didChangeOcclusionStateNotification, object: window, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.window?.occlusionState.contains(.visible) == true else { return }
+                self.layoutVisibleTextSoon()
+            }
+        }
+    }
+    private var occlusionObserver: NSObjectProtocol?
+
+    isolated deinit {
+        if let occlusionObserver { NotificationCenter.default.removeObserver(occlusionObserver) }
+    }
+
+    /// Once the view's in place (next runloop turn).
+    private func layoutVisibleTextSoon() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.window != nil, !self.isHiddenOrHasHiddenAncestor else { return }
+            self.layoutVisibleText()
+        }
     }
 
     private static let jumpSize: CGFloat = 30
@@ -224,6 +271,19 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
         return viewport.endLocation.compare(tlm.documentRange.endLocation) != .orderedAscending
     }
     func debugScrollToBottom() { scrollToBottom() }
+    /// Self-test: how much of the text showing on screen TextKit 2 hasn't laid
+    /// out — points of the visible text column outside its viewport.
+    var debugUnlaidVisibleHeight: CGFloat {
+        guard let vlc = textView.textLayoutManager?.textViewportLayoutController else { return .infinity }
+        let visible = textView.visibleRect
+        let textEnd = min(visible.maxY, textView.frame.height - textView.textContainerInset.height)
+        guard textEnd > visible.minY else { return 0 }
+        // The viewport is in the text container's coordinates (inside the inset).
+        let laid = vlc.viewportBounds.offsetBy(dx: 0, dy: textView.textContainerOrigin.y)
+        let above = max(0, min(laid.minY, textEnd) - visible.minY)
+        let below = max(0, textEnd - max(laid.maxY, visible.minY))
+        return above + below
+    }
     /// The fade and the ↓ button show (more below).
     var debugEndCuesShown: Bool { !jumpButton.isHidden }
     /// Where the fade's clear end is, on screen: "bottom" or "top".
@@ -292,7 +352,9 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
             location += segments[i].length
         }
         storage.endEditing()
-        if stickToBottom { scrollToBottom() }
+        // Following the end lays it out on the way there; otherwise lay out
+        // what shows, so a paragraph changed in place isn't left drawn as it was.
+        if stickToBottom { scrollToBottom() } else { layoutVisibleText() }
     }
 
     private func render(_ item: ChatItem) -> NSAttributedString {

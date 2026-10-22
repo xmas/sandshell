@@ -110,6 +110,7 @@ enum SelfTest {
         case "launch-failure": await launchFailure(window)
         case "fork": await fork(window)
         case "links": links()
+        case "transcript-draw": await transcriptDraw()
         case "tool-groups": await toolGroups()
         case "tables": await tables()
         case "codex-chat": await codexChat(window)
@@ -1727,6 +1728,12 @@ enum SelfTest {
         snapshot(window, "files-relaunch")
     }
 
+    /// `popover` (its content, on screen) sits just under `anchor`, across its middle.
+    static func hangsBelow(_ popover: NSRect, _ anchor: NSRect) -> Bool {
+        popover.maxY <= anchor.minY && popover.maxY >= anchor.minY - 30
+            && popover.minX <= anchor.midX && popover.maxX >= anchor.midX
+    }
+
     // MARK: Kits
 
     /// Kit add + drift against a real sandbox. Needs `-SandshellSelfTestKits
@@ -2337,7 +2344,25 @@ enum SelfTest {
               "the title bar's sandbox says its access (\(window.debugSandboxAccess))")
         check(window.debugSandboxMenuTitles.contains("Folder Access…"), "and its menu has Folder Access…")
         check(window.debugShowSandboxAccess(), "which opens the sandbox access popover")
+        await wait(0.5)
+        if let f = window.debugAccessPopoverFrames {
+            check(Self.hangsBelow(f.popover, f.anchor), "the access popover hangs from the sandbox pill (\(f.popover), pill \(f.anchor))")
+        } else { check(false, "the access popover has a window") }
         window.debugCloseSandboxAccess()
+        // A SwiftUI popover from a view in the window (macOS 27 put these far off).
+        if let w = window.window, let content = w.contentView {
+            let anchor = NSView(frame: NSRect(x: 600, y: 300, width: 60, height: 20))
+            content.addSubview(anchor)
+            var slot: NSPopover?
+            let pop = NSPopover.toggle(&slot, below: anchor, behavior: .applicationDefined) { .hosting(Text("probe").padding(40)) }
+            await wait(0.5)
+            let a = w.convertToScreen(anchor.convert(anchor.bounds, to: nil))
+            if let v = pop?.contentViewController?.view, let pw = v.window {
+                let r = pw.convertToScreen(v.convert(v.bounds, to: nil))
+                check(Self.hangsBelow(r, a), "a SwiftUI popover hangs below its anchor (\(r), anchor \(a))")
+            } else { check(false, "the probe popover shows") }
+            pop?.close(); anchor.removeFromSuperview()
+        }
 
         // A working chat's turn with a plan: how far through it, in place of the model.
         rt = ws.runtime(working.id) ?? SessionRuntime()
@@ -3618,6 +3643,147 @@ enum SelfTest {
         await wait(0.8)
         check(window.isFilesShown == before && window.debugFilesToggle.on == before,
               "and back (\(window.debugFilesToggle))")
+    }
+
+    // MARK: Transcript drawing
+
+    /// The transcript lays out what shows, whatever changes its size or text: a
+    /// long reply streamed in (at the end, or scrolled up), then the chat
+    /// growing taller without a live resize (the plan pin or a long draft
+    /// going, a tiled window). No agent: the items are made here.
+    private static func transcriptDraw() async {
+        let view = ChatTranscriptView()
+        let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1100, height: 900), styleMask: [.titled, .resizable],
+                         backing: .buffered, defer: false)
+        w.isReleasedWhenClosed = false
+        w.alphaValue = 0
+        w.ignoresMouseEvents = true
+        w.contentView = view
+        w.orderBack(nil)
+        defer { w.orderOut(nil) }
+        func unlaid(_ what: String) async {
+            await wait(0.3)
+            let gap = view.debugUnlaidVisibleHeight
+            check(gap < 1, "\(what): TextKit has laid out what shows (\(Int(gap)) pt not)")
+        }
+        var items: [ChatItem] = (0..<12).flatMap { i -> [ChatItem] in
+            [.user(id: UUID(), text: "Question \(i)?", attachments: []),
+             .agentText(id: "a\(i)", text: "Answer \(i): " + String(repeating: "words go here ", count: 40))]
+        }
+        items.append(.thought(id: "t", text: String(repeating: "thinking about where to look ", count: 30)))
+        view.debugApplyNow(items)
+        view.debugScrollToBottom()
+        await unlaid("a conversation at its end")
+
+        // A long Markdown reply, streamed in chunks.
+        let lines = (0..<160).map { i in i % 12 == 0 ? "\n**Section \(i / 12)**\n" : "- [Document number \(i)](https://example.com/doc/\(i)) (Jan \(i % 28 + 1))" }
+        func stream(_ id: String) async {
+            var text = ""
+            for chunk in stride(from: 0, to: lines.count, by: 8) {
+                text += lines[chunk..<min(chunk + 8, lines.count)].joined(separator: "\n") + "\n"
+                view.update(items + [.agentText(id: id, text: text)])
+                await wait(0.03)
+            }
+            items.append(.agentText(id: id, text: text))
+        }
+        await stream("r1")
+        await unlaid("a reply streamed in at the end")
+        view.debugScroll(toY: max(0, view.debugDocHeight - 2600))
+        await unlaid("scrolled up")
+        await stream("r2")
+        await unlaid("a reply streamed in while scrolled up")
+
+        // Taller, with no live resize: what's newly shown must be laid out too.
+        view.debugScrollToBottom()
+        await wait(0.2)
+        w.setContentSize(NSSize(width: 1100, height: 400))
+        await unlaid("the chat made shorter")
+        w.setContentSize(NSSize(width: 1100, height: 900))
+        await unlaid("the chat made taller again (not a live resize)")
+        view.debugScroll(toY: max(0, view.debugDocHeight - 3000))
+        await wait(0.2)
+        w.setContentSize(NSSize(width: 1100, height: 400))
+        await wait(0.2)
+        w.setContentSize(NSSize(width: 1100, height: 900))
+        await unlaid("taller again while scrolled up")
+
+        // A turn as Claude streams it: a reply, tools that start and finish
+        // in place, a thought that grows in place, then the answer after it —
+        // whether following the end or scrolled up a little.
+        for (n, follow) in [(5, true), (6, false)] {
+            view.debugScrollToBottom()
+            await wait(0.2)
+            if !follow { view.debugScroll(toY: max(0, view.debugDocHeight - 1200)) }
+            let base = items
+            var turn: [ChatItem] = [.user(id: UUID(), text: "This is all gonna be google drive", attachments: []),
+                                    .agentText(id: "p\(n)", text: "Drive is the right place to look. I'll check the kit docs and the skill.")]
+            for t in 0..<3 {
+                var call = ChatItem.ToolCall(id: "c\(n)-\(t)", title: "Run a command \(t)", kind: "execute", status: "pending", output: "", diffs: [])
+                turn.append(.tool(call))
+                view.update(base + turn)
+                await wait(0.05)
+                call.status = "completed"; call.output = String(repeating: "output ", count: 40)
+                turn[turn.count - 1] = .tool(call)
+                view.update(base + turn)
+                await wait(0.05)
+            }
+            var thought = ""
+            for word in String(repeating: "gws isn't installed in the sandbox, so I'll check the Mac via the bridge instead ", count: 6).split(separator: " ") {
+                thought += word + " "
+                view.update(base + turn + [.thought(id: "th\(n)", text: thought)])
+                await wait(0.005)
+            }
+            turn.append(.thought(id: "th\(n)", text: thought))
+            var answer = ""
+            for chunk in stride(from: 0, to: lines.count, by: 6) {
+                answer += lines[chunk..<min(chunk + 6, lines.count)].joined(separator: "\n") + "\n"
+                view.update(base + turn + [.agentText(id: "ans\(n)", text: answer)])
+                await wait(0.02)
+            }
+            items = base + turn + [.agentText(id: "ans\(n)", text: answer)]
+            await unlaid("a turn with tools and a growing thought, then its answer (\(follow ? "following" : "scrolled up"))")
+            if !follow {
+                view.debugJumpToNewest()
+                await unlaid("then ↓ to its end")
+            }
+        }
+
+        // The whole window out of view while the turn ran (another Space,
+        // minimized, behind other apps), then back.
+        for follow in [true, false] {
+            view.debugScrollToBottom()
+            await wait(0.2)
+            if !follow { view.debugScroll(toY: max(0, view.debugDocHeight - 1500)) }
+            w.orderOut(nil)
+            await wait(0.2)
+            let id = "away-\(follow)"
+            var thought = ""
+            for word in String(repeating: "checking whether it's installed on the Mac instead ", count: 5).split(separator: " ") {
+                thought += word + " "
+                view.update(items + [.thought(id: id + "-t", text: thought)])
+                await wait(0.005)
+            }
+            await stream(id)
+            items.insert(.thought(id: id + "-t", text: thought), at: items.count - 1)
+            w.orderBack(nil)
+            await unlaid("a turn streamed in while the window was away, back (\(follow ? "following" : "scrolled up"))")
+            view.debugJumpToNewest()
+            await unlaid("and at its end")
+        }
+
+        // Streamed while it didn't show (another session in the pane, the
+        // terminal view): shown again, the reply is there, drawn.
+        view.debugScrollToBottom()
+        await wait(0.2)
+        view.isHidden = true
+        await stream("r3")
+        view.isHidden = false
+        await unlaid("a reply streamed in while hidden, shown again")
+        view.removeFromSuperview()
+        w.contentView = NSView()
+        await stream("r4")
+        w.contentView = view
+        await unlaid("a reply streamed in out of the window, put back")
     }
 
     // MARK: Links
