@@ -3,6 +3,7 @@
 A running log of what changed, newest first. Yes, we actually write these.
 
 ## Unreleased
+- **Your claude.ai connectors in Sandshell's Claude sessions** (Slack, Drive and the rest). Claude signs in through sbx's credential proxy with a token Sandshell hands it, and a token handed over that way only counted for chatting — not for connectors. It now carries the same permissions as your login, so `/mcp` lists them as `sbx run claude` does. Restart a session to pick it up.
 - **Drag sessions onto any pane again,** an empty one included: a pane handed the drag to its terminal or chat (which took the session's folder as text) instead of placing the session.
 - **Dragging a file or image over a chat says so:** the chat is outlined, with "Drop to attach" in the middle.
 - **Remote Control reads Tailscale more reliably:** a `tailscale status` that doesn't answer (Tailscale switching accounts or tailnets) is stopped after 5 seconds, so it can't leave the switch saying "not connected" for good.

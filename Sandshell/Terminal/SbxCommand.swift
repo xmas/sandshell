@@ -54,9 +54,16 @@ enum SbxCommand {
     /// `CLAUDE_CODE_OAUTH_TOKEN` (which outranks the credentials file and is
     /// never refreshed) — otherwise every sandboxed claude refreshes the host
     /// file's token itself and they race (rotating refresh tokens).
-    private static var proxyAuthSetup: String {
-        #"T=$(sed -n 's/.*"accessToken":"\([^"]*\)".*/\1/p' "$HOME/.claude/.credentials.json" 2>/dev/null); [ -n "$T" ] && export CLAUDE_CODE_OAUTH_TOKEN="$T";"#
+    /// A token from the environment has only the scopes `CLAUDE_CODE_OAUTH_SCOPES`
+    /// names (`user:inference` without it), and claude.ai's connectors need
+    /// `user:mcp_servers`: so pass the scopes the same file lists, or Claude
+    /// Code's usual set when it lists none.
+    static var proxyAuthSetup: String {
+        #"F="$HOME/.claude/.credentials.json"; T=$(sed -n 's/.*"accessToken":"\([^"]*\)".*/\1/p' "$F" 2>/dev/null); if [ -n "$T" ]; then export CLAUDE_CODE_OAUTH_TOKEN="$T"; S=$(sed -n 's/.*"scopes":\[\([^]]*\)\].*/\1/p' "$F" 2>/dev/null | tr -d '"' | tr ',' ' '); export CLAUDE_CODE_OAUTH_SCOPES="${S:-\#(defaultOAuthScopes)}"; fi;"#
     }
+
+    /// The scopes Claude Code's own login asks for.
+    static let defaultOAuthScopes = "user:inference user:profile user:sessions:claude_code user:mcp_servers user:file_upload"
 
     /// Whether to use `proxyAuthSetup`: requested, and not overridden by the
     /// opt-in inference gateway (which brings its own auth).

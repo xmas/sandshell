@@ -124,6 +124,55 @@ struct SbxCommandTests {
         }
     }
 
+    // MARK: - Proxy auth, run
+
+    /// The proxy-auth line as `/bin/sh` runs it, against a credentials file in
+    /// a temporary home: what claude gets in its environment.
+    struct ProxyAuthRun {
+        static let placeholder = #"{"claudeAiOauth":{"accessToken":"sk-placeholder","refreshToken":"rt-placeholder","expiresAt":1792549819937,"#
+
+        /// `CLAUDE_CODE_OAUTH_TOKEN` and `CLAUDE_CODE_OAUTH_SCOPES` after the line runs with `credentials` (nil: no file).
+        static func run(credentials: String?) throws -> (token: String, scopes: String) {
+            let home = FileManager.default.temporaryDirectory.appending(path: "sandshell-proxyauth-\(UUID().uuidString)")
+            defer { try? FileManager.default.removeItem(at: home) }
+            try FileManager.default.createDirectory(at: home.appending(path: ".claude"), withIntermediateDirectories: true)
+            if let credentials { try credentials.write(to: home.appending(path: ".claude/.credentials.json"), atomically: true, encoding: .utf8) }
+            let process = Process()
+            process.executableURL = URL(filePath: "/bin/sh")
+            process.arguments = ["-c", SbxCommand.proxyAuthSetup + #" printf '%s\n%s' "$CLAUDE_CODE_OAUTH_TOKEN" "$CLAUDE_CODE_OAUTH_SCOPES""#]
+            process.environment = ["HOME": home.path(percentEncoded: false), "PATH": "/usr/bin:/bin"]
+            let out = Pipe()
+            process.standardOutput = out
+            try process.run()
+            let data = out.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+            let lines = String(decoding: data, as: UTF8.self).split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+            return (lines.first ?? "", lines.count > 1 ? lines[1] : "")
+        }
+
+        @Test("The token comes with the scopes its file lists — claude.ai connectors need user:mcp_servers")
+        func scopesFromTheFile() throws {
+            let result = try Self.run(credentials: Self.placeholder
+                + #""scopes":["user:file_upload","user:inference","user:mcp_servers","user:profile","user:sessions:claude_code"]}}"#)
+            #expect(result.token == "sk-placeholder")
+            #expect(result.scopes == "user:file_upload user:inference user:mcp_servers user:profile user:sessions:claude_code")
+        }
+
+        @Test("A file that lists no scopes gets Claude Code's usual set, not inference alone")
+        func defaultScopes() throws {
+            let result = try Self.run(credentials: Self.placeholder + #""scopes":[]}}"#)
+            #expect(result.token == "sk-placeholder")
+            #expect(result.scopes == SbxCommand.defaultOAuthScopes)
+            #expect(result.scopes.contains("user:mcp_servers"))
+        }
+
+        @Test("No credentials file: neither is set")
+        func noFile() throws {
+            let result = try Self.run(credentials: nil)
+            #expect(result.token.isEmpty && result.scopes.isEmpty)
+        }
+    }
+
     // MARK: - launchCommand / sessionScript (terminal sessions)
 
     struct TerminalLaunch {
@@ -632,7 +681,7 @@ extension SbxCommandTests {
     fileprivate enum Expected {
         static let pathSetup = #"P="$PATH"; [ -d "/home/agent/.cargo/bin" ] && P="/home/agent/.cargo/bin:$P"; [ -d "$HOME/bin" ] && P="$HOME/bin:$P"; [ -d "$HOME/.local/bin" ] && P="$HOME/.local/bin:$P"; export PATH="$P";"#
 
-        static let proxyAuth = #"T=$(sed -n 's/.*"accessToken":"\([^"]*\)".*/\1/p' "$HOME/.claude/.credentials.json" 2>/dev/null); [ -n "$T" ] && export CLAUDE_CODE_OAUTH_TOKEN="$T";"#
+        static let proxyAuth = #"F="$HOME/.claude/.credentials.json"; T=$(sed -n 's/.*"accessToken":"\([^"]*\)".*/\1/p' "$F" 2>/dev/null); if [ -n "$T" ]; then export CLAUDE_CODE_OAUTH_TOKEN="$T"; S=$(sed -n 's/.*"scopes":\[\([^]]*\)\].*/\1/p' "$F" 2>/dev/null | tr -d '"' | tr ',' ' '); export CLAUDE_CODE_OAUTH_SCOPES="${S:-user:inference user:profile user:sessions:claude_code user:mcp_servers user:file_upload}"; fi;"#
 
         static var launchEcho: String { #"echo "\#(SbxCommand.launchMarker)" >&2; "# }
 
