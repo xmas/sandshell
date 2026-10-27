@@ -43,6 +43,11 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
     private let replyActions = NSStackView()
     /// Shown only where forking is wired (not in a subagent's window).
     private weak var forkButton: NSButton?
+    /// The code block or table under the pointer, which shows its own Copy.
+    private var hoveredBlock: NSRange?
+    private let blockActions = NSStackView()
+    /// Where Copy puts things (self-tests use their own, not the clipboard).
+    var pasteboard = NSPasteboard.general
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -97,6 +102,15 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
         replyActions.layer?.borderWidth = 1
         replyActions.isHidden = true
         tv.addSubview(replyActions)
+        let copyBlock = Self.actionButton("doc.on.doc", "Copy", #selector(copyHoveredBlock), self)
+        copyBlock.setAccessibilityIdentifier("chat-block-copy")
+        blockActions.setViews([copyBlock], in: .leading)
+        blockActions.edgeInsets = NSEdgeInsets(top: 1, left: 2, bottom: 1, right: 2)
+        blockActions.wantsLayer = true
+        blockActions.layer?.cornerRadius = 6
+        blockActions.layer?.borderWidth = 1
+        blockActions.isHidden = true
+        tv.addSubview(blockActions)
         tv.onHover = { [weak self] point in self?.hover(at: point) }
         tv.isOverControls = { [weak self] point in self?.isOverActions(point) ?? false }
         tv.replyMenuItems = { [weak self] point in self?.replyMenuItems(at: point) ?? [] }
@@ -616,6 +630,7 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
         // On the action bar (or about to be): still the reply it's for. Half of
         // it sits above the reply, where the reply's own area ends.
         if let point, isOverActions(point) { return }
+        hoverBlock(at: point)
         let hit = point.flatMap { reply(at: $0) }
         hovered = hit?.index
         guard let hit else {
@@ -636,7 +651,73 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
     }
 
     private func isOverActions(_ point: NSPoint) -> Bool {
-        !replyActions.isHidden && replyActions.frame.insetBy(dx: -6, dy: -6).contains(point)
+        (!replyActions.isHidden && replyActions.frame.insetBy(dx: -6, dy: -6).contains(point))
+            || (!blockActions.isHidden && blockActions.frame.insetBy(dx: -4, dy: -4).contains(point))
+    }
+
+    // MARK: Block copy
+
+    /// The code block or table at `point`: its range and what Copy copies.
+    private func copyBlock(at point: NSPoint) -> (range: NSRange, block: CopyBlock)? {
+        guard let storage = textView.textStorage, storage.length > 0 else { return nil }
+        let char = min(textView.characterIndexForInsertion(at: point), storage.length - 1)
+        var range = NSRange()
+        guard let block = storage.attribute(.chatCopyBlock, at: char, longestEffectiveRange: &range,
+                                            in: NSRange(location: 0, length: storage.length)) as? CopyBlock,
+              let frame = blockFrame(of: range), frame.contains(point) else { return nil }
+        return (range, block)
+    }
+
+    /// The block's background as drawn: its paragraphs' layout fragments, in
+    /// the text view's coordinates, across the text column less the block margin.
+    private func blockFrame(of range: NSRange) -> NSRect? {
+        guard let tlm = textView.textLayoutManager, let tcm = tlm.textContentManager,
+              let start = tcm.location(tcm.documentRange.location, offsetBy: range.location) else { return nil }
+        var union: NSRect?
+        tlm.enumerateTextLayoutFragments(from: start, options: [.ensuresLayout]) { fragment in
+            let offset = tcm.offset(from: tcm.documentRange.location, to: fragment.rangeInElement.location)
+            guard offset < NSMaxRange(range) else { return false }
+            union = union.map { $0.union(fragment.layoutFragmentFrame) } ?? fragment.layoutFragmentFrame
+            return true
+        }
+        guard let union else { return nil }
+        let inset = textView.textContainerInset.width + BlockBackgroundFragment.margin
+            + (textView.textContainer?.lineFragmentPadding ?? 0)
+        return NSRect(x: inset, y: union.minY + textView.textContainerOrigin.y,
+                      width: textView.bounds.width - 2 * inset, height: union.height)
+    }
+
+    /// Copy sits in the block's top trailing corner while the pointer is over it.
+    private func hoverBlock(at point: NSPoint?) {
+        guard let hit = point.flatMap({ copyBlock(at: $0) }), let frame = blockFrame(of: hit.range) else {
+            hoveredBlock = nil
+            blockActions.isHidden = true
+            return
+        }
+        hoveredBlock = hit.range
+        blockActions.layer?.backgroundColor = NSColor.textBackgroundColor.cgColor
+        blockActions.layer?.borderColor = NSColor.separatorColor.cgColor
+        let size = blockActions.fittingSize
+        blockActions.frame = NSRect(x: frame.maxX - size.width - 6, y: frame.minY + 6,
+                                    width: size.width, height: size.height)
+        blockActions.isHidden = false
+    }
+
+    @objc private func copyHoveredBlock() {
+        guard let range = hoveredBlock else { return }
+        copyBlockText(at: range.location)
+    }
+
+    /// A code block's code, or a table's Markdown.
+    private func copyBlockText(at location: Int) {
+        guard let storage = textView.textStorage, location < storage.length else { return }
+        var range = NSRange()
+        guard let block = storage.attribute(.chatCopyBlock, at: location, longestEffectiveRange: &range,
+                                            in: NSRange(location: 0, length: storage.length)) as? CopyBlock else { return }
+        flashCopied(range)
+        let pb = pasteboard
+        pb.clearContents()
+        pb.setString(block.text, forType: .string)
     }
 
     private var hoveredText: String? {
@@ -673,6 +754,19 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
     /// Self-test: the pointer moves onto the top half of the hover bar (above the reply).
     func debugHoverActionsTop() { hover(at: NSPoint(x: replyActions.frame.midX, y: replyActions.frame.minY + 2)) }
     var debugReplyActionsShown: Bool { !replyActions.isHidden }
+    /// Self-test: hover the `n`th code block or table (as the pointer would).
+    func debugHoverBlock(_ n: Int) {
+        guard let storage = textView.textStorage else { return }
+        var found: [NSRange] = []
+        storage.enumerateAttribute(.chatCopyBlock, in: NSRange(location: 0, length: storage.length)) { v, r, _ in
+            if v != nil { found.append(r) }
+        }
+        guard n < found.count, let f = blockFrame(of: found[n]) else { return hover(at: nil) }
+        hover(at: NSPoint(x: f.midX, y: f.midY))
+    }
+    var debugBlockCopyShown: Bool { !blockActions.isHidden }
+    /// Self-test: press the hovered block's Copy.
+    func debugCopyHoveredBlock() { copyHoveredBlock() }
     /// Whether the hover bar offers Fork to New Chat (only where forking is wired).
     var debugForkShown: Bool { !replyActions.isHidden && forkButton?.isHidden == false }
     /// Self-test: every link in the transcript as (text, link).
@@ -740,7 +834,7 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
     private func copyReplyText(at index: Int) {
         guard index < segments.count, let markdown = Self.copyableText(segments[index].item) else { return }
         flashCopied(NSRange(location: segments[..<index].reduce(0) { $0 + $1.length }, length: segments[index].length))
-        let pb = NSPasteboard.general
+        let pb = pasteboard
         pb.clearContents()
         pb.setString(markdown, forType: .string)
         if let storage = textView.textStorage {
@@ -755,6 +849,16 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
 
     /// Right-click on a reply: the hover actions, reachable without a pointer hover.
     private func replyMenuItems(at point: NSPoint) -> [NSMenuItem] {
+        var items: [NSMenuItem] = []
+        if let block = copyBlock(at: point) {
+            items.append(NSMenuItem(block.block.kind == .code ? "Copy Code" : "Copy Table") { [weak self] in
+                self?.copyBlockText(at: block.range.location)
+            })
+        }
+        return items + messageMenuItems(at: point)
+    }
+
+    private func messageMenuItems(at point: NSPoint) -> [NSMenuItem] {
         guard let hit = reply(at: point), let text = Self.copyableText(segments[hit.index].item) else { return [] }
         guard isReply(hit.index) else {
             return [NSMenuItem("Copy Message") { [weak self] in self?.copyReplyText(at: hit.index) }]

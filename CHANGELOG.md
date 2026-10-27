@@ -2,6 +2,9 @@
 
 A running log of what changed, newest first. Yes, we actually write these.
 
+## Unreleased
+- **Copy a code block or table on its own:** hover one in a reply and a Copy button sits in its corner. It copies just the code (no fences), or the table as Markdown; right-click has Copy Code / Copy Table too.
+
 ## v0.2.40 — "Connected"
 - **Your claude.ai connectors in Sandshell's Claude sessions** (Slack, Drive and the rest). Claude signs in through sbx's credential proxy with a token Sandshell hands it, and a token handed over that way only counted for chatting — not for connectors. It now carries the same permissions as your login, so `/mcp` lists them as `sbx run claude` does. Restart a session to pick it up.
 - **Drag sessions onto any pane again,** an empty one included: a pane handed the drag to its terminal or chat (which took the session's folder as text) instead of placing the session.

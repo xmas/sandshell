@@ -13,6 +13,20 @@ extension NSAttributedString.Key {
     static let chatTable = NSAttributedString.Key("SandshellChatTable")
     /// A `PlanMark` drawn before a plan entry's first line by `BlockBackgroundFragment`.
     static let chatPlanMark = NSAttributedString.Key("SandshellChatPlanMark")
+    /// A `CopyBlock` over a code block's or table's block: what its hover Copy copies.
+    static let chatCopyBlock = NSAttributedString.Key("SandshellChatCopyBlock")
+}
+
+/// The source of a code block (its code, without the fences) or a table (its
+/// Markdown). A class, so neighbouring blocks never merge into one range.
+final class CopyBlock: NSObject, @unchecked Sendable {
+    enum Kind { case code, table }
+    let kind: Kind
+    let text: String
+    init(_ kind: Kind, text: String) {
+        self.kind = kind
+        self.text = text
+    }
 }
 
 /// The line above a table row: under the header, or between body rows.
@@ -578,16 +592,26 @@ enum ChatRenderer {
                     code.append(lines[i]); i += 1
                 }
                 i += 1   // closing fence (or end of a still-streaming block)
-                out.append(codeBlock(code, language: lang))
+                out.append(copyable(codeBlock(code, language: lang), CopyBlock(.code, text: code.joined(separator: "\n"))))
                 continue
             }
             if let found = MarkdownTable.parse(lines, at: i) {
-                out.append(table(found.table, prose: prose, width: width))
+                let source = lines[i..<found.end].joined(separator: "\n")
+                out.append(copyable(table(found.table, prose: prose, width: width), CopyBlock(.table, text: source)))
                 i = found.end
                 continue
             }
             out.append(block(lines[i], trimmed: trimmed, prose: prose))
             i += 1
+        }
+        return out
+    }
+
+    /// Tags the block (not the space around it) with what its Copy copies.
+    private static func copyable(_ block: NSAttributedString, _ copy: CopyBlock) -> NSAttributedString {
+        let out = NSMutableAttributedString(attributedString: block)
+        out.enumerateAttribute(.chatBlock, in: NSRange(location: 0, length: out.length)) { value, range, _ in
+            if value != nil { out.addAttribute(.chatCopyBlock, value: copy, range: range) }
         }
         return out
     }

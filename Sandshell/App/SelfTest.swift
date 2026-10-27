@@ -3854,6 +3854,30 @@ enum SelfTest {
         view.debugHoverFirstReply()
         check(view.debugReplyActionsShown && !view.debugForkShown, "a transcript that can't fork hovers Copy alone")
 
+        // Code blocks and tables have their own Copy: just that block's code, or the table's Markdown.
+        let blocks = ChatTranscriptView()
+        blocks.pasteboard = NSPasteboard(name: NSPasteboard.Name("com.xmas.sandshell.selftest"))
+        defer { blocks.pasteboard.releaseGlobally() }
+        blocks.frame = NSRect(x: 0, y: 0, width: 600, height: 800)
+        let table = "| a | b |\n|---|---|\n| 1 | 2 |"
+        blocks.debugApplyNow([.agentText(id: "c", text:
+            "Here:\n\n```json\n{\n  \"x\": 1\n}\n```\n\nAnd:\n\n\(table)\n\nDone.")])
+        blocks.layoutSubtreeIfNeeded()
+        for (n, expected, what) in [(0, "{\n  \"x\": 1\n}", "a code block's Copy copies its code, no fences"),
+                                    (1, table, "a table's Copy copies its Markdown")] {
+            blocks.debugHoverBlock(n)
+            check(blocks.debugBlockCopyShown, "hovering block \(n) shows its Copy")
+            blocks.pasteboard.clearContents()
+            blocks.debugCopyHoveredBlock()
+            let copied = blocks.pasteboard.string(forType: .string)
+            if copied != expected { log("block \(n) copied: \(copied ?? "nothing")") }
+            check(copied == expected, what)
+        }
+        let shot = NSWindow(contentRect: blocks.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        shot.contentView = blocks
+        blocks.debugHoverBlock(0)
+        snapshot(shot, "block-copy")
+
         // Paths with spaces: quoted, backslash-escaped, or bare.
         let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("sandshell-links-\(UUID().uuidString.prefix(6))")
         let file = dir.appendingPathComponent("My Folder/Read Me.txt")
