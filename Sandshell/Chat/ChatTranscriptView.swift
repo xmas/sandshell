@@ -298,6 +298,18 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
         let below = max(0, textEnd - max(laid.maxY, visible.minY))
         return above + below
     }
+    /// Self-test: lines showing that no view draws.
+    var debugUndrawnVisibleHeight: CGFloat { undrawnVisibleHeight }
+    /// Self-test: lose the views drawing the text (the blank chat), then check as the view would.
+    func debugDropFragmentViews() {
+        func drop(_ view: NSView) {
+            for sub in view.subviews {
+                if NSStringFromClass(type(of: sub)).contains("ViewportElement") { sub.removeFromSuperview() } else { drop(sub) }
+            }
+        }
+        drop(textView)
+    }
+    func debugCheckDrawn() { checkDrawn() }
     /// The fade and the ↓ button show (more below).
     var debugEndCuesShown: Bool { !jumpButton.isHidden }
     /// Where the fade's clear end is, on screen: "bottom" or "top".
@@ -369,6 +381,7 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
         // Following the end lays it out on the way there; otherwise lay out
         // what shows, so a paragraph changed in place isn't left drawn as it was.
         if stickToBottom { scrollToBottom() } else { layoutVisibleText() }
+        checkDrawnSoon()
     }
 
     private func render(_ item: ChatItem) -> NSAttributedString {
@@ -440,11 +453,70 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
         textView.textLayoutManager?.textViewportLayoutController.layoutViewport()
     }
 
+    // MARK: Drawn check
+
+    /// How much of the laid-out text showing has no view drawing it: TextKit 2
+    /// draws each paragraph in a view of its own, and a reply has been seen
+    /// laid out (hover finds it) yet blank (xmas-sandshell-7x7).
+    var undrawnVisibleHeight: CGFloat {
+        guard let tlm = textView.textLayoutManager, textView.textStorage?.length ?? 0 > 0 else { return 0 }
+        let visible = textView.visibleRect
+        let origin = textView.textContainerOrigin
+        var drawn: [NSRect] = []
+        func collect(_ view: NSView) {
+            for sub in view.subviews where !sub.isHidden {
+                if NSStringFromClass(type(of: sub)).contains("ViewportElement") { drawn.append(sub.convert(sub.bounds, to: textView)) }
+                collect(sub)
+            }
+        }
+        collect(textView)
+        guard let first = tlm.textLayoutFragment(for: CGPoint(x: 0, y: max(0, visible.minY - origin.y))) else { return 0 }
+        var missing: CGFloat = 0
+        tlm.enumerateTextLayoutFragments(from: first.rangeInElement.location, options: []) { fragment in
+            let frame = fragment.layoutFragmentFrame.offsetBy(dx: origin.x, dy: origin.y)
+            guard frame.minY < visible.maxY else { return false }
+            let shown = frame.intersection(visible)
+            // Text only: an empty line or a spacer draws nothing either way.
+            guard shown.height > 0, fragment.textLineFragments.contains(where: { $0.characterRange.length > 1 }) else { return true }
+            if !drawn.contains(where: { $0.minY <= shown.minY + 0.5 && $0.maxY >= shown.maxY - 0.5 }) { missing += shown.height }
+            return true
+        }
+        return missing
+    }
+
+    /// After the text changes or scrolls (once things settle): if a line
+    /// showing has no view, lay out what shows again, harder if need be, and log it.
+    private func checkDrawnSoon() {
+        drawnCheck?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.checkDrawn() }
+        drawnCheck = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
+    }
+    private var drawnCheck: DispatchWorkItem?
+
+    private func checkDrawn() {
+        guard window != nil, !isHiddenOrHasHiddenAncestor, let tlm = textView.textLayoutManager else { return }
+        let missing = undrawnVisibleHeight
+        guard missing >= 1 else { return }
+        let visible = textView.visibleRect
+        Log.info(.app, "chat: \(Int(missing)) pt of text showing undrawn (visible y \(Int(visible.minY))+\(Int(visible.height)), "
+                 + "text \(Int(textView.frame.height)) tall, viewport \(tlm.textViewportLayoutController.viewportBounds)); laying out again")
+        layoutVisibleText()
+        if undrawnVisibleHeight >= 1 {
+            tlm.invalidateLayout(for: tlm.documentRange)
+            layoutVisibleText()
+        }
+        textView.needsDisplay = true
+        let left = undrawnVisibleHeight
+        Log.info(.app, left < 1 ? "chat: redrawn" : "chat: still \(Int(left)) pt undrawn")
+    }
+
     /// Follow new output only while the user is at (or near) the bottom.
     @objc private func scrolled() {
         // The text view isn't the scroll view's document (it sits in a centered
         // one), so TextKit 2 isn't told what scrolled into view: lay that out.
         layoutVisibleText()
+        checkDrawnSoon()
         guard !programmaticScroll, let doc = scrollView.documentView else { return }
         let clip = scrollView.contentView.bounds
         stickToBottom = clip.maxY >= doc.frame.height - 24
@@ -903,4 +975,15 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
 /// A plain top-down view: the transcript's document, holding its text view.
 final class FlippedView: NSView {
     override var isFlipped: Bool { true }
+
+    /// The scroll view prepares content around what shows (overdraw) by
+    /// telling its document; the text view inside, which lays out and draws
+    /// what it's told is prepared, hears it too.
+    override func prepareContent(in rect: NSRect) {
+        super.prepareContent(in: rect)
+        for sub in subviews {
+            let prepared = convert(rect, to: sub).intersection(sub.bounds)
+            if !prepared.isEmpty { sub.prepareContent(in: prepared) }
+        }
+    }
 }

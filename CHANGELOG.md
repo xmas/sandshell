@@ -3,6 +3,7 @@
 A running log of what changed, newest first. Yes, we actually write these.
 
 ## Unreleased
+- **A chat that's gone blank draws itself again:** when a reply is there but not drawn, the chat notices (within half a second of the text changing or scrolling), lays it out again and notes it in the log. The transcript also now tells its text which part of the page to have ready around what shows, as the scroll view asks — a likely cause.
 - **Copy a code block or table on its own:** hover one in a reply and a Copy button sits in its corner. It copies just the code (no fences), or the table as Markdown; right-click has Copy Code / Copy Table too.
 
 ## v0.2.40 — "Connected"

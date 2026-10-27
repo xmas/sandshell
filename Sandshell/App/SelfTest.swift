@@ -3710,6 +3710,8 @@ enum SelfTest {
             await wait(0.3)
             let gap = view.debugUnlaidVisibleHeight
             check(gap < 1, "\(what): TextKit has laid out what shows (\(Int(gap)) pt not)")
+            let undrawn = view.debugUndrawnVisibleHeight
+            check(undrawn < 1, "\(what): every line showing has a view drawing it (\(Int(undrawn)) pt not)")
         }
         var items: [ChatItem] = (0..<12).flatMap { i -> [ChatItem] in
             [.user(id: UUID(), text: "Question \(i)?", attachments: []),
@@ -3829,6 +3831,14 @@ enum SelfTest {
         await stream("r4")
         w.contentView = view
         await unlaid("a reply streamed in out of the window, put back")
+
+        // However it happens, text showing with no view drawing it is found and drawn again.
+        view.debugDropFragmentViews()
+        let lost = view.debugUndrawnVisibleHeight
+        check(lost > 100, "the check sees text drawn by no view (\(Int(lost)) pt)")
+        view.debugCheckDrawn()
+        let left = view.debugUndrawnVisibleHeight
+        check(left < 1, "and draws it again (\(Int(left)) pt left)")
     }
 
     // MARK: Links
