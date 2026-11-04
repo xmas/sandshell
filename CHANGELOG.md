@@ -2,6 +2,10 @@
 
 A running log of what changed, newest first. Yes, we actually write these.
 
+## v0.2.42 — "Always On"
+- **Sandshell's chat kits stay on** when a workspace's kit list is edited without them, instead of rebuilding the sandbox to take them out (chats need them).
+- **Session details reads the context window right again:** newer Claude Code no longer labels the free space and the autocompact buffer, so they were counted as used.
+
 ## v0.2.41 — "Kit and Caboodle"
 - **Works with sbx 0.51.** sbx 0.51 made every agent a new kind of kit (v3) and won't mix it with the older kits Sandshell added, so new sandboxes failed to make. Sandshell's chat kits are rewritten as v3 kits that carry the chat adapter and the Node it runs on (the new agent images have none), built in sbx's own builder; chats start without installing anything. The official kits move to their v3 versions (Git SSH Commit Signing, GitHub SSH, code-server), and your settings and workspaces follow. Claude and Codex sandboxes made before are rebuilt once when opened; Gemini sandboxes take no kits (sbx hasn't moved Gemini to the new kind yet).
 - **No more MCP gateway settings.** Settings ▸ MCP (a gateway URL and servers loaded into sandboxes through sbx) is gone, and Sandshell no longer points sbx at Docker's hosted gateway. Your claude.ai connectors and the MCP servers in `~/.claude.json` or a project's `.mcp.json` work as before, and the chat's MCP button still shows their status.
