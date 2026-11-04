@@ -161,9 +161,8 @@ struct SessionRowStatus: Equatable {
 
     /// The first instruction on one line, when the title isn't it; nil otherwise.
     static func instruction(displayName: String, firstPrompt: String?) -> String? {
-        guard let prompt = firstPrompt?.trimmingCharacters(in: .whitespacesAndNewlines), !prompt.isEmpty,
-              prompt != displayName.trimmingCharacters(in: .whitespacesAndNewlines) else { return nil }
-        return prompt.split(whereSeparator: \.isNewline).joined(separator: " ")
+        guard let prompt = firstPrompt?.oneLine, !prompt.isEmpty, prompt != displayName.oneLine else { return nil }
+        return prompt
     }
 }
 

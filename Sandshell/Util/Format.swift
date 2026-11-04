@@ -80,6 +80,15 @@ extension String {
         if hasPrefix(home + "/") { return "~" + dropFirst(home.count) }
         return self
     }
+
+    /// Its lines on one line, a space between (blank lines dropped): a pasted,
+    /// many-line prompt as a title. One-line labels grow as tall as the lines.
+    var oneLine: String {
+        split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+    }
 }
 
 extension URL {

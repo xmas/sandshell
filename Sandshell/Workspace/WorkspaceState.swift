@@ -121,9 +121,10 @@ struct Session: Identifiable, Codable, Hashable {
     }
 
     private static func resolveName(_ s: Session, parent: (UUID) -> Session?, depth: Int) -> String {
-        if s.isNamedByUser, !s.name.isEmpty { return s.name }
-        if let name = s.generatedName, !name.isEmpty { return name }
-        if let prompt = s.firstPrompt, !prompt.isEmpty { return prompt }
+        // One line, whatever it's from (a first prompt is often a paste).
+        if s.isNamedByUser, case let name = s.name.oneLine, !name.isEmpty { return name }
+        if let name = s.generatedName?.oneLine, !name.isEmpty { return name }
+        if let prompt = s.firstPrompt?.oneLine, !prompt.isEmpty { return prompt }
         if let source = s.forkedFrom {
             // (Fork chains are short: the cap only guards a corrupt loop.)
             if depth < 16, let p = parent(source), p.id != s.id {

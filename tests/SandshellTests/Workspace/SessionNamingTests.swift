@@ -83,6 +83,9 @@ extension SessionNamingTests {
             Case(label: "nothing asked yet", expected: "New session"),
             Case(label: "an automatic name never shows the stored one", name: "an old rename",
                  first: "fix the login bug", expected: "fix the login bug"),
+            Case(label: "a pasted, many-line prompt reads on one line",
+                 first: "Is this still valid?\n\n  frank [1:14 AM]\nso sbx daemon start?",
+                 expected: "Is this still valid? frank [1:14 AM] so sbx daemon start?"),
         ])
         func resolvesInOrder(_ c: Case) {
             var s = SessionNamingTests.session(c.name)

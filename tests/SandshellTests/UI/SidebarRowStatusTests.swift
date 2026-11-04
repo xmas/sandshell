@@ -299,6 +299,7 @@ extension SidebarRowStatusTests {
             Case(name: "Fix trailing-slash links", prompt: "What's not checked in?", density: .compact, shows: false),
             Case(name: "is hatch accessible?", prompt: "is hatch accessible?", density: .comfortable, shows: false),
             Case(name: "is hatch accessible?", prompt: "  is hatch accessible?\n", density: .comfortable, shows: false),
+            Case(name: "first second", prompt: "first\n\nsecond", density: .comfortable, shows: false),
             Case(name: "Fork of x", prompt: nil, density: .comfortable, shows: false),
             Case(name: "Renamed", prompt: "", density: .comfortable, shows: false),
         ])
