@@ -33,6 +33,17 @@ struct CanvasBoard: Equatable, Sendable {
         root.appending(path: ".sandshell/canvas", directoryHint: .isDirectory)
     }
 
+    /// The board a path is in (`<root>/.sandshell/canvas/<board>/…`, the folder
+    /// itself included), if that board has a board.json.
+    static func folder(containing url: URL, root: URL) -> URL? {
+        let base = boardsFolder(root: root).standardizedFileURL.path(percentEncoded: false)
+        let prefix = base.hasSuffix("/") ? base : base + "/"
+        let path = url.standardizedFileURL.path(percentEncoded: false)
+        guard path.hasPrefix(prefix), let name = path.dropFirst(prefix.count).split(separator: "/").first else { return nil }
+        let folder = boardsFolder(root: root).appending(path: String(name), directoryHint: .isDirectory)
+        return FileManager.default.fileExists(atPath: folder.appending(path: fileName).path(percentEncoded: false)) ? folder : nil
+    }
+
     /// The workspace's boards (folders with a board.json), by name.
     static func list(root: URL) -> [URL] {
         let dir = boardsFolder(root: root)

@@ -50,8 +50,14 @@ position back. Unknown keys are kept, so the format can grow.
 
 A skill (`canvas`) says how to make and change a board: the folder, the
 format, one self-contained file per artboard, variants as siblings, how to
-read a note. It ships in Sandshell's kits (v3 `agent-skill@1`), so every
-sandbox Sandshell makes has it, and `/canvas` starts a board from the chat.
+read a note. It's in a small Claude Code plugin the sandshell-claude kit
+builds in (`/opt/sandshell/plugin`), which Sandshell's Claude chats load
+per session (`_meta.claudeCode.options.plugins`) — so it's there for every
+chat without touching the user's mounted `~/.claude` (sbx's `agent-skill@1`
+exposes skills in the sandbox's own `~/.claude`, which Sandshell's chats
+don't read: their `CLAUDE_CONFIG_DIR` is the host's). `/sandshell:canvas`
+starts a board from the chat. A link to a board's file in a reply opens the
+board beside the chat.
 
 ## Notes back to the agent
 

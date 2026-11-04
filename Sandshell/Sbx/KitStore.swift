@@ -91,7 +91,7 @@ enum KitStore {
     /// Bumped when Sandshell's kits change what a sandbox must have built in
     /// (an adapter version, the entry points): sandboxes made with an older
     /// generation are rebuilt (`WorkspaceController.configSignature`).
-    static let sandshellKitGeneration = 3
+    static let sandshellKitGeneration = 4
 
     static func isSandshellKit(_ ref: String) -> Bool {
         sandshellKits.contains { $0.ref == ref } || sandshellKits.contains { ref.hasSuffix("/kits/\($0.ref)") }

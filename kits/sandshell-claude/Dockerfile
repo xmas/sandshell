@@ -15,3 +15,5 @@ COPY --from=build /usr/local/bin/node /opt/sandshell/bin/node
 COPY --from=build /opt/sandshell/claude-acp /opt/sandshell/claude-acp
 COPY scripts/sandshell-acp.mjs /opt/sandshell/sandshell-acp.mjs
 COPY --chmod=0755 scripts/sandshell-claude-acp /opt/sandshell/bin/sandshell-claude-acp
+# A Claude Code plugin Sandshell's chats load (its skills: Canvas).
+COPY plugin /opt/sandshell/plugin

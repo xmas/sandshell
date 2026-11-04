@@ -149,6 +149,11 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
         }
         pane.onOpenFileInFiles = { [weak self, weak pane] url, line in
             guard let self, let pane else { return }
+            // A board's file (the agent says where it put the board): the board,
+            // beside the chat.
+            if let board = CanvasBoard.folder(containing: url, root: self.controller.rootURL) {
+                return self.openBoard(board, beside: pane)
+            }
             if url.hasDirectoryPath || (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true {
                 return NSWorkspace.shared.activateFileViewerSelecting([url])
             }
@@ -588,6 +593,15 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
         if path.count > 1, path.hasSuffix("/") { path.removeLast() }
         let base = root.hasSuffix("/") ? root : root + "/"
         return path.hasPrefix(base) ? String(path.dropFirst(base.count)) : path
+    }
+
+    /// Show a board beside `pane` (to its right), or focus the pane showing it.
+    func openBoard(_ folder: URL, beside pane: TerminalStackController) {
+        if let holder = panes.first(where: { $0.shownBoard?.standardizedFileURL == folder.standardizedFileURL }) {
+            return focus(holder)
+        }
+        split(pane, edge: .trailing, showing: nil)
+        openBoard(folder)
     }
 
     /// Show a board: focus the pane already showing it, else in the focused pane.

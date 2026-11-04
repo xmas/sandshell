@@ -78,3 +78,20 @@ struct CanvasBoardTests {
         #expect(CanvasBoard.list(root: root.appending(path: "nowhere")).isEmpty)
     }
 }
+
+struct CanvasBoardLinkTests {
+    @Test func aPathInABoardNamesItsBoard() throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "canvas-link-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let board = CanvasBoard.boardsFolder(root: root).appending(path: "onboarding")
+        try FileManager.default.createDirectory(at: board, withIntermediateDirectories: true)
+        try Data("{}".utf8).write(to: board.appending(path: CanvasBoard.fileName))
+        for path in ["board.json", "welcome.html", "img/logo.svg", ""] {
+            let found = CanvasBoard.folder(containing: board.appending(path: path), root: root)
+            #expect(found?.lastPathComponent == "onboarding", "\(path)")
+        }
+        #expect(CanvasBoard.folder(containing: root.appending(path: "README.md"), root: root) == nil)
+        #expect(CanvasBoard.folder(containing: CanvasBoard.boardsFolder(root: root).appending(path: "missing/a.html"), root: root) == nil,
+                "a folder without board.json isn't a board")
+    }
+}

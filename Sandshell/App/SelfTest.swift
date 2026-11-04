@@ -3860,7 +3860,13 @@ enum SelfTest {
         let boards = CanvasBoard.list(root: ws.rootURL)
         check(boards.map(\.lastPathComponent) == ["onboarding"], "the workspace's boards are listed (\(boards.map(\.lastPathComponent)))")
         guard let folder = boards.first else { return }
-        tree.openBoard(folder)
+        // A link to one of its files in a chat opens it beside the chat.
+        let chatPane = tree.focused!
+        chatPane.onOpenFileInFiles?(folder.appending(path: "welcome.html"), nil)
+        check(tree.panes.count == 2 && tree.focused !== chatPane && tree.focused.shownBoard != nil,
+              "a link to a board's file opens the board in a pane beside (\(tree.panes.count) panes)")
+        chatPane.onOpenFileInFiles?(folder.appending(path: CanvasBoard.fileName), nil)
+        check(tree.panes.count == 2, "again: the pane showing it is focused, no new one")
         guard let canvas = tree.focused.debugCanvas else { return check(false, "the pane shows the board") }
         check(await until(20) { canvas.debugLoadedCount == 2 }, "both artboards load (\(canvas.debugLoadedCount))")
         check(canvas.debugArtboardIDs == ["welcome", "welcome-b"], "in board.json's order (\(canvas.debugArtboardIDs))")
@@ -3893,7 +3899,11 @@ enum SelfTest {
         // Saved with the window's layout.
         await wait(1)
         let saved = UserDefaults.standard.data(forKey: tree.layoutKey).flatMap { try? JSONDecoder().decode(SavedPaneLayout.self, from: $0) }
-        check(saved?.board == ".sandshell/canvas/onboarding", "the pane's board is saved with the layout (\(saved?.board ?? "-"))")
+        func savedBoards(_ l: SavedPaneLayout?) -> [String] {
+            guard let l else { return [] }
+            return (l.board.map { [$0] } ?? []) + (l.children ?? []).flatMap { savedBoards($0) }
+        }
+        check(savedBoards(saved) == [".sandshell/canvas/onboarding"], "the pane's board is saved with the layout (\(savedBoards(saved)))")
     }
 
     // MARK: Links

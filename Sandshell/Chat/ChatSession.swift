@@ -474,13 +474,19 @@ final class ChatSession: ObservableObject {
     /// Claude Code's prompt suggestions (a predicted next message after each
     /// turn but the first): the adapter drops the SDK's `prompt_suggestion`
     /// messages, so ask for them and for those raw messages, which it then
-    /// forwards as `_claude/sdkMessage` notifications.
+    /// forwards as `_claude/sdkMessage` notifications. And Sandshell's plugin,
+    /// which the sandshell-claude kit builds in (its skills: Canvas) — loaded
+    /// for the chat alone, not put in your ~/.claude.
     static let claudeSessionMeta: JSONValue = [
         "claudeCode": [
-            "options": ["promptSuggestions": true],
+            "options": ["promptSuggestions": true,
+                        "plugins": [["type": "local", "path": .string(sandshellPluginPath)]]],
             "emitRawSDKMessages": [["type": "prompt_suggestion"]],
         ],
     ]
+
+    /// Where the sandshell-claude kit puts Sandshell's Claude Code plugin.
+    static let sandshellPluginPath = "/opt/sandshell/plugin"
 
     /// The suggestion in a forwarded SDK message, if that's what it is.
     static func promptSuggestion(inSDKMessage params: JSONValue) -> String? {

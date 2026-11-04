@@ -34,3 +34,4 @@ capabilities:
     config:
       agent: claude
       command: [/opt/sandshell/bin/sandshell-claude-acp]
+
