@@ -2,7 +2,7 @@
 
 A running log of what changed, newest first. Yes, we actually write these.
 
-## Unreleased
+## v0.2.46 — "Tidy Up"
 - **Finished subagents tidy themselves away.** Once a subagent's turn has really ended, its row leaves the sidebar. A workflow's row goes once all its agents are done. Failed ones stay, and so do ones that have only gone quiet. The subagents row still counts them: right-click it for **Show Finished** or **Hide Finished**. Opening a group whose subagents are all finished shows them.
 - **Sandshell's kits come prebuilt.** Each release's chat kits are built once on GitHub and published to ghcr.io/xmas, so a new sandbox no longer builds them on your Mac. If ghcr.io can't be reached, the bundled copy is built as before.
 
