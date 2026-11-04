@@ -95,6 +95,9 @@ struct Session: Identifiable, Codable, Hashable {
     /// The agent's own title for the conversation (Claude's `ai-title`), set
     /// once, after its first turn.
     var generatedName: String?
+    /// A design session's Canvas board (its folder, relative to the workspace
+    /// root): it opens beside the chat, and the agent is told to work on it.
+    var board: String?
 
     /// The agent whose container this session runs in: the override when present,
     /// otherwise the session's own agent.
@@ -128,6 +131,7 @@ struct Session: Identifiable, Codable, Hashable {
             }
             return s.name.isEmpty ? "Fork" : s.name
         }
+        if s.board != nil { return "New design" }
         // A shell is never asked anything: it keeps reading as what it is.
         return s.agent == .shell ? defaultName(for: s.agent, containerAgent: s.containerAgent) : "New session"
     }
@@ -220,7 +224,7 @@ struct Session: Identifiable, Codable, Hashable {
 
     enum CodingKeys: String, CodingKey {
         case id, folderID, agent, name, order, workdir, transcriptID, createdAt, lastActiveAt, containerAgent
-        case transcriptWorkdir, forkedFrom, forkedAt, firstPrompt, generatedName
+        case transcriptWorkdir, forkedFrom, forkedAt, firstPrompt, generatedName, board
         case isChat = "chat"
         case isNamedByUser = "namedByUser"
         case isRemote = "remote"
@@ -249,6 +253,7 @@ struct Session: Identifiable, Codable, Hashable {
         forkedAt = try c.decodeIfPresent(Date.self, forKey: .forkedAt)
         firstPrompt = try c.decodeIfPresent(String.self, forKey: .firstPrompt)
         generatedName = try c.decodeIfPresent(String.self, forKey: .generatedName)
+        board = try c.decodeIfPresent(String.self, forKey: .board)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -271,6 +276,7 @@ struct Session: Identifiable, Codable, Hashable {
         try c.encodeIfPresent(forkedAt, forKey: .forkedAt)
         try c.encodeIfPresent(firstPrompt, forKey: .firstPrompt)
         try c.encodeIfPresent(generatedName, forKey: .generatedName)
+        try c.encodeIfPresent(board, forKey: .board)
     }
 
     /// A workdir once the directory at `from` has moved to `to`: nil unless

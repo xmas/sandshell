@@ -1105,6 +1105,9 @@ final class SidebarListController: NSViewController {
                                 NewSessionRequest(folderID: folderID, agent: agent,
                                                   chat: SbxCommand.supportsACP(agent))))
         }
+        let design = NSMenuItem("New Design Session") { [weak self] in self?.controller.newDesignSession() }
+        design.image = NSImage(systemSymbolName: "paintpalette", accessibilityDescription: nil)
+        items.append(design)
         items.append(NSMenuItem("In Terminal", symbol: "terminal", submenu: SbxCommand.acpAgents.map { agent in
             action("New \(agent.displayName) in Terminal", agent.menuIcon,
                    NewSessionRequest(folderID: folderID, agent: agent))

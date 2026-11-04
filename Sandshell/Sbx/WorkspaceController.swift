@@ -2010,6 +2010,51 @@ extension WorkspaceController {
         return s
     }
 
+    /// A design session: a Claude chat with a new Canvas board of its own
+    /// (`Session.board`), which opens beside it. Nil without a folder.
+    @discardableResult
+    func newDesignSession() -> Session? {
+        let folderID: UUID
+        if case .session(let id) = selection, let s = session(id: id) {
+            folderID = s.folderID
+        } else if let first = folders.first {
+            folderID = first.id
+        } else {
+            return nil
+        }
+        let boards = CanvasBoard.boardsFolder(root: rootURL)
+        var name = "design"
+        var n = 1
+        while FileManager.default.fileExists(atPath: boards.appending(path: name).path(percentEncoded: false)) {
+            n += 1
+            name = "design-\(n)"
+        }
+        let folder = boards.appending(path: name, directoryHint: .isDirectory)
+        do {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            let title = n == 1 ? "Design" : "Design \(n)"
+            try Data(#"{"title": "\#(title)", "artboards": []}"#.utf8).write(to: folder.appending(path: CanvasBoard.fileName))
+        } catch {
+            lastError = "Couldn’t make a board in .sandshell/canvas: \(error.localizedDescription)"
+            return nil
+        }
+        guard var s = addSession(folderID: folderID, agent: .claude, name: "New Design", chat: true),
+              let index = state.sessions.firstIndex(where: { $0.id == s.id }) else { return nil }
+        s.board = ".sandshell/canvas/\(name)"
+        state.sessions[index].board = s.board
+        saveState()
+        selection = .session(s.id)
+        return s
+    }
+
+    /// A design session's board folder (nil for any other session, or a board gone).
+    func boardFolder(of session: Session) -> URL? {
+        guard let board = session.board else { return nil }
+        let folder = rootURL.appending(path: board, directoryHint: .isDirectory)
+        return FileManager.default.fileExists(atPath: folder.appending(path: CanvasBoard.fileName).path(percentEncoded: false))
+            ? folder : nil
+    }
+
     /// A prompt was sent in a session (seen in its chat or its agent's
     /// transcript): the first one names it (`Session.firstPrompt`), until the
     /// agent titles it or the person renames it. Called with every prompt; only

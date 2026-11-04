@@ -260,7 +260,17 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
         }
         focused.show(id)
         focused.reemitChrome()
+        showBoardBeside(id)
         scheduleSave()
+    }
+
+    /// A design session's board, in a pane beside it (unless one shows it).
+    private func showBoardBeside(_ id: UUID) {
+        guard let session = controller.session(id: id), let folder = controller.boardFolder(of: session),
+              !panes.contains(where: { $0.shownBoard?.standardizedFileURL == folder.standardizedFileURL }),
+              let chatPane = focused else { return }
+        openBoard(folder, beside: chatPane)
+        focus(chatPane)
     }
 
     // MARK: Splitting

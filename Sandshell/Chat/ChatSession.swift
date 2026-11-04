@@ -256,7 +256,8 @@ final class ChatSession: ObservableObject {
 
     init(title: String, agent: AgentKind = .claude, containerName: String, workdir: String, home: String,
          resumeID: String? = nil, sbxProxyAuth: Bool = false, sessionID: UUID = UUID(),
-         unavailable: String? = nil, model: String? = nil, effort: String? = nil) {
+         unavailable: String? = nil, model: String? = nil, effort: String? = nil, designBoard: String? = nil) {
+        self.designBoard = designBoard
         self.launchModel = model
         self.launchEffort = effort
         self.title = title
@@ -453,7 +454,7 @@ final class ChatSession: ObservableObject {
     private func openSession(_ conn: ACPConnection) async throws -> JSONValue {
         // Claude: ask for its prompt suggestions too (other agents get no `_meta`).
         func params(_ base: [String: JSONValue]) -> JSONValue {
-            .object(agent == .claude ? base.merging(["_meta": Self.claudeSessionMeta]) { $1 } : base)
+            .object(agent == .claude ? base.merging(["_meta": claudeMeta]) { $1 } : base)
         }
         if let resumeID {
             do {
@@ -484,6 +485,26 @@ final class ChatSession: ObservableObject {
             "emitRawSDKMessages": [["type": "prompt_suggestion"]],
         ],
     ]
+
+    /// A design session's board (its folder, as the agent sees it).
+    let designBoard: String?
+
+    /// This chat's `_meta`: a design session's also tells the agent where its
+    /// board is (appended to Claude Code's system prompt).
+    var claudeMeta: JSONValue {
+        guard let designBoard, case .object(var meta) = Self.claudeSessionMeta else { return Self.claudeSessionMeta }
+        meta["systemPrompt"] = ["append": .string(Self.designInstructions(board: designBoard))]
+        return .object(meta)
+    }
+
+    static func designInstructions(board: String) -> String {
+        """
+        This is a Sandshell design session. Its Canvas board is \(board) (board.json and a page per \
+        artboard there), and Sandshell shows it beside this chat, reloading as you write. Put every \
+        design you make here on that board as artboards, following the sandshell:canvas skill; keep the \
+        board's title fitting what it's become. Make variations as sibling artboards to compare.
+        """
+    }
 
     /// Where the sandshell-claude kit puts Sandshell's Claude Code plugin.
     static let sandshellPluginPath = "/opt/sandshell/plugin"

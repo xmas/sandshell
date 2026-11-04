@@ -822,6 +822,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// ⌃⌘N — new native Claude chat (ACP) in the current folder; the File menu's
     /// New Codex/Gemini Chat items name their agent in `representedObject`.
+    /// ⇧⌥⌘N — a design session: a Claude chat with the canvas of a new board beside it.
+    @MainActor @objc func newDesignSession(_ sender: Any?) {
+        sessionCommandTarget()?.workspaceController?.newDesignSession()
+    }
+
     @MainActor @objc func newChat(_ sender: Any?) {
         let raw = (sender as? NSMenuItem)?.representedObject as? String
         sessionCommandTarget()?.newChat(agent: raw.map(AgentKind.init(rawValue:)) ?? .claude)

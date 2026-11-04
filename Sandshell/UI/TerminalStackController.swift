@@ -1587,7 +1587,10 @@ final class TerminalStackController: NSViewController {
                                    resumeID: resumeID, sbxProxyAuth: proxyAuth,
                                    sessionID: id, unavailable: unavailable,
                                    model: current.agent == .claude ? controller.claudeModel : nil,
-                                   effort: current.agent == .claude ? controller.claudeEffort : nil)
+                                   effort: current.agent == .claude ? controller.claudeEffort : nil,
+                                   designBoard: controller.boardFolder(of: current).map {
+                                       controller.sandboxWorkdir($0.path(percentEncoded: false), agent: current.containerAgentKind)
+                                   })
             chat.onSessionID = { [controller] sid in controller.setTranscriptID(id, sid) }
             chat.onClosed = { [controller] why in controller.setStopped(id, why) }
             chat.onUnexpectedExit = { [surfaces] in surfaces.onChatAgentExit(id) }

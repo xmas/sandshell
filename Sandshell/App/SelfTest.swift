@@ -3904,6 +3904,23 @@ enum SelfTest {
             return (l.board.map { [$0] } ?? []) + (l.children ?? []).flatMap { savedBoards($0) }
         }
         check(savedBoards(saved) == [".sandshell/canvas/onboarding"], "the pane's board is saved with the layout (\(savedBoards(saved)))")
+
+        // A design session: a Claude chat with a new board of its own, beside it.
+        guard let design = ws.newDesignSession() else { return check(false, "a design session") }
+        check(design.agent == .claude && design.isChat && design.board == ".sandshell/canvas/design",
+              "a design session is a Claude chat with its own board (\(design.board ?? "-"))")
+        let designFolder = ws.boardFolder(of: design)
+        check(designFolder != nil && CanvasBoard.list(root: ws.rootURL).count == 2, "its board is made, empty")
+        check(await until(5) { tree.panes.contains { $0.shownSession == design.id }
+                  && tree.panes.contains { $0.shownBoard?.lastPathComponent == "design" } },
+              "the chat shows with its board in a pane beside it")
+        check(tree.focused.shownSession == design.id, "the chat keeps the focus")
+        check(ws.displayName(of: design) == "New design", "it's listed as a new design (\(ws.displayName(of: design)))")
+        await wait(1)
+        check(ChatSession.designInstructions(board: "/w/.sandshell/canvas/design").contains("/w/.sandshell/canvas/design"),
+              "its agent is told where the board is")
+        snapshot(window, "canvas-design")
+        ws.closeSession(design.id)
     }
 
     // MARK: Links

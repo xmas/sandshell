@@ -81,7 +81,7 @@ final class CanvasView: NSView {
             if board == nil { showMessage(error.localizedDescription) }
         case .success(let loaded):
             board = loaded
-            showMessage(loaded.artboards.isEmpty ? "No artboards yet. Ask the agent to add one to board.json." : nil)
+            showMessage(loaded.artboards.isEmpty ? "Nothing on this board yet. Describe what to design in the chat beside it." : nil)
             layoutArtboards(loaded)
         }
     }

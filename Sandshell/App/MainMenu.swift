@@ -53,6 +53,9 @@ enum MainMenu {
         let newChat = fileMenu.addItem(withTitle: "New Claude Chat",
                                        action: #selector(AppDelegate.newChat(_:)), keyEquivalent: "n")
         newChat.keyEquivalentModifierMask = [.command, .control]
+        let design = fileMenu.addItem(withTitle: "New Design Session",
+                                      action: #selector(AppDelegate.newDesignSession(_:)), keyEquivalent: "n")
+        design.keyEquivalentModifierMask = [.command, .option, .shift]
         for agent in SbxCommand.acpAgents where agent != .claude {
             let item = fileMenu.addItem(withTitle: "New \(agent.displayName) Chat",
                                         action: #selector(AppDelegate.newChat(_:)), keyEquivalent: "")
