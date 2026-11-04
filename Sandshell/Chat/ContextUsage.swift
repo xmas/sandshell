@@ -56,8 +56,12 @@ struct ContextUsage: Equatable, Sendable {
         percentage = v["percentage"]?.int ?? (maxTokens > 0 ? total * 100 / maxTokens : 0)
         categories = cats.compactMap { c in
             guard let name = c["name"]?.string else { return nil }
+            // Newer Claude Code sends no `kind`: the free space and the
+            // autocompact buffer are then told by their names.
             let kind = c["kind"]?.string.flatMap(Category.Kind.init(rawValue:))
-                ?? (c["isDeferred"]?.bool == true ? .deferred : .used)
+                ?? (c["isDeferred"]?.bool == true ? .deferred
+                    : name.localizedCaseInsensitiveContains("free space") ? .free
+                    : name.localizedCaseInsensitiveContains("autocompact buffer") ? .buffer : .used)
             return Category(name: name, tokens: c["tokens"]?.int ?? 0, color: c["color"]?.string ?? "", kind: kind)
         }
         mcpTools = (v["mcpTools"]?.array ?? []).compactMap { t in

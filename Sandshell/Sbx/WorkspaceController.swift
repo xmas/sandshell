@@ -689,7 +689,9 @@ final class WorkspaceController: ObservableObject {
     /// `sbx kit add` (falling back to a rebuild where sbx refuses); anything
     /// else — or `rebuild` — stops and recreates every container.
     func applyKits(_ kits: [String], rebuild: Bool = false) {
-        let cleaned = kits.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+        var cleaned = kits.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+        // Sandshell's own are always on: a list that leaves them out keeps them.
+        cleaned += sandshellKits.filter { !cleaned.contains($0) }
         let previous = resolvedKits()
         let added = rebuild ? nil : KitDrift.additionsOnly(from: previous, to: cleaned)
         // `sbx kit add` appends, so keep the config in the container's order —

@@ -71,6 +71,16 @@ struct ContextUsageTests {
         #expect(usage.percentage == 10, "computed when the reply has none")
     }
 
+    @Test(.tags(.edgeCase)) func repliesWithoutKindsTellFreeSpaceAndBufferByName() throws {
+        let usage = try #require(ContextUsage([
+            "totalTokens": 10, "maxTokens": 100,
+            "categories": [["name": "Messages", "tokens": 10], ["name": "Autocompact buffer", "tokens": 30],
+                           ["name": "Free space", "tokens": 60]],
+        ]))
+        #expect(usage.categories.map(\.kind) == [.used, .buffer, .free])
+        #expect(usage.usedTokens == 10)
+    }
+
     @Test(arguments: [JSONValue.null, ["totalTokens": 5], ["categories": []]])
     func notABreakdown(value: JSONValue) {
         #expect(ContextUsage(value) == nil)

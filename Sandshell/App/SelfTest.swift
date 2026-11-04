@@ -1783,8 +1783,8 @@ enum SelfTest {
 
     /// Kit add + drift against a real sandbox. Needs `-SandshellSelfTestKits
     /// '("<a>","<b>","<c>","<d>","<e>")'`: five local mixin kit dirs, where the
-    /// workspace config starts with [a], and d declares `files` (which
-    /// `sbx kit add` refuses, forcing the rebuild fallback).
+    /// workspace config starts with [a], and d lays a file in the sandbox (which
+    /// sbx 0.51's `kit add` installs in place too).
     private static func kits(_ window: MainWindowController) async {
         guard let ws = window.workspaceController else { return log("no window") }
         let refs = UserDefaults.standard.stringArray(forKey: "SandshellSelfTestKits") ?? []
@@ -1793,7 +1793,9 @@ enum SelfTest {
         let agent = ws.primaryAgent
         let name = ws.containerName(for: agent)
         let stateFile = ws.rootURL.appendingPathComponent(".sandshell/state.json")
-        func actualKits() async -> [String] { await SbxClient.shared.inspect(name)?.kits ?? [] }
+        // Sandshell's own kits are always there too: the checks are about the rest.
+        func actualKits() async -> [String] { (await SbxClient.shared.inspect(name)?.kits ?? []).filter { !KitStore.isSandshellKit($0) } }
+        func configured() -> [String] { ws.kits.filter { !KitStore.isSandshellKit($0) } }
         func sandboxID() async -> String? { try? await SbxClient.shared.status(name: name)?.id }
         func settle() async -> Bool { await until(300) { !ws.busy && !ws.isBuilding } }
 
@@ -1818,7 +1820,7 @@ enum SelfTest {
         renderKitsPane(drift: ws.kitDrift[agent], enabled: [a])
 
         ws.adoptKitDrift(for: agent)
-        check(ws.kits == [a, b], "adopt adds b to the workspace config")
+        check(configured() == [a, b], "adopt adds b to the workspace config")
         await wait(3)
         check(ws.kitDrift[agent] == nil, "no drift after adopting")
 
@@ -1843,13 +1845,22 @@ enum SelfTest {
         check(await sandboxID() == idBefore && idBefore != nil, "same sandbox id → kit add path, not a rebuild")
         check(ws.containerPhases[agent] == .running, "container running after kit add")
 
-        // A kit sbx refuses to add in place → full rebuild fallback.
+        // A kit with files goes in place too (sbx 0.51's v3 `kit add` installs
+        // image content).
         ws.applyKits([a, b, e, d])
-        check(await settle(), "refused kit add apply finishes")
-        let afterRefusal = await actualKits()
-        log("kits after apply [a,b,e,d]: \(afterRefusal)")
-        check(afterRefusal == [a, b, e, d], "rebuild applied the config's kits (ignored c dropped)")
-        check(await sandboxID() != idBefore, "new sandbox id → fell back to a rebuild")
+        check(await settle(), "kit-add apply with files finishes")
+        let withFiles = await actualKits()
+        log("kits after apply [a,b,e,d]: \(withFiles)")
+        let idWithFiles = await sandboxID()
+        check(withFiles == [a, b, c, e, d] && idWithFiles == idBefore, "d (with files) added in place too")
+
+        // Taking one away rebuilds from the config.
+        ws.applyKits([a, e, d])
+        check(await settle(), "removing a kit finishes")
+        let afterRemoval = await actualKits()
+        log("kits after apply [a,e,d]: \(afterRemoval)")
+        check(afterRemoval == [a, e, d], "rebuild applied the config's kits (ignored c dropped)")
+        check(await sandboxID() != idBefore, "new sandbox id → a rebuild")
         let stateAfter = (try? String(contentsOf: stateFile, encoding: .utf8)) ?? ""
         check(!stateAfter.contains("ignoredKitDrift"), "ignored drift cleared by the rebuild")
         ws.refreshKitDrift(for: agent)
@@ -3182,8 +3193,8 @@ enum SelfTest {
     // MARK: Sandshell kits
 
     /// A new workspace gets Sandshell's own kits; its Claude sandbox is created
-    /// with sandshell-claude, so chats have Undo and MCP. Turned off, a rebuilt
-    /// sandbox runs chats plain and those features hide. Needs a fresh folder.
+    /// with sandshell-claude, so chats have Undo and MCP; it's always on.
+    /// Needs a fresh folder.
     private static func kitExtras(_ window: MainWindowController) async {
         guard let ws = window.workspaceController, let tree = window.paneTree else { return log("no window") }
         check(ws.kits.contains("sandshell-claude") && ws.kits.contains("sandshell-codex"),
@@ -3209,13 +3220,9 @@ enum SelfTest {
         ws.closeSession(a.id)
         await chatExtras(window)
 
-        // Off: the sandbox is rebuilt without it, and chats run plain.
+        // Chats need it (the adapter is in it), so it can't be turned off.
         ws.applyKits(ws.kits.filter { $0 != "sandshell-claude" })
-        guard let b = ws.newChatInCurrentContext() else { return check(false, "a chat after turning it off") }
-        check(await until(900) { chat(b.id)?.phase == .ready }, "a chat starts in the rebuilt sandbox")
-        check(chat(b.id)?.hasExtras == false, "without the kit there's no wrapper, so no Undo or MCP")
-        ws.closeSession(b.id)
-        ws.applyKits(ws.kits + ["sandshell-claude"])   // leave it as a new workspace would be
+        check(ws.kits.contains("sandshell-claude"), "Sandshell's kit stays on when a kit list leaves it out")
     }
 
     // MARK: Warm chats
