@@ -2,7 +2,7 @@
 
 A running log of what changed, newest first. Yes, we actually write these.
 
-## Unreleased
+## v0.2.45 — "Old Kits, New Tricks"
 - **Older-format kits no longer stop sandboxes cold.** sbx 0.51 won't put a v1/v2 kit in a sandbox beside v3 kits. Sandshell now checks each kit's format before building:
   - Docker's own kits still on an old name move to their v3 versions by themselves (e.g. `claude-sbx-statusline-kit` → `claude-sbx-statusline`).
   - Any other old-format kit stops the launch before sbx runs, with a message naming the kit and a **Turn Off** button that removes it from the workspace and starts the session.
