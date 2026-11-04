@@ -730,6 +730,8 @@ final class ChatSession: ObservableObject {
     func debugApply(_ update: JSONValue) { apply(update) }
     /// Tests: a turn starts (`.running`) or ends (`.ready`) without the agent.
     func debugSetPhase(_ phase: Phase) { self.phase = phase }
+    /// Tests: Claude Code reports these MCP servers.
+    func debugSetMCPServers(_ servers: [MCPServer]?) { mcpServers = servers }
     /// Tests: Claude Code suggests a next message (as `_claude/sdkMessage` brings it).
     func debugSuggest(_ text: String?) { suggestedPrompt = text }
     /// Tests: talk to `connection` as session `sessionID` (nil and nil: as a

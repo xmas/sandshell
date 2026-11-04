@@ -415,8 +415,9 @@ final class ChatSessionView: NSView {
     // MARK: MCP
 
     private func showMCPSummary(_ servers: [ChatSession.MCPServer]?) {
-        let failing = (servers ?? []).filter { $0.status == "failed" || $0.status == "needs-auth" }
-        bar.showMCP(count: servers?.count, failing: failing.map(\.name))
+        // Red only for a real failure: a connector waiting for sign-in (most
+        // claude.ai ones nobody uses here) or turned off is routine.
+        bar.showMCP(count: servers?.count, failing: MCPServerList.failing(servers ?? []).map(\.name))
     }
 
     // MARK: Inspector (beside the conversation)
