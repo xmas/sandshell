@@ -2,6 +2,9 @@
 
 A running log of what changed, newest first. Yes, we actually write these.
 
+## Unreleased
+- **Copy a tool call:** hover a tool's card (open a "Used 3 tools" line) and its Copy takes the tool's title, input and whole output — not just the lines the card shows. Right-click has Copy Tool Call.
+
 ## v0.2.43 — "Canvas"
 - **Canvas (first look):** a board the agent writes under `.sandshell/canvas/<board>/` — a `board.json` and a page per screen — opens in a pane (View ▸ Open Board) with its screens side by side as artboards, zoomed to fit; pinch or scroll to move around. Pages reload as the agent edits them, and new artboards appear as it adds them.
 - **Claude knows how to use the Canvas.** Sandshell's Claude chats load a small Sandshell plugin from the chat kit with a `canvas` skill, so "put a login screen on the canvas" or "show me three hero variations" makes a board (nothing is added to your own `~/.claude`). Click a board's file in the reply to open the board beside the chat.

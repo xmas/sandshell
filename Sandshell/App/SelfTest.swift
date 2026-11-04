@@ -3935,11 +3935,16 @@ enum SelfTest {
         defer { blocks.pasteboard.releaseGlobally() }
         blocks.frame = NSRect(x: 0, y: 0, width: 600, height: 800)
         let table = "| a | b |\n|---|---|\n| 1 | 2 |"
+        // A tool card too: all its output, not just the lines it shows.
+        let toolOutput = (1...20).map { "line \($0)" }.joined(separator: "\n")
+        let call = ChatItem.ToolCall(id: "t1", title: "Read the docs", kind: "read", status: "completed", output: toolOutput, diffs: [])
         blocks.debugApplyNow([.agentText(id: "c", text:
-            "Here:\n\n```json\n{\n  \"x\": 1\n}\n```\n\nAnd:\n\n\(table)\n\nDone.")])
+            "Here:\n\n```json\n{\n  \"x\": 1\n}\n```\n\nAnd:\n\n\(table)\n\nDone."), .tool(call)])
+        blocks.debugToggle("group-t1")   // the "Used 1 tool" line, opened
         blocks.layoutSubtreeIfNeeded()
         for (n, expected, what) in [(0, "{\n  \"x\": 1\n}", "a code block's Copy copies its code, no fences"),
-                                    (1, table, "a table's Copy copies its Markdown")] {
+                                    (1, table, "a table's Copy copies its Markdown"),
+                                    (2, "Read the docs\n\n" + toolOutput, "a tool card's Copy copies its title and whole output")] {
             blocks.debugHoverBlock(n)
             check(blocks.debugBlockCopyShown, "hovering block \(n) shows its Copy")
             blocks.pasteboard.clearContents()

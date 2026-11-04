@@ -850,7 +850,7 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
         }
         return out
     }
-    func debugApplyNow(_ items: [ChatItem]) { apply(items) }
+    func debugApplyNow(_ items: [ChatItem]) { self.items = items; apply(items) }
     /// Self-test: the transcript's text.
     var debugText: String { textView.string }
     /// Self-test: the plan marks the laid-out fragments draw, in order.
@@ -923,7 +923,12 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
     private func replyMenuItems(at point: NSPoint) -> [NSMenuItem] {
         var items: [NSMenuItem] = []
         if let block = copyBlock(at: point) {
-            items.append(NSMenuItem(block.block.kind == .code ? "Copy Code" : "Copy Table") { [weak self] in
+            let title = switch block.block.kind {
+            case .code: "Copy Code"
+            case .table: "Copy Table"
+            case .tool: "Copy Tool Call"
+            }
+            items.append(NSMenuItem(title) { [weak self] in
                 self?.copyBlockText(at: block.range.location)
             })
         }

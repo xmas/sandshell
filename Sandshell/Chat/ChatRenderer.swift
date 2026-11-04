@@ -17,10 +17,11 @@ extension NSAttributedString.Key {
     static let chatCopyBlock = NSAttributedString.Key("SandshellChatCopyBlock")
 }
 
-/// The source of a code block (its code, without the fences) or a table (its
-/// Markdown). A class, so neighbouring blocks never merge into one range.
+/// The source of a code block (its code, without the fences), a table (its
+/// Markdown) or a tool call (its title, input and whole output). A class, so
+/// neighbouring blocks never merge into one range.
 final class CopyBlock: NSObject, @unchecked Sendable {
-    enum Kind { case code, table }
+    enum Kind { case code, table, tool }
     let kind: Kind
     let text: String
     init(_ kind: Kind, text: String) {
@@ -527,7 +528,11 @@ enum ChatRenderer {
             paras.append(link(expanded ? "Show less" : "Show \(overflow) more line\(overflow == 1 ? "" : "s")",
                               id: "tool-\(call.id)"))
         }
-        let out = NSMutableAttributedString(attributedString: blocked(paras, .card))
+        // Copy takes all of it, however much the card shows.
+        let copy = ([rawTitle, call.input == rawTitle ? "" : call.input, stripFences(call.output)]
+            + call.diffs.map { d in ([d.path] + (d.oldText.map { [$0] } ?? []) + [d.newText]).joined(separator: "\n") })
+            .map { $0.trimmingCharacters(in: .newlines) }.filter { !$0.isEmpty }.joined(separator: "\n\n")
+        let out = NSMutableAttributedString(attributedString: copyable(blocked(paras, .card), CopyBlock(.tool, text: copy)))
         for data in call.images { out.append(image(data)) }
         return out
     }
