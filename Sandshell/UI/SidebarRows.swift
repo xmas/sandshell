@@ -524,6 +524,17 @@ struct SubagentSummary: Equatable {
         background = tasks.count { $0.isRunning && ($0.kind == .shell || $0.kind == .monitor) }
     }
 
+    /// A subagent row hides itself once really done: its transcript says its
+    /// turn ended. Failed, and stopped (only gone quiet — a guess), stay.
+    static func hides(_ subagent: SubagentInfo) -> Bool { subagent.state == .done }
+
+    /// A workflow row hides itself once nothing of the run is running and
+    /// every agent of it is done (one that failed keeps it).
+    static func hides(_ run: WorkflowRun, tasks: [BackgroundTask]) -> Bool {
+        let running = tasks.first { $0.runID == run.id }.map(\.isRunning) ?? !run.agentsSettled
+        return !running && !run.agents.isEmpty && run.agents.allSatisfy { $0.state == .done }
+    }
+
     init(subagents: Int = 0, workflows: Int = 0, running: Int = 0, background: Int = 0) {
         (self.subagents, self.workflows, self.running, self.background) = (subagents, workflows, running, background)
     }

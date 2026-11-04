@@ -1438,6 +1438,15 @@ enum SelfTest {
               "the turn finishes")
         await ws.refreshSubagents()
         check(await until(60) { ws.subagents[s.id]?.first?.state == .done }, "and the subagent reads as done")
+        // Really done: its row hides itself; the subagents row stays, and shows it on request.
+        func subagentRowShown() -> Bool { sidebar.rows.contains { if case .subagent(let i) = $0 { i.id == info.id } else { false } } }
+        check(await until(10) { !subagentRowShown() }, "a finished subagent's row hides itself")
+        check(sidebar.rows.contains(.summary(s.id)) && sidebar.hiddenFinishedCount(of: s.id) == 1,
+              "the subagents row stays, counting it as finished")
+        sidebar.setShowsFinished(true, of: s.id)
+        check(subagentRowShown(), "Show Finished brings it back")
+        sidebar.setShowsFinished(false, of: s.id)
+        check(!subagentRowShown(), "Hide Finished hides it again")
         SubagentWindowController.show(ws.subagents[s.id]?.first ?? info, workspace: ws)
         let viewer = SubagentWindowController.debugWindow(info.id)
         check(await until(10) { !(viewer?.debugTranscriptText.isEmpty ?? true) }, "its transcript opens read-only")
@@ -1461,7 +1470,8 @@ enum SelfTest {
         sidebar.setShowsSubagents(false, of: s.id)
         check(!sidebar.rows.contains { if case .subagent = $0 { true } else { false } }, "collapsing hides the subagents")
         sidebar.setShowsSubagents(true, of: s.id)
-        check(sidebar.rows.contains { if case .subagent = $0 { true } else { false } }, "expanding shows them")
+        check(sidebar.rows.contains { if case .subagent = $0 { true } else { false } },
+              "expanding rows that are all finished shows them")
         ws.closeSession(s.id)
     }
 

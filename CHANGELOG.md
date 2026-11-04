@@ -2,6 +2,10 @@
 
 A running log of what changed, newest first. Yes, we actually write these.
 
+## Unreleased
+- **Finished subagents tidy themselves away.** Once a subagent's turn has really ended, its row leaves the sidebar. A workflow's row goes once all its agents are done. Failed ones stay, and so do ones that have only gone quiet. The subagents row still counts them: right-click it for **Show Finished** or **Hide Finished**. Opening a group whose subagents are all finished shows them.
+- **Sandshell's kits come prebuilt.** Each release's chat kits are built once on GitHub and published to ghcr.io/xmas, so a new sandbox no longer builds them on your Mac. If ghcr.io can't be reached, the bundled copy is built as before.
+
 ## v0.2.45 — "Old Kits, New Tricks"
 - **Older-format kits no longer stop sandboxes cold.** sbx 0.51 won't put a v1/v2 kit in a sandbox beside v3 kits. Sandshell now checks each kit's format before building:
   - Docker's own kits still on an old name move to their v3 versions by themselves (e.g. `claude-sbx-statusline-kit` → `claude-sbx-statusline`).

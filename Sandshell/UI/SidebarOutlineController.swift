@@ -129,6 +129,9 @@ final class SidebarListController: NSViewController {
     private(set) var rows: [Row] = []
     /// Sessions whose subagent rows the person opened (from the subagents row).
     private var openedParents: Set<UUID> = []
+    /// Sessions whose finished subagents and workflows the person asked to
+    /// see again (they hide themselves once really done).
+    private var revealedFinished: Set<UUID> = []
 
     func sessionID(atRow row: Int) -> UUID? {
         guard rows.indices.contains(row), case .session(let id) = rows[row] else { return nil }
@@ -185,16 +188,52 @@ final class SidebarListController: NSViewController {
                         tasks: controller.backgroundTasks[id] ?? [])
     }
 
-    /// A session's child rows: its subagents and workflows, oldest first.
+    /// A session's child rows: its subagents and workflows, oldest first —
+    /// the finished ones left out unless the person asked to see them.
     private func childRows(of id: UUID) -> [Row] {
+        let rows = allChildRows(of: id)
+        return revealedFinished.contains(id) ? rows : rows.filter { !isFinished($0) }
+    }
+
+    private func allChildRows(of id: UUID) -> [Row] {
         let subs = (controller.subagents[id] ?? []).map { (date: $0.startedAt, row: Row.subagent($0)) }
         let runs = (controller.workflows[id] ?? []).map { (date: $0.startedAt ?? .distantPast, row: Row.workflow(id, $0)) }
         return (subs + runs).sorted { $0.date < $1.date }.map(\.row)
     }
+
+    /// Really done, so its row goes: a subagent whose transcript says its turn
+    /// ended, a workflow run that's done with nothing of it still running.
+    /// Failed ones stay, and so do ones only gone quiet (`.stopped` is a guess).
+    private func isFinished(_ row: Row) -> Bool {
+        switch row {
+        case .subagent(let info): SubagentSummary.hides(info)
+        case .workflow(let session, let run): SubagentSummary.hides(run, tasks: controller.backgroundTasks[session] ?? [])
+        default: false
+        }
+    }
+
+    /// How many of a session's subagents and workflows are hidden as finished.
+    func hiddenFinishedCount(of id: UUID) -> Int {
+        revealedFinished.contains(id) ? 0 : allChildRows(of: id).count(where: isFinished)
+    }
+
+    /// Show or hide a session's finished subagents and workflows.
+    func setShowsFinished(_ show: Bool, of id: UUID) {
+        if show { revealedFinished.insert(id); openedParents.insert(id) } else { revealedFinished.remove(id) }
+        reload()
+    }
     private func childCount(of id: UUID) -> Int { (controller.subagents[id]?.count ?? 0) + (controller.workflows[id]?.count ?? 0) }
 
+    /// Opening rows that are all finished shows them (else the click would
+    /// show nothing); closing them hides the finished ones again.
     func setShowsSubagents(_ show: Bool, of id: UUID) {
-        if show { openedParents.insert(id) } else { openedParents.remove(id) }
+        if show {
+            openedParents.insert(id)
+            if childRows(of: id).isEmpty { revealedFinished.insert(id) }
+        } else {
+            openedParents.remove(id)
+            revealedFinished.remove(id)
+        }
         reload()
     }
 
@@ -1348,6 +1387,15 @@ final class SidebarListController: NSViewController {
         let menu = NSMenu()
         if let info = subagent(atRow: row) { return subagentMenu(info) }
         if let wf = workflow(atRow: row) { return workflowMenu(wf.run, in: wf.session) }
+        if let id = summarySession(atRow: row) {
+            let hidden = hiddenFinishedCount(of: id)
+            if revealedFinished.contains(id) {
+                menu.addItem(NSMenuItem("Hide Finished") { [weak self] in self?.setShowsFinished(false, of: id) })
+            } else if hidden > 0 {
+                menu.addItem(NSMenuItem("Show \(hidden) Finished") { [weak self] in self?.setShowsFinished(true, of: id) })
+            }
+            return menu.items.isEmpty ? nil : menu
+        }
         guard let id = sessionID(atRow: row), let session = controller.session(id: id) else {
             // Empty-area click: offer the same menu as the "+" button.
             for item in newSessionMenuItems() { menu.addItem(item) }
