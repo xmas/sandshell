@@ -55,6 +55,7 @@ enum KitStore {
         "docker.io/sbx/git-ssh-sign-kit:latest": "docker.io/sbx/git-ssh-sign:latest",
         "docker.io/sbx/github-ssh-kit:latest": "docker.io/sbx/github-ssh:latest",
         "docker.io/sbx/code-server-kit:latest": "docker.io/sbx/code-server:latest",
+        "docker.io/sbx/claude-sbx-statusline-kit:latest": "docker.io/sbx/claude-sbx-statusline:latest",
     ]
 
     /// `ref`, or the v3 kit that replaced it.
@@ -165,9 +166,10 @@ enum KitStore {
         var cache = UserDefaults.standard.dictionary(forKey: requirementsKey) as? [String: String] ?? [:]
         cache[ref] = requirementEntry(info)
         UserDefaults.standard.set(cache, forKey: requirementsKey)
-        var legacy = Set(UserDefaults.standard.stringArray(forKey: legacyKey) ?? [])
-        if info.isLegacy { legacy.insert(ref) } else { legacy.remove(ref) }
-        UserDefaults.standard.set(legacy.sorted(), forKey: legacyKey)
+        setLegacy([ref], info.isLegacy)
+        var formats = UserDefaults.standard.dictionary(forKey: formatKey) as? [String: String] ?? [:]
+        formats[ref] = "\(info.schemaVersion ?? "")|\(info.name ?? "")"
+        UserDefaults.standard.set(formats, forKey: formatKey)
     }
 
     /// Kits `sbx kit inspect` said are v1/v2: no sandbox can take them now
@@ -175,6 +177,80 @@ enum KitStore {
     private static let legacyKey = "kitLegacy.v1"
     static func isLegacy(_ ref: String) -> Bool {
         UserDefaults.standard.stringArray(forKey: legacyKey)?.contains(ref) ?? false
+    }
+
+    /// Mark kits as v1/v2 (or not): sbx refused them beside v3 kits.
+    static func setLegacy(_ refs: [String], _ isLegacy: Bool = true) {
+        var legacy = Set(UserDefaults.standard.stringArray(forKey: legacyKey) ?? [])
+        for ref in refs { if isLegacy { legacy.insert(ref) } else { legacy.remove(ref) } }
+        UserDefaults.standard.set(legacy.sorted(), forKey: legacyKey)
+    }
+
+    /// Per kit, `<schemaVersion>|<spec name>` as `sbx kit inspect` said. The
+    /// format was learned only from 0.2.41 on: a kit whose agent was cached
+    /// before then was never asked its format (and went to sbx beside v3 kits).
+    private static let formatKey = "kitFormat.v1"
+
+    /// Whether `sbx kit inspect` should be asked about `ref` before a sandbox
+    /// is made with it: what it's for or its format isn't known yet — or it's
+    /// an older-format kit on disk, which its author may have moved to v3 since.
+    static func needsInspection(_ ref: String) -> Bool {
+        if isSandshellKit(ref) { return false }
+        if requiredAgent(ref) == nil { return true }
+        if officialKits.contains(where: { $0.ref == ref }) { return false }
+        let formats = UserDefaults.standard.dictionary(forKey: formatKey) as? [String: String] ?? [:]
+        if formats[ref] == nil { return true }
+        return isLegacy(ref) && isLocal(ref)
+    }
+
+    /// A kit in a folder on this Mac (not a registry or git reference).
+    static func isLocal(_ ref: String) -> Bool {
+        ref.hasPrefix("/") || ref.hasPrefix("~") || ref.hasPrefix(".")
+    }
+
+    /// The name sbx calls a kit by in its messages: its spec's `name` where
+    /// inspected, else the last part of its reference without tag, digest or
+    /// the `-kit` suffix (`docker.io/sbx/claude-sbx-statusline-kit:latest` →
+    /// `claude-sbx-statusline`; a git ref's `dir=`).
+    static func sbxName(_ ref: String) -> String {
+        let formats = UserDefaults.standard.dictionary(forKey: formatKey) as? [String: String] ?? [:]
+        if let entry = formats[ref], let bar = entry.firstIndex(of: "|"), entry.index(after: bar) < entry.endIndex {
+            return String(entry[entry.index(after: bar)...])
+        }
+        return derivedName(ref)
+    }
+
+    static func derivedName(_ ref: String) -> String {
+        if let hash = ref.firstIndex(of: "#") {
+            let fragment = ref[ref.index(after: hash)...]
+            if let dir = fragment.split(separator: "&").first(where: { $0.hasPrefix("dir=") }) {
+                return String(dir.dropFirst(4).split(separator: "/").last ?? "")
+            }
+        }
+        var base = ref.split(separator: "#").first.map(String.init) ?? ref
+        while base.hasSuffix("/") { base.removeLast() }
+        var last = String(base.split(separator: "/").last ?? Substring(base))
+        if let at = last.firstIndex(of: "@") { last = String(last[..<at]) }
+        if let colon = last.firstIndex(of: ":") { last = String(last[..<colon]) }
+        if last.hasSuffix(".git") { last.removeLast(4) }
+        if last.hasSuffix("-kit") && last.count > 4 { last.removeLast(4) }
+        return last
+    }
+
+    /// What a kit is called to a person: its registry display name, else its sbx name.
+    static func displayName(_ ref: String) -> String {
+        all.first(where: { $0.ref == ref })?.displayName ?? sbxName(ref)
+    }
+
+    /// The kits among `refs` a sandbox for `agent` would take but for their
+    /// format: v1/v2 kits sbx refuses beside the agent's own v3 kit.
+    static func legacyKits(_ refs: [String], for agent: AgentKind) -> [String] {
+        guard takesV3Kits(agent) else { return [] }
+        return refs.filter { ref in
+            guard isLegacy(ref), ref != agent.createReference, !definesAgent(ref) else { return false }
+            guard let required = requiredAgent(ref), let agentName = required else { return true }
+            return agentName == agent.rawValue
+        }
     }
 
     /// The cache entry for an inspected kit: `sandbox:<agent>` or `mixin:<agent or "">`.
@@ -269,6 +345,27 @@ enum KitStore {
 
     static func remove(_ ref: String) {
         save(all.filter { $0.ref != ref })
+    }
+
+    /// The registry's entry for `old` now refers to `new` (its v3 version),
+    /// keeping its name, summary and default.
+    static func replace(_ old: String, with new: String) {
+        var kits: [KitRef] = []
+        for var kit in all {
+            if kit.ref == old { kit.ref = new }
+            if !kits.contains(where: { $0.ref == kit.ref }) { kits.append(kit) }
+        }
+        save(kits)
+    }
+
+    /// Where Docker publishes the v3 version of one of its v1/v2 kits: under
+    /// the kit's own name (`docker.io/sbx/claude-sbx-statusline-kit:latest` →
+    /// `docker.io/sbx/claude-sbx-statusline:latest`), as sbx's refusal says.
+    /// Nil for anyone else's kit.
+    static func v3Candidate(_ ref: String) -> String? {
+        guard ref.hasPrefix("docker.io/sbx/") || ref.hasPrefix("sbx/") else { return nil }
+        let candidate = "docker.io/sbx/\(sbxName(ref)):latest"
+        return candidate == ref ? nil : candidate
     }
 
     /// Fill in display metadata for a registered kit (e.g. from Docker Hub or

@@ -596,15 +596,65 @@ final class WorkspaceController: ObservableObject {
         saveConfig()
     }
 
-    /// Look up (with `sbx kit inspect`) which agent each kit is made for, where
-    /// not known yet, so a sandbox only gets the kits it can take.
+    /// Look up (with `sbx kit inspect`) which agent each kit is made for and
+    /// its format, where not known yet, so a sandbox only gets the kits it can
+    /// take — and older-format ones are named before sbx refuses them.
     func learnKitRequirements(_ refs: [String]) async {
-        for ref in refs where KitStore.requiredAgent(ref) == nil {
+        for ref in refs where KitStore.needsInspection(ref) {
             if let info = await SbxClient.shared.kitInspect(ref) { KitStore.learn(ref, from: info) }
         }
     }
 
     private static var loggedSkips: Set<String> = []
+
+    /// The workspace's kits in sbx's older format that `agent`'s sandbox would
+    /// otherwise take: sbx refuses them beside v3 kits (`LegacyKitsError`).
+    func legacyKits(for agent: AgentKind) -> [String] {
+        KitStore.legacyKits(resolvedKits(), for: agent)
+    }
+
+    /// Turn kits off for this workspace (a launch failure's "Turn Off"). They
+    /// were never in a sandbox (sbx refused them), so nothing is rebuilt; the
+    /// next launch makes the sandbox without them.
+    func turnOffKits(_ refs: [String]) {
+        Log.info(.workspace, "turning off kit(s) sbx can't use here: \(refs.joined(separator: ", "))")
+        storeKits(resolvedKits().filter { !refs.contains($0) })
+    }
+
+    /// Docker's own kits still on a v1/v2 reference, where Docker publishes a
+    /// v3 version (`KitStore.v3Candidate`, confirmed with `sbx kit inspect`):
+    /// switched to it for this workspace and in the registry, so the sandbox
+    /// gets the kit instead of refusing it.
+    private static var noV3Version: Set<String> = []
+    private func upgradeLegacyKits(for agent: AgentKind) async {
+        var swaps: [String: String] = [:]
+        for ref in legacyKits(for: agent) where !Self.noV3Version.contains(ref) {
+            guard let candidate = KitStore.v3Candidate(ref),
+                  let info = await SbxClient.shared.kitInspect(candidate), info.schemaVersion == "3" else {
+                Self.noV3Version.insert(ref)
+                continue
+            }
+            KitStore.learn(candidate, from: info)
+            swaps[ref] = candidate
+        }
+        guard !swaps.isEmpty else { return }
+        for (old, new) in swaps {
+            Log.info(.workspace, "kit \(old) is in sbx's older format: using its v3 version \(new)")
+            KitStore.replace(old, with: new)
+        }
+        var kits: [String] = []
+        for ref in resolvedKits().map({ swaps[$0] ?? $0 }) where !kits.contains(ref) { kits.append(ref) }
+        storeKits(kits)
+    }
+
+    /// Before handing sbx `agent`'s kits: the older-format ones, as the error
+    /// the launch failure shows (with its Turn Off).
+    private func checkKitFormats(for agent: AgentKind) -> LegacyKitsError? {
+        let legacy = legacyKits(for: agent)
+        guard !legacy.isEmpty else { return nil }
+        Log.error(.workspace, "\(agent.rawValue) sandbox: kit(s) in sbx's older format: \(legacy.joined(separator: ", "))")
+        return LegacyKitsError(refs: legacy)
+    }
 
     /// The workspace's kits a sandbox for `agent` takes, logging any left out.
     func kits(for agent: AgentKind, from refs: [String]) -> [String] {
@@ -1117,6 +1167,8 @@ final class WorkspaceController: ObservableObject {
             } catch {
                 reason = error.localizedDescription
             }
+            // An older-format kit: marked, so the rebuild names it instead of making the sandbox.
+            _ = LegacyKitsError.from(message: reason, kits: [ref])
             Log.info(.workspace, "sbx kit add \(ref) → '\(name)' not applied (\(reason)); rebuilding instead")
             return try await performBringUp(for: agent, onMismatch: .rebuild, force: true)
         }
@@ -1155,6 +1207,7 @@ final class WorkspaceController: ObservableObject {
 
         let mounts = resolvedMounts()
         await learnKitRequirements(resolvedKits())
+        await upgradeLegacyKits(for: agent)
         let kits = kits(for: agent, from: resolvedKits())
         let signature = configSignature(mounts: mounts, kits: kits, agent: agent)
 
@@ -1204,7 +1257,7 @@ final class WorkspaceController: ObservableObject {
                     break   // fall through to rebuild
                 }
             }
-            if let error = cannotRecreate {
+            if let error: any Error = cannotRecreate ?? checkKitFormats(for: agent).map({ $0 as any Error }) {
                 containers[agent] = existing
                 containerPhases[agent] = existing.isRunning ? .running : .stopped
                 refreshKitStartupIfNeeded(for: agent)
@@ -1217,10 +1270,15 @@ final class WorkspaceController: ObservableObject {
                 built = try await SbxClient.shared.rebuild(workspace: workspace, agent: agent, name: name, mounts: mounts, kits: kits,
                                                            onProgress: buildProgress(for: agent))
             } catch {
+                let error = LegacyKitsError.from(sbxError: error, kits: kits) ?? error
                 containerPhases[agent] = .failed(error.localizedDescription)
                 throw error
             }
         } else {
+            if let error = checkKitFormats(for: agent) {
+                containerPhases[agent] = .failed(error.localizedDescription)
+                throw error
+            }
             Log.info(.workspace, "creating container '\(name)' for \(agent.rawValue) (\(mounts.count) mounts, \(kits.count) kits)")
             beginBuilding(agent, .creating, "Building \(name)…")
             do {
@@ -1231,6 +1289,7 @@ final class WorkspaceController: ObservableObject {
                     self?.recordSignature(signature, for: name)
                 }
             } catch {
+                let error = LegacyKitsError.from(sbxError: error, kits: kits) ?? error
                 containerPhases[agent] = .failed(error.localizedDescription)
                 throw error
             }

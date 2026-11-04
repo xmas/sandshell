@@ -108,6 +108,7 @@ enum SelfTest {
         case "clone": await cloneMode(window)
         case "sandbox-access": await sandboxAccess(window)
         case "launch-failure": await launchFailure(window)
+        case "legacy-kits": await legacyKits(window)
         case "fork": await fork(window)
         case "links": links()
         case "transcript-draw": await transcriptDraw()
@@ -2305,6 +2306,39 @@ enum SelfTest {
         check(creates() == before, "no automatic retries (\(creates() - before) more creates in 15 s)")
         check(tree.surfaces.launchFailures[a.id]?.contains("kit") == true, "the message names the kit problem")
         snapshot(window, "launch-failure")
+    }
+
+    /// A workspace with a kit in sbx's older format (fixture `legacy`:
+    /// kitdirs/old, a v2 mixin): the launch fails before `sbx create`, naming
+    /// the kit, and offers to turn it off; turning it off starts the session.
+    private static func legacyKits(_ window: MainWindowController) async {
+        guard let tree = window.paneTree, let ws = window.workspaceController,
+              let a = ws.orderedSessions.first else { return log("need a session") }
+        let old = ws.workspace.kits.first { $0.hasSuffix("/kitdirs/old") }
+        check(old != nil, "the workspace has the older-format kit (\(ws.workspace.kits))")
+        func creates() -> Int {
+            let log = (try? String(contentsOf: FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent("Library/Logs/Sandshell/Sandshell.log"), encoding: .utf8)) ?? ""
+            let name = ws.containerName(for: a.containerAgentKind)
+            return log.components(separatedBy: "creating “\(name)”").count - 1
+        }
+        let before = creates()
+        ws.selection = .session(a.id)
+        check(await until(120) { tree.surfaces.launchFailures[a.id] != nil }, "the launch fails")
+        let failure = tree.surfaces.launchFailures[a.id] ?? ""
+        log("failure: \(failure)")
+        check(failure.contains("older kit format") && failure.contains(old ?? "-"), "the message names the kit and its format")
+        check(creates() == before, "sbx create isn't asked (\(creates() - before) creates)")
+        check(await until(10) { tree.focused.debugTurnOffKitsTitle != nil }, "the failure offers Turn Off")
+        log("button: \(tree.focused.debugTurnOffKitsTitle ?? "-")")
+        check(tree.focused.debugTurnOffKitsTitle?.contains("Self-test Old") == true
+              || tree.focused.debugTurnOffKitsTitle?.contains("selftest-old") == true, "Turn Off names the kit")
+        snapshot(window, "legacy-kits")
+        tree.focused.debugTurnOffKits()
+        check(!ws.workspace.kits.contains { $0.hasSuffix("/kitdirs/old") }, "the kit is off for the workspace")
+        let saved = (try? String(contentsOf: ws.workspace.rootURL.appending(path: ".sandshell/config.json"), encoding: .utf8)) ?? ""
+        check(!saved.contains("kitdirs/old"), "and in its config.json")
+        check(await until(600) { tree.surfaces.terminals[a.id] != nil }, "the session starts without it")
     }
 
     // MARK: Sidebar

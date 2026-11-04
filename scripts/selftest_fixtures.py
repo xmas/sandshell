@@ -199,11 +199,17 @@ def _broken(d):
     git_repo(d, {}, [("init", {"README.md": README})])
     set_sessions(d, [{"agent": "shell", "name": "Shell A"}])
 
+@fixture("legacy")
+def _legacy(d):
+    git_repo(d, {}, [("init", {"README.md": README})])
+    set_sessions(d, [{"agent": "shell", "name": "Shell A"}])
+
 # config.json edits, applied once the app has written the file.
 CONFIGS = {
     "kits": lambda root: {"kits": [os.path.join(root, "kitdirs", "a")]},
     "kitagents": lambda root: {"kits": ["docker.io/sbx/code-server:latest"]},
     "broken": lambda root: {"kits": [os.path.join(root, "kitdirs", "does-not-exist")]},
+    "legacy": lambda root: {"kits": [os.path.join(root, "kitdirs", "old")]},
 }
 
 def kitdirs(root):
@@ -223,6 +229,14 @@ def kitdirs(root):
                 f'displayName: Self-test {k.upper()}\ndescription: Self-test mixin {k}.\nbuild: |\n{build}')
         open(os.path.join(d, "spec.yaml"), "w").write(spec)
         out.append(d)
+    # A v2 mixin (the legacy-kits scenario): sbx 0.51 won't compose it with v3 kits.
+    old = os.path.join(root, "kitdirs", "old")
+    shutil.rmtree(old, ignore_errors=True)
+    os.makedirs(old, exist_ok=True)
+    open(os.path.join(old, "spec.yaml"), "w").write(
+        'schemaVersion: "2"\nkind: mixin\nname: selftest-old\ndisplayName: Self-test Old\n'
+        'description: A v2 kit sbx refuses beside v3 ones.\n'
+        'environment:\n  variables:\n    SELFTEST_OLD: "1"\n')
     agent = os.path.join(root, "kitdirs", "agents-probe")
     shutil.rmtree(os.path.join(root, "kitdirs", "agent"), ignore_errors=True)
     os.makedirs(agent, exist_ok=True)

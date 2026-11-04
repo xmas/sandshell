@@ -518,6 +518,9 @@ final class TerminalStackController: NSViewController {
     private let failureActions = NSStackView()
     private let retryButton = NSButton(title: "Try Again", target: nil, action: nil)
     private let editSettingsButton = NSButton(title: "Edit Kits…", target: nil, action: nil)
+    /// A launch failure over kits sbx can't use here (`LegacyKitsError`): turn them off and go again.
+    private let turnOffKitsButton = NSButton(title: "Turn Off Kit", target: nil, action: nil)
+    private var kitsToTurnOff: [String] = []
     private var editSettingsPane: InspectorPane = .kits
 
     private let host = NSView()
@@ -721,7 +724,22 @@ final class TerminalStackController: NSViewController {
         editSettingsButton.title = editSettingsPane == .kits ? "Edit Kits…"
             : editSettingsPane == .mounts ? "Edit Mounts…" : "Sandbox Settings…"
         editSettingsButton.isHidden = false
+        // Kits in sbx's older format: one click turns them off and starts it again.
+        kitsToTurnOff = shownSession.flatMap { controller.session(id: $0) }
+            .map { controller.legacyKits(for: $0.containerAgentKind) } ?? []
+        turnOffKitsButton.title = kitsToTurnOff.count == 1
+            ? "Turn Off “\(KitStore.displayName(kitsToTurnOff[0]))”" : "Turn Off \(kitsToTurnOff.count) Kits"
+        turnOffKitsButton.isHidden = kitsToTurnOff.isEmpty
+        turnOffKitsButton.keyEquivalent = kitsToTurnOff.isEmpty ? "" : "\r"
+        retryButton.keyEquivalent = kitsToTurnOff.isEmpty ? "\r" : ""
         failureActions.isHidden = false
+    }
+
+    @objc private func turnOffKitsForFailure() {
+        guard !kitsToTurnOff.isEmpty else { return }
+        controller.turnOffKits(kitsToTurnOff)
+        kitsToTurnOff = []
+        retryLaunch()
     }
 
     @objc private func retryLaunch() {
@@ -843,13 +861,15 @@ final class TerminalStackController: NSViewController {
         emptyActions.setViews([emptyNewButton, emptyCloseButton], in: .leading)
         emptyActions.isHidden = true
         statusStack.addArrangedSubview(emptyActions)
-        for b in [retryButton, editSettingsButton] { b.bezelStyle = .rounded; b.target = self }
+        for b in [retryButton, editSettingsButton, turnOffKitsButton] { b.bezelStyle = .rounded; b.target = self }
+        turnOffKitsButton.action = #selector(turnOffKitsForFailure)
+        turnOffKitsButton.setAccessibilityIdentifier("turnOffKits")
         retryButton.action = #selector(retryLaunch)
         retryButton.keyEquivalent = "\r"
         editSettingsButton.action = #selector(editSettingsForFailure)
         failureActions.orientation = .horizontal
         failureActions.spacing = 10
-        failureActions.setViews([editSettingsButton, retryButton], in: .leading)
+        failureActions.setViews([editSettingsButton, turnOffKitsButton, retryButton], in: .leading)
         failureActions.isHidden = true
         statusStack.addArrangedSubview(failureActions)
 
@@ -1381,6 +1401,8 @@ final class TerminalStackController: NSViewController {
                 surfaces.declinedRestores.insert(id)
                 showStatus("“\(controller.displayName(of: session))”’s \(session.agent.displayName) history is no longer available.", busy: false)
                 editSettingsButton.isHidden = true
+                turnOffKitsButton.isHidden = true
+                retryButton.keyEquivalent = "\r"
                 failureActions.isHidden = false
                 return
             }
@@ -2237,6 +2259,11 @@ extension TerminalStackController {
     var debugStatusText: String? { statusStack.isHidden ? nil : statusLabel.stringValue }
 
     func debugShowLaunchFailure(_ message: String) { showLaunchFailure(message) }
+    /// The launch failure's Turn Off button, when shown (its title).
+    var debugTurnOffKitsTitle: String? {
+        failureActions.isHidden || turnOffKitsButton.isHidden ? nil : turnOffKitsButton.title
+    }
+    func debugTurnOffKits() { turnOffKitsForFailure() }
     /// Self-test: paste from `pasteboard` into the shown terminal (as ⌘V would).
     func debugPaste(_ pasteboard: NSPasteboard) -> Bool { insertPasteboard(pasteboard) }
 

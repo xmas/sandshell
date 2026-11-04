@@ -152,6 +152,8 @@ prepare kitagents; configure kitagents
 run kit-agents     kitagents quick
 prepare broken;    configure broken; rmboxes broken
 run launch-failure broken quick
+prepare legacy;    configure legacy; rmboxes legacy
+run legacy-kits    legacy quick
 prepare agents
 run agents         agents quick "-SandshellSelfTestKit" "$FIX/kitdirs/agents-probe"
 prepare search

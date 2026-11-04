@@ -126,6 +126,11 @@ final class KitConfigModel {
                 }
                 return
             }
+            if info.isLegacy {
+                notice = "“\(info.title ?? ref)” is in sbx’s older kit format (v\(info.schemaVersion ?? "1")): sbx won’t put it "
+                    + "in a sandbox with v3 kits, and every agent is a v3 kit now. Use a v3 version of it "
+                    + "(its spec.yaml starting “# syntax=docker/sandbox-kit:3”)."
+            }
             guard fillMetadata else { return }
             KitStore.update(ref, displayName: info.title, summary: info.description)
             registry = KitStore.all

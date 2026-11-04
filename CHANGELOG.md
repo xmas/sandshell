@@ -2,6 +2,12 @@
 
 A running log of what changed, newest first. Yes, we actually write these.
 
+## Unreleased
+- **Older-format kits no longer stop sandboxes cold.** sbx 0.51 won't put a v1/v2 kit in a sandbox beside v3 kits. Sandshell now checks each kit's format before building:
+  - Docker's own kits still on an old name move to their v3 versions by themselves (e.g. `claude-sbx-statusline-kit` → `claude-sbx-statusline`).
+  - Any other old-format kit stops the launch before sbx runs, with a message naming the kit and a **Turn Off** button that removes it from the workspace and starts the session.
+  - Adding an old-format kit in Settings ▸ Kits now warns you.
+
 ## v0.2.44 — "By Design"
 - **New Design Session** (File ▸ New Design Session, ⇧⌥⌘N, or + ▸ New Design Session): a Claude chat with a new Canvas board of its own open beside it. The agent is told the board is its to work on, so describe what you want and watch the artboards appear. Selecting the session again brings its board back beside it.
 - **Copy a tool call:** hover a tool's card (open a "Used 3 tools" line) and its Copy takes the tool's title, input and whole output — not just the lines the card shows. Right-click has Copy Tool Call.
