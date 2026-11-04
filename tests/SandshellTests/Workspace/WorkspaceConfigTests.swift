@@ -13,8 +13,6 @@ extension Tag {
 /// The smallest config.json `WorkspaceConfig` accepts: only the required policy.
 fileprivate let minimalWorkspaceConfigJSON = #"{"policy":{"selections":[]}}"#
 
-fileprivate let workspaceConfigTestMCPURL = URL(string: "https://mcp.example.com/gateway")!
-
 fileprivate func decodeWorkspaceConfig(_ json: String) throws -> WorkspaceConfig {
     try JSONDecoder().decode(WorkspaceConfig.self, from: Data(json.utf8))
 }
@@ -35,8 +33,6 @@ fileprivate func makeCustomizedWorkspaceConfig() -> WorkspaceConfig {
             MountSpec(path: URL(fileURLWithPath: "/srv/reference", isDirectory: true), readonly: true),
             MountSpec(path: URL(fileURLWithPath: "/srv/scratch", isDirectory: true), readonly: false),
         ]),
-        mcpServers: ["github", "filesystem"],
-        mcpURL: workspaceConfigTestMCPURL,
         primaryAgent: .codex,
         configured: true,
         archiveInterval: 600,
@@ -61,8 +57,6 @@ fileprivate func expectSameWorkspaceConfig(
     #expect(actual.schemaVersion == expected.schemaVersion, "schemaVersion", sourceLocation: sourceLocation)
     #expect(actual.policy.selections.map(\.spec) == expected.policy.selections.map(\.spec),
             "policy", sourceLocation: sourceLocation)
-    #expect(actual.mcpServers == expected.mcpServers, "mcpServers", sourceLocation: sourceLocation)
-    #expect(actual.mcpURL == expected.mcpURL, "mcpURL", sourceLocation: sourceLocation)
     #expect(actual.primaryAgent == expected.primaryAgent, "primaryAgent", sourceLocation: sourceLocation)
     #expect(actual.configured == expected.configured, "configured", sourceLocation: sourceLocation)
     #expect(actual.archiveInterval == expected.archiveInterval, "archiveInterval", sourceLocation: sourceLocation)
@@ -100,8 +94,6 @@ struct WorkspaceConfigTests {
         let config = WorkspaceConfig(policy: MountPolicy())
         #expect(config.schemaVersion == 1)
         #expect(config.policy == MountPolicy())
-        #expect(config.mcpServers.isEmpty)
-        #expect(config.mcpURL == Workspace.defaultMCPURL)
         #expect(config.primaryAgent == .claude)
         #expect(config.configured == false, "A new workspace hasn't had its mounts confirmed yet")
         #expect(config.archiveInterval == WorkspaceConfig.defaultArchiveInterval)
@@ -128,8 +120,6 @@ struct WorkspaceConfigTests {
 
         let config = WorkspaceConfig(
             policy: policy,
-            mcpServers: ["github"],
-            mcpURL: workspaceConfigTestMCPURL,
             primaryAgent: .codex,
             configured: true,
             archiveInterval: 600,
@@ -143,8 +133,6 @@ struct WorkspaceConfigTests {
 
         #expect(config.schemaVersion == 3)
         #expect(config.policy == policy)
-        #expect(config.mcpServers == ["github"])
-        #expect(config.mcpURL == workspaceConfigTestMCPURL)
         #expect(config.primaryAgent == .codex)
         #expect(config.configured)
         #expect(config.archiveInterval == 600)
@@ -182,7 +170,7 @@ extension WorkspaceConfigTests {
         @Test(.tags(.workspaceConfigEdgeCase))
         func explicitNullsFallBackToDefaults() throws {
             let config = try decodeWorkspaceConfig(with: """
-                "schemaVersion":null,"mcpServers":null,"mcpURL":null,"primaryAgent":null,\
+                "schemaVersion":null,"primaryAgent":null,\
                 "configured":null,"archiveInterval":null,"theme":null,"kits":null,\
                 "imageChannel":null,"customImage":null,"claudeModel":null,"claudeEffort":null,\
                 "customAgents":null,"sandshellKits":null
@@ -205,8 +193,6 @@ extension WorkspaceConfigTests {
                 {
                   "schemaVersion": 2,
                   "policy": {"selections": [{"path": "file:///srv/reference/", "readonly": true}]},
-                  "mcpServers": ["github"],
-                  "mcpURL": "https://mcp.example.com/gateway",
                   "primaryAgent": "gemini",
                   "configured": true,
                   "archiveInterval": 90,
@@ -222,8 +208,6 @@ extension WorkspaceConfigTests {
                 """)
             #expect(config.schemaVersion == 2)
             #expect(config.policy.selections.map(\.spec) == ["/srv/reference:ro"])
-            #expect(config.mcpServers == ["github"])
-            #expect(config.mcpURL == workspaceConfigTestMCPURL)
             #expect(config.primaryAgent == .gemini)
             #expect(config.configured)
             #expect(config.archiveInterval == 90)
@@ -237,12 +221,22 @@ extension WorkspaceConfigTests {
             #expect(config.customAgents == [AgentKind(rawValue: "my-kit-agent")])
         }
 
+        /// The removed sbx MCP gateway's settings, in a config an older
+        /// Sandshell wrote: read past, whatever they hold, and not written back.
+        @Test(.tags(.workspaceConfigEdgeCase))
+        func gatewayKeysFromOlderConfigsAreIgnored() throws {
+            let config = try decodeWorkspaceConfig(with: #""mcpServers":["github",1],"mcpURL":"https://mcp.example.com/gateway","primaryAgent":"codex""#)
+            #expect(config.primaryAgent == .codex)
+            let object = try encodedWorkspaceConfigObject(config)
+            #expect(object["mcpServers"] == nil)
+            #expect(object["mcpURL"] == nil)
+        }
+
         @Test(arguments: [
             #""configured":"yes""#,
             #""schemaVersion":"1""#,
             #""archiveInterval":"30""#,
             #""kits":"docker.io/sbx/github-ssh:latest""#,
-            #""mcpServers":[1]"#,
             #""primaryAgent":7"#,
             #""customAgents":"claude""#,
         ])
@@ -389,7 +383,7 @@ extension WorkspaceConfigTests {
         @Test func unsetOptionalsAreLeftOut() throws {
             let object = try encodedWorkspaceConfigObject(WorkspaceConfig(policy: MountPolicy()))
             let alwaysWritten: Set<String> = [
-                "schemaVersion", "policy", "mcpServers", "mcpURL", "primaryAgent", "configured",
+                "schemaVersion", "policy", "primaryAgent", "configured",
                 "archiveInterval", "kits", "imageChannel", "customImage", "customAgents",
             ]
             #expect(Set(object.keys) == alwaysWritten, "theme, sandshellKits, claudeModel and claudeEffort are omitted while nil")
@@ -401,12 +395,11 @@ extension WorkspaceConfigTests {
             #expect(object.keys.contains(key), "\(key) should be written once set")
         }
 
-        @Test func agentsChannelAndGatewayAreWrittenAsPlainStrings() throws {
+        @Test func agentsAndChannelAreWrittenAsPlainStrings() throws {
             let object = try encodedWorkspaceConfigObject(makeCustomizedWorkspaceConfig())
             #expect(object["primaryAgent"] as? String == "codex")
             #expect(object["customAgents"] as? [String] == ["my-kit-agent"])
             #expect(object["imageChannel"] as? String == "custom")
-            #expect(object["mcpURL"] as? String == "https://mcp.example.com/gateway")
         }
 
         @Test func roundTripKeepsEveryField() throws {
@@ -551,7 +544,7 @@ extension WorkspaceConfigTests {
 
             #expect(text.hasPrefix("{\n"), "config.json is tracked in git, so it's written one key per line")
             let keys = ["archiveInterval", "configured", "customAgents", "customImage", "imageChannel",
-                        "kits", "mcpServers", "mcpURL", "policy", "primaryAgent", "schemaVersion"]
+                        "kits", "policy", "primaryAgent", "schemaVersion"]
             let positions = try keys.map { key in
                 try #require(text.range(of: "\"\(key)\"")?.lowerBound, "\(key) should be written")
             }
@@ -606,7 +599,6 @@ extension WorkspaceConfigTests {
             let (config, unreadable) = WorkspaceConfig.loadReportingProblems(root: root, home: home)
 
             #expect(!config.configured)
-            #expect(config.mcpServers.isEmpty)
             let problem = try #require(unreadable)
             #expect(problem.kind == .config)
             #expect(problem.file == configURL)

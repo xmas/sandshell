@@ -106,7 +106,7 @@ struct ComposerBarTests {
     @Test(arguments: [(CGFloat(380), false), (300, true), (1200, false), (1200, true)])
     func aChatGoesNarrow(width: CGFloat, queued: Bool) {
         let session = ChatSession(title: "Claude", containerName: "test-sandbox", workdir: "/nonexistent/work",
-                                  home: "/nonexistent/home", mcpURL: nil)
+                                  home: "/nonexistent/home")
         if queued {
             // Not started: it waits, as it would behind a turn.
             session.sendWhenReady(text: "A long queued message " + String(repeating: "that goes on ", count: 40), attachments: [])

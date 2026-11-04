@@ -1,14 +1,12 @@
 import Foundation
 
 /// Durable, workspace-scoped configuration persisted at
-/// `<root>/.sandshell/config.json`: the mount policy, MCP set, primary agent,
+/// `<root>/.sandshell/config.json`: the mount policy, kits, primary agent,
 /// and whether the user has confirmed the mount setup yet. Unlike `state.json`
 /// (volatile, git-ignored) this is durable and tracked. See GA plan §5.
 struct WorkspaceConfig: Codable {
     var schemaVersion: Int
     var policy: MountPolicy
-    var mcpServers: [String]
-    var mcpURL: URL
     var primaryAgent: AgentKind
     /// Set once the user has reviewed/confirmed mounts in the mount-config UI.
     /// Drives whether that UI is shown on opening the workspace.
@@ -43,8 +41,6 @@ struct WorkspaceConfig: Codable {
     static let defaultArchiveInterval: TimeInterval = 1800   // 30 min
 
     init(policy: MountPolicy,
-         mcpServers: [String] = [],
-         mcpURL: URL = Workspace.defaultMCPURL,
          primaryAgent: AgentKind = .claude,
          configured: Bool = false,
          archiveInterval: TimeInterval = WorkspaceConfig.defaultArchiveInterval,
@@ -57,8 +53,6 @@ struct WorkspaceConfig: Codable {
          schemaVersion: Int = 1) {
         self.schemaVersion = schemaVersion
         self.policy = policy
-        self.mcpServers = mcpServers
-        self.mcpURL = mcpURL
         self.primaryAgent = primaryAgent
         self.configured = configured
         self.archiveInterval = archiveInterval
@@ -71,16 +65,16 @@ struct WorkspaceConfig: Codable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case schemaVersion, policy, mcpServers, mcpURL, primaryAgent, configured, archiveInterval, theme, kits
+        case schemaVersion, policy, primaryAgent, configured, archiveInterval, theme, kits
         case imageChannel, customImage, claudeModel, claudeEffort, customAgents, sandshellKits, cloneRepo
     }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
+        // Older configs' `mcpServers`/`mcpURL` (the sbx MCP gateway, since
+        // removed) are left unread, and go at the next save.
         schemaVersion = try c.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? 1
         policy = try c.decode(MountPolicy.self, forKey: .policy)
-        mcpServers = try c.decodeIfPresent([String].self, forKey: .mcpServers) ?? []
-        mcpURL = try c.decodeIfPresent(URL.self, forKey: .mcpURL) ?? Workspace.defaultMCPURL
         primaryAgent = try c.decodeIfPresent(AgentKind.self, forKey: .primaryAgent) ?? .claude
         configured = try c.decodeIfPresent(Bool.self, forKey: .configured) ?? false
         archiveInterval = try c.decodeIfPresent(TimeInterval.self, forKey: .archiveInterval)

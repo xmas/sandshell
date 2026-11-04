@@ -37,7 +37,7 @@ struct InspectorSelectionTests {
         withObservationTracking { _ = selection.pane } onChange: { flag.changed.withLock { $0 = true } }
         selection.select(.kits)
         #expect(flag.changed.withLock { $0 } == false)
-        selection.select(.mcp)
+        selection.select(.agents)
         #expect(flag.changed.withLock { $0 })
     }
 }
@@ -48,8 +48,7 @@ private final class ChangeFlag: Sendable {
 }
 
 struct InspectorPaneTests {
-    @Test func titlesAreCapitalizedExceptMCP() {
-        #expect(InspectorPane.mcp.title == "MCP")
+    @Test func titlesAreCapitalized() {
         #expect(InspectorPane.general.title == "General")
         #expect(InspectorPane.sandboxes.title == "Sandboxes")
     }

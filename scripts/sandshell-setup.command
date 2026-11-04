@@ -49,22 +49,11 @@ else
   fi
 fi
 
-# 4. Enable MCP so the sandbox gateway exposes dynamic discovery (mcp-find /
-#    mcp-add). SBX_MCP_URL is read by sandboxd at startup, so persist it and
-#    restart the daemon (it auto-starts again on the next sbx call).
-GATEWAY="https://gateway.docker.com"
-echo "→ Enabling MCP (SBX_MCP_URL=$GATEWAY)…"
-if ! grep -q "SBX_MCP_URL" "$HOME/.zshrc" 2>/dev/null; then
-  printf '\n# Docker Sandboxes MCP gateway\nexport SBX_MCP_URL=%s\n' "$GATEWAY" >> "$HOME/.zshrc"
-fi
-export SBX_MCP_URL="$GATEWAY"
-sbx daemon stop >/dev/null 2>&1 || true
-
-# 5. Sign in to sbx (opens a browser).
+# 4. Sign in to sbx (opens a browser).
 echo "→ Signing in to sbx…"
 sbx login
 
-# 6. Install the `sandshell` command-line tool.
+# 5. Install the `sandshell` command-line tool.
 CLI="$APP/Contents/Resources/sandshell"
 if [ ! -f "$CLI" ]; then
   echo "⚠︎  sandshell CLI not found inside Sandshell.app — skipping."

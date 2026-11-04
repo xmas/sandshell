@@ -19,14 +19,8 @@ enum PathFixer {
         let current = ProcessInfo.processInfo.environment["PATH"] ?? ""
         var dirs: [String] = []
 
-        // Ask the login shell for both PATH and key env vars used by our tools.
-        if let (loginPath, extras) = loginShellEnv() {
-            if !loginPath.isEmpty {
-                dirs.append(contentsOf: loginPath.split(separator: ":").map(String.init))
-            }
-            for (key, value) in extras where ProcessInfo.processInfo.environment[key] == nil {
-                setenv(key, value, 0)   // 0 = don't overwrite if already set
-            }
+        if let loginPath = loginShellPath(), !loginPath.isEmpty {
+            dirs.append(contentsOf: loginPath.split(separator: ":").map(String.init))
         }
         dirs.append(contentsOf: current.split(separator: ":").map(String.init))
 
@@ -48,25 +42,18 @@ enum PathFixer {
         Log.info(.app, "PATH patched (\(merged.count) dirs)")
     }
 
-    /// Extra env vars to import from the login shell alongside PATH.
-    static let extraEnvVars = ["SBX_MCP_URL"]
-
     /// Marks where the probe's own output starts: the rc files an interactive
     /// shell sources may print banners or prompts to stdout before it.
     static let envMarker = "__SANDSHELL_ENV__"
 
-    /// What the login shell runs: a marker line, then PATH and each extra var
-    /// on its own line (one `printf`, which repeats its format per argument).
+    /// What the login shell runs: a marker line, then PATH on its own line.
     static var envProbeScript: String {
-        let varList = extraEnvVars.map { "\"$\($0)\"" }.joined(separator: " ")
-        return "printf '\\n%s\\n' \(envMarker); printf '%s\\n' \"$PATH\" \(varList)"
+        "printf '\\n%s\\n%s\\n' \(envMarker) \"$PATH\""
     }
 
-    /// Ask the user's login shell for PATH and selected extra env vars (interactive
-    /// login shell so `.zprofile`/`.zshrc` Homebrew shellenv lines are sourced).
-    /// Returns `(path, [key: value])` where `path` is the PATH string and the dict
-    /// contains any non-empty values for `extraEnvVars`.
-    private static func loginShellEnv() -> (String, [String: String])? {
+    /// Ask the user's login shell for its PATH (interactive login shell so
+    /// `.zprofile`/`.zshrc` Homebrew shellenv lines are sourced).
+    private static func loginShellPath() -> String? {
         let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
         let proc = Process()
         proc.executableURL = URL(filePath: shell)
@@ -87,19 +74,13 @@ enum PathFixer {
         return parseEnvProbe(raw)
     }
 
-    /// PATH and the non-empty `extraEnvVars` from `envProbeScript`'s output:
-    /// the lines after its marker, whatever an rc file printed around them.
-    /// Nil without the marker (the probe never ran: an rc file exited or
-    /// exec'd something else), so nothing is imported.
-    static func parseEnvProbe(_ raw: String) -> (String, [String: String])? {
+    /// PATH from `envProbeScript`'s output: the line after its marker,
+    /// whatever an rc file printed around it. Nil without the marker (the
+    /// probe never ran: an rc file exited or exec'd something else).
+    static func parseEnvProbe(_ raw: String) -> String? {
         guard let marker = raw.range(of: "\n\(envMarker)\n", options: .backwards) else { return nil }
         let lines = raw[marker.upperBound...].split(separator: "\n", omittingEmptySubsequences: false)
-        let path = lines.first.map(String.init) ?? ""
-        var extras: [String: String] = [:]
-        for (i, key) in extraEnvVars.enumerated() where i + 1 < lines.count && !lines[i + 1].isEmpty {
-            extras[key] = String(lines[i + 1])
-        }
-        return (path, extras)
+        return lines.first.map(String.init) ?? ""
     }
 
     /// Absolute path to the `sbx` binary, resolved against the patched PATH.

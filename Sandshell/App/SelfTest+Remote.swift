@@ -427,7 +427,7 @@ extension SelfTest {
         let dir = FileManager.default.temporaryDirectory.appending(path: "sandshell-remote-switch")
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let chat = ChatSession(title: "Fake", agent: .claude, containerName: "remote-switch", workdir: dir.path,
-                               home: dir.path, mcpURL: nil, sessionID: s.id)
+                               home: dir.path, sessionID: s.id)
         if let script = RemoteHub.fakeAgentScript { chat.launchOverride = ("/usr/bin/python3", ["-I", script.path]) }
         let view = ChatSessionView(session: chat)
         tree.surfaces.chats[s.id] = view

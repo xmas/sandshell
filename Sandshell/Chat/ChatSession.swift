@@ -209,7 +209,6 @@ final class ChatSession: ObservableObject {
     /// Host path of the session's working directory (mounted at the same path).
     let workdir: String
     private let home: String
-    private let mcpURL: URL?
     private var connection: ACPConnection?
     private(set) var sessionID: String?
     private var pumpTask: Task<Void, Never>?
@@ -256,7 +255,7 @@ final class ChatSession: ObservableObject {
     private var tickScheduled = false
 
     init(title: String, agent: AgentKind = .claude, containerName: String, workdir: String, home: String,
-         mcpURL: URL?, resumeID: String? = nil, sbxProxyAuth: Bool = false, sessionID: UUID = UUID(),
+         resumeID: String? = nil, sbxProxyAuth: Bool = false, sessionID: UUID = UUID(),
          unavailable: String? = nil, model: String? = nil, effort: String? = nil) {
         self.launchModel = model
         self.launchEffort = effort
@@ -270,7 +269,6 @@ final class ChatSession: ObservableObject {
         self.containerName = containerName
         self.workdir = workdir
         self.home = home
-        self.mcpURL = mcpURL
     }
 
     // MARK: Lifecycle
@@ -286,7 +284,7 @@ final class ChatSession: ObservableObject {
         }
         guard let args = launchOverride?.arguments
                 ?? SbxCommand.acpArguments(agent: agent, containerName: containerName, workdir: workdir,
-                                           home: home, mcpURL: mcpURL, sbxProxyAuth: sbxProxyAuth, tag: tag,
+                                           home: home, sbxProxyAuth: sbxProxyAuth, tag: tag,
                                            claudeModel: agent == .claude ? launchModel : nil)
         else {
             phase = .closed("\(title) can’t run as a chat (no ACP support).")
@@ -512,7 +510,7 @@ final class ChatSession: ObservableObject {
         guard launchOverride == nil else { return }
         let spareTag = SbxCommand.ProcessTag(session: UUID())
         guard !isClosed, let args = SbxCommand.acpArguments(
-            agent: agent, containerName: containerName, workdir: workdir, home: home, mcpURL: mcpURL,
+            agent: agent, containerName: containerName, workdir: workdir, home: home,
             sbxProxyAuth: sbxProxyAuth, tag: spareTag, claudeModel: agent == .claude ? launchModel : nil) else { return }
         ACPSparePool.shared.warm(args, tag: spareTag, container: containerName)
     }

@@ -181,7 +181,7 @@ struct SbxCommandTests {
         @Test(.disabled(if: HostDefaults.inferenceGatewayConfigured, "the host app's inference gateway adds env pairs"))
         func shellCommandLineIsExact() {
             let command = SbxCommand.launchCommand(containerName: "proj-shell", workdir: "/Users/me/proj", agent: .shell,
-                                                   sbxPath: "/opt/homebrew/bin/sbx", home: home, mcpURL: nil)
+                                                   sbxPath: "/opt/homebrew/bin/sbx", home: home)
             let env = Expected.baseEnv(home: home).map(SbxCommand.shellQuote).joined(separator: " ")
             #expect(command == "/opt/homebrew/bin/sbx exec -it -w /Users/me/proj proj-shell env -u MCP_GATEWAY_URL \(env) bash -c '\(Expected.pathSetup) exec bash'")
         }
@@ -201,7 +201,7 @@ struct SbxCommandTests {
         @Test(.tags(.sbxCommandEdgeCase))
         func pathsWithSpacesAreQuoted() throws {
             let command = SbxCommand.launchCommand(containerName: "my proj", workdir: "/Users/me/My Project", agent: .shell,
-                                                   sbxPath: "/Applications/My Tools/sbx", home: home, mcpURL: nil)
+                                                   sbxPath: "/Applications/My Tools/sbx", home: home)
             #expect(command.hasPrefix("'/Applications/My Tools/sbx' exec -it -w '/Users/me/My Project' 'my proj' env -u MCP_GATEWAY_URL "))
             let launch = try Invocation(Shell.words(command))
             #expect(launch.head == ["/Applications/My Tools/sbx", "exec", "-it", "-w", "/Users/me/My Project", "my proj"])
@@ -234,17 +234,11 @@ struct SbxCommandTests {
                     "an unmounted ~/.codex mustn't replace sbx's own CODEX_HOME")
         }
 
-        @Test func mcpGatewayURLIsForwarded() throws {
-            let mcp = try #require(URL(string: "http://host.docker.internal:8811/mcp"))
-            let launch = try Fixture.terminal(agent: .claude, home: home, mcpURL: mcp)
-            #expect(launch.envIgnoringGateway == Expected.baseEnv(home: home) + ["SBX_MCP_URL=http://host.docker.internal:8811/mcp"])
-        }
-
         @Test(.tags(.sbxCommandEdgeCase))
         func envPairsAreShellQuotedOnTheCommandLine() throws {
-            let mcp = try #require(URL(string: "http://host.docker.internal:8811/mcp?token=a&b=c"))
-            let command = Fixture.terminalCommand(agent: .claude, home: home, mcpURL: mcp)
-            #expect(command.contains(" 'SBX_MCP_URL=http://host.docker.internal:8811/mcp?token=a&b=c' "))
+            let options = Options(statusDir: "/My Work/.sandshell/status&more", sessionID: "S1")
+            let command = Fixture.terminalCommand(agent: .claude, home: home, claude: options)
+            #expect(command.contains(" 'SANDSHELL_STATUS_DIR=/My Work/.sandshell/status&more' "))
         }
 
         @Test func statusFeedEnvNamesTheDirAndSession() throws {
@@ -265,16 +259,14 @@ struct SbxCommandTests {
 
         @Test func everyOptionalPairAppearsInOrderWithTheProcessTagLast() throws {
             try Fixture.withCodexHome { codexHome in
-                let mcp = try #require(URL(string: "http://host.docker.internal:8811/mcp"))
                 let tag = ProcessTag(session: UUID())
                 let options = Options(statusDir: "/ws/.sandshell/status", sessionID: "S1")
-                let launch = try Fixture.terminal(agent: .claude, home: codexHome, mcpURL: mcp, claude: options, tag: tag)
+                let launch = try Fixture.terminal(agent: .claude, home: codexHome, claude: options, tag: tag)
                 #expect(launch.envIgnoringGateway == Expected.baseEnv(home: codexHome) + [
                     "CODEX_HOME=\(codexHome)/.codex",
-                    "SBX_MCP_URL=http://host.docker.internal:8811/mcp",
                     "SANDSHELL_STATUS_DIR=/ws/.sandshell/status",
                     "SANDSHELL_SESSION_ID=S1",
-                ] + tag.pairs, "base, CODEX_HOME, MCP, status feed, then the process tag")
+                ] + tag.pairs, "base, CODEX_HOME, status feed, then the process tag")
             }
         }
 
@@ -361,14 +353,11 @@ struct SbxCommandTests {
 
         @Test(.enabled(if: HostDefaults.inferenceGatewayConfigured, "needs inferenceGatewayURL in the host app's defaults"))
         func inferenceGatewayRoutesClaudeInsteadOfProxyAuth() throws {
-            let mcp = try #require(URL(string: "http://host.docker.internal:8811/mcp"))
             let tag = ProcessTag(session: UUID())
-            let launch = try Fixture.terminal(agent: .claude, home: home, mcpURL: mcp, claude: Options(sbxProxyAuth: true), tag: tag)
+            let launch = try Fixture.terminal(agent: .claude, home: home, claude: Options(sbxProxyAuth: true), tag: tag)
             #expect(launch.body == Expected.pathSetup + " exec claude", "the gateway brings its own auth")
             let gateway = try #require(launch.env.firstIndex(where: { $0.hasPrefix("ANTHROPIC_BASE_URL=") }))
-            let mcpIndex = try #require(launch.env.firstIndex(of: "SBX_MCP_URL=http://host.docker.internal:8811/mcp"))
             #expect(launch.env.dropFirst(gateway + 1).first == "ANTHROPIC_AUTH_TOKEN=sandshell-inference-gateway")
-            #expect(mcpIndex < gateway)
             #expect(Array(launch.env.suffix(2)) == tag.pairs)
         }
 
@@ -378,10 +367,10 @@ struct SbxCommandTests {
             let tag = ProcessTag(session: UUID())
             let options = Options(model: "claude-opus-4-5", sbxProxyAuth: true)
             let script = SbxCommand.sessionScript(containerName: Fixture.container, workdir: Fixture.workdir, agent: .claude,
-                                                  sbxPath: Fixture.sbxPath, home: home, mcpURL: nil,
+                                                  sbxPath: Fixture.sbxPath, home: home,
                                                   resumeID: "abc", claude: options, tag: tag)
             let command = SbxCommand.launchCommand(containerName: Fixture.container, workdir: Fixture.workdir, agent: .claude,
-                                                   sbxPath: Fixture.sbxPath, home: home, mcpURL: nil,
+                                                   sbxPath: Fixture.sbxPath, home: home,
                                                    resumeID: "abc", claude: options, tag: tag)
             #expect(script == "#!/bin/sh\nexec " + command + "\n", "the script should exec exactly the launch command")
         }
@@ -411,9 +400,9 @@ struct SbxCommandTests {
 
         @Test func agentDefaultsToClaude() throws {
             let implicit = try #require(SbxCommand.acpArguments(containerName: Fixture.container, workdir: Fixture.workdir,
-                                                                home: home, mcpURL: nil))
+                                                                home: home))
             let explicit = SbxCommand.acpArguments(agent: .claude, containerName: Fixture.container, workdir: Fixture.workdir,
-                                                   home: home, mcpURL: nil)
+                                                   home: home)
             #expect(implicit == explicit, "acpArguments without an agent should launch a Claude chat")
         }
 
@@ -431,7 +420,7 @@ struct SbxCommandTests {
         @Test(.tags(.sbxCommandEdgeCase))
         func argvIsPassedUnquoted() throws {
             let args = try #require(SbxCommand.acpArguments(agent: .gemini, containerName: "my proj",
-                                                            workdir: "/Users/me/My Project", home: home, mcpURL: nil))
+                                                            workdir: "/Users/me/My Project", home: home))
             let chat = try Invocation(args)
             #expect(chat.head == ["exec", "-i", "-w", "/Users/me/My Project", "my proj"])
         }
@@ -439,11 +428,9 @@ struct SbxCommandTests {
         // MARK: env
 
         @Test func envMatchesTerminalsPlusTheClaudeModel() throws {
-            let mcp = try #require(URL(string: "http://host.docker.internal:8811/mcp"))
             let tag = ProcessTag(session: UUID())
-            let chat = try Fixture.parsedChat(agent: .claude, home: home, mcpURL: mcp, tag: tag, claudeModel: "claude-opus-4-5")
+            let chat = try Fixture.parsedChat(agent: .claude, home: home, tag: tag, claudeModel: "claude-opus-4-5")
             #expect(chat.envIgnoringGateway == Expected.baseEnv(home: home)
-                    + ["SBX_MCP_URL=http://host.docker.internal:8811/mcp"]
                     + tag.pairs
                     + ["ANTHROPIC_MODEL=claude-opus-4-5", "ANTHROPIC_CUSTOM_MODEL_OPTION=claude-opus-4-5"])
         }
@@ -463,9 +450,7 @@ struct SbxCommandTests {
 
         @Test(.tags(.sbxCommandEdgeCase))
         func envPairsAreNotShellQuoted() throws {
-            let mcp = try #require(URL(string: "http://host.docker.internal:8811/mcp?token=a&b=c"))
-            let chat = try Fixture.parsedChat(agent: .claude, home: home, mcpURL: mcp, claudeModel: "claude opus")
-            #expect(chat.env.contains("SBX_MCP_URL=http://host.docker.internal:8811/mcp?token=a&b=c"))
+            let chat = try Fixture.parsedChat(agent: .claude, home: home, claudeModel: "claude opus")
             #expect(chat.env.contains("ANTHROPIC_MODEL=claude opus"))
         }
 
@@ -585,35 +570,35 @@ extension SbxCommandTests {
             try body(root.path(percentEncoded: false))
         }
 
-        static func terminalCommand(agent: AgentKind, home: String, workdir: String = Fixture.workdir, mcpURL: URL? = nil,
+        static func terminalCommand(agent: AgentKind, home: String, workdir: String = Fixture.workdir,
                                     resumeID: String? = nil, claude: SbxCommand.ClaudeOptions? = nil,
                                     tag: SbxCommand.ProcessTag? = nil) -> String {
             SbxCommand.launchCommand(containerName: container, workdir: workdir, agent: agent, sbxPath: sbxPath,
-                                     home: home, mcpURL: mcpURL, resumeID: resumeID, claude: claude, tag: tag)
+                                     home: home, resumeID: resumeID, claude: claude, tag: tag)
         }
 
         /// `launchCommand`'s output read back into words the way `/bin/sh` would.
-        static func terminal(agent: AgentKind, home: String, workdir: String = Fixture.workdir, mcpURL: URL? = nil,
+        static func terminal(agent: AgentKind, home: String, workdir: String = Fixture.workdir,
                              resumeID: String? = nil, claude: SbxCommand.ClaudeOptions? = nil,
                              tag: SbxCommand.ProcessTag? = nil,
                              sourceLocation: SourceLocation = #_sourceLocation) throws -> Invocation {
-            let command = terminalCommand(agent: agent, home: home, workdir: workdir, mcpURL: mcpURL,
+            let command = terminalCommand(agent: agent, home: home, workdir: workdir,
                                           resumeID: resumeID, claude: claude, tag: tag)
             return try Invocation(Shell.words(command), sourceLocation: sourceLocation)
         }
 
-        static func chat(agent: AgentKind, home: String, workdir: String = Fixture.workdir, mcpURL: URL? = nil,
+        static func chat(agent: AgentKind, home: String, workdir: String = Fixture.workdir,
                          sbxProxyAuth: Bool = false, tag: SbxCommand.ProcessTag? = nil,
                          claudeModel: String? = nil) -> [String]? {
-            SbxCommand.acpArguments(agent: agent, containerName: container, workdir: workdir, home: home, mcpURL: mcpURL,
+            SbxCommand.acpArguments(agent: agent, containerName: container, workdir: workdir, home: home,
                                     sbxProxyAuth: sbxProxyAuth, tag: tag, claudeModel: claudeModel)
         }
 
-        static func parsedChat(agent: AgentKind, home: String, workdir: String = Fixture.workdir, mcpURL: URL? = nil,
+        static func parsedChat(agent: AgentKind, home: String, workdir: String = Fixture.workdir,
                                sbxProxyAuth: Bool = false, tag: SbxCommand.ProcessTag? = nil,
                                claudeModel: String? = nil,
                                sourceLocation: SourceLocation = #_sourceLocation) throws -> Invocation {
-            let args = try #require(chat(agent: agent, home: home, workdir: workdir, mcpURL: mcpURL,
+            let args = try #require(chat(agent: agent, home: home, workdir: workdir,
                                          sbxProxyAuth: sbxProxyAuth, tag: tag, claudeModel: claudeModel),
                                     "\(agent.rawValue) should have a chat launch", sourceLocation: sourceLocation)
             return try Invocation(args, sourceLocation: sourceLocation)
@@ -729,7 +714,7 @@ extension SbxCommandTests {
     fileprivate enum HostDefaults {
         static var inferenceGatewayConfigured: Bool {
             let args = SbxCommand.acpArguments(agent: .gemini, containerName: "probe", workdir: "",
-                                               home: Fixture.missingHome(), mcpURL: nil) ?? []
+                                               home: Fixture.missingHome()) ?? []
             return args.contains("ANTHROPIC_AUTH_TOKEN=sandshell-inference-gateway")
         }
     }

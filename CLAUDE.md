@@ -88,9 +88,9 @@ AppDelegate (@main)
        │    └─ SessionSurfaces           the window's live terminals + chats, shared by its panes
        └─ FilesPaneController        trailing inspector: file tree + editor (never a pane)
   └─ WorkspaceController (@MainActor ObservableObject)   central state coordinator
-       ├─ Workspace          value type: rootURL, policy, mcpServers, primaryAgent, kits
+       ├─ Workspace          value type: rootURL, policy, primaryAgent, kits
        ├─ WorkspaceState     persisted: folders, sessions, tree expansion (state.json)
-       ├─ WorkspaceConfig    persisted: mounts, theme, MCP, kits
+       ├─ WorkspaceConfig    persisted: mounts, theme, kits
        └─ SbxClient (actor) shells out to `sbx` CLI
 ```
 
@@ -122,7 +122,7 @@ AppDelegate (@main)
 | `Workspace/BackgroundTasks.swift`, `BackgroundTaskMonitor.swift` | Background tasks (subagents, background shells) parsed from Claude transcripts |
 | `Diagnostics/AutomatedRun.swift` | Test-launch mode: nothing waits on a person |
 | `App/SelfTest.swift`, `App/UITestAX.swift` | DEBUG self-test scenarios; UI-test headless mode + file bridge (`ax` commands) |
-| `Sbx/WorkspaceController.swift` | Central `@MainActor` coordinator: container phases, session list, selection, runtimes, MCP state — observed by sidebar, detail, and toolbar |
+| `Sbx/WorkspaceController.swift` | Central `@MainActor` coordinator: container phases, session list, selection, runtimes — observed by sidebar, detail, and toolbar |
 | `Sbx/SbxClient.swift` | `actor`; all `sbx` CLI calls via `Process` (async/await). `sbx create` uses a temp file for stderr (not a pipe) to avoid stalling Foundation's FileHandle callback queue |
 | `Sbx/Models.swift` | `Sandbox`, `AgentKind`, `CreateOptions`, `CommandOutput` |
 | `Sbx/Workspace.swift` | `Workspace` value type + `MountSpec` parser/renderer |
@@ -131,7 +131,7 @@ AppDelegate (@main)
 | `Terminal/TerminalSession.swift` | One libghostty `TerminalController` + `AppTerminalView` per live session; writes a temp `#!/bin/sh` launch script |
 | `Terminal/SbxCommand.swift` | Builds the `sbx exec … env … bash -c '…'` launch script body |
 | `Workspace/WorkspaceState.swift` | Persisted folder+session tree (`state.json`) |
-| `Workspace/WorkspaceConfig.swift` | Persisted workspace config (mounts, theme, MCP, kits) |
+| `Workspace/WorkspaceConfig.swift` | Persisted workspace config (mounts, theme, kits) |
 | `Workspace/HistoryStore.swift` | Scans past agent conversations under the workspace's mounts (`HistoryCache`: SQLite metadata + ranked substring search) |
 | `Workspace/SearchStore.swift` | Search model: open sessions + past conversations, deduped by transcript id, ranked title > folder > body |
 | `Remote/RemoteHub.swift` | Remote Control: the chats devices may see (on per session: `Session.isRemote`, the pane strip's antenna; DEBUG: Help ▸ Remote Check Session), each device's event stream, commands → the same `ChatSession` methods the window uses. Plan: `docs/remote-control.md` |
@@ -159,7 +159,7 @@ AppDelegate (@main)
 ### Key quirks
 
 - **One window per workspace root.** `AppDelegate` manages an array of `MainWindowController` instances. Multiple windows on the same root are allowed (cascaded).
-- **WorkspaceController is the single source of truth.** Container phases, sessions, runtimes, and MCP state all live here; UI observes `@Published` properties.
+- **WorkspaceController is the single source of truth.** Container phases, sessions, and runtimes all live here; UI observes `@Published` properties.
 - **SbxClient stderr quirk.** `sbx create` spawns a long-lived daemon that inherits pipe fds, so stderr capture uses a temp file to avoid stalling the shared `FileHandle` callback queue.
 - **Chat is the default.** ⌘N and + ▸ New Claude/Codex/Gemini start a chat (ACP adapter in the sandbox via `sbx exec -i`); terminal versions sit under + ▸ In Terminal, and each pane's title strip switches Chat ⇄ Terminal (`Session.isChat`).
 - **Session processes are tagged.** Agents launched in a sandbox carry `SANDSHELL_SESSION`/`SANDSHELL_LAUNCH` env and are reaped on close/restart/quit (`SbxClient.reapSessionProcesses`).

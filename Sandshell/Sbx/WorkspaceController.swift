@@ -253,8 +253,7 @@ final class WorkspaceController: ObservableObject {
         let store = try WorkspaceStore.shared(root: root)
         let config = store.config
         var workspace = Workspace(
-            rootURL: root, containerName: slug(for: root), policy: config.policy,
-            mcpServers: config.mcpServers, mcpURL: config.mcpURL, primaryAgent: config.primaryAgent,
+            rootURL: root, containerName: slug(for: root), policy: config.policy, primaryAgent: config.primaryAgent,
             kits: config.kits.filter { !KitStore.isSandshellKit($0) })
         workspace.imageChannel = config.imageChannel
         workspace.customImage = config.customImage
@@ -263,13 +262,11 @@ final class WorkspaceController: ObservableObject {
     }
 
     /// Another window on this folder saved: take its config (mounts, agents,
-    /// kits, MCP, theme) and redraw the session list from its state.
+    /// kits, theme) and redraw the session list from its state.
     private func sharedStoreChanged(_ parts: Set<WorkspaceStore.Part>) {
         if parts.contains(.config) {
             var w = workspace
             w.policy = config.policy
-            w.mcpServers = config.mcpServers
-            w.mcpURL = config.mcpURL
             w.primaryAgent = config.primaryAgent
             w.kits = config.kits.filter { !KitStore.isSandshellKit($0) }
             w.imageChannel = config.imageChannel
@@ -292,8 +289,6 @@ final class WorkspaceController: ObservableObject {
     var primaryAgent: AgentKind { workspace.primaryAgent }
     var archiveInterval: TimeInterval { config.archiveInterval }
     var rootURL: URL { workspace.rootURL }
-    var mcpServers: [String] { workspace.mcpServers }
-    var mcpURL: URL { workspace.mcpURL }
     /// Host paths the workspace mounts — the only dirs a restored session can use
     /// as its working directory (History is limited to conversations within them).
     var mountRoots: [String] { resolvedMounts().map { $0.path.path } }
@@ -362,182 +357,6 @@ final class WorkspaceController: ObservableObject {
         config.customAgents = cleaned
         saveConfig()
         revision += 1
-    }
-
-    /// Apply edited MCP settings (server set + gateway URL), persist, and live-load
-    /// enabled servers into running containers via `sbx mcp load`. Newly-enabled
-    /// servers appear immediately; de-selecting one takes effect when the container
-    /// is next recreated (sbx has no live "unload"). Servers must already be
-    /// authenticated/registered (via `authenticateMCP`).
-    func applyMCP(servers: [String], url: URL) {
-        workspace.mcpServers = servers
-        workspace.mcpURL = url
-        config.mcpServers = servers
-        config.mcpURL = url
-        saveConfig()
-        // Attach the (registered) enabled servers to running containers live via
-        // `sbx mcp load` — no rebuild needed. Newly-enabled servers appear
-        // immediately; de-selecting one takes effect when the sandbox is next
-        // recreated (sbx has no live "unload").
-        Task {
-            let valid = await effectiveMCPServers()
-            for agent in containers.keys where containers[agent]?.isRunning == true {
-                await loadMCPServers(valid, into: containerName(for: agent))
-            }
-        }
-    }
-
-    /// Attach each registered MCP server to a running sandbox (best-effort).
-    private func loadMCPServers(_ servers: [String], into sandbox: String) async {
-        for server in servers {
-            do {
-                try await SbxClient.shared.loadMCP(server: server, sandbox: sandbox, mcpURL: workspace.mcpURL)
-            } catch {
-                Log.error(.workspace, "mcp load \(server) → \(sandbox) failed: \(error.localizedDescription)")
-            }
-        }
-    }
-
-    // MARK: MCP registration / hosted-OAuth status
-
-    /// Registered servers (`sbx mcp ls`) → name : isRemote.
-    @Committed private(set) var mcpRegistered: [String: Bool] = [:]
-    /// Hosted-OAuth status per server (`authorized` / `unauthorized` / `expired`).
-    @Committed private(set) var mcpAuth: [String: String] = [:]
-    /// Servers with an in-flight authenticate/unauthorize/remove action.
-    @Committed private(set) var mcpBusy: Set<String> = []
-    /// Servers freshly authenticated/added, in order, for Settings ▸ MCP to
-    /// auto-enable. It enables and clears them when it next shows, so a list:
-    /// several can finish while it's closed.
-    @Committed var mcpPendingEnable: [String] = []
-    /// Why the last authenticate/unauthorize/remove of a server failed (shown on its row).
-    @Committed private(set) var mcpErrors: [String: String] = [:]
-    /// Why the last "Add from JSON" failed (shown under the JSON field): a
-    /// server that failed to add never registers, so it has no row to show it on.
-    @Committed private(set) var mcpAddError: String?
-
-    /// Refresh the registered set + OAuth status from `sbx mcp`.
-    func refreshMCPStatus() {
-        let url = workspace.mcpURL
-        Task {
-            self.mcpRegistered = await SbxClient.shared.listMCPServers(mcpURL: url)
-            self.mcpAuth = await SbxClient.shared.mcpAuthStatus(mcpURL: url)
-        }
-    }
-
-    /// Authenticate a server in-app (real hosted OAuth — opens the browser). If
-    /// already registered, re-auth via `sbx mcp auth`; otherwise register +
-    /// authorize with `sbx mcp add <name> <addArgs>`. On success flags it for
-    /// auto-enable.
-    func authenticateMCP(name: String, addArgs: [String]?) {
-        let url = workspace.mcpURL
-        let registered = mcpRegistered.keys.contains(name)
-        mcpAction(name, "authenticate") {
-            if registered {
-                try await SbxClient.shared.authMCP(name: name, mcpURL: url)
-            } else if let addArgs {
-                try await SbxClient.shared.addMCP(name: name, args: addArgs, mcpURL: url)
-            }
-            self.mcpPendingEnable.append(name)   // auto-enable
-        }
-    }
-
-    /// Register servers from a standard MCP JSON document (`{ "mcpServers": { … } }`)
-    /// via `sbx mcp add` — each entry maps to `--command/--args` or `--url`.
-    /// Whether every server in it was added: false when the text holds none or
-    /// an add failed (`mcpAddError` says why; the caller keeps the text to fix).
-    @discardableResult
-    func addMCPFromJSON(_ json: String) async -> Bool {
-        let parsed = Self.parseMCPJSON(json)
-        guard !parsed.isEmpty else {
-            mcpAddError = "No servers found — expected { \"mcpServers\": { … } }."
-            return false
-        }
-        mcpAddError = nil
-        let url = workspace.mcpURL
-        for (name, _) in parsed { mcpBusy.insert(name) }
-        var failures: [String] = []
-        for (name, args) in parsed {
-            do {
-                try await SbxClient.shared.addMCP(name: name, args: args, mcpURL: url)
-                mcpPendingEnable.append(name)   // auto-enable
-            } catch {
-                failures.append("\(name): \(error.localizedDescription)")
-                Log.error(.workspace, "mcp add \(name) failed: \(error.localizedDescription)")
-            }
-            mcpBusy.remove(name)
-        }
-        mcpAddError = failures.isEmpty ? nil : failures.joined(separator: "\n")
-        refreshMCPStatus()
-        return failures.isEmpty
-    }
-
-    /// Revoke a server's hosted OAuth credential (keeps registration).
-    func unauthorizeMCP(_ name: String) {
-        let url = workspace.mcpURL
-        mcpAction(name, "unauthorize") { try await SbxClient.shared.unauthorizeMCP(name: name, mcpURL: url) }
-    }
-
-    /// Remove a registered server entirely (`sbx mcp rm`).
-    func removeMCP(_ name: String) {
-        let url = workspace.mcpURL
-        mcpAction(name, "remove") { try await SbxClient.shared.removeMCP(name: name, mcpURL: url) }
-    }
-
-    /// Run an action on a server: busy meanwhile, a failure shown on its row
-    /// (cleared by the next try), then a status refresh.
-    private func mcpAction(_ name: String, _ verb: String, _ work: @escaping @MainActor () async throws -> Void) {
-        mcpBusy.insert(name)
-        mcpErrors[name] = nil
-        Task {
-            defer { self.mcpBusy.remove(name) }
-            do {
-                try await work()
-            } catch {
-                self.mcpErrors[name] = error.localizedDescription
-                Log.error(.workspace, "mcp \(verb) \(name) failed: \(error.localizedDescription)")
-            }
-            self.refreshMCPStatus()
-        }
-    }
-
-    /// Parse `{ "mcpServers": { name: {command,args} | {url} } }` → add-args per
-    /// server. `mcp-remote` command entries register as local stdio servers.
-    static func parseMCPJSON(_ json: String) -> [(name: String, args: [String])] {
-        guard let data = json.data(using: .utf8),
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let servers = obj["mcpServers"] as? [String: Any] else { return [] }
-        var result: [(String, [String])] = []
-        for (name, value) in servers {
-            guard let entry = value as? [String: Any] else { continue }
-            var args: [String] = []
-            if let url = entry["url"] as? String {
-                args = ["--url", url]
-            } else if let command = entry["command"] as? String {
-                let cmdArgs = (entry["args"] as? [String]) ?? []
-                // `npx mcp-remote <url>` is a stdio↔remote bridge — register it as a
-                // native remote server so it gets gateway hosted OAuth and can be
-                // loaded via sbx mcp load (a local --command server can't auth and
-                // isn't reachable by the cloud gateway).
-                if let bridged = bridgedRemoteURL(command: command, args: cmdArgs) {
-                    args = ["--url", bridged]
-                } else {
-                    args = ["--command", command]
-                    for a in cmdArgs { args += ["--args", a] }
-                }
-            } else { continue }
-            result.append((name, args))
-        }
-        return result
-    }
-
-    /// If a `command`/`args` entry is an `npx mcp-remote <url>` bridge, return the
-    /// remote URL it proxies to (so we register it as a real remote server).
-    private static func bridgedRemoteURL(command: String, args: [String]) -> String? {
-        let isNpx = command == "npx" || command.hasSuffix("/npx")
-        guard isNpx, args.contains(where: { $0 == "mcp-remote" || $0.hasPrefix("mcp-remote@") })
-        else { return nil }
-        return args.first { $0.hasPrefix("http://") || $0.hasPrefix("https://") }
     }
 
     // MARK: All sandboxes (Settings ▸ Sandboxes — global, not just this workspace)
@@ -620,9 +439,8 @@ final class WorkspaceController: ObservableObject {
     func deleteSandbox(_ name: String) { sandboxAction(name) { _ = try await SbxClient.shared.remove(name) } }
 
     /// Rebuild a listed sandbox. If it's one of *this* workspace's containers,
-    /// go through the workspace path so it keeps the resolved mounts + MCP load;
-    /// otherwise fall back to a generic recreate from what `sbx ls` reports (no
-    /// MCP info available for foreign sandboxes).
+    /// go through the workspace path so it keeps the resolved mounts and kits;
+    /// otherwise fall back to a generic recreate from what `sbx ls` reports.
     func rebuildSandbox(_ sandbox: Sandbox) {
         if let agent = agentForContainer(named: sandbox.name) {
             sandboxBusy.insert(sandbox.name)   // its row's buttons wait for it
@@ -660,14 +478,12 @@ final class WorkspaceController: ObservableObject {
     /// Display-only post-launch `sbx exec …` one-liner for a sandbox.
     func launchCommandDisplay(for sandbox: Sandbox) -> String {
         let agent = AgentKind(rawValue: sandbox.agent)
-        let usesMCP = agentForContainer(named: sandbox.name) != nil && !workspace.mcpServers.isEmpty
         return SbxCommand.launchCommand(
             containerName: sandbox.name,
             workdir: sandbox.primaryWorkdir ?? "",
             agent: agent,
             sbxPath: PathFixer.sbxPath(),
-            home: home.path,
-            mcpURL: usesMCP ? workspace.mcpURL : nil)
+            home: home.path)
     }
 
     /// Re-sync the workspace's own container map after a global sandbox action
@@ -1147,19 +963,6 @@ final class WorkspaceController: ObservableObject {
         }
     }
 
-    /// The enabled MCP servers that are actually **registered** — intersect
-    /// workspace.mcpServers with `sbx mcp ls` and drop (logging) any that aren't.
-    private func effectiveMCPServers() async -> [String] {
-        guard !workspace.mcpServers.isEmpty else { return [] }
-        let registered = await SbxClient.shared.listMCPServers(mcpURL: workspace.mcpURL)
-        let valid = workspace.mcpServers.filter { registered.keys.contains($0) }
-        let dropped = workspace.mcpServers.filter { !registered.keys.contains($0) }
-        if !dropped.isEmpty {
-            Log.info(.workspace, "mcp load: skipping unregistered server(s): \(dropped.joined(separator: ", "))")
-        }
-        return valid
-    }
-
     /// An in-flight bring-up, and the window (controller) that started it.
     private struct BringUp {
         let task: Task<Void, Error>
@@ -1306,7 +1109,7 @@ final class WorkspaceController: ObservableObject {
             let reason: String
             do {
                 let out = try await SbxClient.shared.kitAdd(sandbox: name, ref: ref, cwd: workspace.rootURL.path,
-                                                            mcpURL: workspace.mcpURL, onProgress: buildProgress(for: agent))
+                                                            onProgress: buildProgress(for: agent))
                 if out.ok { continue }
                 reason = out.stderr.isEmpty ? out.stdout : out.stderr
             } catch {
@@ -1327,8 +1130,6 @@ final class WorkspaceController: ObservableObject {
         containerPhases[agent] = .running
         refreshKitStartup(for: agent)
         refreshKitDrift(for: agent)
-        // The swap container's gateway may not carry dynamically loaded servers over.
-        await loadMCPServers(await effectiveMCPServers(), into: name)
     }
 
     /// Shared create/attach/rebuild core for an agent's container. `force`
@@ -1357,17 +1158,13 @@ final class WorkspaceController: ObservableObject {
 
         let existing = try await listing
         let built: Sandbox
-        // The servers to load once it's built — asked before the build starts
-        // (an `sbx` call spawned as `sbx create` winds down can wedge), and
-        // only then: attaching to a sandbox loads nothing.
-        let mcp: [String]
         if let existing {
             // A custom agent whose kit is no longer registered can't be
             // recreated: its sandbox is kept as it is — not offered a rebuild,
             // and a requested one fails saying why.
             let cannotRecreate = SbxClient.cannotRecreate(agent, sandbox: name)
             // Decide whether to rebuild. `force` skips the unchanged-mounts
-            // shortcut (e.g. an MCP change that doesn't alter mounts).
+            // shortcut (a requested rebuild with the config unchanged).
             if !force {
                 if state.appliedMountSignatures[name] == signature {
                     Log.info(.workspace, "attached to existing container '\(name)' (\(mounts.count) mounts)")
@@ -1377,7 +1174,16 @@ final class WorkspaceController: ObservableObject {
                     refreshKitDrift(for: agent)
                     return
                 }
-                switch onMismatch {
+                // Made with an older generation of Sandshell's own kit (before
+                // sbx 0.51's v3 kits): its chats can't start — the adapter isn't
+                // built in — so it's rebuilt, whatever the caller would allow.
+                let applied = state.appliedMountSignatures[name] ?? ""
+                let staleOwnKit = KitStore.kits(kits, for: agent).filter(KitStore.isSandshellKit)
+                    .contains { !applied.contains("\n\($0)@\(KitStore.sandshellKitGeneration)") }
+                if staleOwnKit, cannotRecreate == nil {
+                    Log.info(.workspace, "'\(name)' predates Sandshell's current \(agent.rawValue) kit: rebuilding it")
+                }
+                switch staleOwnKit && cannotRecreate == nil ? .rebuild : onMismatch {
                 case .attach:
                     containers[agent] = existing
                     containerPhases[agent] = existing.isRunning ? .running : .stopped
@@ -1403,7 +1209,6 @@ final class WorkspaceController: ObservableObject {
                 refreshKitDrift(for: agent)
                 throw error
             }
-            mcp = await effectiveMCPServers()
             Log.info(.workspace, "rebuilding container '\(name)' (\(mounts.count) mounts, \(kits.count) kits, force=\(force))")
             beginBuilding(agent, .rebuilding, "Rebuilding \(name)…")
             do {
@@ -1414,7 +1219,6 @@ final class WorkspaceController: ObservableObject {
                 throw error
             }
         } else {
-            mcp = await effectiveMCPServers()
             Log.info(.workspace, "creating container '\(name)' for \(agent.rawValue) (\(mounts.count) mounts, \(kits.count) kits)")
             beginBuilding(agent, .creating, "Building \(name)…")
             do {
@@ -1445,9 +1249,6 @@ final class WorkspaceController: ObservableObject {
         // the log now so failures/warnings surface as they happen.
         refreshKitStartup(for: agent)
         refreshKitDrift(for: agent)
-        // Dynamic MCP: attach the user's checked servers to the now-running
-        // sandbox via `sbx mcp load` (discovery stays on for everything else).
-        await loadMCPServers(mcp, into: name)
     }
 
     private func recordSignature(_ signature: String, for name: String) {

@@ -518,7 +518,7 @@ final class RemoteHub: ObservableObject {
             let dir = FileManager.default.temporaryDirectory.appending(path: "sandshell-remote-check")
             try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
             let chat = ChatSession(title: "Fake agent", agent: .claude, containerName: "remote-check",
-                                   workdir: dir.path, home: dir.path, mcpURL: nil, sessionID: checkID)
+                                   workdir: dir.path, home: dir.path, sessionID: checkID)
             chat.launchOverride = ("/usr/bin/python3", ["-I", script.path])
             checkChat = chat
             chat.start()

@@ -23,7 +23,7 @@ private struct ChatInWindow {
 
     init(folder: URL) {
         session = ChatSession(title: "Claude", containerName: "test-sandbox", workdir: folder.path,
-                              home: folder.path, mcpURL: nil)
+                              home: folder.path)
         chat = ChatSessionView(session: session)
         chat.frame = NSRect(x: 0, y: 0, width: 700, height: 500)
         let content = NSView(frame: NSRect(x: 0, y: 0, width: 700, height: 600))

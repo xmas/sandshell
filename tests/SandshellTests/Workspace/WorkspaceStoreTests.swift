@@ -20,7 +20,6 @@ fileprivate enum WorkspaceStoreFixture {
     static func config(primaryAgent: AgentKind = .codex) -> WorkspaceConfig {
         WorkspaceConfig(
             policy: MountPolicy(),
-            mcpServers: ["github"],
             primaryAgent: primaryAgent,
             configured: true,
             archiveInterval: 600,
@@ -156,7 +155,6 @@ struct WorkspaceStoreSharingTests {
         let store = try WorkspaceStore.shared(root: root)
 
         #expect(store.config.primaryAgent == .codex)
-        #expect(store.config.mcpServers == ["github"])
         #expect(store.config.configured)
         #expect(store.config.archiveInterval == 600)
         #expect(store.config.kits == ["docker.io/example/store-test-kit:1"])
@@ -379,13 +377,13 @@ struct WorkspaceStoreWriteTests {
     @Test func setConfigReplacesTheConfig() {
         var new = store.config
         new.primaryAgent = .gemini
-        new.mcpServers = []
+        new.kits = []
         new.customImage = "ghcr.io/example/sandbox:2"
 
         store.setConfig(new, by: writer)
 
         #expect(store.config.primaryAgent == .gemini)
-        #expect(store.config.mcpServers.isEmpty)
+        #expect(store.config.kits.isEmpty)
         #expect(store.config.customImage == "ghcr.io/example/sandbox:2")
         #expect(store.config.claudeModel == "opus", "Fields the write kept are unchanged")
     }

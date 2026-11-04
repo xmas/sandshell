@@ -24,7 +24,7 @@ struct MCPStatusView: View {
             if let servers = session.mcpServers {
                 if servers.isEmpty {
                     ContentUnavailableView("No MCP Servers", systemImage: "server.rack",
-                                           description: Text("Add them in Settings ▸ MCP, or in the project’s .mcp.json."))
+                                           description: Text("Add them to ~/.claude.json, or to the project’s .mcp.json."))
                 } else {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 0) {

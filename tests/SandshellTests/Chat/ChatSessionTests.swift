@@ -9,7 +9,7 @@ import Testing
 struct ChatSessionTests {
     /// A chat that never launches anything; its paths are never touched.
     private let session = ChatSession(title: "Claude", containerName: "test-sandbox", workdir: "/nonexistent/work",
-                                      home: "/nonexistent/home", mcpURL: nil)
+                                      home: "/nonexistent/home")
 
     private static func chunk(_ text: String, thought: Bool = false, messageID: String? = nil) -> JSONValue {
         var update: [String: JSONValue] = [

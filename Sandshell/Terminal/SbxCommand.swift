@@ -95,9 +95,8 @@ enum SbxCommand {
     }
 
     /// Env pairs passed through `sbx exec ... env K=V ...`. Mirrors
-    /// `sbx.rs::sandbox_shell_env`, plus `SBX_MCP_URL` when the workspace has an
-    /// MCP gateway configured.
-    private static func envPairs(home: String, mcpURL: URL?, claude: ClaudeOptions?, tag: ProcessTag? = nil) -> [String] {
+    /// `sbx.rs::sandbox_shell_env`.
+    private static func envPairs(home: String, claude: ClaudeOptions?, tag: ProcessTag? = nil) -> [String] {
         // NOTE: we deliberately do NOT override HOME. The container's agents are
         // installed under its own home (/home/agent/.local/bin); forcing HOME to
         // the macOS host home made claude look for its install at
@@ -120,7 +119,6 @@ enum SbxCommand {
         // carries its proxy-auth and MCP config, rather than point codex at an
         // unmounted path.
         if FileManager.default.fileExists(atPath: "\(home)/.codex") { pairs.append("CODEX_HOME=\(home)/.codex") }
-        if let mcpURL { pairs.append("SBX_MCP_URL=\(mcpURL.absoluteString)") }
         // Opt-in inference gateway: route claude through the host's
         // `inference-gateway-auth proxy`, which attaches the stored OAuth token.
         // The placeholder token only stops claude prompting for a login.
@@ -171,14 +169,13 @@ enum SbxCommand {
                               agent: AgentKind,
                               sbxPath: String,
                               home: String,
-                              mcpURL: URL?,
                               resumeID: String? = nil,
                               claude: ClaudeOptions? = nil,
                               tag: ProcessTag? = nil) -> String {
         // `exec` so the sbx process replaces the shell, keeping signal semantics.
         return "#!/bin/sh\nexec " + launchCommand(
             containerName: containerName, workdir: workdir, agent: agent,
-            sbxPath: sbxPath, home: home, mcpURL: mcpURL, resumeID: resumeID, claude: claude, tag: tag) + "\n"
+            sbxPath: sbxPath, home: home, resumeID: resumeID, claude: claude, tag: tag) + "\n"
     }
 
     /// The `sbx exec …` one-liner the session launches with — also shown in the
@@ -188,7 +185,6 @@ enum SbxCommand {
                               agent: AgentKind,
                               sbxPath: String,
                               home: String,
-                              mcpURL: URL?,
                               resumeID: String? = nil,
                               claude: ClaudeOptions? = nil,
                               tag: ProcessTag? = nil) -> String {
@@ -200,7 +196,7 @@ enum SbxCommand {
         if !workdir.isEmpty { parts += ["-w", shellQuote(workdir)] }
         parts.append(shellQuote(containerName))
         parts += ["env", "-u", "MCP_GATEWAY_URL"]
-        parts += envPairs(home: home, mcpURL: mcpURL, claude: claude, tag: tag).map(shellQuote)
+        parts += envPairs(home: home, claude: claude, tag: tag).map(shellQuote)
         parts += ["bash", "-c", shellQuote(bashc)]
         return parts.joined(separator: " ")
     }
@@ -265,13 +261,13 @@ enum SbxCommand {
     /// starts on it (`ANTHROPIC_MODEL`) and lists it even when its own catalog
     /// lacks it (`ANTHROPIC_CUSTOM_MODEL_OPTION`), so chats run what terminals do.
     static func acpArguments(agent: AgentKind = .claude, containerName: String, workdir: String,
-                             home: String, mcpURL: URL?, sbxProxyAuth: Bool = false,
+                             home: String, sbxProxyAuth: Bool = false,
                              tag: ProcessTag? = nil, claudeModel: String? = nil) -> [String]? {
         guard let program = acpProgram(for: agent, sbxProxyAuth: sbxProxyAuth) else { return nil }
         var args = ["exec", "-i"]
         if !workdir.isEmpty { args += ["-w", workdir] }
         args += [containerName, "env", "-u", "MCP_GATEWAY_URL"]
-        args += envPairs(home: home, mcpURL: mcpURL, claude: nil, tag: tag)
+        args += envPairs(home: home, claude: nil, tag: tag)
         if agent == .claude, let model = claudeModel, !model.isEmpty {
             args += ["ANTHROPIC_MODEL=\(model)", "ANTHROPIC_CUSTOM_MODEL_OPTION=\(model)"]
         }

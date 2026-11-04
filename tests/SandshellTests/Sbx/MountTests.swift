@@ -152,16 +152,10 @@ struct MountWorkspaceTests {
         #expect(workspace.rootURL.path == "/srv/project")
         #expect(workspace.containerName == "project")
         #expect(workspace.policy == MountPolicy())
-        #expect(workspace.mcpServers.isEmpty)
-        #expect(workspace.mcpURL == Workspace.defaultMCPURL)
         #expect(workspace.primaryAgent == AgentKind.claude)
         #expect(workspace.kits.isEmpty)
         #expect(workspace.imageChannel == ImageChannel.stable)
         #expect(workspace.customImage.isEmpty)
-    }
-
-    @Test func defaultMCPURLIsDockerGateway() {
-        #expect(Workspace.defaultMCPURL.absoluteString == "https://gateway.docker.com")
     }
 
     @Test("templateImage uses the workspace's channel and custom image", arguments: [

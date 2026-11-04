@@ -197,7 +197,7 @@ actor SbxClient {
         _ = try? await remove(sandbox.name)
         let agent = kind.createReference
         let args = ["create", "--no-progress", "--name", sandbox.name, agent] + sandbox.workspaces
-        return try await createAndPoll(args, cwd: sandbox.primaryWorkdir, env: nil, name: sandbox.name)
+        return try await createAndPoll(args, cwd: sandbox.primaryWorkdir, name: sandbox.name)
     }
 
     /// Why `agent`'s sandbox `name` can't be recreated, if it can't. A kit
@@ -214,11 +214,8 @@ actor SbxClient {
     /// `sbx create --no-progress --name <name> <agent> <mounts…>`
     ///
     /// Builds the container for one agent of a `Workspace` from its
-    /// policy-resolved `mounts` (first entry = the rw workspace root), with
-    /// `SBX_MCP_URL` set to the workspace's gateway. It doesn't load MCP
-    /// servers: the caller (`WorkspaceController`) does that with `loadMCP`
-    /// once this returns. Run from the root so `sbx` derives a sensible
-    /// workdir.
+    /// policy-resolved `mounts` (first entry = the rw workspace root). Run
+    /// from the root so `sbx` derives a sensible workdir.
     ///
     /// `onExists`: called as soon as the sandbox shows up (before any kit
     /// setup finishes), so a quit meanwhile doesn't leave it unrecorded.
@@ -242,20 +239,8 @@ actor SbxClient {
         args.append(agent.createReference)   // a custom agent is created from its kit
         args += mounts.map(\.spec)
         return try await createAndPoll(args, cwd: workspace.rootURL.path(percentEncoded: false),
-                                       env: ["SBX_MCP_URL": workspace.mcpURL.absoluteString],
                                        name: name, waitForKitSetup: !kits.isEmpty,
                                        onProgress: onProgress, onExists: onExists)
-    }
-
-    /// Attach an already-registered MCP server to a running sandbox
-    /// (`sbx mcp load <server> --sandbox <name>`). Propagates to connected agent
-    /// sessions via a `tools/list_changed` notification — no recreate needed.
-    @discardableResult
-    func loadMCP(server: String, sandbox: String, mcpURL: URL) async throws -> CommandOutput {
-        let out = try await run(["mcp", "load", server, "--sandbox", sandbox],
-                                env: ["SBX_MCP_URL": mcpURL.absoluteString])
-        if !out.ok { throw SbxError.command(out.stderr.isEmpty ? out.stdout : out.stderr) }
-        return out
     }
 
     /// Kick off an `sbx create …` invocation without blocking on it (`sbx create`
@@ -263,14 +248,14 @@ actor SbxClient {
     /// long-lived daemon), then poll `sbx ls` once a second until the named
     /// sandbox is running. If the create process dies non-zero before the
     /// sandbox appears, its stderr is thrown instead of waiting out the timeout.
-    private func createAndPoll(_ args: [String], cwd: String?, env: [String: String]?,
+    private func createAndPoll(_ args: [String], cwd: String?,
                                name: String, waitForKitSetup: Bool = false,
                                onProgress: ProgressHandler? = nil,
                                onExists: (@MainActor @Sendable () -> Void)? = nil) async throws -> Sandbox {
         Log.info(.sbx, "creating “\(name)”: sbx \(args.joined(separator: " "))")
         changes += 1
         defer { changes += 1 }
-        let proc = makeProcess(args, env: env)
+        let proc = makeProcess(args)
         if let cwd { proc.currentDirectoryURL = URL(filePath: cwd) }
         proc.standardInput = FileHandle.nullDevice
         // Capture stderr (and stdout, its progress) to a temp *file*, not a Pipe: `sbx create` starts the
@@ -400,76 +385,6 @@ actor SbxClient {
         }
         Log.error(.sbx, "timed out waiting for sandbox “\(name)” to start")
         throw SbxError.command("Timed out waiting for sandbox “\(name)” to start.")
-    }
-
-    /// Registered MCP servers (`sbx mcp ls`) → name : isRemote (TYPE == "remote").
-    func listMCPServers(mcpURL: URL) async -> [String: Bool] {
-        guard let out = try? await run(["mcp", "ls"], env: ["SBX_MCP_URL": mcpURL.absoluteString]),
-              out.ok else { return [:] }
-        var map: [String: Bool] = [:]
-        for (i, line) in out.stdout.split(separator: "\n").enumerated() {
-            if i == 0 { continue }   // header: NAME TYPE URL/COMMAND
-            let cols = line.split(separator: " ", omittingEmptySubsequences: true)
-            guard let name = cols.first else { continue }
-            map[String(name)] = cols.count > 1 && cols[1] == "remote"
-        }
-        return map
-    }
-
-    /// Register a server: `sbx mcp add <name> <args…>` (no `--skip_auth`; for a
-    /// remote `--url` server this runs the hosted OAuth flow).
-    @discardableResult
-    func addMCP(name: String, args: [String], mcpURL: URL) async throws -> CommandOutput {
-        let out = try await run(["mcp", "add", name] + args,
-                                env: ["SBX_MCP_URL": mcpURL.absoluteString])
-        if !out.ok { throw SbxError.command(out.stderr.isEmpty ? out.stdout : out.stderr) }
-        return out
-    }
-
-    /// (Re)authorize an already-registered server: `sbx mcp auth <name>`.
-    @discardableResult
-    func authMCP(name: String, mcpURL: URL) async throws -> CommandOutput {
-        let out = try await run(["mcp", "auth", name],
-                                env: ["SBX_MCP_URL": mcpURL.absoluteString])
-        if !out.ok { throw SbxError.command(out.stderr.isEmpty ? out.stdout : out.stderr) }
-        return out
-    }
-
-    /// Remove a registered server (`sbx mcp rm <name>`).
-    @discardableResult
-    func removeMCP(name: String, mcpURL: URL) async throws -> CommandOutput {
-        let out = try await run(["mcp", "rm", name],
-                                env: ["SBX_MCP_URL": mcpURL.absoluteString])
-        if !out.ok { throw SbxError.command(out.stderr.isEmpty ? out.stdout : out.stderr) }
-        return out
-    }
-
-    /// Hosted-OAuth status per server (`authorized` / `unauthorized` / `expired`).
-    func mcpAuthStatus(mcpURL: URL) async -> [String: String] {
-        guard let out = try? await run(["mcp", "auth", "status", "--all", "--format=json"],
-                                       env: ["SBX_MCP_URL": mcpURL.absoluteString]), out.ok,
-              // Tolerate a daemon-startup banner on stdout ahead of the JSON.
-              let json = Self.firstJSONArray(in: out.stdout),
-              let data = json.data(using: .utf8),
-              let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]]
-        else { return [:] }
-        var map: [String: String] = [:]
-        for entry in arr {
-            if let name = entry["server_name"] as? String, let status = entry["status"] as? String {
-                map[name] = status
-            }
-        }
-        return map
-    }
-
-    /// Revoke a server's hosted OAuth credential (`sbx mcp auth rm <name>`),
-    /// keeping its registration.
-    @discardableResult
-    func unauthorizeMCP(name: String, mcpURL: URL) async throws -> CommandOutput {
-        let out = try await run(["mcp", "auth", "rm", name],
-                                env: ["SBX_MCP_URL": mcpURL.absoluteString])
-        if !out.ok { throw SbxError.command(out.stderr.isEmpty ? out.stdout : out.stderr) }
-        return out
     }
 
     /// Tear the container down and recreate it: `stop` → `rm -f` → `create`.
@@ -650,8 +565,16 @@ actor SbxClient {
     func inspect(_ name: String) async -> SandboxInspection? {
         guard let out = try? await run(["inspect", name, "--json"], routine: true), out.ok,
               let json = Self.firstJSONObject(in: out.stdout),
-              let data = json.data(using: .utf8) else { return nil }
-        return try? JSONDecoder().decode(SandboxInspection.self, from: data)
+              let data = json.data(using: .utf8),
+              var info = try? JSONDecoder().decode(SandboxInspection.self, from: data) else { return nil }
+        // sbx 0.51 lists a built-in agent's own kit (`docker.io/sbx/claude@sha256:…`)
+        // among the kits: that's how the sandbox was made, not a kit added to it.
+        if let agent = info.agent { info.kits = info.kits?.filter { !Self.isAgentsOwnKit($0, agent: agent) } }
+        return info
+    }
+
+    nonisolated static func isAgentsOwnKit(_ ref: String, agent: String) -> Bool {
+        ref.hasPrefix("docker.io/sbx/\(agent)@") || ref.hasPrefix("docker.io/sbx/\(agent):")
     }
 
     /// `sbx kit add <name> <ref>` (experimental): recreates the container with
@@ -662,14 +585,14 @@ actor SbxClient {
     /// Output goes to temp files rather than pipes for the same reason as
     /// `createAndPoll`: the recreate (re)starts the sandbox, and a helper that
     /// inherits a pipe fd would stall Foundation's shared callback queue.
-    func kitAdd(sandbox name: String, ref: String, cwd: String, mcpURL: URL,
+    func kitAdd(sandbox name: String, ref: String, cwd: String,
                 onProgress: ProgressHandler? = nil) async throws -> CommandOutput {
         let args = ["kit", "add", name, KitStore.resolve(ref)]
         Log.info(.sbx, "$ sbx \(args.joined(separator: " "))")
         changes += 1
         defer { changes += 1 }
         let started = Date.now
-        let proc = makeProcess(args, env: ["SBX_MCP_URL": mcpURL.absoluteString])
+        let proc = makeProcess(args)
         proc.currentDirectoryURL = URL(filePath: cwd)
         proc.standardInput = FileHandle.nullDevice
         let outURL = URL.temporaryDirectory.appending(path: "sbx-kit-add-\(UUID().uuidString).out")
@@ -806,20 +729,12 @@ actor SbxClient {
         return value.addingPercentEncoding(withAllowedCharacters: allowed) ?? value
     }
 
-    private func makeProcess(_ args: [String], env: [String: String]? = nil) -> Process {
+    private func makeProcess(_ args: [String]) -> Process {
         let proc = Process()
         proc.executableURL = URL(filePath: sbx)
         proc.arguments = args
         // Inherit the patched process environment (PATH fix from PathFixer).
         var environment = ProcessInfo.processInfo.environment
-        // Enable MCP (dynamic discovery: the gateway exposes mcp-find/mcp-add) by
-        // default so every sbx call — including the one that starts sandboxd —
-        // runs with MCP on. A per-call env (e.g. a workspace's custom gateway) or
-        // a value the user already exported takes precedence.
-        if environment["SBX_MCP_URL"]?.isEmpty != false {
-            environment["SBX_MCP_URL"] = Workspace.defaultMCPURL.absoluteString
-        }
-        if let env { environment.merge(env) { _, new in new } }
         environment.removeValue(forKey: "MCP_GATEWAY_URL")
         proc.environment = environment
         return proc
@@ -843,14 +758,14 @@ actor SbxClient {
     /// delivery is wedged — e.g. a daemon a sibling `sbx create` just spawned is
     /// holding one of our pipe fds open, stalling Foundation's shared callback
     /// queue — the call is killed and surfaced as an error rather than hanging the
-    /// UI forever. Non-routine calls (mcp auth/OAuth, etc.) may legitimately run
+    /// UI forever. Non-routine calls (kit inspections, execs, etc.) may legitimately run
     /// long, so they stay unbounded unless a caller passes `timeout`.
-    private func run(_ args: [String], cwd: String? = nil, env: [String: String]? = nil,
+    private func run(_ args: [String], cwd: String? = nil,
                      routine: Bool = false, timeout: TimeInterval? = nil) async throws -> CommandOutput {
         if !routine { Log.info(.sbx, "$ sbx \(args.joined(separator: " "))"); changes += 1 }
         defer { if !routine { changes += 1 } }
         let started = Date.now
-        let proc = makeProcess(args, env: env)
+        let proc = makeProcess(args)
         if let cwd { proc.currentDirectoryURL = URL(filePath: cwd) }
         let outPipe = Pipe()
         let errPipe = Pipe()
@@ -859,7 +774,7 @@ actor SbxClient {
         let limit = timeout ?? (routine ? 30 : nil)
 
         // Accumulate output incrementally instead of `readDataToEndOfFile()` at
-        // exit: commands like `sbx mcp add` (re)start the long-lived daemon, which
+        // exit: any command may (re)start the long-lived daemon, which
         // inherits these pipe fds and never closes them — so a read-to-EOF would
         // block forever even after `sbx` itself exits. We resolve on termination
         // with whatever was streamed by then, plus what the pipes still hold.

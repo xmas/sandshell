@@ -295,7 +295,7 @@ enum SelfTest {
         let dir = FileManager.default.temporaryDirectory.appending(path: "sandshell-attach-drop")
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let chat = ChatSession(title: "Fake", agent: .claude, containerName: "attach-drop", workdir: dir.path,
-                               home: dir.path, mcpURL: nil, sessionID: c.id)
+                               home: dir.path, sessionID: c.id)
         if let script = RemoteHub.fakeAgentScript { chat.launchOverride = ("/usr/bin/python3", ["-I", script.path]) }
         tree.surfaces.chats[c.id] = ChatSessionView(session: chat)
         ws.setLive(c.id, true)
@@ -731,7 +731,7 @@ enum SelfTest {
     /// same argv the chat uses.
     private static func handshake(_ agent: AgentKind, container: String, workdir: String, home: String) async {
         guard let args = SbxCommand.acpArguments(agent: agent, containerName: container, workdir: workdir,
-                                                 home: home, mcpURL: nil) else {
+                                                 home: home) else {
             return check(false, "\(agent.rawValue) has an ACP launch")
         }
         let conn = ACPConnection(executable: PathFixer.sbxPath(), arguments: args)
@@ -1808,7 +1808,7 @@ enum SelfTest {
         check(ws.kitDrift[agent] == nil, "no drift right after create")
 
         // Hand-run `sbx kit add` behind Sandshell's back → drift → adopt.
-        let handB = try? await SbxClient.shared.kitAdd(sandbox: name, ref: b, cwd: ws.rootURL.path, mcpURL: ws.mcpURL)
+        let handB = try? await SbxClient.shared.kitAdd(sandbox: name, ref: b, cwd: ws.rootURL.path)
         check(handB?.ok == true, "hand-run sbx kit add b succeeds")
         ws.refreshKitDrift(for: agent)
         check(await until(30) { ws.kitDrift[agent]?.extra == [b] }, "drift reports b as extra")
@@ -1823,7 +1823,7 @@ enum SelfTest {
         check(ws.kitDrift[agent] == nil, "no drift after adopting")
 
         // Hand-add c → drop on next rebuild (persisted ignore).
-        _ = try? await SbxClient.shared.kitAdd(sandbox: name, ref: c, cwd: ws.rootURL.path, mcpURL: ws.mcpURL)
+        _ = try? await SbxClient.shared.kitAdd(sandbox: name, ref: c, cwd: ws.rootURL.path)
         ws.refreshKitDrift(for: agent)
         check(await until(30) { ws.kitDrift[agent]?.extra == [c] }, "drift reports c as extra")
         ws.ignoreKitDrift(for: agent)

@@ -40,15 +40,13 @@ struct MountSpec: Codable, Hashable, Identifiable {
 }
 
 /// A workspace: one host root folder backed (in later phases) by one or more
-/// `sbx` containers. The durable settings (`policy`, `mcpServers`, `mcpURL`,
-/// `primaryAgent`) live in `<root>/.sandshell/config.json`; the projects and
+/// `sbx` containers. The durable settings (`policy`, `primaryAgent`, `kits`)
+/// live in `<root>/.sandshell/config.json`; the projects and
 /// sessions live in `WorkspaceState` (`state.json`). See GA plan §5.
 struct Workspace: Codable, Hashable {
     var rootURL: URL
     var containerName: String
     var policy: MountPolicy
-    var mcpServers: [String]
-    var mcpURL: URL
     var primaryAgent: AgentKind
     /// Kit references applied to this workspace's sandboxes (`sbx create --kit`).
     var kits: [String]
@@ -63,20 +61,14 @@ struct Workspace: Codable, Hashable {
         imageChannel.templateImage(for: agent, custom: customImage)
     }
 
-    static let defaultMCPURL = URL(string: "https://gateway.docker.com")!
-
     init(rootURL: URL,
          containerName: String,
          policy: MountPolicy = MountPolicy(),
-         mcpServers: [String] = [],
-         mcpURL: URL = Workspace.defaultMCPURL,
          primaryAgent: AgentKind = .claude,
          kits: [String] = []) {
         self.rootURL = rootURL
         self.containerName = containerName
         self.policy = policy
-        self.mcpServers = mcpServers
-        self.mcpURL = mcpURL
         self.primaryAgent = primaryAgent
         self.kits = kits
     }

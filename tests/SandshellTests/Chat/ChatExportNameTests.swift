@@ -13,7 +13,7 @@ struct ChatExportNameTests {
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: folder) }
         let path = folder.path(percentEncoded: false)
-        let session = ChatSession(title: "Claude", containerName: "test-sandbox", workdir: path, home: path, mcpURL: nil)
+        let session = ChatSession(title: "Claude", containerName: "test-sandbox", workdir: path, home: path)
         try body(ChatSessionView(session: session))
     }
 

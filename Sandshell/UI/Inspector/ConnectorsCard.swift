@@ -38,9 +38,6 @@ struct ConnectorsCard: View {
             } else {
                 ProgressView().controlSize(.small)
             }
-            Button("MCP Settings…") { model.openMCPSettings?() }
-                .buttonStyle(.link)
-                .font(.role(.meta))
         }
         .font(.role(.body))
     }

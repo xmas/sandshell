@@ -62,8 +62,6 @@ struct InspectorView: View {
             KitsInspectorPane(controller: controller)
         case .agents:
             AgentsInspectorPane(controller: controller)
-        case .mcp:
-            MCPInspectorPane(controller: controller)
         case .git:
             StubPaneView(title: "Git & Remote", symbol: "arrow.triangle.branch",
                          note: "Auto-commit and remotes in Phase 6.")

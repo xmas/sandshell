@@ -82,7 +82,6 @@ final class SessionInspectorModel {
     @ObservationIgnored var openWorkflow: ((WorkflowRun) -> Void)?
     @ObservationIgnored var openSubagent: ((SubagentInfo) -> Void)?
     @ObservationIgnored var showMCP: (() -> Void)?
-    @ObservationIgnored var openMCPSettings: (() -> Void)?
 
     init(sessionID: UUID, chat: ChatSession, workspace: WorkspaceController) {
         self.sessionID = sessionID

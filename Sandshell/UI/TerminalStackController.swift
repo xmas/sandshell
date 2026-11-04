@@ -1385,7 +1385,6 @@ final class TerminalStackController: NSViewController {
             let terminal = TerminalSession(
                 sessionID: id, containerName: containerName, agent: session.agent,
                 workdir: controller.sandboxWorkdir(session.workdir, agent: session.containerAgentKind),
-                mcpURL: controller.workspace.mcpURL,
                 theme: controller.theme,
                 resumeID: resumeID,
                 claude: claudeOptions)
@@ -1418,9 +1417,6 @@ final class TerminalStackController: NSViewController {
         model.openSubagent = { [controller] info in SubagentWindowController.show(info, workspace: controller) }
         model.openTask = { [weak surfaces] _ in surfaces?.paneShowing(id)?.showBackgroundTasks() }
         model.showMCP = { [weak view] in view?.showMCPDetails() }
-        model.openMCPSettings = { [controller, weak view] in
-            SettingsWindowController.show(for: controller, pane: .mcp, owner: view?.window)
-        }
         view.setInspector(NSHostingView(rootView: SessionInspectorView(model: model)))
     }
 
@@ -1539,7 +1535,7 @@ final class TerminalStackController: NSViewController {
                                    containerName: containerName,
                                    workdir: controller.sandboxWorkdir(current.workdir, agent: current.containerAgentKind),
                                    home: controller.home.path,
-                                   mcpURL: controller.mcpURL, resumeID: resumeID, sbxProxyAuth: proxyAuth,
+                                   resumeID: resumeID, sbxProxyAuth: proxyAuth,
                                    sessionID: id, unavailable: unavailable,
                                    model: current.agent == .claude ? controller.claudeModel : nil,
                                    effort: current.agent == .claude ? controller.claudeEffort : nil)
