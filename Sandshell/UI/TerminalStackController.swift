@@ -581,11 +581,56 @@ final class TerminalStackController: NSViewController {
     /// Show `id` in this pane (nil = empty).
     func show(_ id: UUID?) {
         shownSession = id
+        if id != nil { shownBoard = nil }
         refresh()
     }
 
+    // MARK: Canvas
+
+    /// The Canvas board this pane shows instead of a session (its folder).
+    private(set) var shownBoard: URL?
+    private lazy var canvas: CanvasView = {
+        let view = CanvasView()
+        addTerminalView(view)
+        return view
+    }()
+
+    /// Show a board's folder in this pane (it replaces the session shown).
+    func showBoard(_ folder: URL?) {
+        shownBoard = folder
+        if folder != nil { shownSession = nil }
+        refresh()
+    }
+
+    private func showCanvas(_ folder: URL) {
+        canvas.show(folder)
+        hideHostContents(except: canvas)
+        canvas.isHidden = false
+        activeSessionID = nil
+        frameView.isHidden = false
+        restartButton.isHidden = true
+        spinner.stopAnimation(nil)
+        statusStack.isHidden = true
+        emptyActions.isHidden = true
+        failureActions.isHidden = true
+        buildLogView.isHidden = true
+        kitBannerContextActive = false
+        titleStrip.update(folder: folder, access: controller.sandboxAccess(for: folder, agent: controller.primaryAgent))
+        titleStrip.setViewMode(nil)
+        updateStripName()
+        let title = canvas.board?.title ?? folder.lastPathComponent
+        onChromeChange?(Chrome(agent: nil, title: title, subtitle: "Canvas · \(folder.path(percentEncoded: false).tildeAbbreviated)"))
+        onStatusChange?("", false)
+        updateFocusRing()
+    }
+
+    #if DEBUG
+    var debugCanvas: CanvasView? { shownBoard == nil ? nil : canvas }
+    #endif
+
     /// Re-send this pane's identity/status to the window (it became focused).
     func reemitChrome() {
+        if let board = shownBoard { return showCanvas(board) }
         if let id = activeSessionID, id == shownSession, let session = controller.session(id: id) {
             configureHeader(session)
             updateHeaderStatus(id)
@@ -612,6 +657,9 @@ final class TerminalStackController: NSViewController {
     /// The strip names the session only when the window has more than one pane
     /// (with one, the title bar already does).
     private func updateStripName() {
+        if let board = shownBoard {
+            return titleStrip.setName(showsFocusRing ? canvas.board?.title ?? board.lastPathComponent : nil)
+        }
         guard showsFocusRing, let id = activeSessionID, let session = controller.session(id: id) else {
             return titleStrip.setName(nil)
         }
@@ -965,6 +1013,7 @@ final class TerminalStackController: NSViewController {
 
     /// Single source of truth for what the detail pane shows.
     func refresh() {
+        if let board = shownBoard { return showCanvas(board) }
         // Another sandbox building doesn't hide a session that's already up —
         // its own being rebuilt does (what's on screen is about to go).
         let live = shownSession.map { terminals[$0] != nil || chats[$0] != nil } ?? false

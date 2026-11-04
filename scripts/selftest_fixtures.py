@@ -149,6 +149,22 @@ def _sidebar(d):
                      {"agent": "shell", "name": "Shell in Claude"},
                      {"agent": "claude", "name": "where is the dmg of the release"}])
 
+@fixture("canvas")
+def _canvas(d):
+    # One board, two pages (the scenario edits them).
+    shutil.rmtree(d, ignore_errors=True)
+    git_repo(d, {}, [("init", {"README.md": README})])
+    set_sessions(d, [])
+    board = os.path.join(d, ".sandshell", "canvas", "onboarding")
+    os.makedirs(board, exist_ok=True)
+    json.dump({"title": "Onboarding", "artboards": [
+        {"id": "welcome", "title": "Welcome", "file": "welcome.html", "width": 390, "height": 844},
+        {"id": "welcome-b", "title": "Welcome (B)", "file": "welcome-b.html", "width": 390, "height": 844}]},
+        open(os.path.join(board, "board.json"), "w"))
+    page = '<!doctype html><body style="font:16px -apple-system;padding:24px;background:{bg}"><h1>{h}</h1><p>Sign in to continue.</p></body>'
+    open(os.path.join(board, "welcome.html"), "w").write(page.format(bg="#fff", h="Welcome aboard"))
+    open(os.path.join(board, "welcome-b.html"), "w").write(page.format(bg="#f4f0ff", h="Hello there"))
+
 @fixture("kits")
 def _kits(d):
     git_repo(d, {}, [("init", {"README.md": README})])

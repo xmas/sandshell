@@ -57,7 +57,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// one its Settings, Search or Background Tasks window or sheet belongs
     /// to — else the main window's, else the one last made key, else the
     /// primary one.
-    @MainActor private var activeController: MainWindowController? {
+    @MainActor fileprivate var activeController: MainWindowController? {
         for window in [NSApp.keyWindow, NSApp.mainWindow].compactMap({ $0 }) {
             if let match = windows.first(where: { $0.owns(window) }) { return match }
         }
@@ -772,6 +772,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     // MARK: Panes (View menu)
+
+    /// View ▸ Open Board: the active window's Canvas boards, listed as the menu opens.
+    @MainActor static let boardsMenu = BoardsMenu()
+
+    @MainActor final class BoardsMenu: NSObject, NSMenuDelegate {
+        func menuNeedsUpdate(_ menu: NSMenu) {
+            menu.removeAllItems()
+            let window = (NSApp.delegate as? AppDelegate)?.activeController
+            guard let window, let root = window.workspaceController?.rootURL else {
+                menu.addItem(withTitle: "No Window", action: nil, keyEquivalent: "")
+                return
+            }
+            let boards = CanvasBoard.list(root: root)
+            if boards.isEmpty {
+                menu.addItem(withTitle: "No Boards in .sandshell/canvas", action: nil, keyEquivalent: "")
+            }
+            for folder in boards {
+                let title = (try? CanvasBoard.load(folder: folder).get().title) ?? folder.lastPathComponent
+                menu.addItem(NSMenuItem(title) { [weak window] in window?.paneTree?.openBoard(folder) })
+            }
+        }
+    }
 
     @MainActor @objc func splitRight(_ sender: Any?) { activeController?.splitRight() }
     @MainActor @objc func splitDown(_ sender: Any?) { activeController?.splitDown() }

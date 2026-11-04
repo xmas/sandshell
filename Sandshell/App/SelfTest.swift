@@ -133,6 +133,7 @@ enum SelfTest {
         case "agents": await agents(window)
         case "search": await search(window)
         case "sidebar": await sidebar(window)
+        case "canvas": await canvas(window)
         case "remote": await remote(window)
         default: check(false, "unknown self-test \(requested ?? "")")
         }
@@ -3846,6 +3847,53 @@ enum SelfTest {
         view.debugCheckDrawn()
         let left = view.debugUndrawnVisibleHeight
         check(left < 1, "and draws it again (\(Int(left)) pt left)")
+    }
+
+    // MARK: Canvas
+
+    /// A board in a pane: its artboards load, an edited page reloads, an
+    /// artboard added to board.json appears, a half-written board.json keeps
+    /// what's shown, and the pane's board is saved with the layout. Needs the
+    /// `canvas` fixture (.sandshell/canvas/onboarding: two pages).
+    private static func canvas(_ window: MainWindowController) async {
+        guard let ws = window.workspaceController, let tree = window.paneTree else { return log("no window") }
+        let boards = CanvasBoard.list(root: ws.rootURL)
+        check(boards.map(\.lastPathComponent) == ["onboarding"], "the workspace's boards are listed (\(boards.map(\.lastPathComponent)))")
+        guard let folder = boards.first else { return }
+        tree.openBoard(folder)
+        guard let canvas = tree.focused.debugCanvas else { return check(false, "the pane shows the board") }
+        check(await until(20) { canvas.debugLoadedCount == 2 }, "both artboards load (\(canvas.debugLoadedCount))")
+        check(canvas.debugArtboardIDs == ["welcome", "welcome-b"], "in board.json's order (\(canvas.debugArtboardIDs))")
+        check(canvas.debugMagnification <= 1, "zoomed to fit (\(canvas.debugMagnification))")
+        let text = await canvas.debugPageText("welcome") ?? ""
+        check(text.contains("Welcome aboard"), "the page renders (“\(text.prefix(40))”)")
+        snapshot(window, "canvas")
+
+        // The agent edits a page: it reloads.
+        let page = folder.appending(path: "welcome.html")
+        try? "<h1>Welcome back</h1>".write(to: page, atomically: true, encoding: .utf8)
+        check(await until(10) { canvas.debugReloads >= 1 }, "an edited page reloads")
+        _ = await until(10) { canvas.debugLoadedCount == 2 }
+        let edited = await canvas.debugPageText("welcome") ?? ""
+        check(edited.contains("Welcome back"), "and shows the edit (“\(edited.prefix(40))”)")
+
+        // The agent adds an artboard.
+        let boardFile = folder.appending(path: CanvasBoard.fileName)
+        let original = (try? String(contentsOf: boardFile, encoding: .utf8)) ?? ""
+        try? "<p>Settings</p>".write(to: folder.appending(path: "settings.html"), atomically: true, encoding: .utf8)
+        try? original.replacingOccurrences(of: #"]"#, with: #", {"id": "settings", "file": "settings.html", "width": 600, "height": 400}]"#)
+            .write(to: boardFile, atomically: true, encoding: .utf8)
+        check(await until(10) { canvas.debugArtboardIDs.count == 3 }, "an artboard added to board.json appears (\(canvas.debugArtboardIDs))")
+
+        // Mid-write (not JSON): what's shown stays.
+        try? "{ \"artboards\": [".write(to: boardFile, atomically: true, encoding: .utf8)
+        await wait(1.5)
+        check(canvas.debugArtboardIDs.count == 3 && canvas.debugMessage == nil, "a half-written board.json keeps the board shown")
+
+        // Saved with the window's layout.
+        await wait(1)
+        let saved = UserDefaults.standard.data(forKey: tree.layoutKey).flatMap { try? JSONDecoder().decode(SavedPaneLayout.self, from: $0) }
+        check(saved?.board == ".sandshell/canvas/onboarding", "the pane's board is saved with the layout (\(saved?.board ?? "-"))")
     }
 
     // MARK: Links

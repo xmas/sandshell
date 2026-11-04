@@ -533,7 +533,7 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
             self.saveTask = nil
             @MainActor func encode(_ n: Node) -> Saved {
                 switch n.kind {
-                case .leaf(let p): Saved(session: p.shownSession)
+                case .leaf(let p): Saved(session: p.shownSession, board: p.shownBoard.map(self.relativeBoardPath))
                 case .split(let a, let kids): Saved(axis: a, children: kids.map(encode), fractions: n.fractions)
                 }
             }
@@ -568,10 +568,36 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
             // Restore only sessions that still exist, each in one pane.
             if let id = s.session, controller.session(id: id) != nil, seen.insert(id).inserted {
                 pane.show(id)
+            } else if let board = s.board {
+                let folder = controller.rootURL.appending(path: board, directoryHint: .isDirectory)
+                if FileManager.default.fileExists(atPath: folder.appending(path: CanvasBoard.fileName).path(percentEncoded: false)) {
+                    pane.showBoard(folder)
+                }
             }
             return Node(.leaf(pane))
         }
         return decode(saved)
+    }
+
+    // MARK: Canvas
+
+    /// A board's folder as saved: relative to the workspace root.
+    private func relativeBoardPath(_ folder: URL) -> String {
+        let root = controller.rootURL.standardizedFileURL.path(percentEncoded: false)
+        var path = folder.standardizedFileURL.path(percentEncoded: false)
+        if path.count > 1, path.hasSuffix("/") { path.removeLast() }
+        let base = root.hasSuffix("/") ? root : root + "/"
+        return path.hasPrefix(base) ? String(path.dropFirst(base.count)) : path
+    }
+
+    /// Show a board: focus the pane already showing it, else in the focused pane.
+    func openBoard(_ folder: URL) {
+        if let holder = panes.first(where: { $0.shownBoard?.standardizedFileURL == folder.standardizedFileURL }) {
+            return focus(holder)
+        }
+        focused.showBoard(folder)
+        focused.reemitChrome()
+        scheduleSave()
     }
 
     // MARK: Window API (forwarded to the focused pane)
@@ -682,6 +708,8 @@ struct SavedPaneLayout: Codable, Equatable {
     var children: [SavedPaneLayout]?
     var fractions: [CGFloat]?
     var session: UUID?
+    /// A Canvas board's folder, relative to the workspace root.
+    var board: String?
     /// A Files leaf an earlier build saved (Files was a pane then). Only read,
     /// to drop it: `withoutFiles`.
     var files: LegacyFilesLeaf?
@@ -689,11 +717,12 @@ struct SavedPaneLayout: Codable, Equatable {
     struct LegacyFilesLeaf: Codable, Equatable {}
 
     init(axis: PaneTreeController.Axis? = nil, children: [SavedPaneLayout]? = nil, fractions: [CGFloat]? = nil,
-         session: UUID? = nil, files: LegacyFilesLeaf? = nil) {
+         session: UUID? = nil, board: String? = nil, files: LegacyFilesLeaf? = nil) {
         self.axis = axis
         self.children = children
         self.fractions = fractions
         self.session = session
+        self.board = board
         self.files = files
     }
 

@@ -1,0 +1,247 @@
+import AppKit
+import WebKit
+
+/// A board on a zoomable, pannable surface: each artboard a web view sized to
+/// it, titled above. Watches the board folder and reloads what changed, so the
+/// agent's edits show as they land. See docs/canvas.md.
+@MainActor
+final class CanvasView: NSView {
+    private let scrollView = NSScrollView()
+    private let document = FlippedView()
+    private let messageLabel = NSTextField(wrappingLabelWithString: "")
+    private(set) var board: CanvasBoard?
+    private var folder: URL?
+    private var artboardViews: [String: ArtboardView] = [:]
+    /// When each file artboard's file was last seen changed (a reload only for those).
+    private var modified: [String: Date] = [:]
+    private var watcher: FileWatcher?
+    private var zoomedToFit = false
+
+    /// Empty space around the artboards.
+    static let margin: CGFloat = 120
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        scrollView.translatesAutoresizingMaskIntoConstraints = false
+        scrollView.hasVerticalScroller = true
+        scrollView.hasHorizontalScroller = true
+        scrollView.autohidesScrollers = true
+        scrollView.allowsMagnification = true
+        scrollView.minMagnification = 0.05
+        scrollView.maxMagnification = 4
+        scrollView.drawsBackground = true
+        scrollView.backgroundColor = .underPageBackgroundColor
+        scrollView.documentView = document
+        addSubview(scrollView)
+        messageLabel.translatesAutoresizingMaskIntoConstraints = false
+        messageLabel.alignment = .center
+        messageLabel.textColor = .secondaryLabelColor
+        messageLabel.isHidden = true
+        addSubview(messageLabel)
+        NSLayoutConstraint.activate([
+            scrollView.topAnchor.constraint(equalTo: topAnchor),
+            scrollView.bottomAnchor.constraint(equalTo: bottomAnchor),
+            scrollView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            scrollView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            messageLabel.centerXAnchor.constraint(equalTo: centerXAnchor),
+            messageLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
+            messageLabel.widthAnchor.constraint(lessThanOrEqualToConstant: 420),
+        ])
+        setAccessibilityIdentifier("canvas")
+    }
+
+    @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
+
+    /// Show the board in `folder` (nil = nothing), watching it for changes.
+    func show(_ folder: URL?) {
+        guard folder != self.folder else { return }
+        self.folder = folder
+        watcher = nil
+        zoomedToFit = false
+        for view in artboardViews.values { view.removeFromSuperview() }
+        artboardViews = [:]
+        modified = [:]
+        board = nil
+        guard let folder else { return reload() }
+        watcher = FileWatcher(path: folder.path(percentEncoded: false), latency: 0.2) { [weak self] in self?.reload() }
+        reload()
+    }
+
+    /// Read board.json again: artboards added, moved or gone follow it, and
+    /// a file artboard whose file changed reloads.
+    func reload() {
+        guard let folder else {
+            board = nil
+            return showMessage(nil)
+        }
+        switch CanvasBoard.load(folder: folder) {
+        case .failure(let error):
+            // Keep what's on screen while the agent's rewriting it; say so only when there's nothing.
+            if board == nil { showMessage(error.localizedDescription) }
+        case .success(let loaded):
+            board = loaded
+            showMessage(loaded.artboards.isEmpty ? "No artboards yet. Ask the agent to add one to board.json." : nil)
+            layoutArtboards(loaded)
+        }
+    }
+
+    private func showMessage(_ text: String?) {
+        messageLabel.stringValue = text ?? ""
+        messageLabel.isHidden = text == nil
+        scrollView.isHidden = text != nil && artboardViews.isEmpty
+    }
+
+    private func layoutArtboards(_ board: CanvasBoard) {
+        let frames = board.frames()
+        for (id, view) in artboardViews where !board.artboards.contains(where: { $0.id == id }) {
+            view.removeFromSuperview()
+            artboardViews[id] = nil
+            modified[id] = nil
+        }
+        let bounds = frames.values.reduce(CGRect.null) { $0.union($1) }
+        let origin = CGPoint(x: Self.margin - (bounds.isNull ? 0 : bounds.minX),
+                             y: Self.margin + ArtboardView.titleHeight - (bounds.isNull ? 0 : bounds.minY))
+        for artboard in board.artboards {
+            guard let frame = frames[artboard.id] else { continue }
+            let view = artboardViews[artboard.id] ?? {
+                let v = ArtboardView()
+                document.addSubview(v)
+                artboardViews[artboard.id] = v
+                return v
+            }()
+            view.frame = CGRect(x: frame.minX + origin.x, y: frame.minY + origin.y - ArtboardView.titleHeight,
+                                width: frame.width, height: frame.height + ArtboardView.titleHeight)
+            view.title = artboard.title
+            let source = board.fileURL(of: artboard) ?? artboard.url
+            let stamp = board.fileURL(of: artboard).flatMap {
+                (try? $0.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+            }
+            if view.source != source {
+                view.load(source, readAccess: board.folder)
+            } else if let stamp, stamp != modified[artboard.id] {
+                view.reloadPage()
+            }
+            modified[artboard.id] = stamp
+        }
+        let size = bounds.isNull ? .zero : bounds.size
+        document.setFrameSize(NSSize(width: size.width + 2 * Self.margin,
+                                     height: size.height + 2 * Self.margin + ArtboardView.titleHeight))
+        if !zoomedToFit, !board.artboards.isEmpty {
+            zoomedToFit = true
+            DispatchQueue.main.async { [weak self] in self?.zoomToFit() }
+        }
+    }
+
+    /// Everything on screen at once (never larger than 100 %).
+    func zoomToFit() {
+        guard document.frame.width > 0, scrollView.contentSize.width > 0 else { return }
+        let fit = min(scrollView.contentSize.width / document.frame.width,
+                      scrollView.contentSize.height / document.frame.height, 1)
+        scrollView.magnification = max(fit, scrollView.minMagnification)
+        scrollView.contentView.scroll(to: .zero)
+        scrollView.reflectScrolledClipView(scrollView.contentView)
+    }
+
+    func zoom(by factor: CGFloat) {
+        let center = NSPoint(x: scrollView.contentView.bounds.midX, y: scrollView.contentView.bounds.midY)
+        scrollView.setMagnification(scrollView.magnification * factor, centeredAt: center)
+    }
+
+    #if DEBUG
+    var debugArtboardIDs: [String] { (board?.artboards ?? []).map(\.id).filter { artboardViews[$0] != nil } }
+    var debugLoadedCount: Int { artboardViews.values.filter(\.hasLoaded).count }
+    var debugReloads: Int { artboardViews.values.reduce(0) { $0 + $1.reloads } }
+    var debugMessage: String? { messageLabel.isHidden ? nil : messageLabel.stringValue }
+    var debugMagnification: CGFloat { scrollView.magnification }
+    func debugPageText(_ id: String) async -> String? { await artboardViews[id]?.pageText() }
+    #endif
+}
+
+/// One artboard: its title, then the page in a web view of the artboard's size.
+@MainActor
+private final class ArtboardView: NSView, WKNavigationDelegate {
+    static let titleHeight: CGFloat = 28
+    private let titleLabel = NSTextField(labelWithString: "")
+    private let webView: WKWebView
+    private(set) var source: URL?
+    private(set) var hasLoaded = false
+    private(set) var reloads = 0
+
+    var title: String {
+        get { titleLabel.stringValue }
+        set { titleLabel.stringValue = newValue }
+    }
+
+    override var isFlipped: Bool { true }
+
+    init() {
+        let config = WKWebViewConfiguration()
+        config.websiteDataStore = .nonPersistent()
+        webView = WKWebView(frame: .zero, configuration: config)
+        super.init(frame: .zero)
+        titleLabel.font = .systemFont(ofSize: 13, weight: .medium)
+        titleLabel.textColor = .secondaryLabelColor
+        titleLabel.lineBreakMode = .byTruncatingTail
+        addSubview(titleLabel)
+        webView.navigationDelegate = self
+        webView.allowsMagnification = false
+        webView.wantsLayer = true
+        webView.layer?.cornerRadius = 6
+        webView.layer?.masksToBounds = true
+        webView.layer?.borderWidth = 1
+        webView.layer?.borderColor = NSColor.separatorColor.cgColor
+        addSubview(webView)
+    }
+
+    @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
+
+    override func layout() {
+        super.layout()
+        titleLabel.frame = NSRect(x: 0, y: 4, width: bounds.width, height: 18)
+        webView.frame = NSRect(x: 0, y: Self.titleHeight, width: bounds.width,
+                               height: max(bounds.height - Self.titleHeight, 0))
+    }
+
+    func load(_ url: URL?, readAccess: URL) {
+        source = url
+        hasLoaded = false
+        guard let url else {
+            webView.loadHTMLString("", baseURL: nil)
+            return
+        }
+        if url.isFileURL {
+            // Both by their real paths: WebKit compares them as given (/tmp is /private/tmp).
+            webView.loadFileURL(url.resolvingSymlinksInPath(), allowingReadAccessTo: readAccess.resolvingSymlinksInPath())
+        } else {
+            webView.load(URLRequest(url: url))
+        }
+    }
+
+    func reloadPage() {
+        reloads += 1
+        hasLoaded = false
+        webView.reloadFromOrigin()
+    }
+
+    func pageText() async -> String? {
+        try? await webView.evaluateJavaScript("document.body ? document.body.innerText : ''") as? String
+    }
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        hasLoaded = true
+    }
+
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: any Error) {
+        Log.error(.app, "canvas: \(source?.lastPathComponent ?? "-") didn't load: \(error.localizedDescription)")
+    }
+
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: any Error) {
+        Log.error(.app, "canvas: \(source?.lastPathComponent ?? "-") didn't load: \(error.localizedDescription)")
+    }
+
+    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        Log.error(.app, "canvas: \(source?.lastPathComponent ?? "-")'s page process ended; reloading")
+        webView.reload()
+    }
+}

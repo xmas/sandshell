@@ -168,6 +168,12 @@ enum MainMenu {
         viewMenu.addItem(NSMenuItem("Show Diff Column", action: #selector(AppDelegate.toggleDiffColumn(_:)),
                                     key: "2", modifiers: [.command, .option]))
         viewMenu.addItem(.separator())
+        // The workspace's Canvas boards (filled when the menu opens).
+        let boards = NSMenuItem(title: "Open Board", action: nil, keyEquivalent: "")
+        boards.submenu = NSMenu(title: "Open Board")
+        boards.submenu?.delegate = AppDelegate.boardsMenu
+        viewMenu.addItem(boards)
+        viewMenu.addItem(.separator())
         viewMenu.addItem(withTitle: "Split Right", action: #selector(AppDelegate.splitRight(_:)), keyEquivalent: "d")
         let splitDown = viewMenu.addItem(withTitle: "Split Down", action: #selector(AppDelegate.splitDown(_:)), keyEquivalent: "d")
         splitDown.keyEquivalentModifierMask = [.command, .shift]
