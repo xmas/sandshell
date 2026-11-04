@@ -767,7 +767,9 @@ final class WorkspaceController: ObservableObject {
     }
 
     /// Sandshell's own kits that are on for this workspace.
-    var sandshellKits: [String] { config.sandshellKits ?? KitStore.defaultSandshellRefs }
+    /// Sandshell's own kits: always on (chats need them); `KitStore.kits(_:for:)`
+    /// gives each sandbox its own agent's.
+    var sandshellKits: [String] { KitStore.sandshellKits.map(\.ref) }
 
     /// Store a full kit list: Sandshell's own apart from the rest (see
     /// `WorkspaceConfig.sandshellKits`).
@@ -786,13 +788,16 @@ final class WorkspaceController: ObservableObject {
         }
     }
 
+    private static var loggedSkips: Set<String> = []
+
     /// The workspace's kits a sandbox for `agent` takes, logging any left out.
     func kits(for agent: AgentKind, from refs: [String]) -> [String] {
         let kept = KitStore.kits(refs, for: agent)
         let skipped = refs.filter { !kept.contains($0) }
-        if !skipped.isEmpty {
-            Log.info(.workspace, "\(agent.rawValue) sandbox: skipping kit(s) made for another agent: \(skipped.joined(separator: ", "))")
-        }
+        let note = "\(agent.rawValue) sandbox: skipping kit(s) made for another agent or for sbx's older kit format: "
+            + skipped.joined(separator: ", ")
+        // Asked every few seconds (the create signature): said once.
+        if !skipped.isEmpty, Self.loggedSkips.insert(note).inserted { Log.info(.workspace, note) }
         return kept
     }
 
@@ -801,10 +806,13 @@ final class WorkspaceController: ObservableObject {
     /// A custom agent ignores the base-image channel (its kit names the image),
     /// so a channel change doesn't rebuild it.
     func configSignature(mounts: [MountSpec], kits: [String], agent: AgentKind) -> String {
-        // Sandshell's own kits don't count: an existing sandbox picks them up
-        // at its next rebuild instead of being rebuilt for them on open.
-        mountSignature(mounts) + "\n--kits--\n"
+        // Sandshell's own kits count with their generation: a chat needs the
+        // adapter the current kit builds in, so a sandbox made with an older
+        // one is rebuilt (sbx 0.51's v3 kits replaced the npm-at-first-start ones).
+        let own = KitStore.kits(kits, for: agent).filter(KitStore.isSandshellKit)
+        return mountSignature(mounts) + "\n--kits--\n"
             + KitStore.kits(kits, for: agent).filter { !KitStore.isSandshellKit($0) }.joined(separator: "\n")
+            + own.map { "\n\($0)@\(KitStore.sandshellKitGeneration)" }.joined()
             + "\n--image--\n" + (agent.isBuiltin ? imageSignature : "")
             + (workspace.cloneRepo ? "\n--clone--" : "")
     }

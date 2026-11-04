@@ -3,6 +3,7 @@ import Foundation
 /// What `sbx kit inspect <ref> --json` tells us about a kit (schema v1 or v2;
 /// every field optional so a newer spec can't break decoding).
 struct KitInspection: Decodable {
+    var schemaVersion: String?
     var name: String?
     var displayName: String?
     var description: String?
@@ -32,4 +33,6 @@ struct KitInspection: Decodable {
 
     var networkAllow: [String] { (permissions ?? caps)?.network?.allow ?? [] }
     var title: String? { displayName ?? name }
+    /// A v1/v2 kit: sbx won't compose it with the v3 kits every agent is now.
+    var isLegacy: Bool { schemaVersion.map { $0 != "3" } ?? false }
 }

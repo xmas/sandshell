@@ -153,7 +153,7 @@ run kit-agents     kitagents quick
 prepare broken;    configure broken; rmboxes broken
 run launch-failure broken quick
 prepare agents
-run agents         agents quick "-SandshellSelfTestKit" "$FIX/kitdirs/agent"
+run agents         agents quick "-SandshellSelfTestKit" "$FIX/kitdirs/agents-probe"
 prepare search
 run search         search quick
 prepare sidebar

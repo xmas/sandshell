@@ -517,29 +517,33 @@ struct SbxCommandTests {
     // MARK: - Adapters, markers, bundled kits
 
     struct Adapters {
-        @Test(arguments: [SbxCommand.claudeACPVersion, SbxCommand.codexACPVersion])
-        func versionsArePinnedExactly(version: String) {
-            let parts = version.split(separator: ".", omittingEmptySubsequences: false)
-            #expect(parts.count == 3, "\(version) should be major.minor.patch")
-            #expect(parts.allSatisfy({ Int($0) != nil }), "\(version) should be a pinned version, not a range or tag")
-        }
-
-        @Test func packagesNameTheirPinnedVersions() {
-            #expect(SbxCommand.claudeACPPackage == "@agentclientprotocol/claude-agent-acp@\(SbxCommand.claudeACPVersion)")
-            #expect(SbxCommand.codexACPPackage == "@agentclientprotocol/codex-acp@\(SbxCommand.codexACPVersion)")
-        }
-
         @Test func markersAreDistinct() {
-            let markers = [SbxCommand.launchMarker, SbxCommand.installingMarker, SbxCommand.extrasMarker]
+            let markers = [SbxCommand.launchMarker, SbxCommand.extrasMarker]
             #expect(Set(markers).count == markers.count, "the chat tells these stderr lines apart")
         }
 
-        @Test(.tags(.sbxCommandEdgeCase),
-              arguments: [SbxCommand.launchMarker, SbxCommand.installingMarker, SbxCommand.extrasMarker])
+        @Test(.tags(.sbxCommandEdgeCase), arguments: [SbxCommand.launchMarker, SbxCommand.extrasMarker])
         func markersAreSafeInsideDoubleQuotes(marker: String) {
             #expect(marker.isEmpty == false)
             #expect(marker.contains(where: { "\"$`\\\n".contains($0) }) == false,
                     "the scripts echo \(marker) inside double quotes")
+        }
+
+        /// Each kit is a v3 kit that declares the entry point the launch runs,
+        /// pins its adapter's version, and builds its launcher in.
+        @Test(arguments: [(AgentKind.claude, "sandshell-claude"), (.codex, "sandshell-codex")])
+        func kitsCarryTheEntryPointTheLaunchRuns(agent: AgentKind, kit: String) throws {
+            let dir = try #require(SbxCommand.bundledKits).appending(path: kit)
+            let entry = try #require(SbxCommand.kitEntryPoints[agent])
+            let spec = try String(contentsOf: dir.appending(path: "spec.yaml"), encoding: .utf8)
+            #expect(spec.hasPrefix("# syntax=docker/sandbox-kit:3"))
+            #expect(spec.contains(#"schemaVersion: "3""#))
+            #expect(spec.contains("command: [\(entry)]"))
+            #expect(spec.contains(#"pattern: '^[0-9]+\.[0-9]+\.[0-9]+$'"#), "the adapter version is pinned exactly")
+            let launcher = (entry as NSString).lastPathComponent
+            let dockerfile = try String(contentsOf: dir.appending(path: "Dockerfile"), encoding: .utf8)
+            #expect(dockerfile.contains("scripts/\(launcher) \(entry)"))
+            #expect(FileManager.default.isExecutableFile(atPath: dir.appending(path: "scripts/\(launcher)").path(percentEncoded: false)))
         }
 
         @Test(arguments: ["sandshell-claude", "sandshell-codex"])
@@ -687,14 +691,10 @@ extension SbxCommandTests {
 
         static let geminiACP = #"command -v gemini >/dev/null || { echo "sandshell: gemini isn't installed in this sandbox's image" >&2; exit 127; }; exec gemini --acp"#
 
-        static var codexACP: String {
-            let v = SbxCommand.codexACPVersion
-            return #"export NO_BROWSER=1; H="$HOME/.codex"; if [ "${CODEX_HOME:-$H}" = "$H" ] && [ ! -s "$H/auth.json" ] && [ -n "$SBX_CRED_OPENAI_MODE" ]; then mkdir -p "$H" && printf '%s' '{"OPENAI_API_KEY":"proxy-managed"}' > "$H/auth.json"; fi; D="$HOME/.sandshell/acp/codex-acp-\#(v)"; B="$D/node_modules/.bin/codex-acp"; if [ ! -x "$B" ]; then echo "\#(SbxCommand.installingMarker)" >&2; mkdir -p "$HOME/.sandshell/acp"; T=$(mktemp -d "$D.tmp.XXXXXX"); if npm install --silent --no-audit --no-fund --prefix "$T" @agentclientprotocol/codex-acp@\#(v) >&2; then [ -x "$B" ] || rm -rf "$D"; mv -T "$T" "$D" 2>/dev/null || rm -rf "$T"; else rm -rf "$T"; echo "sandshell: couldn't install @agentclientprotocol/codex-acp@\#(v)" >&2; exit 1; fi; fi; exec "$B""#
-        }
+        static let codexACP = #"H="$HOME/.codex"; if [ "${CODEX_HOME:-$H}" = "$H" ] && [ ! -s "$H/auth.json" ] && [ -n "$SBX_CRED_OPENAI_MODE" ]; then mkdir -p "$H" && printf '%s' '{"OPENAI_API_KEY":"proxy-managed"}' > "$H/auth.json"; fi; [ -x /opt/sandshell/bin/sandshell-codex-acp ] || { echo "sandshell: this sandbox doesn't have Sandshell's codex kit (sandshell-codex); rebuild it" >&2; exit 127; }; exec /opt/sandshell/bin/sandshell-codex-acp"#
 
         static var claudeACP: String {
-            let v = SbxCommand.claudeACPVersion
-            return #"export CLAUDE_CODE_EXECUTABLE="$(command -v claude)"; D="$HOME/.sandshell/acp/\#(v)"; B="$D/node_modules/.bin/claude-agent-acp"; if [ ! -x "$B" ]; then echo "\#(SbxCommand.installingMarker)" >&2; mkdir -p "$HOME/.sandshell/acp"; T=$(mktemp -d "$D.tmp.XXXXXX"); if npm install --silent --no-audit --no-fund --omit=optional --prefix "$T" @agentclientprotocol/claude-agent-acp@\#(v) >&2; then [ -x "$B" ] || rm -rf "$D"; mv -T "$T" "$D" 2>/dev/null || rm -rf "$T"; else rm -rf "$T"; echo "sandshell: couldn't install @agentclientprotocol/claude-agent-acp@\#(v)" >&2; exit 1; fi; fi; W="$HOME/.sandshell/sandshell-acp.mjs"; if [ -f "$W" ]; then echo "\#(SbxCommand.extrasMarker)" >&2; export SANDSHELL_ACP_DIR="$D"; exec node "$W"; fi; exec "$B""#
+            #"[ -x /opt/sandshell/bin/sandshell-claude-acp ] || { echo "sandshell: this sandbox doesn't have Sandshell's claude kit (sandshell-claude); rebuild it" >&2; exit 127; }; echo "\#(SbxCommand.extrasMarker)" >&2; exec /opt/sandshell/bin/sandshell-claude-acp"#
         }
 
         /// Each chat agent's ACP entry point, as it follows the launch marker

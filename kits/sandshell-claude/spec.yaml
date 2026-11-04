@@ -1,22 +1,36 @@
-schemaVersion: "2"
+# syntax=docker/sandbox-kit:3
+# Sandshell's native Claude chats: the Claude ACP adapter with its own Node
+# runtime, built into an overlay at /opt/sandshell (the Claude workload ships
+# no Node), and Sandshell's wrapper around it — Undo (Claude Code's
+# checkpoints), MCP server status, reconnect and on/off, the /context
+# breakdown. The adapter drives the sandbox's own claude, so it signs in the
+# way `claude` does, through sbx's credential proxy.
+schemaVersion: "3"
 kind: mixin
-name: sandshell-claude
 displayName: Sandshell chats for Claude
 description: >-
-  Preinstalls the ACP adapter Sandshell's native Claude chats run in this
-  sandbox (@agentclientprotocol/claude-agent-acp), with Sandshell's small
-  wrapper for undoing a turn's file edits and MCP server status.
-requires:
-  agent: claude
-permissions:
-  network:
-    allow:
-      - registry.npmjs.org
-setup:
-  install:
-    - command: >-
-        mkdir -p /home/agent/.sandshell/acp &&
-        npm install --silent --no-audit --no-fund --omit=optional
-        --prefix /home/agent/.sandshell/acp/0.90.0 @agentclientprotocol/claude-agent-acp@0.90.0
-      user: "1000"
-      description: Install the Claude ACP adapter where Sandshell looks for it
+  The Claude ACP adapter Sandshell's native chats run, with its Node runtime,
+  and Sandshell's wrapper for undoing a turn's file edits and MCP server status.
+sourceUrl: https://github.com/xmas/sandshell-kits
+
+args:
+  version:
+    default: "0.90.0"
+    pattern: '^[0-9]+\.[0-9]+\.[0-9]+$'
+    description: claude-agent-acp release to install
+    buildArg: ACP_VERSION
+
+provides: ["sandshell-claude@${{ kit.args.version }}"]
+requires: ["claude"]
+
+dockerfile: ./Dockerfile
+
+# No network or credential of its own: the adapter is installed at build
+# time and drives the sandbox's claude, whose kit declares both.
+capabilities:
+  - type: com.docker.sandbox/acp@1
+    optional: true
+    description: Drive Claude sessions over the Agent Client Protocol (Sandshell's chats)
+    config:
+      agent: claude
+      command: [/opt/sandshell/bin/sandshell-claude-acp]

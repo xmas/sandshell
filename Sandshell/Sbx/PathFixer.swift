@@ -40,6 +40,11 @@ enum PathFixer {
         let merged = dirs.filter { !$0.isEmpty && seen.insert($0).inserted }
         setenv("PATH", merged.joined(separator: ":"), 1)
         unsetenv("MCP_GATEWAY_URL")
+        // Source-form kits (Sandshell's own, a folder or git ref) build in sbx's
+        // builder sandbox, not the Mac's Docker engine: Docker Desktop's default
+        // builder can't export the OCI image a v3 kit is. Inherited by every sbx
+        // call, terminals' included; a value the user set stays.
+        setenv("SBX_KIT_BUILDER", "sandbox", 0)
         Log.info(.app, "PATH patched (\(merged.count) dirs)")
     }
 

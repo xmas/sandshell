@@ -41,7 +41,7 @@ fileprivate func makeCustomizedWorkspaceConfig() -> WorkspaceConfig {
         configured: true,
         archiveInterval: 600,
         theme: theme,
-        kits: ["docker.io/sbx/github-ssh-kit:latest"],
+        kits: ["docker.io/sbx/github-ssh:latest"],
         imageChannel: .custom,
         customImage: "ghcr.io/example/sandbox:1.2",
         claudeModel: "opus",
@@ -134,7 +134,7 @@ struct WorkspaceConfigTests {
             configured: true,
             archiveInterval: 600,
             theme: theme,
-            kits: ["docker.io/sbx/github-ssh-kit:latest"],
+            kits: ["docker.io/sbx/github-ssh:latest"],
             imageChannel: .nightly,
             customImage: "ghcr.io/example/sandbox:1.2",
             claudeModel: "opus",
@@ -149,7 +149,7 @@ struct WorkspaceConfigTests {
         #expect(config.configured)
         #expect(config.archiveInterval == 600)
         #expect(config.theme == theme)
-        #expect(config.kits == ["docker.io/sbx/github-ssh-kit:latest"])
+        #expect(config.kits == ["docker.io/sbx/github-ssh:latest"])
         #expect(config.imageChannel == .nightly)
         #expect(config.customImage == "ghcr.io/example/sandbox:1.2")
         #expect(config.claudeModel == "opus")
@@ -190,6 +190,16 @@ extension WorkspaceConfigTests {
             expectSameWorkspaceConfig(config, WorkspaceConfig(policy: MountPolicy()))
         }
 
+        /// sbx 0.51's agents are v3 kits, which won't compose with the official
+        /// kits' v2 versions: a config naming those reads as their v3 successors.
+        @Test func officialV2KitsReadAsTheirV3Successors() throws {
+            let config = try decodeWorkspaceConfig("""
+                {"policy": {"selections": []}, "kits": ["docker.io/sbx/git-ssh-sign-kit:latest", "docker.io/sbx/git-ssh-sign:latest",
+                          "docker.io/sbx/code-server-kit:latest", "ghcr.io/me/kit:1"]}
+                """)
+            #expect(config.kits == ["docker.io/sbx/git-ssh-sign:latest", "docker.io/sbx/code-server:latest", "ghcr.io/me/kit:1"])
+        }
+
         @Test func everyStoredFieldIsRead() throws {
             let config = try decodeWorkspaceConfig("""
                 {
@@ -201,7 +211,7 @@ extension WorkspaceConfigTests {
                   "configured": true,
                   "archiveInterval": 90,
                   "theme": {"terminalThemeName": "Dracula"},
-                  "kits": ["docker.io/sbx/github-ssh-kit:latest"],
+                  "kits": ["docker.io/sbx/github-ssh:latest"],
                   "sandshellKits": ["sandshell-claude"],
                   "imageChannel": "nightly",
                   "customImage": "ghcr.io/example/sandbox:1.2",
@@ -218,7 +228,7 @@ extension WorkspaceConfigTests {
             #expect(config.configured)
             #expect(config.archiveInterval == 90)
             #expect(config.theme?.terminalThemeName == "Dracula")
-            #expect(config.kits == ["docker.io/sbx/github-ssh-kit:latest"])
+            #expect(config.kits == ["docker.io/sbx/github-ssh:latest"])
             #expect(config.sandshellKits == ["sandshell-claude"])
             #expect(config.imageChannel == .nightly)
             #expect(config.customImage == "ghcr.io/example/sandbox:1.2")
@@ -231,7 +241,7 @@ extension WorkspaceConfigTests {
             #""configured":"yes""#,
             #""schemaVersion":"1""#,
             #""archiveInterval":"30""#,
-            #""kits":"docker.io/sbx/github-ssh-kit:latest""#,
+            #""kits":"docker.io/sbx/github-ssh:latest""#,
             #""mcpServers":[1]"#,
             #""primaryAgent":7"#,
             #""customAgents":"claude""#,
@@ -302,10 +312,10 @@ extension WorkspaceConfigTests {
 
         static let cases: [Scenario] = [
             Scenario(name: "both own kits among others, field absent",
-                     storedKits: ["docker.io/sbx/git-ssh-sign-kit:latest", "sandshell-claude",
-                                  "docker.io/sbx/github-ssh-kit:latest", "sandshell-codex"],
+                     storedKits: ["docker.io/sbx/git-ssh-sign:latest", "sandshell-claude",
+                                  "docker.io/sbx/github-ssh:latest", "sandshell-codex"],
                      storedSandshellKits: nil,
-                     expectedKits: ["docker.io/sbx/git-ssh-sign-kit:latest", "docker.io/sbx/github-ssh-kit:latest"],
+                     expectedKits: ["docker.io/sbx/git-ssh-sign:latest", "docker.io/sbx/github-ssh:latest"],
                      expectedSandshellKits: ["sandshell-claude", "sandshell-codex"]),
             Scenario(name: "appended after the ones already in the field",
                      storedKits: ["sandshell-claude"],
@@ -329,14 +339,14 @@ extension WorkspaceConfigTests {
                      expectedKits: [],
                      expectedSandshellKits: ["/Applications/Sandshell.app/Contents/Resources/kits/sandshell-claude"]),
             Scenario(name: "no own kits leaves the field absent",
-                     storedKits: ["docker.io/sbx/github-ssh-kit:latest"],
+                     storedKits: ["docker.io/sbx/github-ssh:latest"],
                      storedSandshellKits: nil,
-                     expectedKits: ["docker.io/sbx/github-ssh-kit:latest"],
+                     expectedKits: ["docker.io/sbx/github-ssh:latest"],
                      expectedSandshellKits: nil),
             Scenario(name: "no own kits keeps an empty field empty",
-                     storedKits: ["docker.io/sbx/github-ssh-kit:latest"],
+                     storedKits: ["docker.io/sbx/github-ssh:latest"],
                      storedSandshellKits: [],
-                     expectedKits: ["docker.io/sbx/github-ssh-kit:latest"],
+                     expectedKits: ["docker.io/sbx/github-ssh:latest"],
                      expectedSandshellKits: []),
             Scenario(name: "look-alike refs stay in kits",
                      storedKits: ["sandshell-claude-dev", "my-kits/sandshell-codex", "SANDSHELL-CLAUDE"],
@@ -357,8 +367,8 @@ extension WorkspaceConfigTests {
         @Test(.tags(.workspaceConfigEdgeCase))
         func ownKitListedTwiceIsMovedOnce() throws {
             let config = try decodeWorkspaceConfig(
-                with: #""kits":["sandshell-claude","docker.io/sbx/github-ssh-kit:latest","sandshell-claude"]"#)
-            #expect(config.kits == ["docker.io/sbx/github-ssh-kit:latest"])
+                with: #""kits":["sandshell-claude","docker.io/sbx/github-ssh:latest","sandshell-claude"]"#)
+            #expect(config.kits == ["docker.io/sbx/github-ssh:latest"])
             #expect(config.sandshellKits == ["sandshell-claude"], "sbx create would get the kit twice")
         }
 
@@ -443,7 +453,7 @@ extension WorkspaceConfigTests {
             "/srv/mykits/sandshell-claude",
             "my-kits/sandshell-codex",
             "/srv/kits/sandshell-claude/spec.yaml",
-            "docker.io/sbx/git-ssh-sign-kit:latest",
+            "docker.io/sbx/git-ssh-sign:latest",
         ])
         func rejectsLookAlikes(ref: String) {
             #expect(KitStore.isSandshellKit(ref) == false)
@@ -528,7 +538,7 @@ extension WorkspaceConfigTests {
         @Test func saveReplacesPreviousConfig() throws {
             try makeCustomizedWorkspaceConfig().save(root: root)
             let replacement = WorkspaceConfig(policy: MountPolicy(), primaryAgent: .gemini,
-                                              kits: ["docker.io/sbx/git-ssh-sign-kit:latest"])
+                                              kits: ["docker.io/sbx/git-ssh-sign:latest"])
             try replacement.save(root: root)
 
             let loaded = try #require(try WorkspaceConfig.load(root: root))
@@ -558,16 +568,16 @@ extension WorkspaceConfigTests {
 
         @Test func legacyKitsAreMovedOnLoadAndStayMovedAfterSave() throws {
             try writeConfigFile(
-                #"{"policy":{"selections":[]},"kits":["sandshell-claude","docker.io/sbx/github-ssh-kit:latest"]}"#)
+                #"{"policy":{"selections":[]},"kits":["sandshell-claude","docker.io/sbx/github-ssh:latest"]}"#)
 
             let loaded = try #require(try WorkspaceConfig.load(root: root))
-            #expect(loaded.kits == ["docker.io/sbx/github-ssh-kit:latest"])
+            #expect(loaded.kits == ["docker.io/sbx/github-ssh:latest"])
             #expect(loaded.sandshellKits == ["sandshell-claude"])
 
             try loaded.save(root: root)
             let object = try #require(
                 try JSONSerialization.jsonObject(with: Data(contentsOf: configURL)) as? [String: Any])
-            #expect(object["kits"] as? [String] == ["docker.io/sbx/github-ssh-kit:latest"],
+            #expect(object["kits"] as? [String] == ["docker.io/sbx/github-ssh:latest"],
                     "An older Sandshell reading the file must not find the bare kit name in kits")
             #expect(object["sandshellKits"] as? [String] == ["sandshell-claude"])
         }

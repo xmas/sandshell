@@ -86,7 +86,12 @@ struct WorkspaceConfig: Codable {
         archiveInterval = try c.decodeIfPresent(TimeInterval.self, forKey: .archiveInterval)
             ?? WorkspaceConfig.defaultArchiveInterval
         theme = try c.decodeIfPresent(ThemePreferences.self, forKey: .theme)
-        kits = try c.decodeIfPresent([String].self, forKey: .kits) ?? []
+        // An official kit's v2 name becomes its v3 successor's.
+        var current: [String] = []
+        for kit in try c.decodeIfPresent([String].self, forKey: .kits) ?? [] where !current.contains(KitStore.current(kit)) {
+            current.append(KitStore.current(kit))
+        }
+        kits = current
         imageChannel = try c.decodeIfPresent(ImageChannel.self, forKey: .imageChannel) ?? .stable
         customImage = try c.decodeIfPresent(String.self, forKey: .customImage) ?? ""
         claudeModel = try c.decodeIfPresent(String.self, forKey: .claudeModel)

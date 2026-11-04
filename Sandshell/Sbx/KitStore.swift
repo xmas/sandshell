@@ -45,30 +45,53 @@ struct KitRef: Codable, Hashable, Identifiable {
 enum KitStore {
     private static let key = "kitRegistry"
     private static let seededKey = "kitRegistrySeededOfficialDefaults.v1"
-    private static let sandshellSeededKey = "kitRegistrySeededSandshell.v1"
     private static let codeServerOffKey = "kitRegistryCodeServerNotDefault.v1"
-    static let codeServerRef = "docker.io/sbx/code-server-kit:latest"
+    private static let v3Key = "kitRegistryV3.v1"
+    static let codeServerRef = "docker.io/sbx/code-server:latest"
+
+    /// sbx 0.51 made every built-in agent a v3 kit, and a sandbox can't mix v3
+    /// kits with v1/v2 ones: the official v2 kits' v3 successors.
+    static let renamedKits = [
+        "docker.io/sbx/git-ssh-sign-kit:latest": "docker.io/sbx/git-ssh-sign:latest",
+        "docker.io/sbx/github-ssh-kit:latest": "docker.io/sbx/github-ssh:latest",
+        "docker.io/sbx/code-server-kit:latest": "docker.io/sbx/code-server:latest",
+    ]
+
+    /// `ref`, or the v3 kit that replaced it.
+    static func current(_ ref: String) -> String { renamedKits[ref] ?? ref }
+
+    /// Once: the registry's official kits move to their v3 names, and
+    /// Sandshell's own leave it (they're always on now: a chat can't run without
+    /// one — the agents' images have no Node for the adapter).
+    static func migrateToV3IfNeeded() {
+        guard !UserDefaults.standard.bool(forKey: v3Key) else { return }
+        var kits: [KitRef] = []
+        for var kit in all where !isSandshellKit(kit.ref) {
+            kit.ref = current(kit.ref)
+            if !kits.contains(where: { $0.ref == kit.ref }) { kits.append(kit) }
+        }
+        save(kits)
+        UserDefaults.standard.set(true, forKey: v3Key)
+    }
 
     /// Sandshell's own kits (`kits/` in the repo, bundled in the app, published
-    /// at github.com/xmas/sandshell-kits): the chat adapters preinstalled, and
-    /// the wrapper behind Undo and MCP status in Claude chats. On by default;
-    /// turned off, those features hide. Referred to by name, resolved to the
-    /// app's bundled copy when sbx is called (`resolve`).
+    /// at github.com/xmas/sandshell-kits): each carries its agent's chat adapter
+    /// with the Node it runs on, and Claude's the wrapper behind Undo and MCP
+    /// status. Always on — chats need them. Referred to by name, resolved to
+    /// the app's bundled copy when sbx is called (`resolve`), which sbx builds.
     static let sandshellKits: [KitRef] = [
         KitRef(ref: "sandshell-claude", displayName: "Sandshell chats for Claude",
-               summary: "Undo a turn's file edits and MCP server status in Claude chats; preinstalls the chat adapter so chats start sooner.",
+               summary: "The Claude chat adapter, with Undo for a turn's file edits and MCP server status.",
                isDefault: true),
         KitRef(ref: "sandshell-codex", displayName: "Sandshell chats for Codex",
-               summary: "Preinstalls the Codex chat adapter and its sign-in through sbx's credential proxy.",
+               summary: "The Codex chat adapter.",
                isDefault: true),
     ]
 
-    /// Sandshell's kits that are on where a workspace hasn't said: the
-    /// registry's defaults among them.
-    static var defaultSandshellRefs: [String] {
-        let registry = all
-        return sandshellKits.map(\.ref).filter { ref in registry.first { $0.ref == ref }?.isDefault ?? false }
-    }
+    /// Bumped when Sandshell's kits change what a sandbox must have built in
+    /// (an adapter version, the entry points): sandboxes made with an older
+    /// generation are rebuilt (`WorkspaceController.configSignature`).
+    static let sandshellKitGeneration = 3
 
     static func isSandshellKit(_ ref: String) -> Bool {
         sandshellKits.contains { $0.ref == ref } || sandshellKits.contains { ref.hasSuffix("/kits/\($0.ref)") }
@@ -87,13 +110,13 @@ enum KitStore {
     /// host-key prompts). code-server is listed but off: its install takes
     /// minutes, which every new sandbox would wait on.
     static let officialKits: [KitRef] = [
-        KitRef(ref: "docker.io/sbx/git-ssh-sign-kit:latest", displayName: "Git SSH Commit Signing",
+        KitRef(ref: "docker.io/sbx/git-ssh-sign:latest", displayName: "Git SSH Commit Signing",
                summary: "Signs commits with the SSH key forwarded from your Mac's agent, so in-sandbox commits are Verified like host commits.",
                isDefault: true),
-        KitRef(ref: "docker.io/sbx/github-ssh-kit:latest", displayName: "GitHub SSH",
+        KitRef(ref: "docker.io/sbx/github-ssh:latest", displayName: "GitHub SSH",
                summary: "Pre-populates GitHub's SSH host keys so clone/push/pull over SSH never stops on a host-verification prompt.",
                isDefault: true),
-        KitRef(ref: "docker.io/sbx/code-server-kit:latest", displayName: "code-server (web VS Code)",
+        KitRef(ref: codeServerRef, displayName: "code-server (web VS Code)",
                summary: "VS Code in the browser on port 8080, opened on the workspace, with the Claude Code extension preinstalled. "
                    + "Installing it adds a few minutes to making a sandbox.",
                isDefault: false),
@@ -110,7 +133,7 @@ enum KitStore {
     private static let requirementsKey = "kitRequirements.v3"
     private static let staleRequirementsKeys = ["kitRequiredAgents", "kitRequiredAgents.v2", "kitDefinesAgent"]
     /// Known up front, so the official kit works offline.
-    private static let knownRequirements = ["docker.io/sbx/code-server-kit:latest": "claude",
+    private static let knownRequirements = [codeServerRef: "claude",
                                             "sandshell-claude": "claude", "sandshell-codex": "codex"]
 
     /// What's cached for `ref`: its kind and the agent it's for ("" = any).
@@ -142,6 +165,16 @@ enum KitStore {
         var cache = UserDefaults.standard.dictionary(forKey: requirementsKey) as? [String: String] ?? [:]
         cache[ref] = requirementEntry(info)
         UserDefaults.standard.set(cache, forKey: requirementsKey)
+        var legacy = Set(UserDefaults.standard.stringArray(forKey: legacyKey) ?? [])
+        if info.isLegacy { legacy.insert(ref) } else { legacy.remove(ref) }
+        UserDefaults.standard.set(legacy.sorted(), forKey: legacyKey)
+    }
+
+    /// Kits `sbx kit inspect` said are v1/v2: no sandbox can take them now
+    /// (every agent is a v3 kit, and sbx won't mix the two).
+    private static let legacyKey = "kitLegacy.v1"
+    static func isLegacy(_ ref: String) -> Bool {
+        UserDefaults.standard.stringArray(forKey: legacyKey)?.contains(ref) ?? false
     }
 
     /// The cache entry for an inspected kit: `sandbox:<agent>` or `mixin:<agent or "">`.
@@ -159,25 +192,26 @@ enum KitStore {
     /// another agent is left out (sbx refuses to compose it), and so is any
     /// agent kit, its own included. Unknown ones stay in.
     static func kits(_ refs: [String], for agent: AgentKind) -> [String] {
-        refs.filter { ref in
-            guard ref != agent.createReference, !definesAgent(ref) else { return false }
+        guard takesV3Kits(agent) else { return [] }
+        return refs.filter { ref in
+            guard ref != agent.createReference, !definesAgent(ref), !isLegacy(ref) else { return false }
             guard let required = requiredAgent(ref), let agentName = required else { return true }
             return agentName == agent.rawValue
         }
     }
 
+    /// Whether a sandbox for `agent` can take kits at all: every kit is v3 now,
+    /// and sbx composes v3 kits only onto a v3 agent. Gemini is still sbx's
+    /// embedded (pre-kit) agent, and so is a custom agent from a v1/v2 kit.
+    static func takesV3Kits(_ agent: AgentKind) -> Bool {
+        if agent == .gemini { return false }
+        if let ref = AgentProfileStore.profile(for: agent)?.kitRef { return !isLegacy(ref) }
+        return true
+    }
+
     /// Kits flagged as defaults for new workspaces, in registry order.
     static var defaults: [KitRef] { all.filter(\.isDefault) }
     static var defaultRefs: [String] { defaults.map(\.ref) }
-
-    /// One-time: register the official kits (runs at launch).
-    static func seedSandshellKitsIfNeeded() {
-        guard !UserDefaults.standard.bool(forKey: sandshellSeededKey) else { return }
-        var kits = all
-        for kit in sandshellKits where !kits.contains(where: { $0.ref == kit.ref }) { kits.append(kit) }
-        save(kits)
-        UserDefaults.standard.set(true, forKey: sandshellSeededKey)
-    }
 
     static func seedOfficialDefaultsIfNeeded() {
         guard !UserDefaults.standard.bool(forKey: seededKey) else { return }

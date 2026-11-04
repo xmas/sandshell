@@ -1,32 +1,32 @@
-schemaVersion: "2"
+# syntax=docker/sandbox-kit:3
+# Sandshell's native Codex chats: the Codex ACP adapter with its own Node
+# runtime, built into an overlay at /opt/sandshell (the Codex workload ships
+# no Node). The adapter runs the codex it depends on, not the image's: it
+# talks to `codex app-server`, whose protocol moves with codex releases.
+schemaVersion: "3"
 kind: mixin
-name: sandshell-codex
 displayName: Sandshell chats for Codex
 description: >-
-  Preinstalls the ACP adapter Sandshell's native Codex chats run in this
-  sandbox (@agentclientprotocol/codex-acp), and gives Codex the sign-in file
-  `sbx run codex` writes, so chats sign in through sbx's credential proxy too.
-requires:
-  agent: codex
-permissions:
-  network:
-    allow:
-      - registry.npmjs.org
-setup:
-  install:
-    - command: >-
-        mkdir -p /home/agent/.sandshell/acp &&
-        npm install --silent --no-audit --no-fund
-        --prefix /home/agent/.sandshell/acp/codex-acp-2.2.2 @agentclientprotocol/codex-acp@2.2.2
-      user: "1000"
-      description: Install the Codex ACP adapter where Sandshell looks for it
-  startup:
-    - command:
-        - sh
-        - -c
-        - >-
-          H="${CODEX_HOME:-$HOME/.codex}";
-          if [ ! -s "$H/auth.json" ] && [ -n "$SBX_CRED_OPENAI_MODE" ]; then
-          mkdir -p "$H" && printf '%s' '{"OPENAI_API_KEY":"proxy-managed"}' > "$H/auth.json"; fi
-      user: "1000"
-      description: The placeholder sign-in sbx's proxy fills in (what sbx run codex writes)
+  The Codex ACP adapter Sandshell's native chats run, with its Node runtime.
+sourceUrl: https://github.com/xmas/sandshell-kits
+licenses: [Apache-2.0]
+
+args:
+  version:
+    default: "2.2.2"
+    pattern: '^[0-9]+\.[0-9]+\.[0-9]+$'
+    description: codex-acp release to install
+    buildArg: ACP_VERSION
+
+provides: ["sandshell-codex@${{ kit.args.version }}"]
+requires: ["codex"]
+
+dockerfile: ./Dockerfile
+
+capabilities:
+  - type: com.docker.sandbox/acp@1
+    optional: true
+    description: Drive Codex sessions over the Agent Client Protocol (Sandshell's chats)
+    config:
+      agent: codex
+      command: [/opt/sandshell/bin/sandshell-codex-acp]

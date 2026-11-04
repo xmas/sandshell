@@ -12,7 +12,7 @@ struct BuildLogTests {
     SANDBOX
       Name:       probe
       Agent:      shell
-      Kit:        docker.io/sbx/github-ssh-kit:latest
+      Kit:        docker.io/sbx/github-ssh:latest
 
     IMAGE
       ○ image — pulling…

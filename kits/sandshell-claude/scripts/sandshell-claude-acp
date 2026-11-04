@@ -1,0 +1,11 @@
+#!/bin/sh
+# Sandshell's Claude chat entry point: the ACP adapter on stdio, through
+# Sandshell's wrapper, driving the claude an interactive shell would run.
+set -e
+if [ -z "$CLAUDE_CODE_EXECUTABLE" ]; then
+  CLAUDE_CODE_EXECUTABLE="$(command -v claude || echo "$HOME/.local/bin/claude")"
+  export CLAUDE_CODE_EXECUTABLE
+fi
+export PATH="/opt/sandshell/bin:$PATH"
+export SANDSHELL_ACP_DIR=/opt/sandshell/claude-acp
+exec /opt/sandshell/bin/node /opt/sandshell/sandshell-acp.mjs "$@"

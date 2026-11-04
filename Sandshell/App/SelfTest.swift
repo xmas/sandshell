@@ -2606,10 +2606,10 @@ enum SelfTest {
 
     /// A kit made for one agent (code-server needs claude) stays out of other
     /// agents' sandboxes instead of failing them. Expects the workspace's kits
-    /// to include docker.io/sbx/code-server-kit:latest.
+    /// to include docker.io/sbx/code-server:latest.
     private static func kitAgents(_ window: MainWindowController) async {
         guard let ws = window.workspaceController, let tree = window.paneTree else { return log("no window") }
-        let codeServer = "docker.io/sbx/code-server-kit:latest"
+        let codeServer = "docker.io/sbx/code-server:latest"
         check(KitStore.kits([codeServer, "/some/kit"], for: .codex) == ["/some/kit"]
               && KitStore.kits([codeServer, "/some/kit"], for: .claude) == [codeServer, "/some/kit"],
               "code-server is for Claude's sandbox only")

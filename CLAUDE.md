@@ -174,10 +174,12 @@ AppDelegate (@main)
 
 `kits/` holds Sandshell's own sbx kits, bundled in the app (`Contents/Resources/kits`) and published to the public repo `xmas/sandshell-kits` on release (`scripts/publish-kits.sh`):
 
-- `sandshell-claude` (claude sandboxes): preinstalls the Claude ACP adapter and `sandshell-acp.mjs`, a wrapper that adds rewind (Undo) and MCP status/reconnect/toggle on the adapter's `_session/async_task/stop` request (`asyncTaskId` `sandshell:<base64url JSON>`).
-- `sandshell-codex` (codex sandboxes): preinstalls codex-acp and writes Codex's proxy sign-in placeholder.
+Both are **v3 kits** (sbx ≥ 0.51: every built-in agent is a v3 kit, and sbx won't mix v3 with v1/v2): `spec.yaml` (`# syntax=docker/sandbox-kit:3`) plus a `Dockerfile` whose image overlay carries Node and the pinned adapter under `/opt/sandshell` — the agents' images ship no Node. The launch (`SbxCommand.kitEntryPoints`) runs the kit's entry point and nothing else; there's no npm at first start any more.
 
-Workspaces reference them by name (`KitStore.sandshellKits`); `KitStore.resolve` turns that into the bundled path for sbx. They're on by default (added once per workspace, `sandshellKitsOffered`), don't count toward the create signature or kit drift (existing sandboxes get them at their next rebuild), and the chat shows Undo/MCP only when the launch reports the wrapper (`sandshell-extras: on`). sbx only allows `docker.io/` and `github.com/docker/` kit sources by default, so the published git refs need `kit.allowedSources` to include `github.com/xmas/`.
+- `sandshell-claude` (claude sandboxes): `/opt/sandshell/bin/sandshell-claude-acp` runs the Claude ACP adapter through `scripts/sandshell-acp.mjs`, a wrapper that adds rewind (Undo) and MCP status/reconnect/toggle on the adapter's `_session/async_task/stop` request (`asyncTaskId` `sandshell:<base64url JSON>`).
+- `sandshell-codex` (codex sandboxes): `/opt/sandshell/bin/sandshell-codex-acp` runs codex-acp with its own codex; the launch writes Codex's proxy sign-in placeholder.
+
+Source kits build in sbx's **builder sandbox**: `PathFixer` sets `SBX_KIT_BUILDER=sandbox` for every sbx call (otherwise sbx uses the Mac's Docker Desktop buildx, which can't export a v3 kit). Workspaces reference them by name (`KitStore.sandshellKits`); `KitStore.resolve` turns that into the bundled path for sbx. They're always on (chats need them) and count toward the create signature with `KitStore.sandshellKitGeneration` — bump it when a kit changes what a sandbox must have, and existing sandboxes are rebuilt. Gemini (still sbx's embedded agent) takes no kits (`KitStore.takesV3Kits`); kits inspected as v1/v2 are left out (`KitStore.isLegacy`); the official kits' v2 names migrate to their v3 ones (`KitStore.renamedKits`). sbx only allows `docker.io/` and `github.com/docker/` kit sources by default, so the published git refs need `kit.allowedSources` to include `github.com/xmas/`.
 
 ## Reference
 

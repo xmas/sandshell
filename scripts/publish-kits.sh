@@ -27,7 +27,8 @@ if git -C "$KITS_DIR" ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev
 fi
 
 for kit in "$ROOT"/kits/*/; do
-  sbx kit validate "$kit" >/dev/null || { echo "kit $(basename "$kit") doesn't validate" >&2; exit 1; }
+  # v3 source kits build in sbx's builder sandbox (Docker Desktop's builder can't export them).
+  SBX_KIT_BUILDER=sandbox sbx kit validate "$kit" >/dev/null || { echo "kit $(basename "$kit") doesn't validate" >&2; exit 1; }
 done
 
 # Mirror the kit directories (README.md in the clone is its own); a kit gone

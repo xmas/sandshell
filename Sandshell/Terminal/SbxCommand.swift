@@ -205,75 +205,51 @@ enum SbxCommand {
         return parts.joined(separator: " ")
     }
 
-    /// Pinned ACP adapter for Claude chat sessions (built on the Claude Agent
-    /// SDK; releases track Claude Code). Bump deliberately.
-    static let claudeACPVersion = "0.90.0"
-    static let claudeACPPackage = "@agentclientprotocol/claude-agent-acp@\(claudeACPVersion)"
-
-    /// Pinned ACP adapter for Codex chat sessions (it drives `codex app-server`).
-    static let codexACPVersion = "2.2.2"
-    static let codexACPPackage = "@agentclientprotocol/codex-acp@\(codexACPVersion)"
-
     /// Agents a native chat can run: each needs an ACP entry point inside its
-    /// sandbox — an adapter (Claude, Codex) or native support (Gemini CLI).
+    /// sandbox — Sandshell's kit (Claude, Codex) or native support (Gemini CLI).
     static let acpAgents: [AgentKind] = [.claude, .codex, .gemini]
     static func supportsACP(_ agent: AgentKind) -> Bool { acpAgents.contains(agent) }
 
-    /// Run an npm-published adapter from a per-version install in the sandbox,
-    /// installing it once (Claude's: ≈4s, 67 MB, no network afterwards; ~0.2s to
-    /// start vs ~1.3s for npx). Installs into a temp dir then renames into place,
-    /// so concurrent first starts can't corrupt it. npm's output goes to stderr:
-    /// stdout is the JSON-RPC channel.
-    private static func npmAdapterLaunch(dir: String, package: String, bin: String, omitOptional: Bool,
-                                         wrapperIfPresent: Bool = false) -> String {
-        let omit = omitOptional ? " --omit=optional" : ""
-        // A half-finished install (no bin) is cleared before the new one moves
-        // in; the marker tells the chat a first start may take a while.
-        let install = #"D="$HOME/.sandshell/acp/\#(dir)"; B="$D/node_modules/.bin/\#(bin)"; if [ ! -x "$B" ]; then echo "\#(installingMarker)" >&2; mkdir -p "$HOME/.sandshell/acp"; T=$(mktemp -d "$D.tmp.XXXXXX"); if npm install --silent --no-audit --no-fund\#(omit) --prefix "$T" \#(package) >&2; then [ -x "$B" ] || rm -rf "$D"; mv -T "$T" "$D" 2>/dev/null || rm -rf "$T"; else rm -rf "$T"; echo "sandshell: couldn't install \#(package)" >&2; exit 1; fi; fi; "#
-        guard wrapperIfPresent else { return install + #"exec "$B""# }
-        // The sandshell-claude kit's wrapper runs whichever adapter version this
-        // is; with it, say so (the chat shows Undo and MCP), without it run plain.
-        return install + #"W="$HOME/.sandshell/sandshell-acp.mjs"; if [ -f "$W" ]; then echo "\#(extrasMarker)" >&2; export SANDSHELL_ACP_DIR="$D"; exec node "$W"; fi; exec "$B""#
-    }
+    /// Where Sandshell's kits put the chat adapters: each kit's image overlay
+    /// carries Node and the adapter, built in (the agents' images ship no Node).
+    static let kitEntryPoints: [AgentKind: String] = [
+        .claude: "/opt/sandshell/bin/sandshell-claude-acp",
+        .codex: "/opt/sandshell/bin/sandshell-codex-acp",
+    ]
 
-    /// What the launch writes to stderr when the kit's wrapper is there, and
-    /// when it's installing the adapter first.
+    /// What the launch writes to stderr when it runs Sandshell's wrapper (the
+    /// chat shows Undo and MCP), and once it's up.
     static let extrasMarker = "sandshell-extras: on"
-    static let installingMarker = "sandshell-installing: adapter"
     static let launchMarker = "sandshell-launch: up"
 
     /// The bundled copy of Sandshell's kits (`kits/` in the repo).
     static var bundledKits: URL? { Bundle.main.url(forResource: "kits", withExtension: nil) }
 
-    // The Claude ACP adapter's wrapper (rewind, MCP status) lives in the
-    // sandshell-claude kit: `kits/sandshell-claude/files/home/.sandshell/sandshell-acp.mjs`.
+    /// Run a Sandshell kit's entry point, or say the sandbox lacks the kit.
+    private static func kitLaunch(_ agent: AgentKind) -> String {
+        let entry = kitEntryPoints[agent]!
+        return #"[ -x \#(entry) ] || { echo "sandshell: this sandbox doesn't have Sandshell's \#(agent.rawValue) kit (sandshell-\#(agent.rawValue)); rebuild it" >&2; exit 127; }; "#
+            + (agent == .claude ? #"echo "\#(extrasMarker)" >&2; "# : "") + "exec \(entry)"
+    }
 
     /// In-sandbox program (a `bash -c` body after PATH setup) that speaks ACP on
     /// stdio for `agent`, or nil when it has none.
     private static func acpProgram(for agent: AgentKind, sbxProxyAuth: Bool) -> String? {
         switch agent {
         case .claude:
-            // `--omit=optional` skips the SDK's bundled claude; CLAUDE_CODE_EXECUTABLE
-            // points the adapter at the image's own, so the base-image channel still
-            // decides the Claude Code version.
+            // The kit's entry point runs the adapter through Sandshell's wrapper
+            // (rewind, MCP status), driving the sandbox's own claude.
             let auth = useProxyAuth(sbxProxyAuth) ? proxyAuthSetup + " " : ""
-            return auth + #"export CLAUDE_CODE_EXECUTABLE="$(command -v claude)"; "#
-                + npmAdapterLaunch(dir: claudeACPVersion, package: claudeACPPackage,
-                                   bin: "claude-agent-acp", omitOptional: true, wrapperIfPresent: true)
+            return auth + kitLaunch(.claude)
         case .codex:
-            // The adapter runs its own pinned codex (a regular dependency, not the
-            // image's): it talks to `codex app-server`, whose protocol moves with
-            // codex releases, and the stable image's codex trails the adapter's.
-            // NO_BROWSER hides the ChatGPT browser login, which can't work here.
             // `sbx run codex` writes a placeholder auth.json when it starts (sbx's
             // proxy swaps in the real credential); `sbx exec` doesn't, and without
             // it the adapter reports "Authentication required". Write the same one —
             // only into the sandbox's own ~/.codex, never a mounted host one.
-            return "export NO_BROWSER=1; " + #"H="$HOME/.codex"; "#
+            return #"H="$HOME/.codex"; "#
                 + #"if [ "${CODEX_HOME:-$H}" = "$H" ] && [ ! -s "$H/auth.json" ] && [ -n "$SBX_CRED_OPENAI_MODE" ]; then "#
                 + #"mkdir -p "$H" && printf '%s' '{"OPENAI_API_KEY":"proxy-managed"}' > "$H/auth.json"; fi; "#
-                + npmAdapterLaunch(dir: "codex-acp-\(codexACPVersion)", package: codexACPPackage,
-                                   bin: "codex-acp", omitOptional: false)
+                + kitLaunch(.codex)
         case .gemini:
             // Gemini CLI speaks ACP itself (`--acp`; `--experimental-acp` is the
             // deprecated spelling).

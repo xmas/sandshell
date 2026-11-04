@@ -185,31 +185,36 @@ def _broken(d):
 
 # config.json edits, applied once the app has written the file.
 CONFIGS = {
-    "kits": lambda root: {"kits": [os.path.join(root, "kitdirs", "a")], "sandshellKits": []},
-    "kitagents": lambda root: {"kits": ["docker.io/sbx/code-server-kit:latest"], "sandshellKits": []},
-    "broken": lambda root: {"kits": [os.path.join(root, "kitdirs", "does-not-exist")], "sandshellKits": []},
+    "kits": lambda root: {"kits": [os.path.join(root, "kitdirs", "a")]},
+    "kitagents": lambda root: {"kits": ["docker.io/sbx/code-server:latest"]},
+    "broken": lambda root: {"kits": [os.path.join(root, "kitdirs", "does-not-exist")]},
 }
 
 def kitdirs(root):
-    """Five tiny mixin kits for the kits scenario; d declares `files` (which
-    `sbx kit add` refuses, forcing a rebuild)."""
+    """Five tiny v3 mixin kits for the kits scenario (each sets SELFTEST_<K>; d
+    also lays a file in the sandbox), and a v3 workload kit for the agents
+    scenario (its folder's name is the agent's)."""
     out = []
     for k in "abcde":
         d = os.path.join(root, "kitdirs", k)
+        shutil.rmtree(d, ignore_errors=True)
         os.makedirs(d, exist_ok=True)
-        spec = (f'schemaVersion: "2"\nkind: mixin\nname: selftest-{k}\ndisplayName: Self-test {k.upper()}\n'
-                f'description: Self-test mixin {k}.\nenvironment:\n  variables:\n    SELFTEST_{k.upper()}: "1"\n')
+        build = f"  FROM scratch\n  ENV SELFTEST_{k.upper()}=1\n"
         if k == "d":
-            os.makedirs(os.path.join(d, "files", "home"), exist_ok=True)
-            open(os.path.join(d, "files", "home", "selftest-d.txt"), "w").write("d\n")
+            open(os.path.join(d, "selftest-d.txt"), "w").write("d\n")
+            build += "  COPY selftest-d.txt /home/agent/selftest-d.txt\n"
+        spec = ('# syntax=docker/sandbox-kit:3\nschemaVersion: "3"\nkind: mixin\n'
+                f'displayName: Self-test {k.upper()}\ndescription: Self-test mixin {k}.\nbuild: |\n{build}')
         open(os.path.join(d, "spec.yaml"), "w").write(spec)
         out.append(d)
-    agent = os.path.join(root, "kitdirs", "agent")
+    agent = os.path.join(root, "kitdirs", "agents-probe")
+    shutil.rmtree(os.path.join(root, "kitdirs", "agent"), ignore_errors=True)
     os.makedirs(agent, exist_ok=True)
     open(os.path.join(agent, "spec.yaml"), "w").write(
-        'schemaVersion: "2"\nkind: sandbox\nname: agents-probe\ndisplayName: Agents Probe\n'
-        'description: Throwaway kind:sandbox kit for the agents scenario.\n'
-        'sandbox:\n  image: docker/sandbox-templates:shell-docker\n  entrypoint:\n    - bash\n')
+        '# syntax=docker/sandbox-kit:3\nschemaVersion: "3"\nkind: workload\ndisplayName: Agents Probe\n'
+        'description: Throwaway workload kit for the agents scenario.\nprovides: ["agents-probe@1.0.0"]\n'
+        'build: |\n  FROM debian:trixie-slim\n  RUN useradd -m -u 1000 agent\n  USER agent\n'
+        '  WORKDIR /home/agent\n  ENTRYPOINT ["bash"]\n')
     return out
 
 def rm_sandboxes(d, twins_only=False):

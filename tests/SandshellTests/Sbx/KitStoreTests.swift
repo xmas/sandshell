@@ -31,7 +31,7 @@ fileprivate enum KitStoreFixture {
     }
 
     /// Refs `KitStore.requiredAgent` answers without consulting stored state.
-    static let knownRefs = ["docker.io/sbx/code-server-kit:latest", "sandshell-claude", "sandshell-codex"]
+    static let knownRefs = ["docker.io/sbx/code-server:latest", "sandshell-claude", "sandshell-codex"]
 
     /// Every kit in the built-in catalogs. Computed rather than stored, and tests
     /// are parameterized over `builtInRefs`, so nothing here needs `KitRef: Sendable`.
@@ -67,14 +67,14 @@ struct KitStoreKitRefTests {
 
     @Test("The identity of a KitRef is its reference")
     func idIsRef() {
-        let kit = KitRef(ref: "docker.io/sbx/github-ssh-kit:latest", displayName: "GitHub SSH", summary: "Keys", isDefault: true)
-        #expect(kit.id == "docker.io/sbx/github-ssh-kit:latest")
+        let kit = KitRef(ref: "docker.io/sbx/github-ssh:latest", displayName: "GitHub SSH", summary: "Keys", isDefault: true)
+        #expect(kit.id == "docker.io/sbx/github-ssh:latest")
     }
 
     @Test("The title is the display name, else the last path or ref component", arguments: [
         ("/Users/dev/kits/my-kit", nil, "my-kit"),
         ("/tmp/scratch///", nil, "scratch"),
-        ("docker.io/sbx/git-ssh-sign-kit:latest", nil, "git-ssh-sign-kit:latest"),
+        ("docker.io/sbx/git-ssh-sign:latest", nil, "git-ssh-sign:latest"),
         ("sandshell-claude", nil, "sandshell-claude"),
         ("kits/archive.zip", "", "archive.zip"),
         ("docker.io/sbx/kit", "My Kit", "My Kit"),
@@ -215,9 +215,9 @@ struct KitStoreCatalogTests {
     @Test("The official kits are the three docker.io kits, in that order")
     func officialKitRefs() {
         #expect(KitStore.officialKits.map(\.ref) == [
-            "docker.io/sbx/git-ssh-sign-kit:latest",
-            "docker.io/sbx/github-ssh-kit:latest",
-            "docker.io/sbx/code-server-kit:latest",
+            "docker.io/sbx/git-ssh-sign:latest",
+            "docker.io/sbx/github-ssh:latest",
+            "docker.io/sbx/code-server:latest",
         ])
     }
 
@@ -273,14 +273,14 @@ struct KitStoreSandshellKitTests {
         "/Users/dev/kits/sandshell-claude-extra",
         "/Users/dev/mykits/sandshell-claude",
         "/Users/dev/sandshell-claude",
-        "docker.io/sbx/git-ssh-sign-kit:latest",
+        "docker.io/sbx/git-ssh-sign:latest",
     ])
     func unrecognizedRefs(ref: String) {
         #expect(KitStore.isSandshellKit(ref) == false)
     }
 
     @Test("Anything but a bare Sandshell kit name is passed to sbx unchanged", arguments: [
-        "docker.io/sbx/github-ssh-kit:latest",
+        "docker.io/sbx/github-ssh:latest",
         "/Users/dev/kits/my-kit",
         "/Users/dev/kits/archive.zip",
         "sandshell-gemini",
@@ -315,7 +315,7 @@ struct KitStoreSandshellKitTests {
 
 struct KitStoreAgentRequirementTests {
     @Test("Kits known up front report their agent without any lookup", arguments: [
-        ("docker.io/sbx/code-server-kit:latest", "claude"),
+        ("docker.io/sbx/code-server:latest", "claude"),
         ("sandshell-claude", "claude"),
         ("sandshell-codex", "codex"),
     ])
@@ -325,7 +325,7 @@ struct KitStoreAgentRequirementTests {
     }
 
     @Test("Only kits made for the sandbox's agent are kept, in their original order", arguments: [
-        ("claude", ["docker.io/sbx/code-server-kit:latest", "sandshell-claude"]),
+        ("claude", ["docker.io/sbx/code-server:latest", "sandshell-claude"]),
         ("codex", ["sandshell-codex"]),
         ("gemini", []),
         ("shell", []),

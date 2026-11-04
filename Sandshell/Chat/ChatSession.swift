@@ -313,13 +313,11 @@ final class ChatSession: ObservableObject {
         let launchedAt = Date.now
         // An agent that never answers (its sandbox restarted under it, say)
         // would leave the chat "Starting…" forever: give up on it, so the
-        // pane offers Reconnect. The first start may install the adapter.
-        installingAdapter = false
+        // pane offers Reconnect.
         launchSeen = false
         Task { [weak self, weak conn] in
-            // 4 minutes, or 12 while it installs the adapter first (slow networks).
             var waited = 0
-            while waited < 12 * 60 {
+            while waited < 4 * 60 {
                 try? await Task.sleep(for: .seconds(10))
                 waited += 10
                 guard let self, let conn, self.connection === conn, self.phase == .starting else { return }
@@ -338,7 +336,6 @@ final class ChatSession: ObservableObject {
                     self.start()
                     return
                 }
-                if waited >= 4 * 60, !self.installingAdapter { break }
             }
             guard let self, let conn, self.connection === conn, self.phase == .starting else { return }
             Log.error(.sbx, "chat: \(self.agent.rawValue) agent didn't answer; giving up on it")
@@ -875,8 +872,6 @@ final class ChatSession: ObservableObject {
     /// The sandshell-claude kit's wrapper is running this chat's agent: Undo
     /// and MCP status work (the launch says so on stderr).
     @Published private(set) var hasExtras = false
-    /// The launch is installing the adapter first (the start deadline waits longer).
-    private var installingAdapter = false
     /// The launch script has said its first line (the exec got into the sandbox).
     private var launchSeen = false
     private var stuckLaunchRetries = 0
@@ -1332,7 +1327,6 @@ final class ChatSession: ObservableObject {
         case .stderr(let line):
             Log.info(.sbx, "chat[acp]: \(line)")
             if line == SbxCommand.extrasMarker { hasExtras = true; return }
-            if line == SbxCommand.installingMarker { installingAdapter = true; return }
             if line == SbxCommand.launchMarker { launchSeen = true; return }
             if line.hasPrefix("sandshell: ") { launchError = String(line.dropFirst("sandshell: ".count)) }
         case .closed(let status):

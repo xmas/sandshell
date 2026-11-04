@@ -167,7 +167,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSUpdateDynamicServices()
         KitStore.seedOfficialDefaultsIfNeeded()
         KitStore.undefaultCodeServerIfNeeded()
-        KitStore.seedSandshellKitsIfNeeded()
+        KitStore.migrateToV3IfNeeded()
         Log.info(.app, "Sandshell launched (sbx: \(PathFixer.sbxPath()))")
 
         #if DEBUG
