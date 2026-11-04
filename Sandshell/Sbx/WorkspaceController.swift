@@ -1206,6 +1206,7 @@ final class WorkspaceController: ObservableObject {
         }.value
 
         let mounts = resolvedMounts()
+        await KitStore.publishedKitsChecked.value
         await learnKitRequirements(resolvedKits())
         await upgradeLegacyKits(for: agent)
         let kits = kits(for: agent, from: resolvedKits())

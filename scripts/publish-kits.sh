@@ -2,7 +2,9 @@
 # Publish kits/ to the public repo xmas/sandshell-kits, tagged v<version>, so
 # sbx clients (and Docker Cloud Sandboxes) can use them by git ref:
 #   git+https://github.com/xmas/sandshell-kits.git#ref=v<version>&dir=sandshell-claude
-# The app itself uses its bundled copy; this is for everyone else.
+# The tag starts that repo's workflow (scripts/kits-repo/publish.yml), which
+# builds the kits and pushes them to ghcr.io/xmas/<kit>:<version> — what the
+# released app uses (KitStore.resolve), falling back to its bundled copy.
 #
 # Usage: scripts/publish-kits.sh [--dry-run] <version>
 # Env:   SANDSHELL_KITS_DIR  local clone of xmas/sandshell-kits (default ../sandshell-kits)
@@ -40,6 +42,9 @@ done
 for dir in "$KITS_DIR"/*/; do
   [[ -d "$ROOT/kits/$(basename "$dir")" ]] || run rm -rf "$dir"
 done
+# The workflow that builds each tag's kits and pushes them to ghcr.io/xmas.
+run mkdir -p "$KITS_DIR/.github/workflows"
+run cp "$ROOT/scripts/kits-repo/publish.yml" "$KITS_DIR/.github/workflows/publish.yml"
 # Point the README's examples at this tag.
 [[ -f "$KITS_DIR/README.md" ]] && run sed -i '' -E "s/ref=v[0-9][0-9.]*/ref=$TAG/g" "$KITS_DIR/README.md"
 

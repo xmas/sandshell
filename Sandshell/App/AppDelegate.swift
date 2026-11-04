@@ -168,6 +168,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         KitStore.seedOfficialDefaultsIfNeeded()
         KitStore.undefaultCodeServerIfNeeded()
         KitStore.migrateToV3IfNeeded()
+        _ = KitStore.publishedKitsChecked   // this version's built kits, if published
         Log.info(.app, "Sandshell launched (sbx: \(PathFixer.sbxPath()))")
 
         #if DEBUG

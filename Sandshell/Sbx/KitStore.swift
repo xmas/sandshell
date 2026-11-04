@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 
 /// A kit the user has added — the reference passed to `sbx create --kit <ref>`
 /// (a directory, ZIP, or OCI reference), plus optional metadata read from a
@@ -95,13 +96,63 @@ enum KitStore {
     static let sandshellKitGeneration = 4
 
     static func isSandshellKit(_ ref: String) -> Bool {
-        sandshellKits.contains { $0.ref == ref } || sandshellKits.contains { ref.hasSuffix("/kits/\($0.ref)") }
+        sandshellKits.contains { kit in
+            ref == kit.ref || ref.hasSuffix("/kits/\(kit.ref)")
+                || ref.hasPrefix("\(publishedRepository)/\(kit.ref):") || ref.hasPrefix("\(publishedRepository)/\(kit.ref)@")
+        }
     }
 
-    /// What sbx is given for `ref`: Sandshell's own kits are the app's bundled copies.
+    /// Where each release's own kits are published, built (the kits repo's
+    /// workflow, `scripts/kits-repo/publish.yml`): `<repository>/<kit>:<version>`.
+    static let publishedRepository = "ghcr.io/xmas"
+
+    /// Whether this app's published kits answered (`checkPublishedKits`): until
+    /// then, and offline, sbx builds the bundled copies instead.
+    private static let publishedAvailable = Mutex(false)
+
+    /// The published kit this app version uses for `name`, or nil where it
+    /// builds its bundled copy: a Debug build (its kits may hold changes not
+    /// published yet), or the published ones weren't reachable.
+    static func publishedRef(_ name: String) -> String? {
+        #if DEBUG
+        return nil
+        #else
+        guard publishedAvailable.withLock({ $0 }), let version = appVersion else { return nil }
+        return "\(publishedRepository)/\(name):\(version)"
+        #endif
+    }
+
+    private static var appVersion: String? {
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
+    }
+
+    /// Whether this version's kits are published, asked once (started at
+    /// launch; a bring-up awaits it before handing sbx the kits).
+    static let publishedKitsChecked = Task { await checkPublishedKits() }
+
+    /// Ask whether this version's kits are published: then sandboxes take
+    /// them as built images, not built from source on this Mac.
+    private static func checkPublishedKits() async {
+        #if !DEBUG
+        guard let version = appVersion else { return }
+        var reachable = true
+        for kit in sandshellKits {
+            let ref = "\(publishedRepository)/\(kit.ref):\(version)"
+            let info = await SbxClient.shared.kitInspect(ref)
+            if info?.schemaVersion != "3" { reachable = false; break }
+        }
+        Log.info(.workspace, reachable ? "Sandshell's kits: the published \(version) ones (\(publishedRepository))"
+                                       : "Sandshell's kits: \(version) isn't published or reachable; building the bundled ones")
+        publishedAvailable.withLock { $0 = reachable }
+        #endif
+    }
+
+    /// What sbx is given for `ref`: Sandshell's own kits are this version's
+    /// published ones, else the app's bundled copies.
     static func resolve(_ ref: String) -> String {
-        guard sandshellKits.contains(where: { $0.ref == ref }),
-              let dir = SbxCommand.bundledKits?.appending(path: ref) else { return ref }
+        guard sandshellKits.contains(where: { $0.ref == ref }) else { return ref }
+        if let published = publishedRef(ref) { return published }
+        guard let dir = SbxCommand.bundledKits?.appending(path: ref) else { return ref }
         return dir.path(percentEncoded: false)
     }
 

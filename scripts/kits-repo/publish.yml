@@ -1,0 +1,52 @@
+# Copied into github.com/xmas/sandshell-kits by scripts/publish-kits.sh (the
+# Sandshell repo holds its source). Builds each kit — a v3 kit, published as
+# an OCI image with Buildx, the way Docker's docs say — and pushes it to
+# ghcr.io/xmas/<kit>:<version>, which the Sandshell app of that version uses
+# instead of building its bundled copy on every Mac.
+name: Publish kits
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Kits tag to publish (e.g. v0.2.45)
+        required: true
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        kit: [sandshell-claude, sandshell-codex]
+    steps:
+      - name: Version
+        id: v
+        run: |
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.v.outputs.tag }}
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push
+        run: |
+          docker buildx build "./${{ matrix.kit }}" -f "./${{ matrix.kit }}/spec.yaml" \
+            --platform linux/amd64,linux/arm64 \
+            --label "org.opencontainers.image.source=https://github.com/xmas/sandshell-kits" \
+            -t "ghcr.io/xmas/${{ matrix.kit }}:${{ steps.v.outputs.version }}" \
+            -t "ghcr.io/xmas/${{ matrix.kit }}:latest" \
+            --push
