@@ -2,7 +2,7 @@
 
 A running log of what changed, newest first. Yes, we actually write these.
 
-## Unreleased
+## v0.2.44 — "By Design"
 - **New Design Session** (File ▸ New Design Session, ⇧⌥⌘N, or + ▸ New Design Session): a Claude chat with a new Canvas board of its own open beside it. The agent is told the board is its to work on, so describe what you want and watch the artboards appear. Selecting the session again brings its board back beside it.
 - **Copy a tool call:** hover a tool's card (open a "Used 3 tools" line) and its Copy takes the tool's title, input and whole output — not just the lines the card shows. Right-click has Copy Tool Call.
 
