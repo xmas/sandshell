@@ -174,6 +174,24 @@ actor SbxClient {
         }
     }
 
+    /// The berg kit signs in through an sbx secret (`BergHub.secretArguments`):
+    /// set, or brought up to date, before a sandbox gets the kit. Without
+    /// berg signed in on this Mac there's nothing to give; the kit says so in
+    /// the sandbox. Never under tests: it's the user's sbx.
+    func signInToBerg(for kits: [String], hub: BergHub? = BergHub.current()) async {
+        guard kits.contains(where: { KitStore.bundledKitName($0) == BergHub.kitName }),
+              !AutomatedRun.isActive, !AppDelegate.isHostingTests else { return }
+        guard let hub else {
+            return Log.info(.sbx, "berg kit: berg isn't signed in on this Mac (berg login <hub>); the sandbox's berg won't be")
+        }
+        do {
+            let out = try await run(hub.secretArguments())
+            if !out.ok { Log.info(.sbx, "berg kit: sbx didn't take the sign-in secret: \(out.stderr.isEmpty ? out.stdout : out.stderr)") }
+        } catch {
+            Log.info(.sbx, "berg kit: sign-in secret: \(error.localizedDescription)")
+        }
+    }
+
     /// `sbx stop <name>`
     @discardableResult
     func stop(_ name: String) async throws -> CommandOutput {
@@ -236,6 +254,8 @@ actor SbxClient {
         }
         // (Never the agent's own kit as a --kit too: sbx refuses a sandbox kit there.)
         args += kits.filter { $0 != agent.createReference }.flatMap { ["--kit", KitStore.resolve($0)] }
+        args += KitStore.kitArguments(for: kits)
+        await signInToBerg(for: kits)
         args.append(agent.createReference)   // a custom agent is created from its kit
         args += mounts.map(\.spec)
         return try await createAndPoll(args, cwd: workspace.rootURL.path(percentEncoded: false),
@@ -587,7 +607,8 @@ actor SbxClient {
     /// inherits a pipe fd would stall Foundation's shared callback queue.
     func kitAdd(sandbox name: String, ref: String, cwd: String,
                 onProgress: ProgressHandler? = nil) async throws -> CommandOutput {
-        let args = ["kit", "add", name, KitStore.resolve(ref)]
+        let args = ["kit", "add", name, KitStore.resolve(ref)] + KitStore.kitArguments(for: [ref])
+        await signInToBerg(for: [ref])
         Log.info(.sbx, "$ sbx \(args.joined(separator: " "))")
         changes += 1
         defer { changes += 1 }

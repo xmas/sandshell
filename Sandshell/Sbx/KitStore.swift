@@ -90,6 +90,34 @@ enum KitStore {
                isDefault: true),
     ]
 
+    /// Sandshell's kits a workspace turns on (Settings ▸ Kits, or the kit
+    /// browser): bundled and published like the ones above, referred to by
+    /// name the same way, but off until chosen.
+    static let optionalSandshellKits: [KitRef] = [
+        KitRef(ref: BergHub.kitName, displayName: "berg",
+               summary: "berg (Iceberg's CLI) and bd, signed in to the hub this Mac's berg uses, through sbx's proxy; "
+                   + "git commits made as you."),
+    ]
+
+    /// Every kit in the app's `kits/`, by name.
+    static var bundledKitNames: [String] { (sandshellKits + optionalSandshellKits).map(\.ref) }
+
+    /// The bundled kit `ref` is, however sbx spells it: its name, its bundled
+    /// folder, or its published image.
+    static func bundledKitName(_ ref: String) -> String? {
+        let t = ref.hasSuffix("/") ? String(ref.dropLast()) : ref
+        return bundledKitNames.first { name in
+            t == name || t.hasSuffix("/kits/\(name)")
+                || t.hasPrefix("\(publishedRepository)/\(name):") || t.hasPrefix("\(publishedRepository)/\(name)@")
+        }
+    }
+
+    /// `--kit-arg`s the given kits take from this Mac (the berg kit's hub).
+    static func kitArguments(for kits: [String], hub: BergHub? = BergHub.current()) -> [String] {
+        guard kits.contains(where: { bundledKitName($0) == BergHub.kitName }), let hub else { return [] }
+        return hub.kitArguments
+    }
+
     /// Bumped when Sandshell's kits change what a sandbox must have built in
     /// (an adapter version, the entry points): sandboxes made with an older
     /// generation are rebuilt (`WorkspaceController.configSignature`).
@@ -136,7 +164,7 @@ enum KitStore {
         #if !DEBUG
         guard let version = appVersion else { return }
         var reachable = true
-        for kit in sandshellKits {
+        for kit in sandshellKits + optionalSandshellKits {
             let ref = "\(publishedRepository)/\(kit.ref):\(version)"
             let info = await SbxClient.shared.kitInspect(ref)
             if info?.schemaVersion != "3" { reachable = false; break }
@@ -150,7 +178,7 @@ enum KitStore {
     /// What sbx is given for `ref`: Sandshell's own kits are this version's
     /// published ones, else the app's bundled copies.
     static func resolve(_ ref: String) -> String {
-        guard sandshellKits.contains(where: { $0.ref == ref }) else { return ref }
+        guard bundledKitNames.contains(ref) else { return ref }
         if let published = publishedRef(ref) { return published }
         guard let dir = SbxCommand.bundledKits?.appending(path: ref) else { return ref }
         return dir.path(percentEncoded: false)
@@ -186,7 +214,8 @@ enum KitStore {
     private static let staleRequirementsKeys = ["kitRequiredAgents", "kitRequiredAgents.v2", "kitDefinesAgent"]
     /// Known up front, so the official kit works offline.
     private static let knownRequirements = [codeServerRef: "claude",
-                                            "sandshell-claude": "claude", "sandshell-codex": "codex"]
+                                            "sandshell-claude": "claude", "sandshell-codex": "codex",
+                                            BergHub.kitName: ""]
 
     /// What's cached for `ref`: its kind and the agent it's for ("" = any).
     private static func cached(_ ref: String) -> (kind: String, agent: String)? {
@@ -200,7 +229,7 @@ enum KitStore {
     /// a `kind: sandbox` kit defines): `.some(nil)` for any agent, `nil` while
     /// not yet known.
     static func requiredAgent(_ ref: String) -> String?? {
-        if let known = knownRequirements[ref] { return .some(known) }
+        if let known = knownRequirements[ref] { return .some(known.isEmpty ? nil : known) }
         // An agent kit is its own agent's: sbx refuses it as another's --kit.
         if let profile = AgentProfileStore.all.first(where: { $0.kitRef == ref }) { return .some(profile.agent) }
         guard let entry = cached(ref) else { return nil }

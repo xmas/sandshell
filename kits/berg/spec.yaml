@@ -1,0 +1,56 @@
+# syntax=docker/sandbox-kit:3
+# berg — Iceberg's CLI — in a sandbox, with bd (beads) beside it, signed in
+# to your hub, and git commits made as you. (Signing commits is Docker's
+# git-ssh-sign kit's job: Sandshell turns it on beside this one.)
+#
+# Sign-in: the token never enters the sandbox. The sandbox's BERG_TOKEN is a
+# placeholder; sbx's proxy puts the real token on requests to the hub. Give
+# sbx the Mac's berg token once (Sandshell does this: Settings ▸ Kits ▸ berg):
+#   sbx secret set-custom --host <hub host> --env BERG_TOKEN \
+#     --command "/usr/bin/plutil -extract token raw -o - '<berg config.json>'"
+schemaVersion: "3"
+kind: mixin
+version: "1.0.0"
+displayName: berg
+description: >-
+  berg (Iceberg's CLI) and bd, signed in to your hub through sbx's proxy, with
+  git commits made as you.
+sourceUrl: https://github.com/xmas/sandshell-kits
+licenses: [Apache-2.0]
+
+args:
+  hub:
+    default: ""
+    pattern: '^(https?://[A-Za-z0-9.-]+(:[0-9]+)?)?$'
+    description: Your Iceberg hub's address, e.g. https://hub.example.com (one on this Mac is http://host.docker.internal:8180)
+    env: BERG_HUB_URL
+  hubHost:
+    default: "berg-hub.invalid"
+    pattern: '^[A-Za-z0-9.-]+$'
+    description: The hub's host name, for the network rule
+  bdVersion:
+    default: "1.3.3"
+    pattern: '^[0-9]+\.[0-9]+\.[0-9]+$'
+    description: beads (bd) release to install
+    buildArg: BD_VERSION
+
+provides: ["berg", "bd@${{ kit.args.bdVersion }}"]
+
+dockerfile: ./Dockerfile
+
+capabilities:
+  - type: com.docker.sandbox/network-policy@1
+    description: Reach your hub
+    config:
+      runtime:
+        allow: ["${{ kit.args.hubHost }}"]
+  - type: com.docker.sandbox/git-identity@1
+    optional: true
+    description: Commits made as you
+  - type: com.docker.sandbox/lifecycle@1
+    config:
+      startup:
+        - command: /opt/berg-kit/bin/berg-kit-setup
+          user: agent
+          env: [BERG_HUB_URL, BERG_TOKEN, HOME, PATH]
+          description: berg from your hub

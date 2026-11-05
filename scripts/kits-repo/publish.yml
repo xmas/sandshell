@@ -2,7 +2,12 @@
 # Sandshell repo holds its source). Builds each kit — a v3 kit, published as
 # an OCI image with Buildx, the way Docker's docs say — and pushes it to
 # ghcr.io/xmas/<kit>:<version>, which the Sandshell app of that version uses
-# instead of building its bundled copy on every Mac.
+# instead of building its bundled copy on every Mac. Each is signed keyless
+# (Sigstore, this workflow's GitHub identity) and the signature attached as an
+# OCI referrer, the way `sbx kit verify` checks it:
+#   sbx kit verify ghcr.io/xmas/<kit>:<version> \
+#     --certificate-identity-regexp '^https://github.com/xmas/sandshell-kits/' \
+#     --certificate-oidc-issuer https://token.actions.githubusercontent.com
 name: Publish kits
 
 on:
@@ -17,6 +22,7 @@ on:
 permissions:
   contents: read
   packages: write
+  id-token: write   # keyless signing: Sigstore takes this workflow's GitHub identity
 
 jobs:
   publish:
@@ -24,7 +30,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        kit: [sandshell-claude, sandshell-codex]
+        kit: [sandshell-claude, sandshell-codex, berg]
     steps:
       - name: Version
         id: v
@@ -42,11 +48,21 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: sigstore/cosign-installer@v3
       - name: Build and push
+        id: build
         run: |
           docker buildx build "./${{ matrix.kit }}" -f "./${{ matrix.kit }}/spec.yaml" \
             --platform linux/amd64,linux/arm64 \
             --label "org.opencontainers.image.source=https://github.com/xmas/sandshell-kits" \
             -t "ghcr.io/xmas/${{ matrix.kit }}:${{ steps.v.outputs.version }}" \
             -t "ghcr.io/xmas/${{ matrix.kit }}:latest" \
+            --metadata-file "$RUNNER_TEMP/meta.json" \
             --push
+          echo "digest=$(jq -r '.["containerimage.digest"]' "$RUNNER_TEMP/meta.json")" >> "$GITHUB_OUTPUT"
+      - name: Sign
+        env:
+          COSIGN_EXPERIMENTAL: "1"   # OCI 1.1 referrers: where sbx kit verify looks
+        run: |
+          cosign sign --yes --registry-referrers-mode=oci-1-1 \
+            "ghcr.io/xmas/${{ matrix.kit }}@${{ steps.build.outputs.digest }}"

@@ -1,7 +1,8 @@
 import SwiftUI
 
-/// Sheet listing the kits published in Docker Hub's `sbx` namespace, with
-/// type-to-filter and one-click Add (registers `docker.io/sbx/<name>:latest`).
+/// Sheet listing Sandshell's kits (github.com/xmas/sandshell-kits) and the
+/// ones published in Docker Hub's `sbx` namespace, with type-to-filter and
+/// one-click Add (a Sandshell kit by name, Docker's as `docker.io/sbx/<name>:latest`).
 struct KitHubBrowserView: View {
     var namespace: String = KitHub.officialNamespace
     let isRegistered: (String) -> Bool
@@ -27,14 +28,14 @@ struct KitHubBrowserView: View {
         VStack(spacing: 0) {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Docker Hub kits").font(.role(.title))
-                    Text("docker.io/\(namespace) · ^[\(kits.count) kit](inflect: true)")
+                    Text("Kits").font(.role(.title))
+                    Text("Sandshell's and docker.io/\(namespace) · ^[\(kits.count) kit](inflect: true)")
                         .font(.role(.meta)).foregroundStyle(.secondary)
                 }
                 Spacer()
                 Button("Reload", systemImage: "arrow.clockwise") { Task { await load() } }
                     .labelStyle(.iconOnly)
-                    .buttonStyle(.borderless).help("Reload from Docker Hub").disabled(loading)
+                    .buttonStyle(.borderless).help("Reload from GitHub and Docker Hub").disabled(loading)
             }
             .padding(16)
             HStack(spacing: 6) {
@@ -72,7 +73,7 @@ struct KitHubBrowserView: View {
     @ViewBuilder private var content: some View {
         let shown = filtered
         if loading {
-            VStack(spacing: 10) { ProgressView(); Text("Fetching kits from Docker Hub…").foregroundStyle(.secondary) }
+            VStack(spacing: 10) { ProgressView(); Text("Fetching kits…").foregroundStyle(.secondary) }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if shown.isEmpty {
             Group {
@@ -105,9 +106,12 @@ struct KitHubBrowserView: View {
     private func load() async {
         loading = true
         error = nil
+        async let sandshell = KitHub.fetchSandshellKits()
         do {
-            kits = try await KitHub.fetchKits(namespace: namespace)
+            let docker = try await KitHub.fetchKits(namespace: namespace)
+            kits = await sandshell + docker
         } catch {
+            kits = await sandshell
             self.error = "Couldn’t reach Docker Hub: \(error.localizedDescription)"
         }
         loading = false
@@ -123,7 +127,7 @@ private struct KitHubRow: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
-            Image(systemName: "cube.fill").font(.symbol(.body)).foregroundStyle(.green)
+            Image(systemName: "cube.fill").font(.symbol(.body)).foregroundStyle(kit.isSandshell ? .orange : .green)
                 .frame(width: 24).padding(.top, 2)
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 8) {
@@ -136,8 +140,12 @@ private struct KitHubRow: View {
                     Text(kit.description).font(.role(.meta)).foregroundStyle(.secondary).lineLimit(3)
                 }
                 HStack(spacing: 10) {
-                    Label("\(kit.pullCount.formatted(.number.notation(.compactName))) pulls",
-                          systemImage: "arrow.down.circle")
+                    if kit.isSandshell {
+                        Label("Sandshell", systemImage: "sparkles")
+                    } else {
+                        Label("\(kit.pullCount.formatted(.number.notation(.compactName))) pulls",
+                              systemImage: "arrow.down.circle")
+                    }
                     if let d = kit.lastUpdated {
                         Label(Format.relative(d), systemImage: "clock")
                     }

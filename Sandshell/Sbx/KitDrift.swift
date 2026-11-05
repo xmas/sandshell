@@ -37,6 +37,9 @@ struct KitDrift: Equatable {
     /// trailing slash removed; Docker Hub refs get the implicit registry and tag.
     static func normalize(_ ref: String, root: URL) -> String {
         let t = ref.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Sandshell's kits: by name, as configured, whether sbx built the
+        // bundled folder or took the published image.
+        if let name = KitStore.bundledKitName(t) { return name }
         if t.hasPrefix("/") || t.hasPrefix("~") || t == "." || t == ".." || t.hasPrefix("./") || t.hasPrefix("../") {
             let expanded = (t as NSString).expandingTildeInPath
             let url = expanded.hasPrefix("/") ? URL(filePath: expanded) : root.appending(path: expanded)
