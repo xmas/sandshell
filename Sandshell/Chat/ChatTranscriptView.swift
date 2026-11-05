@@ -325,6 +325,11 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
         drop(textView)
     }
     func debugCheckDrawn() { checkDrawn() }
+    /// Unit tests: drop the layout of what's showing, as the blank chat had it.
+    func debugForgetLayout() {
+        guard let tlm = textView.textLayoutManager else { return }
+        tlm.invalidateLayout(for: tlm.documentRange)
+    }
     /// The fade and the ↓ button show (more below).
     var debugEndCuesShown: Bool { !jumpButton.isHidden }
     /// Where the fade's clear end is, on screen: "bottom" or "top".
@@ -491,12 +496,46 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
             let frame = fragment.layoutFragmentFrame.offsetBy(dx: origin.x, dy: origin.y)
             guard frame.minY < visible.maxY else { return false }
             let shown = frame.intersection(visible)
+            guard shown.height > 0 else { return true }
+            // Showing but never laid out: no lines, so nothing draws it. (It
+            // looks like a spacer by its lines, which is how this hid before.)
+            guard fragment.state == .layoutAvailable else {
+                if Self.hasText(fragment) { missing += shown.height }
+                return true
+            }
             // Text only: an empty line or a spacer draws nothing either way.
-            guard shown.height > 0, fragment.textLineFragments.contains(where: { $0.characterRange.length > 1 }) else { return true }
+            guard fragment.textLineFragments.contains(where: { $0.characterRange.length > 1 }) else { return true }
             if !drawn.contains(where: { $0.minY <= shown.minY + 0.5 && $0.maxY >= shown.maxY - 0.5 }) { missing += shown.height }
             return true
         }
         return missing
+    }
+
+    /// A paragraph with something to see (not a blank line or a spacer).
+    private static func hasText(_ fragment: NSTextLayoutFragment) -> Bool {
+        guard let paragraph = fragment.textElement as? NSTextParagraph else { return false }
+        return paragraph.attributedString.string.contains { !$0.isWhitespace && $0 != "\u{FFFC}" }
+    }
+
+    /// The views TextKit 2 draws paragraphs in: lay out what shows and redraw
+    /// them. Marking the text view alone doesn't reach them — each is a view of its own.
+    private func layoutAndRedrawVisibleText() {
+        guard let tlm = textView.textLayoutManager else { return }
+        let visible = textView.visibleRect.offsetBy(dx: -textView.textContainerOrigin.x, dy: -textView.textContainerOrigin.y)
+        if let top = tlm.textLayoutFragment(for: CGPoint(x: 0, y: max(0, visible.minY))) {
+            let end = tlm.textLayoutFragment(for: CGPoint(x: 0, y: visible.maxY))?.rangeInElement.endLocation
+                ?? tlm.documentRange.endLocation
+            if let range = NSTextRange(location: top.rangeInElement.location, end: end) { tlm.ensureLayout(for: range) }
+        }
+        layoutVisibleText()
+        func redraw(_ view: NSView) {
+            for sub in view.subviews {
+                if NSStringFromClass(type(of: sub)).contains("ViewportElement") { sub.needsDisplay = true }
+                redraw(sub)
+            }
+        }
+        redraw(textView)
+        textView.needsDisplay = true
     }
 
     /// After the text changes or scrolls (once things settle): if a line
@@ -516,12 +555,11 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
         let visible = textView.visibleRect
         Log.info(.app, "chat: \(Int(missing)) pt of text showing undrawn (visible y \(Int(visible.minY))+\(Int(visible.height)), "
                  + "text \(Int(textView.frame.height)) tall, viewport \(tlm.textViewportLayoutController.viewportBounds)); laying out again")
-        layoutVisibleText()
+        layoutAndRedrawVisibleText()
         if undrawnVisibleHeight >= 1 {
             tlm.invalidateLayout(for: tlm.documentRange)
-            layoutVisibleText()
+            layoutAndRedrawVisibleText()
         }
-        textView.needsDisplay = true
         let left = undrawnVisibleHeight
         Log.info(.app, left < 1 ? "chat: redrawn" : "chat: still \(Int(left)) pt undrawn")
     }
