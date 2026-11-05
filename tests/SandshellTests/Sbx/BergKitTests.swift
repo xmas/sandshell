@@ -6,16 +6,20 @@ import Testing
 /// arguments and sign-in secret sbx gets, and the kit known by its name
 /// however sbx spells it.
 struct BergKitTests {
+    /// One on this Mac: the sandbox connects to host.docker.internal, which
+    /// sbx's proxy (its rules, its secrets) calls localhost.
     @Test(arguments: [
-        ("http://localhost:8180", "http://host.docker.internal:8180", "host.docker.internal"),
-        ("http://127.0.0.1:8180/", "http://host.docker.internal:8180", "host.docker.internal"),
-        ("https://hub.ezdata.xyz", "https://hub.ezdata.xyz", "hub.ezdata.xyz"),
-        ("https://Hub.Example.com/work?x=1", "https://hub.example.com", "hub.example.com"),
+        ("http://localhost:8180", "http://host.docker.internal:8180", "localhost", "localhost:8180"),
+        ("http://127.0.0.1:8180/", "http://host.docker.internal:8180", "localhost", "localhost:8180"),
+        ("https://localhost", "https://host.docker.internal", "localhost", "localhost:443"),
+        ("https://hub.ezdata.xyz", "https://hub.ezdata.xyz", "hub.ezdata.xyz", "hub.ezdata.xyz"),
+        ("https://Hub.Example.com/work?x=1", "https://hub.example.com", "hub.example.com", "hub.example.com"),
     ])
-    func aHubAsTheSandboxReachesIt(hubURL: String, url: String, host: String) throws {
+    func aHubAsTheSandboxReachesIt(hubURL: String, url: String, host: String, allow: String) throws {
         let hub = try #require(BergHub(hubURL: hubURL))
         #expect(hub.url == url)
         #expect(hub.host == host)
+        #expect(hub.allow == allow)
     }
 
     @Test(arguments: ["", "hub.example.com", "ftp://hub.example.com", "https://"])
@@ -45,6 +49,7 @@ struct BergKitTests {
         let command = try #require(args.last)
         #expect(command == "/usr/bin/plutil -extract token raw -o - '/Users/someone/Library/Application Support/berg/config.json'")
         #expect(!args.contains("--value"), "Never the token itself on a command line")
+        #expect(!args.contains("--name"), "Cloud-only: sbx refuses it for a local secret")
     }
 
     @Test func aQuoteInThePathStaysQuoted() throws {

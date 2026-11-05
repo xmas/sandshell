@@ -9,13 +9,14 @@ import Foundation
 struct BergHub: Equatable {
     /// The hub as a sandbox reaches it (the kit's `hub`).
     var url: String
-    /// Its host (the kit's network rule, and the secret's host).
+    /// Its host as sbx's proxy names it (the sign-in secret's host): one on
+    /// this Mac is reached at host.docker.internal, which the proxy calls localhost.
     var host: String
+    /// The kit's network rule (`hubHost`): the host, with the port for one on this Mac.
+    var allow: String
 
     /// The kit's name: its folder in `kits/`, its repository on ghcr.io.
     static let kitName = "berg"
-    /// What the sbx secret is called.
-    static let secretName = "berg"
 
     /// berg's config (`internal/cliconfig`: Go's user config dir), unless
     /// `BERG_CONFIG` says otherwise.
@@ -39,19 +40,26 @@ struct BergHub: Equatable {
         guard var parts = URLComponents(string: hubURL.trimmingCharacters(in: .whitespaces)),
               let scheme = parts.scheme?.lowercased(), scheme == "http" || scheme == "https",
               let host = parts.host?.lowercased(), !host.isEmpty else { return nil }
-        parts.host = ["localhost", "127.0.0.1", "::1", "[::1]"].contains(host) ? "host.docker.internal" : host
+        let onThisMac = ["localhost", "127.0.0.1", "::1", "[::1]"].contains(host)
+        parts.host = onThisMac ? "host.docker.internal" : host
         parts.scheme = scheme
         parts.path = ""
         parts.query = nil
         parts.fragment = nil
-        guard let url = parts.string, let reached = parts.host else { return nil }
+        guard let url = parts.string else { return nil }
         self.url = url
-        self.host = reached
+        if onThisMac {
+            self.host = "localhost"
+            self.allow = "localhost:\(parts.port ?? (scheme == "https" ? 443 : 80))"
+        } else {
+            self.host = host
+            self.allow = host
+        }
     }
 
     /// `--kit-arg`s for `sbx create` / `sbx kit add` with the berg kit.
     var kitArguments: [String] {
-        ["--kit-arg", "\(Self.kitName).hub=\(url)", "--kit-arg", "\(Self.kitName).hubHost=\(host)"]
+        ["--kit-arg", "\(Self.kitName).hub=\(url)", "--kit-arg", "\(Self.kitName).hubHost=\(allow)"]
     }
 
     /// `sbx secret set-custom …`: the sandbox's BERG_TOKEN is a placeholder
@@ -60,7 +68,8 @@ struct BergHub: Equatable {
     /// `berg login` carries over.
     func secretArguments(config: URL = BergHub.configURL) -> [String] {
         let path = config.path(percentEncoded: false).replacing("'", with: #"'\''"#)
-        return ["secret", "set-custom", "--name", Self.secretName, "--host", host, "--env", "BERG_TOKEN",
+        // (Local custom secrets go by host and env var: `--name` is cloud-only.)
+        return ["secret", "set-custom", "--host", host, "--env", "BERG_TOKEN",
                 "--command", "/usr/bin/plutil -extract token raw -o - '\(path)'"]
     }
 }
