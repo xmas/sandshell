@@ -8,13 +8,16 @@ claude-agent-acp does, and answers each prompt by what it asks for:
   permission  a tool call that asks for permission, then says what was chosen
   question    a form question (elicitation/create), then says the answer
   long        a long reply, streamed a word at a time
-  slow        works for 20 seconds unless stopped (session/cancel)
+  slow        works for 20 seconds unless stopped (session/cancel), or until
+              a message steered into the turn (_session/steering) arrives,
+              which it answers ("Heard: …")
   plan        a plan with three steps
   tool        a tool call with a diff
   markdown    headings, a list, code, a link
   anything    "pong: <what you said>"
 
-Run by Sandshell (DEBUG) for the Remote check session.
+Run by Sandshell (DEBUG) for the Remote check session, and by the unit
+tests. --no-steering: refuse `_session/steering` as an agent without it does.
 """
 import base64
 import itertools
@@ -30,6 +33,10 @@ out_lock = threading.Lock()
 pending = {}          # our request id -> [threading.Event, response]
 pending_lock = threading.Lock()
 cancelled = threading.Event()
+turn_running = threading.Event()
+steered = []          # texts steered into the running turn
+steered_lock = threading.Lock()
+supports_steering = "--no-steering" not in sys.argv
 ids = itertools.count(1)
 used_tokens = [1200]
 
@@ -164,11 +171,19 @@ def run_prompt(rid, params):
             say(session, "A long reply: " + words + " — the end.", pause=0.02)
         elif "slow" in asked:
             say(session, "Working slowly…")
+            heard = None
             for _ in range(200):
                 if cancelled.is_set():
                     break
+                with steered_lock:
+                    if steered:
+                        heard = steered.pop(0)
+                if heard is not None:
+                    break
                 time.sleep(0.1)
-            if not cancelled.is_set():
+            if heard is not None:
+                say(session, "Heard: " + heard)
+            elif not cancelled.is_set():
                 say(session, " Done.")
         elif "plan" in asked:
             update(session, {"sessionUpdate": "plan", "entries": [
@@ -192,11 +207,13 @@ def run_prompt(rid, params):
             say(session, "pong: " + (text or "(nothing)"), pause=0.03)
         finish(rid, session)
     except Exception as exc:  # report, don't hang the turn
+        turn_running.clear()
         error(rid, -32603, "fake agent failed: %s" % exc)
 
 
 def finish(rid, session):
     usage(session)
+    turn_running.clear()
     respond(rid, {"stopReason": "cancelled" if cancelled.is_set() else "end_turn"})
 
 
@@ -232,7 +249,17 @@ def handle(message):
         update(params.get("sessionId"), {"sessionUpdate": "current_mode_update",
                                          "currentModeId": MODES["currentModeId"]})
     elif method == "session/prompt":
+        turn_running.set()
         threading.Thread(target=run_prompt, args=(rid, params), daemon=True).start()
+    elif method == "_session/steering" and supports_steering:
+        # As claude-agent-acp: into the running turn, or "promptRequired" when idle.
+        if turn_running.is_set():
+            texts = [b.get("text", "") for b in params.get("prompt") or [] if b.get("type") == "text"]
+            with steered_lock:
+                steered.append(" ".join(texts))
+            respond(rid, {"outcome": "injected"})
+        else:
+            respond(rid, {"outcome": "promptRequired", "reason": "noRunningTurn"})
     else:
         error(rid, -32601, "%s is not supported by the fake agent" % method)
 

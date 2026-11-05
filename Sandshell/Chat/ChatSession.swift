@@ -578,19 +578,7 @@ final class ChatSession: ObservableObject {
         if !trimmed.isEmpty, !retryingTurn { onPrompt?(trimmed) }
         stopped = false
 
-        var blocks: [JSONValue] = []
-        if !trimmed.isEmpty { blocks.append(["type": "text", "text": .string(trimmed)]) }
-        for a in attachments {
-            switch a.kind {
-            case .file(let url):
-                // Mounted host paths appear at the same path in the sandbox.
-                blocks.append(["type": "resource_link", "uri": .string(url.absoluteString),
-                               "name": .string(url.lastPathComponent)])
-            case .image(let data, let mime, _):
-                blocks.append(["type": "image", "mimeType": .string(mime),
-                               "data": .string(data.base64EncodedString())])
-            }
-        }
+        let blocks = Self.promptBlocks(trimmed, attachments)
         phase = .running
         var params: JSONValue = ["sessionId": .string(sid), "prompt": .array(blocks)]
         if agent == .claude {
@@ -655,6 +643,64 @@ final class ChatSession: ObservableObject {
         }
     }
 
+    /// A prompt's ACP content: its text, then its files and images.
+    static func promptBlocks(_ text: String, _ attachments: [ChatAttachment]) -> [JSONValue] {
+        var blocks: [JSONValue] = []
+        if !text.isEmpty { blocks.append(["type": "text", "text": .string(text)]) }
+        for a in attachments {
+            switch a.kind {
+            case .file(let url):
+                // Mounted host paths appear at the same path in the sandbox.
+                blocks.append(["type": "resource_link", "uri": .string(url.absoluteString),
+                               "name": .string(url.lastPathComponent)])
+            case .image(let data, let mime, _):
+                blocks.append(["type": "image", "mimeType": .string(mime),
+                               "data": .string(data.base64EncodedString())])
+            }
+        }
+        return blocks
+    }
+
+    /// The agent takes a message into the turn it's running (Claude's
+    /// adapter: `_session/steering`), as Claude Code does — until it says it
+    /// can't, when messages queue behind the turn instead.
+    private(set) var canSteer = true
+
+    /// Hand `text` to the running turn: it shows in the transcript now and
+    /// Claude reads it at once (between tool calls, or cutting its current
+    /// reply short). If the turn ended meanwhile it goes as a new prompt;
+    /// if the agent can't take it, it waits in the queue as before.
+    private func steer(text: String, attachments: [ChatAttachment]) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty || !attachments.isEmpty else { return }
+        guard case .running = phase, let conn = connection, let sid = sessionID, !agentIsBehind else {
+            return sendWhenReady(text: text, attachments: attachments)
+        }
+        let id = UUID()
+        items.append(.user(id: id, text: trimmed, attachments: attachments.map(\.displayName)))
+        if !trimmed.isEmpty { onPrompt?(trimmed) }
+        let params: JSONValue = ["sessionId": .string(sid), "prompt": .array(Self.promptBlocks(trimmed, attachments)),
+                                 "_meta": ["steering": ["idleBehavior": "promptRequired"]]]
+        Task {
+            @MainActor func takeBack() { items.removeAll { $0.id == ChatItem.user(id: id, text: "", attachments: []).id } }
+            do {
+                let result = try await conn.request("_session/steering", params)
+                guard !isClosed, connection === conn else { return }
+                if result["outcome"]?.string == "promptRequired" {
+                    // The turn ended just before: a prompt of its own (shown again by `send`).
+                    takeBack()
+                    sendWhenReady(text: text, attachments: attachments)
+                }
+            } catch {
+                guard !isClosed, connection === conn else { return }
+                Log.info(.sbx, "chat: the agent didn't take a message mid-turn (\(error.localizedDescription)); queuing")
+                canSteer = false
+                takeBack()
+                sendWhenReady(text: text, attachments: attachments)
+            }
+        }
+    }
+
     /// Send `text` as soon as the session is ready (Shortcuts / Services
     /// "send now"); sends immediately if it already is.
     func sendWhenReady(text: String, attachments: [ChatAttachment]) {
@@ -689,6 +735,11 @@ final class ChatSession: ObservableObject {
             } else {
                 send(text: text, attachments: attachments)
             }
+            return true
+        case .running where agent == .claude && canSteer:
+            // Waiting messages (sent while it started) go along with this one.
+            queue.append(text: text, attachments: attachments)
+            if let (all, files) = queue.takeAll() { steer(text: all, attachments: files) }
             return true
         case .running, .starting: sendWhenReady(text: text, attachments: attachments); return true
         case .closed: return false
