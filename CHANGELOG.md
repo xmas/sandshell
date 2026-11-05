@@ -2,6 +2,15 @@
 
 A running log of what changed, newest first. Yes, we actually write these.
 
+## v0.2.48 — "Hands Free"
+- **Text size, the Mac way.** ⌘+ / ⌘− / ⌘0 (View ▸ Make Text Bigger, Make Text Smaller, Actual Size) resize what you read and write: chats, the composer, the Files editor and Markdown preview, and terminals. The sidebar, toolbar and pane strips stay as they are. One size for the app, kept across launches. ⌘0 used to bring up the Sandshell window; it's Actual Size now.
+- **Messages sent while Claude works are read right away.** Instead of waiting in a queue for the turn to end, your message goes into the running turn, shown in the chat at once, as in Claude Code. If the turn ends just as you send it, it starts a new one. Codex and Gemini still queue.
+- **A board in its own window:** Open in Full Screen Window on a board pane's strip (or hold ⌥ in View ▸ Open Board) shows the same live board full screen, while the chat carries on in the workspace window.
+- **Panning a zoomed board works over the artboards.** The pages took your scroll, so a zoomed-in board only panned with the pointer over empty space. Now scrolling anywhere pans, diagonally too; ⌥-scroll scrolls a page itself; dragging empty space pans; and you can pan past the board's edges.
+- **Blank chat replies repair themselves in more cases.** The check that redraws a reply left undrawn missed text that had never been laid out, and its repair skipped the views that do the drawing. Both are fixed.
+- **berg kit (new):** add `berg` from Settings ▸ Kits to give a sandbox bd and berg, signed in to the hub your Mac's berg uses, with commits made as you. Your berg token stays on the Mac: sbx's proxy adds it to requests to the hub, and the sandbox only ever sees a placeholder. The hub needs Iceberg's token download route for berg to install.
+- **The kit browser finds Sandshell's kits** alongside Docker Hub's, and its filter searches both. Sandshell's published kits are now signed, so `sbx kit verify` can check them.
+
 ## v0.2.47 — "Steady Hand"
 - **The Files editor holds still.** In a long file with wrapped lines, typing or clicking could make the text jump by dozens of lines: the editor recolored the whole file after every keystroke, and macOS re-measured the document. It now recolors only what changed and keeps the line at the top of the view in place.
 - **Settings ▸ Editor:** font size, wrap lines, syntax coloring, highlight the current line (on by default), a page guide, line numbers and change bars, tab width, indent with spaces or tabs, keep indentation on Return, and on save remove trailing spaces and end with a line break. They apply to every folder, and open editors follow as you change them.
