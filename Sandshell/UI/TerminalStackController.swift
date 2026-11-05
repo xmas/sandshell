@@ -799,6 +799,9 @@ final class TerminalStackController: NSViewController {
         titleStrip.onSplitRight = { [weak self] in self?.onSplit?(.trailing) }
         titleStrip.onSplitDown = { [weak self] in self?.onSplit?(.bottom) }
         titleStrip.onClose = { [weak self] in self?.onClosePane?() }
+        titleStrip.onBoardWindow = { [weak self] in
+            if let board = self?.shownBoard { BoardWindowController.show(board) }
+        }
         titleStrip.onStopSession = { [weak self] in self?.stopClicked() }
         titleStrip.onRestartSession = { [weak self] in self?.headerRestartClicked() }
         titleStrip.onRemote = { [weak self] anchor in self?.showRemoteControl(below: anchor) }
@@ -1033,6 +1036,7 @@ final class TerminalStackController: NSViewController {
 
     /// Single source of truth for what the detail pane shows.
     func refresh() {
+        titleStrip.showsBoardWindowButton = shownBoard != nil
         if let board = shownBoard { return showCanvas(board) }
         // Another sandbox building doesn't hide a session that's already up —
         // its own being rebuilt does (what's on screen is about to go).

@@ -792,6 +792,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             for folder in boards {
                 let title = (try? CanvasBoard.load(folder: folder).get().title) ?? folder.lastPathComponent
                 menu.addItem(NSMenuItem(title) { [weak window] in window?.paneTree?.openBoard(folder) })
+                // ⌥: the board in a full-screen window of its own.
+                let own = NSMenuItem("\(title) in Full Screen Window") { BoardWindowController.show(folder) }
+                own.isAlternate = true
+                own.keyEquivalentModifierMask = [.option]
+                menu.addItem(own)
             }
         }
     }
