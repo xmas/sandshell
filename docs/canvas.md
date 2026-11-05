@@ -20,7 +20,9 @@ you: click an artboard, leave a note ──▶ chat message + screenshot ──�
 - **The Canvas is a pane**, like a session: open a board from the sidebar or
   ⌘K, split it beside the chat that's making it (`PaneTreeController`).
 - **Artboards are web pages**: one `WKWebView` each, sized to the artboard,
-  on a zoomable, pannable surface (`NSScrollView` magnification). HTML, CSS,
+  on a zoomable, pannable surface (`NSScrollView` magnification; its clip
+  view pans past the board's edges, scrolling over a page pans the board and
+  ⌥-scroll scrolls the page, dragging empty space pans). HTML, CSS,
   a React component through a small bundled runtime, an image, or a URL (a dev
   server in the sandbox).
 - **Live**: a `FileWatcher` on the board folder reloads the artboards whose

@@ -2,12 +2,13 @@ import AppKit
 import WebKit
 
 /// A board on a zoomable, pannable surface: each artboard a web view sized to
-/// it, titled above. Watches the board folder and reloads what changed, so the
+/// it, titled above. Scroll anywhere or drag the empty space to pan (⌥-scroll
+/// scrolls a page itself); pinch to zoom. Watches the board folder and reloads what changed, so the
 /// agent's edits show as they land. See docs/canvas.md.
 @MainActor
 final class CanvasView: NSView {
     private let scrollView = NSScrollView()
-    private let document = FlippedView()
+    private let document = CanvasDocumentView()
     private let messageLabel = NSTextField(wrappingLabelWithString: "")
     private(set) var board: CanvasBoard?
     private var folder: URL?
@@ -24,9 +25,12 @@ final class CanvasView: NSView {
         super.init(frame: frame)
         wantsLayer = true
         scrollView.translatesAutoresizingMaskIntoConstraints = false
+        scrollView.contentView = CanvasClipView()
         scrollView.hasVerticalScroller = true
         scrollView.hasHorizontalScroller = true
         scrollView.autohidesScrollers = true
+        // A board pans freely, diagonally too — not locked to one axis like a page.
+        scrollView.usesPredominantAxisScrolling = false
         scrollView.allowsMagnification = true
         scrollView.minMagnification = 0.05
         scrollView.maxMagnification = 4
@@ -133,13 +137,15 @@ final class CanvasView: NSView {
         }
     }
 
-    /// Everything on screen at once (never larger than 100 %).
+    /// Everything on screen at once (never larger than 100 %), centered.
     func zoomToFit() {
         guard document.frame.width > 0, scrollView.contentSize.width > 0 else { return }
         let fit = min(scrollView.contentSize.width / document.frame.width,
                       scrollView.contentSize.height / document.frame.height, 1)
         scrollView.magnification = max(fit, scrollView.minMagnification)
-        scrollView.contentView.scroll(to: .zero)
+        let visible = scrollView.contentView.bounds.size
+        let doc = document.frame
+        scrollView.contentView.scroll(to: NSPoint(x: doc.midX - visible.width / 2, y: doc.midY - visible.height / 2))
         scrollView.reflectScrolledClipView(scrollView.contentView)
     }
 
@@ -155,7 +161,86 @@ final class CanvasView: NSView {
     var debugMessage: String? { messageLabel.isHidden ? nil : messageLabel.stringValue }
     var debugMagnification: CGFloat { scrollView.magnification }
     func debugPageText(_ id: String) async -> String? { await artboardViews[id]?.pageText() }
+    /// Where the view is on the board (the clip view's origin).
+    var debugVisibleOrigin: NSPoint { scrollView.contentView.bounds.origin }
+    /// A mouse wheel's scroll over an artboard's page, as the page gets it.
+    func debugScroll(over id: String, dx: Int32, dy: Int32, option: Bool = false) {
+        guard let cg = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2, wheel1: dy, wheel2: dx, wheel3: 0)
+        else { return }
+        if option { cg.flags = .maskAlternate }
+        guard let event = NSEvent(cgEvent: cg) else { return }
+        artboardViews[id]?.debugWebView.scrollWheel(with: event)
+    }
     #endif
+}
+
+/// The board's clip view. A board isn't a page: at zoom-to-fit it's all in
+/// view, so a plain clip view leaves nothing to scroll. This one pans past the
+/// edges, as far as keeps the middle of the view over the board, so it can't
+/// get lost.
+private final class CanvasClipView: NSClipView {
+    override func constrainBoundsRect(_ proposed: NSRect) -> NSRect {
+        guard let doc = documentView?.frame, !doc.isEmpty else { return super.constrainBoundsRect(proposed) }
+        var rect = proposed
+        rect.origin.x = min(max(rect.origin.x, doc.minX - rect.width / 2), doc.maxX - rect.width / 2)
+        rect.origin.y = min(max(rect.origin.y, doc.minY - rect.height / 2), doc.maxY - rect.height / 2)
+        return rect
+    }
+}
+
+/// The board's surface (top-down). Dragging its empty space pans the board.
+private final class CanvasDocumentView: NSView {
+    override var isFlipped: Bool { true }
+    private var dragStart: NSPoint?
+    private var originAtStart: NSPoint = .zero
+
+    override func mouseDown(with event: NSEvent) {
+        guard let clip = enclosingScrollView?.contentView else { return super.mouseDown(with: event) }
+        dragStart = event.locationInWindow
+        originAtStart = clip.bounds.origin
+        NSCursor.closedHand.push()
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard let start = dragStart, let scrollView = enclosingScrollView else { return }
+        let clip = scrollView.contentView
+        let scale = max(scrollView.magnification, 0.01)
+        // The window's y goes up, this view's down.
+        let origin = NSPoint(x: originAtStart.x - (event.locationInWindow.x - start.x) / scale,
+                             y: originAtStart.y + (event.locationInWindow.y - start.y) / scale)
+        clip.scroll(to: clip.constrainBoundsRect(NSRect(origin: origin, size: clip.bounds.size)).origin)
+        scrollView.reflectScrolledClipView(clip)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        if dragStart != nil { NSCursor.pop() }
+        dragStart = nil
+    }
+}
+
+/// An artboard's page. Scrolling over it pans the board, as in a design tool
+/// (the artboards cover most of it); with ⌥ held it scrolls the page itself.
+/// Pinching zooms the board.
+private final class ArtboardWebView: WKWebView {
+    /// Whether the scroll gesture under way goes to the page.
+    private var scrollsPage = false
+
+    override func scrollWheel(with event: NSEvent) {
+        // Decided as a gesture starts and kept through its momentum; a mouse
+        // wheel's clicks (no phases) each decide.
+        if event.phase.contains(.mayBegin) || event.phase.contains(.began)
+            || (event.phase.isEmpty && event.momentumPhase.isEmpty) {
+            scrollsPage = event.modifierFlags.contains(.option)
+        }
+        if scrollsPage { return super.scrollWheel(with: event) }
+        guard let scrollView = enclosingScrollView else { return super.scrollWheel(with: event) }
+        scrollView.scrollWheel(with: event)
+    }
+
+    override func magnify(with event: NSEvent) {
+        guard let scrollView = enclosingScrollView else { return super.magnify(with: event) }
+        scrollView.magnify(with: event)
+    }
 }
 
 /// One artboard: its title, then the page in a web view of the artboard's size.
@@ -178,7 +263,7 @@ private final class ArtboardView: NSView, WKNavigationDelegate {
     init() {
         let config = WKWebViewConfiguration()
         config.websiteDataStore = .nonPersistent()
-        webView = WKWebView(frame: .zero, configuration: config)
+        webView = ArtboardWebView(frame: .zero, configuration: config)
         super.init(frame: .zero)
         titleLabel.font = .systemFont(ofSize: 13, weight: .medium)
         titleLabel.textColor = .secondaryLabelColor
@@ -223,6 +308,10 @@ private final class ArtboardView: NSView, WKNavigationDelegate {
         hasLoaded = false
         webView.reloadFromOrigin()
     }
+
+    #if DEBUG
+    var debugWebView: WKWebView { webView }
+    #endif
 
     func pageText() async -> String? {
         try? await webView.evaluateJavaScript("document.body ? document.body.innerText : ''") as? String

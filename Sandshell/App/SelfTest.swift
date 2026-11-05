@@ -3915,6 +3915,12 @@ enum SelfTest {
         check(await until(20) { canvas.debugLoadedCount == 2 }, "both artboards load (\(canvas.debugLoadedCount))")
         check(canvas.debugArtboardIDs == ["welcome", "welcome-b"], "in board.json's order (\(canvas.debugArtboardIDs))")
         check(canvas.debugMagnification <= 1, "zoomed to fit (\(canvas.debugMagnification))")
+        // Everything fits, yet scrolling over a page pans the board.
+        let before = canvas.debugVisibleOrigin
+        canvas.debugScroll(over: "welcome", dx: -60, dy: -40)
+        let after = canvas.debugVisibleOrigin
+        check(after.x != before.x && after.y != before.y, "scrolling over an artboard pans the board (\(before) → \(after))")
+        canvas.zoomToFit()
         let text = await canvas.debugPageText("welcome") ?? ""
         check(text.contains("Welcome aboard"), "the page renders (“\(text.prefix(40))”)")
         snapshot(window, "canvas")
