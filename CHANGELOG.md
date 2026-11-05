@@ -2,6 +2,12 @@
 
 A running log of what changed, newest first. Yes, we actually write these.
 
+## v0.2.47 — "Steady Hand"
+- **The Files editor holds still.** In a long file with wrapped lines, typing or clicking could make the text jump by dozens of lines: the editor recolored the whole file after every keystroke, and macOS re-measured the document. It now recolors only what changed and keeps the line at the top of the view in place.
+- **Settings ▸ Editor:** font size, wrap lines, syntax coloring, highlight the current line (on by default), a page guide, line numbers and change bars, tab width, indent with spaces or tabs, keep indentation on Return, and on save remove trailing spaces and end with a line break. They apply to every folder, and open editors follow as you change them.
+- **The MCP panel copes with lots of servers.** Servers are grouped by where they come from (the project, `~/.claude.json`, plugins, claude.ai), problems first, one line each (click one for details, Reconnect, Turn On/Off). A filter appears past 8 servers, and each group's menu can turn off all its servers that aren't connected, or turn them all off or on. The composer's MCP button goes red only for real failures, not for connectors waiting for you to sign in or ones you've turned off.
+- **A session named after a long pasted prompt reads on one line** in the sidebar. A prompt with many lines made the row go blank.
+
 ## v0.2.46 — "Tidy Up"
 - **Finished subagents tidy themselves away.** Once a subagent's turn has really ended, its row leaves the sidebar. A workflow's row goes once all its agents are done. Failed ones stay, and so do ones that have only gone quiet. The subagents row still counts them: right-click it for **Show Finished** or **Hide Finished**. Opening a group whose subagents are all finished shows them.
 - **Sandshell's kits come prebuilt.** Each release's chat kits are built once on GitHub and published to ghcr.io/xmas, so a new sandbox no longer builds them on your Mac. If ghcr.io can't be reached, the bundled copy is built as before.
