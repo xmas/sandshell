@@ -47,8 +47,6 @@ struct EditorPreferences: Codable, Equatable {
         endsWithNewline = value(.endsWithNewline, d.endsWithNewline)
     }
 
-    var font: NSFont { .monospacedSystemFont(ofSize: fontSize, weight: .regular) }
-
     /// What Tab inserts at `column` (0-based, tabs counted to their stop):
     /// spaces to the next tab stop, or a tab.
     func indent(atColumn column: Int) -> String {

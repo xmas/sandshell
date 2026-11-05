@@ -869,6 +869,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: Session menu (the focused pane's session, like the toolbar)
 
     @MainActor @objc func toggleSessionDetails(_ sender: Any?) { SessionDetails.toggle() }
+
+    // View ▸ Make Text Bigger / Smaller / Actual Size (`TextZoom`).
+    @MainActor @objc func makeTextBigger(_ sender: Any?) { TextZoom.zoomIn() }
+    @MainActor @objc func makeTextSmaller(_ sender: Any?) { TextZoom.zoomOut() }
+    @MainActor @objc func makeTextActualSize(_ sender: Any?) { TextZoom.actualSize() }
     @MainActor @objc func focusSessionFilter(_ sender: Any?) { activeController?.sidebarController?.focusFilter() }
     @MainActor @objc func reopenClosedSession(_ sender: Any?) { activeController?.reopenClosedSession() }
     @MainActor @objc func renameSession(_ sender: Any?) { activeController?.sidebarController?.beginRenameSelected() }
@@ -1039,6 +1044,9 @@ extension AppDelegate: NSMenuItemValidation {
             item.state = RemoteHub.shared.checkChat != nil ? .on : .off
             return true
         #endif
+        case #selector(makeTextBigger(_:)): return TextZoom.canZoomIn
+        case #selector(makeTextSmaller(_:)): return TextZoom.canZoomOut
+        case #selector(makeTextActualSize(_:)): return !TextZoom.isActualSize
         case #selector(toggleFiles(_:)):
             item.title = controller?.isFilesShown == true ? "Hide Files" : "Show Files"
             return controller != nil

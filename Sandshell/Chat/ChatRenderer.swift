@@ -193,8 +193,9 @@ final class BlockFragmentProvider: NSObject, NSTextLayoutManagerDelegate {
 /// of items the user opened ("Show more"); links use `sandshell-chat://toggle/<id>`.
 @MainActor
 enum ChatRenderer {
-    static let body = NSFont.role(.body)
-    static let mono = NSFont.role(.code)
+    /// Prose and code at View ▸ Make Text Bigger's size (`TextZoom`).
+    static var body: NSFont { .content(.body) }
+    static var mono: NSFont { .content(.code) }
     static let pad: CGFloat = 14           // text inset inside a block
     static let maxImageWidth: CGFloat = 520
     /// The text column a table fits when its view doesn't say (the Files preview).
@@ -230,7 +231,7 @@ enum ChatRenderer {
             return spaced(fileChanges(turn: turn, paths: paths, restored: restored), before: 2, after: 6)
         case .notice(_, let text, let isError):
             // Errors carry a warning mark, not only red, so they read as errors without color.
-            return spaced(line(isError ? "⚠︎  \(text)" : text, font: .role(.meta),
+            return spaced(line(isError ? "⚠︎  \(text)" : text, font: .content(.meta),
                                color: isError ? .systemRed : .secondaryLabelColor),
                           before: 4, after: 4)
         }
@@ -294,7 +295,7 @@ enum ChatRenderer {
     /// "Changed 3 files: a.swift, b.swift, and c.swift · Undo", or once undone,
     /// "Restored 3 files to before this message".
     private static func fileChanges(turn: String, paths: [String], restored: Bool) -> NSAttributedString {
-        let font = NSFont.role(.meta)
+        let font = NSFont.content(.meta)
         let names = paths.map { ($0 as NSString).lastPathComponent }
         let list = (Array(names.prefix(4)) + (names.count > 4 ? ["\(names.count - 4) more"] : [])).formatted()
         let count = paths.count == 1 ? "1 file" : "\(paths.count) files"
@@ -307,7 +308,7 @@ enum ChatRenderer {
                 .font: font, .foregroundColor: NSColor.secondaryLabelColor, .toolTip: paths.joined(separator: "\n")]))
             out.append(NSAttributedString(string: "   ", attributes: [.font: font]))
             out.append(NSAttributedString(string: "Undo", attributes: [
-                .font: NSFont.role(.meta, weight: .semibold), .foregroundColor: NSColor.controlAccentColor,
+                .font: NSFont.content(.meta, weight: .semibold), .foregroundColor: NSColor.controlAccentColor,
                 .link: undoURL(turn), .toolTip: "Put these files back as they were before this message"]))
         }
         out.append(NSAttributedString(string: "\n", attributes: [.font: font]))
@@ -365,7 +366,7 @@ enum ChatRenderer {
 
     private static func link(_ title: String, id: String) -> NSAttributedString {
         NSAttributedString(string: title + "\n", attributes: [
-            .font: NSFont.role(.meta), .link: toggleURL(id),
+            .font: NSFont.content(.meta), .link: toggleURL(id),
             .foregroundColor: NSColor.linkColor])
     }
 
@@ -373,7 +374,7 @@ enum ChatRenderer {
         let italic = NSFontManager.shared.convert(body, toHaveTrait: .italicFontMask)
         let lines = text.trimmingCharacters(in: .whitespacesAndNewlines).split(separator: "\n", omittingEmptySubsequences: false)
         let out = NSMutableAttributedString()
-        out.append(line("Thinking", font: .role(.meta, weight: .semibold), color: .tertiaryLabelColor))
+        out.append(line("Thinking", font: .content(.meta, weight: .semibold), color: .tertiaryLabelColor))
         let shown = expanded ? lines[...] : lines.prefix(2)
         out.append(line(shown.joined(separator: "\n"), font: italic, color: .tertiaryLabelColor))
         if lines.count > 2 { out.append(link(expanded ? "Show less" : "Show more", id: "thought-\(id)")) }
@@ -571,8 +572,8 @@ enum ChatRenderer {
         static let document = Prose(serif: true)
 
         /// A type role in the prose face.
-        func font(_ role: TypeRole = .body) -> NSFont {
-            let system = NSFont.role(role)
+        @MainActor func font(_ role: TypeRole = .body) -> NSFont {
+            let system = NSFont.content(role)
             guard serif, let serif = system.fontDescriptor.withDesign(.serif) else { return system }
             return NSFont(descriptor: serif, size: system.pointSize) ?? system
         }
@@ -844,7 +845,7 @@ enum ChatRenderer {
             let intent = (value as? NSNumber).map { InlinePresentationIntent(rawValue: $0.uintValue) } ?? []
             var font = base
             if intent.contains(.code) {
-                font = NSFont.role(.code)
+                font = NSFont.content(.code)
 
                 ns.addAttribute(.backgroundColor, value: NSColor.labelColor.withAlphaComponent(0.07), range: range)
             }

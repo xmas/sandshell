@@ -157,6 +157,7 @@ final class TerminalSession {
     private let theme: ThemeController
     private var themeObserver: AnyCancellable?
     private var cursorObserver: AnyCancellable?
+    private var zoomObserver: (any NSObjectProtocol)?
     /// Called when the agent/PTY process exits and the surface wants to close.
     var onProcessExit: (() -> Void)?
 
@@ -222,8 +223,7 @@ final class TerminalSession {
     /// selection. Unbound, the menu gets the key (when no menu item takes it,
     /// the terminal still does).
     ///
-    /// Left to Ghostty: ⌘V, ⌘A and ⌘0 (paste, select all, font size, done in
-    /// the terminal); ⌘E, ⌘G, ⇧⌘G and ⌘J, whose text-find menu items have
+    /// Left to Ghostty: ⌘V and ⌘A (paste, select all, done in the terminal); ⌘E, ⌘G, ⇧⌘G and ⌘J, whose text-find menu items have
     /// nothing to do in a terminal; and the pane commands ⌘D, ⇧⌘D, ⌥⌘W and
     /// ⌃⌘=, which AppDelegate's shortcut monitor routes in a workspace window
     /// and which, from a terminal on this Mac, would reach into the workspace
@@ -240,13 +240,14 @@ final class TerminalSession {
         "super+f", "super+shift+f",
         "super+alt+i", "super+ctrl+f",
         "super+[", "super+]", "super+shift+[", "super+shift+]",
+        "super+=", "super++", "super+-", "super+0",   // text size: the app's, terminals included
     ]
 
     /// Font, cursor and the released menu shortcuts: what every Sandshell
     /// terminal shares (sessions and `HostTerminalWindowController`'s).
     static func applyBase(_ prefs: ThemePreferences, to c: inout TerminalConfiguration.Builder) {
         c.withFontFamily("SF Mono")
-        c.withFontSize(13)
+        c.withFontSize(Float(TextZoom.scaled(13)))   // View ▸ Make Text Bigger / Smaller
         c.withFontThicken(true)
         applyCursor(prefs, to: &c)
         for key in releasedMenuKeys { c.withCustom("keybind", "\(key)=unbind") }
@@ -289,6 +290,15 @@ final class TerminalSession {
     /// Cursor style/blink are config-time in ghostty, so push a fresh configuration
     /// to this live terminal when they change instead of waiting for a new one.
     private func observeCursorPrefs() {
+        // ⌘+ / ⌘−: the app's text size, terminals included (the menu has
+        // the keys; Ghostty's own font-size bindings are released).
+        zoomObserver = NotificationCenter.default.addObserver(forName: TextZoom.didChange, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.controller.setTerminalConfiguration(
+                    Self.configuration(scriptURL: self.scriptURL, prefs: self.theme.prefs))
+            }
+        }
         cursorObserver = theme.$prefs
             .map { [$0.terminalCursorStyle, $0.terminalCursorBlink] as [AnyHashable] }
             .removeDuplicates()

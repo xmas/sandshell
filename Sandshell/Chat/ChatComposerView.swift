@@ -63,7 +63,8 @@ final class ChatComposerView: NSView, NSTextViewDelegate {
         textView.isRichText = true
         textView.importsGraphics = false
         textView.allowsUndo = true
-        textView.font = .role(.body)
+        textView.font = .content(.body)
+        NotificationCenter.default.addObserver(self, selector: #selector(textZoomChanged), name: TextZoom.didChange, object: nil)
         // One line sits centered in the 40 pt field (48 with the pill's own padding).
         textView.textContainerInset = NSSize(width: 0, height: 12)
         textView.isContinuousSpellCheckingEnabled = true
@@ -474,6 +475,15 @@ final class ChatComposerView: NSView, NSTextViewDelegate {
     /// half its height).
     var maximumHeight: CGFloat = 200 {
         didSet { if oldValue != maximumHeight { resize() } }
+    }
+
+    /// View ▸ Make Text Bigger / Smaller: the draft (and what's typed next) at the new size.
+    @objc private func textZoomChanged() {
+        let font = NSFont.content(.body)
+        textView.font = font
+        textView.typingAttributes[.font] = font
+        textView.needsDisplay = true
+        resize()
     }
 
     /// Grow with the text, from one line up to `maximumHeight`, then scroll.

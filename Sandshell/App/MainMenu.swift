@@ -161,6 +161,16 @@ enum MainMenu {
         mainMenu.addItem(viewItem)
         let viewMenu = NSMenu(title: "View")
         viewItem.submenu = viewMenu
+        // Text size, as Mail and Safari have it: the content, not the chrome
+        // (`TextZoom`). ⌘= is ⌘+ without Shift, as there.
+        viewMenu.addItem(withTitle: "Make Text Bigger", action: #selector(AppDelegate.makeTextBigger(_:)), keyEquivalent: "+")
+        let bigger = viewMenu.addItem(withTitle: "Make Text Bigger", action: #selector(AppDelegate.makeTextBigger(_:)),
+                                      keyEquivalent: "=")
+        bigger.isHidden = true
+        bigger.allowsKeyEquivalentWhenHidden = true
+        viewMenu.addItem(withTitle: "Make Text Smaller", action: #selector(AppDelegate.makeTextSmaller(_:)), keyEquivalent: "-")
+        viewMenu.addItem(withTitle: "Actual Size", action: #selector(AppDelegate.makeTextActualSize(_:)), keyEquivalent: "0")
+        viewMenu.addItem(.separator())
         // The window's Files sidebar (validation names it Show / Hide Files).
         let showFiles = viewMenu.addItem(withTitle: "Show Files", action: #selector(AppDelegate.toggleFiles(_:)),
                                          keyEquivalent: "0")
@@ -250,10 +260,8 @@ enum MainMenu {
                            action: #selector(NSApplication.arrangeInFront(_:)), keyEquivalent: "")
         windowMenu.addItem(.separator())
         // Always-available way to reopen/focus the main window after it's closed.
-        let mainWindowItem = windowMenu.addItem(withTitle: appName,
-                                                action: #selector(AppDelegate.showMainWindow(_:)),
-                                                keyEquivalent: "0")
-        mainWindowItem.keyEquivalentModifierMask = [.command]
+        // (No ⌘0: that's View ▸ Actual Size, as across macOS.)
+        windowMenu.addItem(withTitle: appName, action: #selector(AppDelegate.showMainWindow(_:)), keyEquivalent: "")
 
         // MARK: Help menu
         let helpItem = NSMenuItem()

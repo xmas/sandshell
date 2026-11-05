@@ -12,6 +12,7 @@ final class HostTerminalWindowController: NSWindowController, NSWindowDelegate {
     private let theme: ThemeController
     private var themeObserver: AnyCancellable?
     private var cursorObserver: AnyCancellable?
+    private var zoomObserver: (any NSObjectProtocol)?
     /// Called when the window closes so the owner can drop its reference.
     var onClose: (() -> Void)?
 
@@ -63,6 +64,13 @@ final class HostTerminalWindowController: NSWindowController, NSWindowDelegate {
             self.term.setColorScheme(self.theme.terminalIsDark ? .dark : .light)
         }
 
+        // ⌘+ / ⌘−: the app's text size.
+        zoomObserver = NotificationCenter.default.addObserver(forName: TextZoom.didChange, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.term.setTerminalConfiguration(Self.configuration(scriptURL: self.scriptURL, prefs: self.theme.prefs))
+            }
+        }
         // Cursor style/blink are config-time; re-apply to this live terminal.
         cursorObserver = theme.$prefs
             .map { [$0.terminalCursorStyle, $0.terminalCursorBlink] as [AnyHashable] }

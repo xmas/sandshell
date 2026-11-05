@@ -381,7 +381,7 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
         editor.isAutomaticSpellingCorrectionEnabled = false
         editor.isContinuousSpellCheckingEnabled = false
         editor.smartInsertDeleteEnabled = false
-        editor.font = prefs.font
+        editor.font = editorFont
         editor.textContainerInset = NSSize(width: 6, height: 8)
         editor.delegate = self
         editor.setAccessibilityIdentifier("files-editor")
@@ -397,6 +397,20 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
         settingsWatch = EditorSettings.shared.$prefs.dropFirst().sink { [weak self] prefs in
             MainActor.assumeIsolated { self?.apply(prefs) }
         }
+        NotificationCenter.default.addObserver(self, selector: #selector(textZoomChanged), name: TextZoom.didChange, object: nil)
+    }
+
+    /// Settings ▸ Editor's font size, at View ▸ Make Text Bigger's zoom.
+    private var editorFont: NSFont {
+        .monospacedSystemFont(ofSize: TextZoom.scaled(prefs.fontSize), weight: .regular)
+    }
+
+    /// View ▸ Make Text Bigger / Smaller: the text, its gutter and the
+    /// Markdown preview at the new size.
+    @objc private func textZoomChanged() {
+        ruler.fontSize = TextZoom.scaled(prefs.fontSize)
+        editor.keepingTopLine { styleText() }
+        if let current, current.mode == .preview { show(current) }
     }
 
     /// Show and edit as Settings ▸ Editor says.
@@ -404,7 +418,7 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
         let old = editor.prefs
         editor.prefs = new
         ruler.showsChangeBars = new.showsChangeBars
-        ruler.fontSize = new.fontSize
+        ruler.fontSize = TextZoom.scaled(new.fontSize)
         editorScroll.rulersVisible = new.showsLineNumbers
         if new.wrapsLines != old.wrapsLines || editorScroll.hasHorizontalScroller == new.wrapsLines {
             editor.keepingTopLine { applyWrapping(new.wrapsLines) }
@@ -430,7 +444,7 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
 
     /// The font and tab stops, on the whole text and what's typed next.
     private func styleText() {
-        let font = prefs.font
+        let font = editorFont
         let paragraph = NSMutableParagraphStyle()
         paragraph.tabStops = []
         paragraph.defaultTabInterval = CGFloat(prefs.tabWidth) * (" " as NSString).size(withAttributes: [.font: font]).width
@@ -1338,7 +1352,7 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
     private func highlight() {
         guard let file = current, let storage = editor.textStorage, storage.length < 300_000 else { return }
         let colored = prefs.colorsSyntax
-            ? SyntaxHighlighter.highlight(storage.string, language: file.language, font: prefs.font)
+            ? SyntaxHighlighter.highlight(storage.string, language: file.language, font: editorFont)
             : NSAttributedString(string: storage.string, attributes: [.foregroundColor: NSColor.labelColor])
         editor.keepingTopLine { EditorRecolor.apply(colored, to: storage) }
     }

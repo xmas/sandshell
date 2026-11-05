@@ -107,7 +107,7 @@ struct ReleasedMenuKeysTests {
         try #require(shortcuts.count > 40, "the main menu was read")
         let bound = try ghosttyBinds(shortcuts, with: sandshellTerminals).filter(\.value).map(\.key.trigger)
         let leftToGhostty: Set = [
-            "super+v", "super+a", "super+0",                           // paste, select all, font size
+            "super+v", "super+a",                                      // paste, select all
             "super+e", "super+g", "super+shift+g", "super+j",          // text find
             "super+d", "super+shift+d", "super+alt+w", "super+ctrl+=", // panes (the app's key monitor)
         ]
@@ -138,9 +138,10 @@ struct ReleasedMenuKeysTests {
     func everyReleasedKeyWasABinding(_ trigger: String) throws {
         // The character forms Ghostty's defaults use: "super+comma" or
         // "super+shift+left_bracket" would name other keys and unbind nothing.
-        let parts = trigger.split(separator: "+").map(String.init)
-        let character = try #require(parts.last?.first)
-        let flags: NSEvent.ModifierFlags = parts.dropLast().reduce(into: []) { flags, name in
+        // The key is the last character ("super++" is ⌘+), the modifiers before it.
+        let character = try #require(trigger.last)
+        let parts = trigger.dropLast(2).split(separator: "+").map(String.init)
+        let flags: NSEvent.ModifierFlags = parts.reduce(into: []) { flags, name in
             switch name {
             case "super": flags.insert(.command)
             case "ctrl": flags.insert(.control)
