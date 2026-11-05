@@ -3,7 +3,7 @@ import SwiftUI
 /// The per-root inspector panes. All app settings live here — there is no
 /// separate global Settings window.
 enum InspectorPane: String, CaseIterable, Identifiable {
-    case general, sandboxes, folders, mounts, kits, agents, git, terminal
+    case general, sandboxes, folders, mounts, kits, agents, git, terminal, editor
     var id: String { rawValue }
     var title: String { rawValue.capitalized }
 
@@ -17,6 +17,7 @@ enum InspectorPane: String, CaseIterable, Identifiable {
         case .agents: "person.crop.square.fill"
         case .git: "arrow.triangle.branch"
         case .terminal: "terminal.fill"
+        case .editor: "chevron.left.forwardslash.chevron.right"
         }
     }
 
@@ -31,6 +32,7 @@ enum InspectorPane: String, CaseIterable, Identifiable {
         case .agents: .pink
         case .git: .orange
         case .terminal: .teal
+        case .editor: .purple
         }
     }
 }

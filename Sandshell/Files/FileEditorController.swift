@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import Quartz
 import UniformTypeIdentifiers
 
@@ -275,7 +276,9 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
     /// Where Changes render: the diff column while it shows, the editor otherwise.
     private var changesView: TranscriptTextView { diffColumnShown ? diffText : preview }
 
-    static let codeFont = NSFont.monospacedSystemFont(ofSize: 12.5, weight: .regular)
+    /// Settings ▸ Editor (the editor follows changes live: `apply(_:)`).
+    private var prefs: EditorPreferences { editor.prefs }
+    private var settingsWatch: AnyCancellable?
 
     override func loadView() {
         let root = NSView()
@@ -378,7 +381,7 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
         editor.isAutomaticSpellingCorrectionEnabled = false
         editor.isContinuousSpellCheckingEnabled = false
         editor.smartInsertDeleteEnabled = false
-        editor.font = Self.codeFont
+        editor.font = prefs.font
         editor.textContainerInset = NSSize(width: 6, height: 8)
         editor.delegate = self
         editor.setAccessibilityIdentifier("files-editor")
@@ -389,6 +392,57 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
         editorScroll.verticalRulerView = ruler
         editorScroll.hasVerticalRuler = true
         editorScroll.rulersVisible = true
+        apply(EditorSettings.shared.prefs)
+        // @Published sends before the value changes, with the new one.
+        settingsWatch = EditorSettings.shared.$prefs.dropFirst().sink { [weak self] prefs in
+            MainActor.assumeIsolated { self?.apply(prefs) }
+        }
+    }
+
+    /// Show and edit as Settings ▸ Editor says.
+    private func apply(_ new: EditorPreferences) {
+        let old = editor.prefs
+        editor.prefs = new
+        ruler.showsChangeBars = new.showsChangeBars
+        ruler.fontSize = new.fontSize
+        editorScroll.rulersVisible = new.showsLineNumbers
+        if new.wrapsLines != old.wrapsLines || editorScroll.hasHorizontalScroller == new.wrapsLines {
+            editor.keepingTopLine { applyWrapping(new.wrapsLines) }
+        }
+        if new.fontSize != old.fontSize || new.tabWidth != old.tabWidth || editor.typingAttributes[.paragraphStyle] == nil {
+            editor.keepingTopLine { styleText() }
+        }
+        if new.colorsSyntax != old.colorsSyntax { highlight() }
+    }
+
+    /// Wrapped at the editor's width, or one row per line, scrolling sideways.
+    private func applyWrapping(_ wraps: Bool) {
+        editorScroll.hasHorizontalScroller = !wraps
+        editor.isHorizontallyResizable = !wraps
+        editor.autoresizingMask = wraps ? [.width] : []
+        editor.textContainer?.widthTracksTextView = wraps
+        let width = editorScroll.contentSize.width
+        editor.textContainer?.containerSize = NSSize(width: wraps ? width : .greatestFiniteMagnitude,
+                                                     height: .greatestFiniteMagnitude)
+        if wraps { editor.setFrameSize(NSSize(width: width, height: editor.frame.height)) }
+        editor.sizeToFit()
+    }
+
+    /// The font and tab stops, on the whole text and what's typed next.
+    private func styleText() {
+        let font = prefs.font
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.tabStops = []
+        paragraph.defaultTabInterval = CGFloat(prefs.tabWidth) * (" " as NSString).size(withAttributes: [.font: font]).width
+        editor.font = font
+        editor.defaultParagraphStyle = paragraph
+        editor.typingAttributes[.font] = font
+        editor.typingAttributes[.paragraphStyle] = paragraph
+        guard let storage = editor.textStorage, storage.length > 0 else { return }
+        let all = NSRange(location: 0, length: storage.length)
+        storage.beginEditing()
+        storage.addAttributes([.font: font, .paragraphStyle: paragraph], range: all)
+        storage.endEditing()
     }
 
     private func setUpPreview() {
@@ -758,6 +812,7 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
             // scroll and undo alone.
             if editor.string != file.text || shownInEditor !== file {
                 editor.string = file.text
+                styleText()
                 editor.setSelectedRange(file.selection)
                 editor.undoManager?.removeAllActions(withTarget: editor.textStorage as Any)
             }
@@ -1278,17 +1333,14 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
         }
     }
 
-    /// Re-color the whole buffer (colors only, so typing/undo/selection are untouched).
+    /// Re-color the buffer (colors only, so typing/undo/selection are
+    /// untouched; only what changed, so the text doesn't move — `EditorRecolor`).
     private func highlight() {
         guard let file = current, let storage = editor.textStorage, storage.length < 300_000 else { return }
-        let colored = SyntaxHighlighter.highlight(storage.string, language: file.language, font: Self.codeFont)
-        storage.beginEditing()
-        colored.enumerateAttribute(.foregroundColor, in: NSRange(location: 0, length: colored.length)) { value, range, _ in
-            if let color = value as? NSColor, NSMaxRange(range) <= storage.length {
-                storage.addAttribute(.foregroundColor, value: color, range: range)
-            }
-        }
-        storage.endEditing()
+        let colored = prefs.colorsSyntax
+            ? SyntaxHighlighter.highlight(storage.string, language: file.language, font: prefs.font)
+            : NSAttributedString(string: storage.string, attributes: [.foregroundColor: NSColor.labelColor])
+        editor.keepingTopLine { EditorRecolor.apply(colored, to: storage) }
     }
 
     /// ⌘S (File ▸ Save).
@@ -1313,6 +1365,7 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
             else { return }
         case nil: break
         }
+        tidyBeforeSaving(file)
         do {
             try file.write()
             // What's on disk is this tab's version now: no "changed on disk"
@@ -1324,6 +1377,29 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
         } catch {
             NSAlert(error: error).runModal()
         }
+    }
+
+    /// Settings ▸ Editor ▸ When Saving: trailing spaces cut, a final line
+    /// break added — in the editor as an edit you can undo, when it shows the file.
+    private func tidyBeforeSaving(_ file: OpenFile) {
+        guard file.isText else { return }
+        guard file === current, shownInEditor === file, file.mode == .source, let storage = editor.textStorage else {
+            file.text = prefs.tidied(file.text)
+            return
+        }
+        let edits = prefs.saveEdits(in: storage.string as NSString, caret: editor.selectedRange().location)
+        guard !edits.isEmpty,
+              editor.shouldChangeText(inRanges: edits.map { NSValue(range: $0.range) },
+                                      replacementStrings: edits.map(\.replacement))
+        else { return }
+        editor.keepingTopLine {
+            storage.beginEditing()
+            for edit in edits { storage.replaceCharacters(in: edit.range, with: edit.replacement) }
+            storage.endEditing()
+            editor.didChangeText()
+        }
+        editor.undoManager?.setActionName("Tidy on Save")
+        file.text = editor.string
     }
 
     /// What File ▸ Print prints: the tab as it shows — its text in Source, the
@@ -1440,10 +1516,16 @@ private final class BannerView: NSStackView {
     override func updateLayer() { layer?.backgroundColor = NSColor.systemYellow.withAlphaComponent(0.15).cgColor }
 }
 
-/// Editor text view: Tab inserts spaces matching the line's indentation width
-/// convention (4), Return keeps the current line's indentation.
+/// Editor text view, as Settings ▸ Editor says: Tab inserts spaces to the
+/// next tab stop (or a tab), Return keeps the line's indentation, the caret's
+/// line is highlighted and a page guide drawn.
 final class CodeTextView: NSTextView {
+    var prefs = EditorPreferences() {
+        didSet { if prefs != oldValue { setNeedsDisplay(visibleRect) } }
+    }
+
     override func insertNewline(_ sender: Any?) {
+        guard prefs.autoIndents else { return super.insertNewline(sender) }
         let ns = string as NSString
         let lineRange = ns.lineRange(for: NSRange(location: selectedRange().location, length: 0))
         let line = ns.substring(with: lineRange)
@@ -1451,13 +1533,80 @@ final class CodeTextView: NSTextView {
         super.insertNewline(sender)
         if !indent.isEmpty { insertText(String(indent), replacementRange: selectedRange()) }
     }
+
+    override func insertTab(_ sender: Any?) {
+        let ns = string as NSString
+        let caret = selectedRange().location
+        let lineStart = ns.lineRange(for: NSRange(location: caret, length: 0)).location
+        let column = prefs.column(of: caret - lineStart, in: ns.substring(with: NSRange(location: lineStart, length: caret - lineStart)))
+        insertText(prefs.indent(atColumn: column), replacementRange: selectedRange())
+    }
+
+    override func setSelectedRanges(_ ranges: [NSValue], affinity: NSSelectionAffinity, stillSelecting: Bool) {
+        super.setSelectedRanges(ranges, affinity: affinity, stillSelecting: stillSelecting)
+        guard prefs.highlightsCurrentLine else { return }
+        setNeedsDisplay(visibleRect)
+        enclosingScrollView?.verticalRulerView?.needsDisplay = true
+    }
+
+    override func drawBackground(in rect: NSRect) {
+        super.drawBackground(in: rect)
+        if prefs.highlightsCurrentLine, let line = caretLineRect(), line.intersects(rect) {
+            NSColor.labelColor.withAlphaComponent(0.06).setFill()
+            line.fill()
+        }
+        if prefs.showsPageGuide, let font {
+            let advance = ("0" as NSString).size(withAttributes: [.font: font]).width
+            let x = (textContainerOrigin.x + (textContainer?.lineFragmentPadding ?? 0)
+                     + CGFloat(prefs.pageGuideColumn) * advance).rounded() + 0.5
+            if x < bounds.maxX {
+                NSColor.separatorColor.setFill()
+                NSRect(x: x, y: rect.minY, width: 1, height: rect.height).fill()
+            }
+        }
+    }
+
+    /// The caret's whole line (all its wrapped rows), the view's full width;
+    /// nil with a selection.
+    func caretLineRect() -> NSRect? {
+        let selection = selectedRange()
+        guard selection.length == 0, let tlm = textLayoutManager, let tcm = tlm.textContentManager,
+              let location = tcm.location(tcm.documentRange.location, offsetBy: selection.location) else { return nil }
+        let origin = textContainerOrigin
+        let length = (string as NSString).length
+        // After a final line break the caret sits on the empty last line,
+        // laid out as the last paragraph's extra row.
+        let endsWithBreak = selection.location == length && length > 0
+            && CharacterSet.newlines.contains(UnicodeScalar((string as NSString).character(at: length - 1)) ?? " ")
+        let lookup = endsWithBreak ? (tcm.location(location, offsetBy: -1) ?? location) : location
+        guard let fragment = tlm.textLayoutFragment(for: lookup) else {
+            // An empty file: the first row.
+            guard length == 0, let font else { return nil }
+            // (Not `layoutManager`: asking a TextKit 2 view for it turns it into TextKit 1.)
+            let height = (font.ascender - font.descender + font.leading).rounded(.up)
+            return NSRect(x: 0, y: origin.y, width: bounds.width, height: height)
+        }
+        let frame = fragment.layoutFragmentFrame
+        let rows = fragment.textLineFragments
+        if endsWithBreak, let last = rows.last {
+            let b = last.typographicBounds
+            return NSRect(x: 0, y: frame.minY + b.minY + origin.y, width: bounds.width, height: b.height)
+        }
+        let textRows = rows.filter { $0.characterRange.length > 0 }
+        let height = textRows.last.map { $0.typographicBounds.maxY } ?? frame.height
+        return NSRect(x: 0, y: frame.minY + origin.y, width: bounds.width, height: height)
+    }
 }
 
 /// Line numbers + git change bars for a TextKit 2 text view.
 final class LineNumberRuler: NSRulerView {
     var changes = LineChanges() { didSet { needsDisplay = true } }
+    var showsChangeBars = true { didSet { needsDisplay = true } }
+    /// The editor's font size: the numbers and the gutter follow it.
+    var fontSize: CGFloat = 12.5 { didSet { if fontSize != oldValue { lineCountChanged() } } }
     private weak var textView: NSTextView?
     private var lineStarts: [Int] = [0]
+    private var scale: CGFloat { fontSize / 12.5 }
 
     init(textView: NSTextView) {
         self.textView = textView
@@ -1484,7 +1633,7 @@ final class LineNumberRuler: NSRulerView {
         guard let s = textView?.string as NSString? else { return }
         lineStarts = Self.lineStarts(in: s)
         let digits = max(3, String(lineStarts.count).count)
-        ruleThickness = CGFloat(digits) * 7.5 + 22
+        ruleThickness = ((CGFloat(digits) * 7.5 + 22) * scale).rounded()
         needsDisplay = true
     }
 
@@ -1524,9 +1673,13 @@ final class LineNumberRuler: NSRulerView {
     override func drawHashMarksAndLabels(in rect: NSRect) {
         guard let tv = textView, let tlm = tv.textLayoutManager, let tcm = tlm.textContentManager else { return }
         NSColor.textBackgroundColor.withAlphaComponent(0.0).setFill()
+        let font = NSFont.role(.code)
         let attrs: [NSAttributedString.Key: Any] = [
-            .font: NSFont.role(.code),
+            .font: font.withSize(font.pointSize * scale),
             .foregroundColor: NSColor.tertiaryLabelColor]
+        // The caret's line reads in full color (Settings ▸ Editor ▸ Highlight Current Line).
+        let caretLine = (tv as? CodeTextView)?.prefs.highlightsCurrentLine == true && tv.selectedRange().length == 0
+            ? line(forOffset: tv.selectedRange().location) : nil
         let visible = tv.visibleRect
         let origin = convert(NSPoint.zero, from: tv)
         let inset = tv.textContainerInset.height
@@ -1544,7 +1697,10 @@ final class LineNumberRuler: NSRulerView {
             let y = frame.minY + inset + origin.y
             let label = "\(n)" as NSString
             let size = label.size(withAttributes: attrs)
-            label.draw(at: NSPoint(x: ruleThickness - size.width - 10, y: y + 1), withAttributes: attrs)
+            var labelAttrs = attrs
+            if n == caretLine { labelAttrs[.foregroundColor] = NSColor.secondaryLabelColor }
+            label.draw(at: NSPoint(x: ruleThickness - size.width - 10, y: y + 1), withAttributes: labelAttrs)
+            guard showsChangeBars else { return true }
             // Change bar on the right edge of the gutter, as tall as the text
             // (the last paragraph's fragment also holds the empty end line).
             let textLines = fragment.textLineFragments.filter { $0.characterRange.length > 0 }

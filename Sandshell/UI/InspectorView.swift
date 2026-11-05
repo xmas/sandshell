@@ -67,6 +67,8 @@ struct InspectorView: View {
                          note: "Auto-commit and remotes in Phase 6.")
         case .terminal:
             TerminalPaneView(theme: controller.theme)
+        case .editor:
+            EditorPaneView(settings: .shared)
         }
     }
 }
