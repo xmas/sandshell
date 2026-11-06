@@ -220,6 +220,28 @@ struct ChatRendererTests {
             #expect(CRFixture.font(in: rendered, at: text.location)?.fontDescriptor.symbolicTraits.contains(.italic) == true)
             #expect(CRFixture.color(in: rendered, at: text.location) == NSColor.secondaryLabelColor)
         }
+
+        /// What pulses when something's copied: the block it sits on, whole.
+        @Test func aCopiedMessagePulsesItsOwnBlock() {
+            let rendered = ChatRenderer.render(.user(id: UUID(), text: "one\n\ntwo", attachments: []), expanded: false)
+            let blocks = ChatTranscriptView.copiedBlocks(in: rendered, range: NSRange(location: 0, length: rendered.length))
+            #expect(blocks.count == 1)
+            #expect(blocks.first?.style.kind == .user)
+        }
+
+        @Test func aCopiedCodeBlockPulsesItsOwnBlock() {
+            let rendered = ChatRenderer.markdown("```\nlet a = 1\nlet b = 2\n```")
+            let blocks = ChatTranscriptView.copiedBlocks(in: rendered, range: NSRange(location: 0, length: rendered.length))
+            #expect(blocks.count == 1)
+            #expect(blocks.first?.style.kind == .code)
+        }
+
+        /// No block says "all of this": the caller tints the whole reply.
+        @Test(arguments: ["Plain prose.", "Before.\n\n```\ncode\n```\n\nAfter."])
+        func aReplyHasNoBlockOfItsOwn(markdown: String) {
+            let rendered = ChatRenderer.markdown(markdown)
+            #expect(ChatTranscriptView.copiedBlocks(in: rendered, range: NSRange(location: 0, length: rendered.length)).isEmpty)
+        }
     }
 
     // MARK: - Tool cards

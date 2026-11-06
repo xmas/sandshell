@@ -1059,19 +1059,58 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
         if let window { op.runModal(for: window, delegate: nil, didRun: nil, contextInfo: nil) } else { op.run() }
     }
 
-    /// What was just copied lights up in the accent color and fades.
+    /// What was just copied pulses: its own background deepens and eases
+    /// back. A reply has none, so it takes your messages' tint for the pulse.
     private func flashCopied(_ range: NSRange) {
-        guard let frame = frame(of: range) else { return }
-        let flash = NSView(frame: frame.insetBy(dx: -8, dy: -4))
-        flash.wantsLayer = true
-        flash.layer?.cornerRadius = 8
-        flash.layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.18).cgColor
-        textView.addSubview(flash, positioned: .below, relativeTo: nil)
-        NSAnimationContext.runAnimationGroup({ context in
-            context.duration = 0.55
-            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
-            flash.animator().alphaValue = 0
-        }, completionHandler: { MainActor.assumeIsolated { flash.removeFromSuperview() } })
+        guard let storage = textView.textStorage else { return }
+        let blocks = Self.copiedBlocks(in: storage, range: range)
+        let pulses = blocks.isEmpty ? [(range: range, style: BlockStyle(.user, .single))] : blocks
+        for block in pulses {
+            if let frame = blockFrame(of: block.range) { pulse(frame, color: block.style.fill) }
+        }
+    }
+
+    /// The whole blocks `range` sits on; none if any of its text is off them
+    /// (a reply's prose around its code), where one block wouldn't say what was copied.
+    static func copiedBlocks(in text: NSAttributedString, range: NSRange) -> [(range: NSRange, style: BlockStyle)] {
+        var blocks: [(range: NSRange, style: BlockStyle)] = []
+        var hasPlainText = false
+        let range = NSIntersectionRange(range, NSRange(location: 0, length: text.length))
+        text.enumerateAttribute(.chatBlock, in: range) { value, run, stop in
+            if let style = value as? BlockStyle {
+                if let last = blocks.last, NSMaxRange(last.range) == run.location,
+                   style.position == .middle || style.position == .last {
+                    blocks[blocks.count - 1].range.length += run.length
+                } else {
+                    blocks.append((run, style))
+                }
+            } else if text.attributedSubstring(from: run).string.contains(where: { !$0.isWhitespace && $0 != "\u{FFFC}" }) {
+                hasPlainText = true
+                stop.pointee = true
+            }
+        }
+        return hasPlainText ? [] : blocks
+    }
+
+    /// Lays `color` over a block's background, behind its text, and back out.
+    private func pulse(_ frame: NSRect, color: NSColor) {
+        let view = NSView(frame: frame)
+        view.wantsLayer = true
+        view.alphaValue = 0
+        view.layer?.cornerRadius = BlockBackgroundFragment.radius
+        textView.effectiveAppearance.performAsCurrentDrawingAppearance {
+            view.layer?.backgroundColor = color.withAlphaComponent(color.alphaComponent * 1.6).cgColor
+        }
+        textView.addSubview(view, positioned: .below, relativeTo: nil)
+        let animation = CAKeyframeAnimation(keyPath: "opacity")
+        animation.values = [0, 1, 0]
+        animation.keyTimes = [0, 0.3, 1]
+        animation.duration = 0.6
+        animation.timingFunctions = [CAMediaTimingFunction(name: .easeOut), CAMediaTimingFunction(name: .easeInEaseOut)]
+        CATransaction.begin()
+        CATransaction.setCompletionBlock { MainActor.assumeIsolated { view.removeFromSuperview() } }
+        view.layer?.add(animation, forKey: "pulse")
+        CATransaction.commit()
     }
 
     /// A reply as its Markdown (plain text) and as it looks (rich text); a
