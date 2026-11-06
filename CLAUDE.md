@@ -51,6 +51,8 @@ scripts/xcode-sandbox.py build                   # scripts/xcode-sandbox.py log 
 
 It drives the user's real Xcode. A new source file needs `xcodegen generate` on the Mac first; self-tests and UI tests need the Mac.
 
+`scripts/xcode-sandbox.py release <version>` starts a release: Xcode's Publish scheme runs `scripts/xcode-release.sh`, which asks on the Mac, then runs `release.sh` apart from the build (progress in `release.log`). Only when the user asks for a release.
+
 ### Unit tests (Swift Testing)
 
 ```bash

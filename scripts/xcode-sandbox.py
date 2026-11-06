@@ -11,6 +11,8 @@ MCP to the gateway itself, through the sandbox's proxy.
   scripts/xcode-sandbox.py test                 build, then every test
   scripts/xcode-sandbox.py test FooTests ...    build, then these suites or tests
   scripts/xcode-sandbox.py log [warning]        the last build's issues
+  scripts/xcode-sandbox.py release 1.2.3        start a release on the Mac (Publish
+                                                scheme); it asks there first
   scripts/xcode-sandbox.py tools                what Xcode offers
   scripts/xcode-sandbox.py call Tool '{json}'   any tool
 
@@ -22,6 +24,7 @@ It drives the user's real Xcode, which must have Sandshell.xcodeproj open. A
 new source file needs `xcodegen generate` on the Mac first.
 """
 import json
+import re
 import sys
 import urllib.error
 import urllib.request
@@ -143,6 +146,25 @@ def test(ws, names):
     return counts.get("failed", 1) == 0 and counts.get("passed", 0) > 0
 
 
+def release(ws, version):
+    """Ask for a release: the Publish scheme's build starts it, and that's all a build does."""
+    if not re.fullmatch(r"\d+\.\d+\.\d+", version):
+        sys.exit(f"Not a version: {version}")
+    if '"Publish"' not in call("XcodeListSchemes", {"workspaceIdentifier": ws}):
+        sys.exit("Xcode has no Publish scheme: run `xcodegen generate` on the Mac.")
+    request = Path(__file__).resolve().parent.parent / ".release-request"
+    request.write_text(version)
+    try:
+        call("XcodeSwitchScheme", {"workspaceIdentifier": ws, "schemeName": "Publish"})
+        call("BuildProject", {"workspaceIdentifier": ws})
+    finally:
+        call("XcodeSwitchScheme", {"workspaceIdentifier": ws, "schemeName": "Sandshell"})
+    if request.exists():
+        request.unlink()
+        sys.exit("The Publish build didn't pick the request up; nothing started.")
+    print(f"Release {version} started: confirm it on the Mac. Progress: release.log")
+
+
 def main():
     command = sys.argv[1] if len(sys.argv) > 1 else "help"
     if command == "tools":
@@ -154,6 +176,8 @@ def main():
         issues(workspace(), sys.argv[2] if len(sys.argv) > 2 else "error")
     elif command == "build":
         return 0 if build(workspace()) else 1
+    elif command == "release":
+        release(workspace(), sys.argv[2] if len(sys.argv) > 2 else "")
     elif command == "test":
         ws = workspace()
         return 0 if build(ws) and test(ws, sys.argv[2:]) else 1

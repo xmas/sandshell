@@ -1,6 +1,10 @@
 # XcodeGen output (regenerate with `xcodegen generate`)
 *.xcodeproj
 
+# A release started from Xcode (scripts/xcode-release.sh)
+.release-request
+release.log
+
 # Build output
 build/
 build-release/

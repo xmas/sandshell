@@ -38,6 +38,11 @@ scripts/release.sh --dry-run 0.2.20
 scripts/release.sh 0.2.20
 ```
 
+From a sandbox, which has no `gh` login or tap clone, `scripts/xcode-sandbox.py
+release 0.2.20` does the same through Xcode: the Publish scheme runs
+`scripts/xcode-release.sh`, which asks in a dialog on the Mac, then runs
+`release.sh` there, logging to `release.log`.
+
 The real run:
 
 1. **Preflight** — on `main`; working tree clean except `project.yml` /

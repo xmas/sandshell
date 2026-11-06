@@ -128,3 +128,19 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.xmas.sandshell.tests
         GENERATE_INFOPLIST_FILE: YES
 
+# Starts a release from Xcode, so from a sandbox: scripts/xcode-release.sh.
+aggregateTargets:
+  Publish:
+    buildScripts:
+      - name: Release
+        script: '"$SRCROOT/scripts/xcode-release.sh"'
+        basedOnDependencyAnalysis: false
+    settings:
+      base:
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
+
+schemes:
+  Publish:
+    build:
+      targets:
+        Publish: all
