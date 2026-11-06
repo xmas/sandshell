@@ -17,12 +17,17 @@ log="$root/release.log"
 
 if [ "${1:-}" = "--run" ]; then
   version="$2"
-  answer="$(osascript -e "display dialog \"Publish Sandshell $version?\" & return & return & \"This builds the release and publishes it to Homebrew, using your GitHub login, then pushes main.\" with title \"Sandshell Release\" buttons {\"Cancel\", \"Publish\"} default button \"Cancel\" with icon caution giving up after 900" 2>&1)"
+  cd "$root" || exit 1
+  gh auth status || { echo "RELEASE FINISHED 1: gh isn't signed in"; exit 1; }
+  git -C "${SANDSHELL_TAP_DIR:-../homebrew-xmas}" pull --ff-only \
+    || { echo "RELEASE FINISHED 1: couldn't update the tap clone"; exit 1; }
+  # A rehearsal first: a real build and DMG, nothing published.
+  scripts/release.sh --dry-run "$version" || { echo "RELEASE FINISHED 1: the rehearsal failed"; exit 1; }
+  answer="$(osascript -e "display dialog \"Publish Sandshell $version?\" & return & return & \"The rehearsal passed. This builds the release and publishes it to Homebrew, using your GitHub login, then pushes main.\" with title \"Sandshell Release\" buttons {\"Cancel\", \"Publish\"} default button \"Cancel\" with icon caution giving up after 900" 2>&1)"
   case "$answer" in
     *"button returned:Publish"*"gave up:false"*) ;;
     *) echo "RELEASE FINISHED 1: not confirmed on the Mac ($answer)"; exit 1 ;;
   esac
-  cd "$root" || exit 1
   scripts/release.sh "$version"
   code=$?
   echo "RELEASE FINISHED $code"
