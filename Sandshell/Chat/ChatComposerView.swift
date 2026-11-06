@@ -483,7 +483,7 @@ final class ChatComposerView: NSView, NSTextViewDelegate {
         didSet { if oldValue != maximumHeight { resize() } }
     }
 
-    /// View ▸ Make Text Bigger / Smaller: the draft (and what's typed next) at the new size.
+    /// View ▸ Make Chat Text Bigger / Smaller: the draft (and what's typed next) at the new size.
     @objc private func textZoomChanged() {
         let font = NSFont.content(.body)
         textView.font = font

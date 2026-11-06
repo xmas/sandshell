@@ -876,9 +876,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @MainActor @objc func toggleSessionDetails(_ sender: Any?) { SessionDetails.toggle() }
 
     // View ▸ Make Text Bigger / Smaller / Actual Size (`TextZoom`).
-    @MainActor @objc func makeTextBigger(_ sender: Any?) { TextZoom.zoomIn() }
-    @MainActor @objc func makeTextSmaller(_ sender: Any?) { TextZoom.zoomOut() }
-    @MainActor @objc func makeTextActualSize(_ sender: Any?) { TextZoom.actualSize() }
+    /// ⌘+ ⌘− ⌘0 size what you're in: the chat, or everything else.
+    @MainActor private var textZoomIsChat: Bool { ChatTextZoom.isInChat(NSApp.keyWindow?.firstResponder) }
+    @MainActor @objc func makeTextBigger(_ sender: Any?) { textZoomIsChat ? ChatTextZoom.zoomIn() : TextZoom.zoomIn() }
+    @MainActor @objc func makeTextSmaller(_ sender: Any?) { textZoomIsChat ? ChatTextZoom.zoomOut() : TextZoom.zoomOut() }
+    @MainActor @objc func makeTextActualSize(_ sender: Any?) { textZoomIsChat ? ChatTextZoom.actualSize() : TextZoom.actualSize() }
+    @MainActor @objc func makeChatTextBigger(_ sender: Any?) { ChatTextZoom.zoomIn() }
+    @MainActor @objc func makeChatTextSmaller(_ sender: Any?) { ChatTextZoom.zoomOut() }
+    @MainActor @objc func makeChatTextActualSize(_ sender: Any?) { ChatTextZoom.actualSize() }
     @MainActor @objc func focusSessionFilter(_ sender: Any?) { activeController?.sidebarController?.focusFilter() }
     @MainActor @objc func reopenClosedSession(_ sender: Any?) { activeController?.reopenClosedSession() }
     @MainActor @objc func renameSession(_ sender: Any?) { activeController?.sidebarController?.beginRenameSelected() }
@@ -1049,9 +1054,12 @@ extension AppDelegate: NSMenuItemValidation {
             item.state = RemoteHub.shared.checkChat != nil ? .on : .off
             return true
         #endif
-        case #selector(makeTextBigger(_:)): return TextZoom.canZoomIn
-        case #selector(makeTextSmaller(_:)): return TextZoom.canZoomOut
-        case #selector(makeTextActualSize(_:)): return !TextZoom.isActualSize
+        case #selector(makeTextBigger(_:)): return textZoomIsChat ? ChatTextZoom.canZoomIn : TextZoom.canZoomIn
+        case #selector(makeTextSmaller(_:)): return textZoomIsChat ? ChatTextZoom.canZoomOut : TextZoom.canZoomOut
+        case #selector(makeTextActualSize(_:)): return textZoomIsChat ? !ChatTextZoom.isActualSize : !TextZoom.isActualSize
+        case #selector(makeChatTextBigger(_:)): return ChatTextZoom.canZoomIn
+        case #selector(makeChatTextSmaller(_:)): return ChatTextZoom.canZoomOut
+        case #selector(makeChatTextActualSize(_:)): return !ChatTextZoom.isActualSize
         case #selector(toggleFiles(_:)):
             item.title = controller?.isFilesShown == true ? "Hide Files" : "Show Files"
             return controller != nil

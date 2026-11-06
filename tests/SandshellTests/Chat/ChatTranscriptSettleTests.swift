@@ -37,7 +37,7 @@ struct ChatTranscriptSettleTests {
                               backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.contentView = view
-        NotificationCenter.default.removeObserver(view, name: TextZoom.didChange, object: nil)   // TextZoomTests run alongside
+        NotificationCenter.default.removeObserver(view, name: ChatTextZoom.didChange, object: nil)   // TextZoomTests run alongside
         window.orderFrontRegardless()   // offscreen
         view.update(items)
         await Task { @MainActor in }.value

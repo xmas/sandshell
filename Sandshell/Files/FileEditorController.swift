@@ -838,7 +838,7 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
             refreshChanges(for: file)
         case .preview:
             preview.linkTextAttributes = documentLinkAttributes
-            preview.textStorage?.setAttributedString(ChatRenderer.markdown(file.text, prose: .document))
+            preview.textStorage?.setAttributedString(ChatTextZoom.rendering(at: TextZoom.scale) { ChatRenderer.markdown(file.text, prose: .document) })
             previewScroll.isHidden = false
         case .changes:
             // Hunk actions read as buttons, not web links.

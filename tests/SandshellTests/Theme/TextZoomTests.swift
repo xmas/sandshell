@@ -59,14 +59,69 @@ struct TextZoomTests {
         }
     }
 
-    @Test func chatTextGrowsWithIt() throws {
+    @MainActor private func bodySize() -> CGFloat? {
+        (ChatRenderer.markdown("Hello").attribute(.font, at: 0, effectiveRange: nil) as? NSFont)?.pointSize
+    }
+
+    @Test func chatTextHasItsOwnSize() throws {
         try withZoom {
-            @MainActor func bodySize() -> CGFloat? {
-                (ChatRenderer.markdown("Hello").attribute(.font, at: 0, effectiveRange: nil) as? NSFont)?.pointSize
-            }
             #expect(bodySize() == TypeRole.body.pointSize)
-            TextZoom.scale = 1.5
+            ChatTextZoom.scale = 1.5
             #expect(bodySize() == 19.5)
+            #expect(TextZoom.scale == 1)
+            TextZoom.zoomIn()
+            #expect(ChatTextZoom.scale == 1.5)
+            ChatTextZoom.actualSize()
+            #expect(ChatTextZoom.isActualSize)
+            #expect(TextZoom.scale == 1.15)
+        }
+    }
+
+    /// Someone already zoomed keeps that size in chats, and zooming the rest doesn't move it.
+    @Test func chatsKeepTheSizeTheyWereAt() throws {
+        try withZoom {
+            TextZoom.defaults.set(1.5, forKey: TextZoom.key)
+            #expect(ChatTextZoom.scale == 1.5)
+            TextZoom.zoomIn()
+            #expect(TextZoom.scale == 1.75)
+            #expect(ChatTextZoom.scale == 1.5)
+        }
+    }
+
+    /// Files' Markdown preview shares the chat's fonts but not its size.
+    @Test func renderingAtAnotherSizeIsOnlyForThatRender() throws {
+        try withZoom {
+            ChatTextZoom.scale = 2
+            let size = ChatTextZoom.rendering(at: 1) { bodySize() }
+            #expect(size == TypeRole.body.pointSize)
+            #expect(ChatTextZoom.scale == 2)
+        }
+    }
+
+    /// ⌘+ ⌘− ⌘0 size the chat you're in, and everything else otherwise.
+    @Test func theKeysKnowWhenYoureInAChat() {
+        let transcript = ChatTranscriptView()
+        let inside = NSView()
+        transcript.addSubview(inside)
+        #expect(ChatTextZoom.isInChat(transcript))
+        #expect(ChatTextZoom.isInChat(inside))
+        #expect(!ChatTextZoom.isInChat(NSView()))
+        #expect(!ChatTextZoom.isInChat(nil))
+    }
+
+    @Test func chatChangesAreAnnouncedOnTheirOwn() throws {
+        try withZoom {
+            var chat = 0
+            var other = 0
+            let tokens = [
+                NotificationCenter.default.addObserver(forName: ChatTextZoom.didChange, object: nil, queue: nil) { _ in chat += 1 },
+                NotificationCenter.default.addObserver(forName: TextZoom.didChange, object: nil, queue: nil) { _ in other += 1 },
+            ]
+            defer { for token in tokens { NotificationCenter.default.removeObserver(token) } }
+            ChatTextZoom.zoomIn()
+            #expect(chat == 1 && other == 0)
+            TextZoom.zoomIn()
+            #expect(chat == 1 && other == 1)
         }
     }
 }

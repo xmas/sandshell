@@ -19,7 +19,7 @@ struct ChatTranscriptDrawnTests {
         window.contentView = view
         window.orderFrontRegardless()   // offscreen
         defer { window.orderOut(nil); window.close() }
-        NotificationCenter.default.removeObserver(view, name: TextZoom.didChange, object: nil)   // TextZoomTests run alongside
+        NotificationCenter.default.removeObserver(view, name: ChatTextZoom.didChange, object: nil)   // TextZoomTests run alongside
         view.update(items)
         await Task { @MainActor in }.value
         view.debugScrollToBottom()
@@ -45,7 +45,7 @@ struct ChatTranscriptDrawnTests {
         window.contentView = view
         window.orderFrontRegardless()   // offscreen
         defer { window.orderOut(nil); window.close() }
-        NotificationCenter.default.removeObserver(view, name: TextZoom.didChange, object: nil)   // TextZoomTests run alongside
+        NotificationCenter.default.removeObserver(view, name: ChatTextZoom.didChange, object: nil)   // TextZoomTests run alongside
         view.update(items)
         await Task { @MainActor in }.value
         view.debugScrollToBottom()

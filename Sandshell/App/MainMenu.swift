@@ -170,6 +170,18 @@ enum MainMenu {
         bigger.allowsKeyEquivalentWhenHidden = true
         viewMenu.addItem(withTitle: "Make Text Smaller", action: #selector(AppDelegate.makeTextSmaller(_:)), keyEquivalent: "-")
         viewMenu.addItem(withTitle: "Actual Size", action: #selector(AppDelegate.makeTextActualSize(_:)), keyEquivalent: "0")
+        // The chat's own size (`ChatTextZoom`): the same keys with ⌥, from anywhere.
+        let chatBiggerShown = viewMenu.addItem(withTitle: "Make Chat Text Bigger", action: #selector(AppDelegate.makeChatTextBigger(_:)),
+                                               keyEquivalent: "+")
+        let chatBigger = viewMenu.addItem(withTitle: "Make Chat Text Bigger", action: #selector(AppDelegate.makeChatTextBigger(_:)),
+                                          keyEquivalent: "=")
+        chatBigger.isHidden = true
+        chatBigger.allowsKeyEquivalentWhenHidden = true
+        let chatSmaller = viewMenu.addItem(withTitle: "Make Chat Text Smaller", action: #selector(AppDelegate.makeChatTextSmaller(_:)),
+                                           keyEquivalent: "-")
+        let chatActual = viewMenu.addItem(withTitle: "Chat Actual Size", action: #selector(AppDelegate.makeChatTextActualSize(_:)),
+                                          keyEquivalent: "0")
+        for item in [chatBiggerShown, chatBigger, chatSmaller, chatActual] { item.keyEquivalentModifierMask = [.command, .option] }
         viewMenu.addItem(.separator())
         // The window's Files sidebar (validation names it Show / Hide Files).
         let showFiles = viewMenu.addItem(withTitle: "Show Files", action: #selector(AppDelegate.toggleFiles(_:)),

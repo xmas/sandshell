@@ -1,10 +1,10 @@
 import AppKit
 
 /// View ▸ Make Text Bigger / Smaller / Actual Size (⌘+ ⌘− ⌘0), as Mail, Notes
-/// and Safari do: the text you read and write grows — chats and their
-/// composers, the Files editor and Markdown preview, terminals — while the
-/// window's chrome (sidebar, toolbar, strips) stays the size macOS draws it.
-/// One size for the app, kept across launches.
+/// and Safari do: the text you read and write grows — the Files editor and
+/// Markdown preview, terminals — while the window's chrome (sidebar, toolbar,
+/// strips) stays the size macOS draws it. One size, kept across launches.
+/// Chats have their own, `ChatTextZoom`: these keys size it while you're in a chat.
 @MainActor
 enum TextZoom {
     /// The sizes ⌘+ and ⌘− step through (1 is Actual Size).
@@ -21,6 +21,7 @@ enum TextZoom {
         set {
             let step = nearestStep(newValue)
             guard step != scale else { return }
+            ChatTextZoom.keepCurrentSize()
             defaults.set(Double(step), forKey: key)
             NotificationCenter.default.post(name: didChange, object: nil)
         }
@@ -44,12 +45,79 @@ enum TextZoom {
     }
 }
 
+/// View ▸ Make Chat Text Bigger / Smaller / Chat Actual Size (⌥⌘+ ⌥⌘− ⌥⌘0,
+/// or ⌘+ ⌘− ⌘0 while you're in a chat): chat transcripts and composers, apart
+/// from `TextZoom`, so a chat can go big for a screen share. Until it's first set
+/// it's `TextZoom`'s size, which it keeps when that one next changes, so
+/// nothing jumps for anyone who'd already zoomed.
+@MainActor
+enum ChatTextZoom {
+    static let key = "chatTextZoom"
+
+    /// Whether `responder` is in a chat: its composer, or a transcript (a
+    /// session's, or a subagent's window).
+    static func isInChat(_ responder: NSResponder?) -> Bool {
+        var view = responder as? NSView
+        while let current = view {
+            if current is ChatSessionView || current is ChatTranscriptView { return true }
+            view = current.superview
+        }
+        return false
+    }
+
+    /// Posted when `scale` changes; chats re-render at the new size.
+    static let didChange = Notification.Name("SandshellChatTextZoomDidChange")
+    /// What `rendering(at:)` is drawing at.
+    private static var renderingScale: CGFloat?
+
+    private static var saved: CGFloat? {
+        let value = TextZoom.defaults.double(forKey: key)
+        return value > 0 ? TextZoom.nearestStep(CGFloat(value)) : nil
+    }
+
+    /// The current size, one of `TextZoom.steps`.
+    static var scale: CGFloat {
+        get { renderingScale ?? saved ?? TextZoom.scale }
+        set {
+            let step = TextZoom.nearestStep(newValue)
+            guard step != scale else { return }
+            TextZoom.defaults.set(Double(step), forKey: key)
+            NotificationCenter.default.post(name: didChange, object: nil)
+        }
+    }
+
+    static var canZoomIn: Bool { scale < TextZoom.steps.last! }
+    static var canZoomOut: Bool { scale > TextZoom.steps.first! }
+    static var isActualSize: Bool { scale == 1 }
+
+    static func zoomIn() { if let next = TextZoom.steps.first(where: { $0 > scale }) { scale = next } }
+    static func zoomOut() { if let next = TextZoom.steps.last(where: { $0 < scale }) { scale = next } }
+    static func actualSize() { scale = 1 }
+
+    /// `size` at the current zoom.
+    static func scaled(_ size: CGFloat) -> CGFloat { (size * scale * 2).rounded() / 2 }
+
+    /// `TextZoom` is about to change: stay at the size chats are at.
+    fileprivate static func keepCurrentSize() {
+        if saved == nil { TextZoom.defaults.set(Double(TextZoom.scale), forKey: key) }
+    }
+
+    /// Render with the chat's fonts at another size (Files' Markdown preview
+    /// goes by `TextZoom`).
+    static func rendering<T>(at scale: CGFloat, _ body: () -> T) -> T {
+        let outer = renderingScale
+        renderingScale = scale
+        defer { renderingScale = outer }
+        return body()
+    }
+}
+
 extension NSFont {
-    /// A type role in content (chat, composer): grows with View ▸ Make Text Bigger.
+    /// A type role in content (chat, composer): grows with View ▸ Make Chat Text Bigger.
     @MainActor static func content(_ role: TypeRole) -> NSFont { content(role, weight: role.weight) }
 
     @MainActor static func content(_ role: TypeRole, weight: NSFont.Weight) -> NSFont {
-        let size = TextZoom.scaled(role.pointSize)
+        let size = ChatTextZoom.scaled(role.pointSize)
         return role == .code ? .monospacedSystemFont(ofSize: size, weight: weight) : .systemFont(ofSize: size, weight: weight)
     }
 }

@@ -142,10 +142,10 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
         scrollView.contentView.postsBoundsChangedNotifications = true
         NotificationCenter.default.addObserver(self, selector: #selector(scrolled),
                                                name: NSView.boundsDidChangeNotification, object: scrollView.contentView)
-        NotificationCenter.default.addObserver(self, selector: #selector(textZoomChanged), name: TextZoom.didChange, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(textZoomChanged), name: ChatTextZoom.didChange, object: nil)
     }
 
-    /// View ▸ Make Text Bigger / Smaller: every item again at the new size,
+    /// View ▸ Make Chat Text Bigger / Smaller: every item again at the new size,
     /// the same part of the conversation in view (or still following the end).
     @objc private func textZoomChanged() {
         let height = max(textView.frame.height, 1)

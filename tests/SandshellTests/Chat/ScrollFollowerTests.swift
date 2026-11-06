@@ -82,7 +82,7 @@ struct ChatTranscriptFollowTests {
         window.ignoresMouseEvents = true
         window.level = .floating       // not behind other windows: following only eases when seen
         window.contentView = view
-        NotificationCenter.default.removeObserver(view, name: TextZoom.didChange, object: nil)   // TextZoomTests run alongside
+        NotificationCenter.default.removeObserver(view, name: ChatTextZoom.didChange, object: nil)   // TextZoomTests run alongside
         window.orderFrontRegardless()
         for _ in 0..<40 where !window.occlusionState.contains(.visible) { await run(0.05) }
         view.update(chat)
