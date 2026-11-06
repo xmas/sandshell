@@ -64,12 +64,18 @@ final class ChatComposerView: NSView, NSTextViewDelegate {
         textView.importsGraphics = false
         textView.allowsUndo = true
         textView.font = .content(.body)
-        NotificationCenter.default.addObserver(self, selector: #selector(textZoomChanged), name: TextZoom.didChange, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(textZoomChanged), name: ChatTextZoom.didChange, object: nil)
         // One line sits centered in the 40 pt field (48 with the pill's own padding).
         textView.textContainerInset = NSSize(width: 0, height: 12)
         textView.isContinuousSpellCheckingEnabled = true
         textView.isAutomaticQuoteSubstitutionEnabled = false   // prompts are often code
         textView.isAutomaticDashSubstitutionEnabled = false
+        // macOS's own guessing, which goes by the system's settings otherwise:
+        // no predictions, word completions or autocorrect in a prompt. `/`, `@`
+        // and Tab are Sandshell's and stay.
+        textView.inlinePredictionType = .no
+        textView.isAutomaticTextCompletionEnabled = false
+        textView.isAutomaticSpellingCorrectionEnabled = false
         textView.drawsBackground = false
         textView.isVerticallyResizable = true
         textView.autoresizingMask = [.width]
