@@ -126,6 +126,8 @@ struct BergKitTests {
         "/Users/me/my-kits/berg", "docker.io/sbx/github-ssh:latest",
         "git+https://github.com/xmas/sandshell-kits.git#ref=v0.2.49&dir=sandshell-claude",
         "git+https://github.com/someone/other.git#dir=berg",
+        "git+https://github.com/someone/sandshell-kits.git#dir=berg",
+        "git+https://github.com/xmas/sandshell-kits-fork.git#dir=berg",
     ])
     func otherKitsAreNot(ref: String) {
         #expect(!BergHub.isKit(ref))

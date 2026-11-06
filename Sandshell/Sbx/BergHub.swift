@@ -25,8 +25,9 @@ struct BergHub: Equatable {
         if KitStore.bundledKitName(ref) == kitName { return true }
         let t = ref.hasSuffix("/") ? String(ref.dropLast()) : ref
         if t.hasSuffix("/sandshell-kits/\(kitName)") { return true }
-        guard t.hasPrefix("git+"), t.contains("/sandshell-kits"), let fragment = t.split(separator: "#").last else { return false }
-        return fragment.split(separator: "&").map(String.init).contains("dir=\(kitName)")
+        guard t.hasPrefix("git+"), let url = URLComponents(string: String(t.dropFirst(4))), url.host == "github.com",
+              url.path == "/xmas/sandshell-kits" || url.path == "/xmas/sandshell-kits.git" else { return false }
+        return (url.fragment ?? "").split(separator: "&").map(String.init).contains("dir=\(kitName)")
     }
 
     /// berg's config (`internal/cliconfig`: Go's user config dir), unless
