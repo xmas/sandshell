@@ -7,6 +7,10 @@ struct ClaudeStatsDetailView: View {
     var status: ClaudeSessionStatus?
     var defaultModel: String?
     var defaultEffort: String?
+    /// The chat is waiting for you, so it can compact now.
+    var canCompact = false
+    /// Compact the conversation (nil: no button).
+    var onCompact: (@MainActor () -> Void)?
     /// The conversation's priced totals (the Cost row).
     @ObservedObject private var usage = ClaudeUsageStore.shared
     /// The context levels' colours (Settings ▸ Terminal can override them).
@@ -21,6 +25,12 @@ struct ClaudeStatsDetailView: View {
                 Text("Waiting for Claude Code's first status report…")
                     .font(.role(.body))
                     .foregroundStyle(.secondary)
+            }
+            if let onCompact {
+                Button("Compact Session") { onCompact() }
+                    .controlSize(.small)
+                    .disabled(!canCompact)
+                    .help("Summarize the conversation so far to free up the window (/compact)")
             }
             Divider()
             ClaudeUsageSummaryView()

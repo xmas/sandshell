@@ -112,6 +112,7 @@ final class ChatSessionView: NSView {
     /// The readout's click: Session details.
     func debugClickReadout() { bar.readoutButton.performClick(nil) }
     var debugDetailsShown: Bool { detailsPopover?.isShown == true }
+    var debugDetailsCanCompact: Bool { detailsHost?.rootView.canCompact == true }
     #endif
 
     /// A file path in the conversation was clicked.
@@ -379,6 +380,7 @@ final class ChatSessionView: NSView {
     }
 
     private func showPhase(_ phase: ChatSession.Phase) {
+        detailsHost?.rootView = detailView(phase: phase)
         switch phase {
         // The status line under the pill says only what's out of the ordinary.
         case .starting:
@@ -551,9 +553,19 @@ final class ChatSessionView: NSView {
         bar.readoutButton.toolTip = tip
     }
 
-    private func detailView() -> ClaudeStatsDetailView {
+    /// `phase`: the one just reported, when `session.phase` may not have it yet.
+    private func detailView(phase: ChatSession.Phase? = nil) -> ClaudeStatsDetailView {
         ClaudeStatsDetailView(status: session.claudeStatus, defaultModel: session.launchModel,
-                              defaultEffort: session.launchEffort)
+                              defaultEffort: session.launchEffort, canCompact: (phase ?? session.phase) == .ready,
+                              onCompact: { [weak self] in self?.compactFromDetails() })
+    }
+
+    /// Session details' Compact Session: closes them, so the turn shows.
+    private func compactFromDetails() {
+        session.compact()
+        detailsPopover?.close()
+        detailsPopover = nil
+        detailsHost = nil
     }
 
     /// The readout's ⓘ: Session details, with the context gauge.

@@ -1264,6 +1264,7 @@ enum SelfTest {
         check(v.debugContextGaugeShown, "with its gauge beside it")
         v.debugClickReadout()
         check(await until(3) { v.debugDetailsShown }, "clicking the readout opens Session details")
+        check(v.debugDetailsCanCompact, "with Compact Session on while the chat waits")
         await wait(0.5)
         snapshot(window, "details-popover")
         v.debugClickReadout()
