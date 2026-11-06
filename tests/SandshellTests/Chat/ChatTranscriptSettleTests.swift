@@ -57,6 +57,54 @@ struct ChatTranscriptSettleTests {
         return Data(bytes: rep.bitmapData!, count: rep.bytesPerRow * rep.pixelsHigh)
     }
 
+    /// Yields the main queue, which holds the check (a nested run loop wouldn't drain it).
+    private func wait(_ seconds: TimeInterval) async { try? await Task.sleep(for: .seconds(seconds)) }
+
+    /// Changes this close together, as a stream sends them, for `seconds`.
+    private func stream(_ view: ChatTranscriptView, for seconds: TimeInterval) async {
+        let end = Date.now.addingTimeInterval(seconds)
+        while Date.now < end {
+            view.debugChanged()
+            await wait(0.05)
+        }
+    }
+
+    /// A reply streaming in never goes quiet, and the rebuild mustn't wait for
+    /// it to (xmas-sandshell-7x7: a blank mid-reply stayed until the turn ended).
+    @Test func aStreamCantHoldOffTheRebuild() async {
+        let (view, window) = await make(items(4))
+        defer { window.orderOut(nil); window.close() }
+        view.drawnCheckMaxWait = 0.6
+        let before = view.debugRefreshes
+        await stream(view, for: 1.5)
+        #expect(view.debugRefreshes > before)
+    }
+
+    /// Control: without the limit, the same stream holds it off the whole time.
+    @Test func withoutTheLimitTheStreamWould() async {
+        let (view, window) = await make(items(4))
+        defer { window.orderOut(nil); window.close() }
+        view.drawnCheckMaxWait = 3600
+        let before = view.debugRefreshes
+        await stream(view, for: 1.5)
+        #expect(view.debugRefreshes == before)
+    }
+
+    /// Text that settled while the chat didn't show is rebuilt when it does.
+    @Test func aChatShownAgainGetsTheRebuildItMissed() async {
+        let (view, window) = await make(items(4))
+        defer { window.orderOut(nil); window.close() }
+        await wait(0.7)
+        view.isHidden = true
+        let before = view.debugRefreshes
+        view.debugChanged()
+        await wait(0.7)
+        #expect(view.debugRefreshes == before, "Nothing's rebuilt while it's hidden")
+        view.isHidden = false
+        await wait(0.7)
+        #expect(view.debugRefreshes > before)
+    }
+
     @Test(arguments: [0.0, 0.1, 0.37, 0.5, 0.83, 1.0])
     func notAPixelMoves(fraction: Double) async {
         let (view, window) = await make(items(150))

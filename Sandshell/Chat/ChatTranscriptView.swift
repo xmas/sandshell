@@ -227,6 +227,10 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
         }
     }
     private var occlusionObserver: NSObjectProtocol?
+    #if DEBUG
+    /// Times what shows was rebuilt.
+    private(set) var debugRefreshes = 0
+    #endif
 
     isolated deinit {
         if let occlusionObserver { NotificationCenter.default.removeObserver(occlusionObserver) }
@@ -237,6 +241,8 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
         DispatchQueue.main.async { [weak self] in
             guard let self, self.window != nil, !self.isHiddenOrHasHiddenAncestor else { return }
             self.layoutVisibleText()
+            // Text settled while this didn't show: that rebuild is still owed.
+            if self.visibleTextNeedsRefresh { self.checkDrawnSoon() }
         }
     }
 
@@ -326,6 +332,8 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
         drop(textView)
     }
     func debugCheckDrawn() { checkDrawn() }
+    /// Text changed, or the view moved, as far as the drawn check hears.
+    func debugChanged() { visibleTextNeedsRefresh = true; checkDrawnSoon() }
     /// What's scrolled to the top of the transcript, as a text offset.
     var debugTopCharacter: Int {
         textView.characterIndexForInsertion(at: NSPoint(x: 20, y: textView.visibleRect.minY + 2))
@@ -634,13 +642,24 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
 
     /// After the text changes or scrolls (once things settle): if a line
     /// showing has no view, lay out what shows again, harder if need be, and log it.
+    /// A reply streaming in, or the view easing after it, never goes quiet
+    /// (every chunk and every frame comes here): a check held off for
+    /// `drawnCheckMaxWait` runs anyway, or a blank couldn't heal until the turn ended.
     private func checkDrawnSoon() {
+        if drawnCheck != nil, let since = drawnCheckSince, Date.now.timeIntervalSince(since) >= drawnCheckMaxWait { return }
         drawnCheck?.cancel()
-        let work = DispatchWorkItem { [weak self] in self?.checkDrawn() }
+        if drawnCheckSince == nil { drawnCheckSince = .now }
+        let work = DispatchWorkItem { [weak self] in
+            self?.drawnCheck = nil
+            self?.drawnCheckSince = nil
+            self?.checkDrawn()
+        }
         drawnCheck = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
     }
     private var drawnCheck: DispatchWorkItem?
+    private var drawnCheckSince: Date?
+    var drawnCheckMaxWait: TimeInterval = 2
     /// The text changed since what shows was last rebuilt.
     private var visibleTextNeedsRefresh = false
 
@@ -650,6 +669,9 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
     /// (xmas-sandshell-7x7) — so this runs whenever the text settles.
     private func refreshVisibleText() {
         guard let tlm = textView.textLayoutManager else { return }
+        #if DEBUG
+        debugRefreshes += 1
+        #endif
         let height = document.frame.height
         programmaticScroll = true   // holding its place isn't you scrolling away from the end
         textView.keepingTopLine {
