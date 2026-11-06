@@ -1,5 +1,6 @@
 import AppKit
 import Testing
+import os
 @testable import Sandshell
 
 /// View ▸ Make Text Bigger / Smaller / Actual Size (`TextZoom`), on a defaults
@@ -49,13 +50,13 @@ struct TextZoomTests {
 
     @Test func aChangeIsAnnounced() throws {
         try withZoom {
-            var posts = 0
-            let token = NotificationCenter.default.addObserver(forName: TextZoom.didChange, object: nil, queue: nil) { _ in posts += 1 }
+            let posts = OSAllocatedUnfairLock(initialState: 0)
+            let token = NotificationCenter.default.addObserver(forName: TextZoom.didChange, object: nil, queue: nil) { _ in posts.withLock { $0 += 1 } }
             defer { NotificationCenter.default.removeObserver(token) }
             TextZoom.zoomIn()
             TextZoom.actualSize()
             TextZoom.actualSize()   // already there: nothing to redraw
-            #expect(posts == 2)
+            #expect(posts.withLock { $0 } == 2)
         }
     }
 
@@ -111,17 +112,17 @@ struct TextZoomTests {
 
     @Test func chatChangesAreAnnouncedOnTheirOwn() throws {
         try withZoom {
-            var chat = 0
-            var other = 0
+            let chat = OSAllocatedUnfairLock(initialState: 0)
+            let other = OSAllocatedUnfairLock(initialState: 0)
             let tokens = [
-                NotificationCenter.default.addObserver(forName: ChatTextZoom.didChange, object: nil, queue: nil) { _ in chat += 1 },
-                NotificationCenter.default.addObserver(forName: TextZoom.didChange, object: nil, queue: nil) { _ in other += 1 },
+                NotificationCenter.default.addObserver(forName: ChatTextZoom.didChange, object: nil, queue: nil) { _ in chat.withLock { $0 += 1 } },
+                NotificationCenter.default.addObserver(forName: TextZoom.didChange, object: nil, queue: nil) { _ in other.withLock { $0 += 1 } },
             ]
             defer { for token in tokens { NotificationCenter.default.removeObserver(token) } }
             ChatTextZoom.zoomIn()
-            #expect(chat == 1 && other == 0)
+            #expect(chat.withLock { $0 } == 1 && other.withLock { $0 } == 0)
             TextZoom.zoomIn()
-            #expect(chat == 1 && other == 1)
+            #expect(chat.withLock { $0 } == 1 && other.withLock { $0 } == 1)
         }
     }
 }

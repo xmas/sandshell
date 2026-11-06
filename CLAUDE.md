@@ -39,6 +39,18 @@ Distributed via the Homebrew tap `xmas/xmas` (public repo `xmas/homebrew-xmas`):
 
 ## Tests
 
+### From inside a sandbox
+
+The sandbox has no Swift, so builds and tests go through the Mac's Xcode: `sbx mcp add xcode --command xcrun --args mcpbridge`, then `sbx mcp load xcode --sandbox <name>`, on the Mac, with `Sandshell.xcodeproj` open.
+
+```bash
+scripts/xcode-sandbox.py test                    # build, then every test
+scripts/xcode-sandbox.py test AgentQuestionTests # build, then these suites
+scripts/xcode-sandbox.py build                   # scripts/xcode-sandbox.py log warning for warnings
+```
+
+It drives the user's real Xcode. A new source file needs `xcodegen generate` on the Mac first; self-tests and UI tests need the Mac.
+
 ### Unit tests (Swift Testing)
 
 ```bash
