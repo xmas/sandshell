@@ -54,6 +54,34 @@ agent (any, in the sandbox) ──MCP──▶ sbx gateway ──stdio──▶ 
   read logs; a pane showing the simulator live.
 - **Android**: the same over `adb` and the emulator on the Mac.
 
+## Host tasks (running things on the Mac, with approval)
+
+Local dev keeps needing the Mac: Xcode, `xcodegen`, `gh`, signing, simulators.
+Today that goes through Xcode's MCP, where a build step can run anything: no
+policy, and nothing a person sees. Host tasks are the general answer, as tools
+on `sandshell-mcp`: `host_tasks` (what may be run) and `host_run` (run one).
+
+- **The policy lives in the app, never in a mounted folder.** What a sandbox can
+  write it can rewrite, so a repo file can suggest tasks but can't approve them.
+  `scripts/xcode-release.sh` shows the limit: its dialog is in a file the
+  sandbox can edit, so it stops accidents, not an agent.
+- **The app asks, not a script.** The approval is Sandshell's own UI, showing the
+  sandbox, session and exact command.
+- **Approval is of what runs:** argv, working directory, and a hash of the script
+  it runs. A script that changes asks again.
+- **Three answers**, per workspace: allow (tests, builds), ask (once, this
+  session, or always for this hash), deny. Unlisted means ask.
+- **No shell strings.** An executable and arguments, in the workspace root.
+- **Credentials are granted, not inherited:** a scrubbed environment, plus what
+  a task is allowed (`gh`, say).
+- **Bounded and recorded:** timeout, capped output, stoppable, and an audit log
+  shown in the session.
+
+Depends on knowing which sandbox is calling (below), or each sandbox's
+permissions blur together, and on chats reaching the gateway. The policy only
+holds if a sandbox has no other way across: one with Xcode's MCP loaded can get
+past it with a build step or `RunCodeSnippet`.
+
 ## Open questions
 
 - Which sandbox (and which chat) is calling: sbx runs one server process per
