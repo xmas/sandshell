@@ -2,6 +2,18 @@
 
 A running log of what changed, newest first. Yes, we actually write these.
 
+## v0.2.50 — "Note to Self"
+- **Notes on a Canvas board.** ⌥-click an artboard, or right-click ▸ Add Note, and say what to change. Notes collect as numbered pins, then **Send to Chat** gives the agent one message naming each artboard and the element you pointed at, with a marked screenshot.
+- **Chat text has its own size.** ⌘+ / ⌘− / ⌘0 size the chat while you're in one, so it can go big for a screen share without touching your editor or terminals. Anywhere else they size those, as before. ⌥⌘+ / ⌥⌘− / ⌥⌘0 (View ▸ Make Chat Text Bigger, Make Chat Text Smaller, Chat Actual Size) size the chat from anywhere.
+- **Compact Session in Session details.** The ⓘ readout under the composer now has the button too.
+- **Copying pulses.** What you copy deepens its own background and eases back, instead of flashing a separate box. A reply, which has no background, takes the tint of your messages for a moment.
+- **No more guessing in the chat box.** macOS's predictions, word completions and autocorrect are off there. `/`, `@` and Tab work as before.
+- **Thinking is easier to read.** Its text is a darker gray.
+- **Rebuilding a sandbox from Settings keeps its kits.** It used to bring the sandbox back with none.
+- **`sandshell://` links ask first.** A link that would give sandboxes a new folder, a new mount or read-write access now shows you what it wants. Any web page or document can send one of these links.
+- **Blank chat replies, again.** A streaming reply could keep the repair from running until its turn ended, and a chat that was hidden missed it altogether. Neither happens now. This may not be the last word: tell us if you still see one.
+- **berg kit:** it gets its hub and sign-in however it was added, including from a folder or Sandshell's own git repository (and only that repository), says so in the kit's status when it can't install berg, and installs bd 1.3.4. A kit with no start-up step now reads "no start-up step", not an orange "not run".
+
 ## v0.2.49 — "Smooth Operator"
 - **Auto-scroll eases in and out.** Following a reply used to jump to the end with each chunk. Now the view gathers speed, slows as it arrives, and a streaming reply is one continuous motion. Scrolling up stops it at once and leaves the view where you put it. With Reduce Motion on, it goes straight to the end.
 - **Another fix for blank chat replies.** A reply could be in the chat, laid out and normally colored, with nothing painted, and no check could see it. Now whenever a chat's text settles, what's on screen is rebuilt and repainted. It takes a couple of milliseconds and moves nothing.
