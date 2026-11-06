@@ -211,6 +211,7 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
+        if window == nil { stopFollowing() }
         if let occlusionObserver { NotificationCenter.default.removeObserver(occlusionObserver) }
         occlusionObserver = nil
         guard let window else { return }
@@ -331,6 +332,25 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
     }
     /// The drawn check as it runs when text settles.
     func debugSettle() { visibleTextNeedsRefresh = true; checkDrawn() }
+    var debugIsFollowingEnd: Bool { stickToBottom }
+    /// The one test that watches following ease.
+    var debugEasesFollow = false
+    var debugFollowIsMoving: Bool { followLink != nil }
+    /// A scroll that's the user's, not the follower's.
+    func debugUserScroll(by dy: CGFloat) {
+        let clip = scrollView.contentView
+        clip.scroll(to: NSPoint(x: clip.bounds.minX, y: clip.bounds.minY + dy))
+        scrollView.reflectScrolledClipView(clip)
+    }
+    /// Scrolled how far down, and the height being scrolled.
+    var debugScrollY: CGFloat { scrollView.contentView.bounds.minY }
+    var debugDocumentHeight: CGFloat { document.frame.height }
+    /// Scroll to a fraction of the way down, as a reader would.
+    func debugScroll(toFraction fraction: CGFloat) {
+        let clip = scrollView.contentView
+        clip.scroll(to: NSPoint(x: clip.bounds.minX, y: (document.frame.height - clip.bounds.height) * fraction))
+        scrollView.reflectScrolledClipView(clip)
+    }
     /// Unit tests: drop the layout of what's showing, as the blank chat had it.
     func debugForgetLayout() {
         guard let tlm = textView.textLayoutManager else { return }
@@ -406,7 +426,7 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
         storage.endEditing()
         // Following the end lays it out on the way there; otherwise lay out
         // what shows, so a paragraph changed in place isn't left drawn as it was.
-        if stickToBottom { scrollToBottom() } else { layoutVisibleText() }
+        if stickToBottom { followEnd() } else { layoutVisibleText() }
         visibleTextNeedsRefresh = true
         checkDrawnSoon()
     }
@@ -456,15 +476,20 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
         return calls.contains { ids.contains("tool-\($0.id)") }
     }
 
-    private func scrollToBottom() {
-        guard let tlm = textView.textLayoutManager else { return }
-        // TextKit 2 lays out lazily; make sure the tail is real before scrolling.
-        if let last = tlm.textContentManager?.documentRange.endLocation,
+    /// TextKit 2 lays out lazily: make the tail real before scrolling to it,
+    /// and the document as tall as the text.
+    private func layOutTail() {
+        if let tlm = textView.textLayoutManager, let last = tlm.textContentManager?.documentRange.endLocation,
            let tail = tlm.location(last, offsetBy: -min(2000, textView.textStorage?.length ?? 0)),
            let range = NSTextRange(location: tail, end: last) {
             tlm.ensureLayout(for: range)
         }
-        textHeightChanged()   // the document as tall as the text, laid out to its end
+        textHeightChanged()
+    }
+
+    private func scrollToBottom() {
+        stopFollowing()
+        layOutTail()
         programmaticScroll = true
         // The clip itself: the text view's scrollToEndOfDocument doesn't reach a
         // scroll view it isn't the document of.
@@ -478,6 +503,63 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
 
     private func layoutVisibleText() {
         textView.textLayoutManager?.textViewportLayoutController.layoutViewport()
+    }
+
+    // MARK: Following the end
+
+    private var followLink: CADisplayLink?
+    private var follower = ScrollFollower(position: 0)
+    private var lastFollowTick: CFTimeInterval?
+    /// Past this many screens behind there's no reading along: jump.
+    private static let followJumpScreens: CGFloat = 2
+
+    /// Whether following eases: on screen, unless Reduce Motion is on. (A
+    /// chat nobody sees just goes to the end; so do tests, but for the one
+    /// that watches the motion.)
+    private var followEases: Bool {
+        guard let window, window.occlusionState.contains(.visible), !isHiddenOrHasHiddenAncestor,
+              !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return false }
+        #if DEBUG
+        if debugEasesFollow { return true }
+        #endif
+        return !AppDelegate.isHostingTests && !AutomatedRun.isActive
+    }
+
+    private var endOffset: CGFloat { max(0, document.frame.height - scrollView.contentView.bounds.height) }
+
+    /// Go to the end of the text as it grows, with momentum (`ScrollFollower`).
+    private func followEnd() {
+        guard followEases else { return scrollToBottom() }
+        layOutTail()
+        let y = scrollView.contentView.bounds.minY
+        guard followLink != nil || endOffset - y >= 0.5 else { return }
+        guard endOffset - y <= scrollView.contentView.bounds.height * Self.followJumpScreens else { return scrollToBottom() }
+        guard followLink == nil else { return }
+        follower = ScrollFollower(position: y)
+        lastFollowTick = nil
+        let link = displayLink(target: self, selector: #selector(followTick(_:)))
+        link.add(to: .main, forMode: .common)
+        followLink = link
+    }
+
+    @objc private func followTick(_ link: CADisplayLink) {
+        guard followEases else { return scrollToBottom() }
+        // Clamped: a stall (a frame or a sleeping Mac) resumes, it doesn't leap.
+        let dt = lastFollowTick.map { min(link.targetTimestamp - $0, 1.0 / 20) } ?? 1.0 / 120
+        lastFollowTick = link.targetTimestamp
+        follower.step(toward: endOffset, dt: dt)
+        let atRest = follower.isAtRest(at: endOffset)
+        let clip = scrollView.contentView
+        programmaticScroll = true
+        clip.scroll(to: NSPoint(x: clip.bounds.minX, y: atRest ? endOffset : follower.position))
+        scrollView.reflectScrolledClipView(clip)
+        programmaticScroll = false
+        if atRest { stopFollowing() }
+    }
+
+    private func stopFollowing() {
+        followLink?.invalidate()
+        followLink = nil
     }
 
     // MARK: Drawn check
@@ -568,16 +650,22 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
     /// (xmas-sandshell-7x7) — so this runs whenever the text settles.
     private func refreshVisibleText() {
         guard let tlm = textView.textLayoutManager else { return }
+        let height = document.frame.height
+        programmaticScroll = true   // holding its place isn't you scrolling away from the end
         textView.keepingTopLine {
             if let range = visibleTextRange { tlm.invalidateLayout(for: range) }
         }
+        programmaticScroll = false
         layoutAndRedrawVisibleText()
-        if stickToBottom { scrollToBottom() }
+        // Only if it grew: following the end lays out the tail again, a hitch in a long chat.
+        if stickToBottom, document.frame.height != height { followEnd() }
     }
 
     private func checkDrawn() {
         guard window != nil, !isHiddenOrHasHiddenAncestor, let tlm = textView.textLayoutManager else { return }
         if visibleTextNeedsRefresh {
+            // Not under a drag (selecting text): once it's over.
+            guard NSEvent.pressedMouseButtons == 0 else { return checkDrawnSoon() }
             visibleTextNeedsRefresh = false
             refreshVisibleText()
         }
@@ -604,6 +692,7 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
         guard !programmaticScroll, let doc = scrollView.documentView else { return }
         let clip = scrollView.contentView.bounds
         stickToBottom = clip.maxY >= doc.frame.height - 24
+        if !stickToBottom { stopFollowing() }   // you scrolled away: the view is yours
         updateEndCues()
     }
 
