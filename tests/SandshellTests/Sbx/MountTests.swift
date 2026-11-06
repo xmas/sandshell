@@ -517,3 +517,24 @@ final class MountPolicyFileSystemTests {
         #expect(mountsTheFile == false, "`sbx create` rejects a file mount and fails the whole create")
     }
 }
+
+/// What a `sandshell://open` link would newly give sandboxes, and so must ask about.
+struct MountWideningTests {
+    private let held = MountPolicy(selections: [MountSpec(path: URL(filePath: "/a"), readonly: true),
+                                                MountSpec(path: URL(filePath: "/b"), readonly: false)])
+
+    @Test func aPathItDoesntHaveWidens() {
+        let new = MountSpec(path: URL(filePath: "/c"), readonly: true)
+        #expect(held.widened(by: [new]) == [new])
+    }
+
+    @Test func readWriteOverReadOnlyWidens() {
+        let upgrade = MountSpec(path: URL(filePath: "/a"), readonly: false)
+        #expect(held.widened(by: [upgrade]) == [upgrade])
+    }
+
+    @Test(arguments: [("/a", true), ("/b", false), ("/b", true), ("/a/", true), ("/x/../a", true)] as [(String, Bool)])
+    func whatItAlreadyGivesDoesnt(path: String, readonly: Bool) {
+        #expect(held.widened(by: [MountSpec(path: URL(filePath: path), readonly: readonly)]).isEmpty)
+    }
+}

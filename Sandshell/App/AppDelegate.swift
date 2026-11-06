@@ -322,6 +322,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let path = workspacePath else { return }
         let workspaceURL = URL(filePath: path, directoryHint: .checkFileSystem)
         let key = RootFolderStore.standardize(workspaceURL.path)
+        let extras = roMounts.map { MountSpec(path: $0, readonly: true) }
+                   + rwMounts.map { MountSpec(path: $0, readonly: false) }
+
+        // Any web page or document can send this URL (the browser only asks
+        // "Open Sandshell?"), so what it would newly let sandboxes reach is
+        // the person's call: a new folder is one too, read-write.
+        let isNew = !RootFolderStore.all.contains { $0.path == key }
+        let opened = windows.compactMap(\.workspaceController)
+            .first { $0.rootURL.standardizedFileURL.path == workspaceURL.standardizedFileURL.path }
+        let current = opened?.policy ?? WorkspaceConfig.loadReportingProblems(root: workspaceURL, home: URL.homeDirectory).0.policy
+        let widened = (isNew ? [MountSpec(path: workspaceURL, readonly: false)] : []) + current.widened(by: extras)
+        if !widened.isEmpty {
+            let list = widened.map { "\($0.path.path(percentEncoded: false).tildeAbbreviated) (\($0.readonly ? "read-only" : "read-write"))" }
+            guard Alerts.confirm("Give sandboxes access to these folders?",
+                                 "A link asked Sandshell to open “\(workspaceURL.lastPathComponent)” with:\n\n"
+                                 + list.joined(separator: "\n")
+                                 + "\n\nAllow this only if you started it.",
+                                 confirm: "Allow", cancel: "Don’t Open") else { return }
+        }
 
         // Assign a random icon + color to workspaces opened for the first time via CLI.
         if !RootFolderStore.all.contains(where: { $0.path == key }) {
@@ -337,9 +356,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // any existing entry for the same path so re-invocations with changed
         // flags take effect.
         func withExtras(_ policy: MountPolicy) -> MountPolicy {
-            guard !roMounts.isEmpty || !rwMounts.isEmpty else { return policy }
-            let extras = roMounts.map { MountSpec(path: $0, readonly: true) }
-                       + rwMounts.map { MountSpec(path: $0, readonly: false) }
+            guard !extras.isEmpty else { return policy }
             let extraPaths = Set(extras.map { $0.path.standardizedFileURL.path })
             var policy = policy
             policy.selections = policy.selections

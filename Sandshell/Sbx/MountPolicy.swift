@@ -13,6 +13,16 @@ struct MountPolicy: Codable, Hashable {
     /// dot-folders. Each is rw or ro; display/apply order is preserved.
     var selections: [MountSpec]
 
+    /// Those of `requested` that give more than this policy does: a path it
+    /// doesn't have, or read-write where it has read-only.
+    func widened(by requested: [MountSpec]) -> [MountSpec] {
+        requested.filter { spec in
+            let path = spec.path.standardizedFileURL.path
+            let held = selections.filter { $0.path.standardizedFileURL.path == path }
+            return held.isEmpty || (!spec.readonly && held.allSatisfy(\.readonly))
+        }
+    }
+
     init(selections: [MountSpec] = []) {
         self.selections = selections
     }
