@@ -325,6 +325,12 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
         drop(textView)
     }
     func debugCheckDrawn() { checkDrawn() }
+    /// What's scrolled to the top of the transcript, as a text offset.
+    var debugTopCharacter: Int {
+        textView.characterIndexForInsertion(at: NSPoint(x: 20, y: textView.visibleRect.minY + 2))
+    }
+    /// The drawn check as it runs when text settles.
+    func debugSettle() { visibleTextNeedsRefresh = true; checkDrawn() }
     /// Unit tests: drop the layout of what's showing, as the blank chat had it.
     func debugForgetLayout() {
         guard let tlm = textView.textLayoutManager else { return }
@@ -401,6 +407,7 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
         // Following the end lays it out on the way there; otherwise lay out
         // what shows, so a paragraph changed in place isn't left drawn as it was.
         if stickToBottom { scrollToBottom() } else { layoutVisibleText() }
+        visibleTextNeedsRefresh = true
         checkDrawnSoon()
     }
 
@@ -517,16 +524,21 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
         return paragraph.attributedString.string.contains { !$0.isWhitespace && $0 != "\u{FFFC}" }
     }
 
+    /// The text showing, whole paragraphs.
+    private var visibleTextRange: NSTextRange? {
+        guard let tlm = textView.textLayoutManager else { return nil }
+        let visible = textView.visibleRect.offsetBy(dx: -textView.textContainerOrigin.x, dy: -textView.textContainerOrigin.y)
+        guard let top = tlm.textLayoutFragment(for: CGPoint(x: 0, y: max(0, visible.minY))) else { return nil }
+        let end = tlm.textLayoutFragment(for: CGPoint(x: 0, y: visible.maxY))?.rangeInElement.endLocation
+            ?? tlm.documentRange.endLocation
+        return NSTextRange(location: top.rangeInElement.location, end: end)
+    }
+
     /// The views TextKit 2 draws paragraphs in: lay out what shows and redraw
     /// them. Marking the text view alone doesn't reach them — each is a view of its own.
     private func layoutAndRedrawVisibleText() {
         guard let tlm = textView.textLayoutManager else { return }
-        let visible = textView.visibleRect.offsetBy(dx: -textView.textContainerOrigin.x, dy: -textView.textContainerOrigin.y)
-        if let top = tlm.textLayoutFragment(for: CGPoint(x: 0, y: max(0, visible.minY))) {
-            let end = tlm.textLayoutFragment(for: CGPoint(x: 0, y: visible.maxY))?.rangeInElement.endLocation
-                ?? tlm.documentRange.endLocation
-            if let range = NSTextRange(location: top.rangeInElement.location, end: end) { tlm.ensureLayout(for: range) }
-        }
+        if let range = visibleTextRange { tlm.ensureLayout(for: range) }
         layoutVisibleText()
         func redraw(_ view: NSView) {
             for sub in view.subviews {
@@ -547,9 +559,28 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
     }
     private var drawnCheck: DispatchWorkItem?
+    /// The text changed since what shows was last rebuilt.
+    private var visibleTextNeedsRefresh = false
+
+    /// Lay out what shows afresh and repaint it. A reply has been seen with
+    /// its views in place, laid out and the right color, and nothing painted
+    /// — scrolling doesn't bring it back and no check can see it
+    /// (xmas-sandshell-7x7) — so this runs whenever the text settles.
+    private func refreshVisibleText() {
+        guard let tlm = textView.textLayoutManager else { return }
+        textView.keepingTopLine {
+            if let range = visibleTextRange { tlm.invalidateLayout(for: range) }
+        }
+        layoutAndRedrawVisibleText()
+        if stickToBottom { scrollToBottom() }
+    }
 
     private func checkDrawn() {
         guard window != nil, !isHiddenOrHasHiddenAncestor, let tlm = textView.textLayoutManager else { return }
+        if visibleTextNeedsRefresh {
+            visibleTextNeedsRefresh = false
+            refreshVisibleText()
+        }
         let missing = undrawnVisibleHeight
         guard missing >= 1 else { return }
         let visible = textView.visibleRect

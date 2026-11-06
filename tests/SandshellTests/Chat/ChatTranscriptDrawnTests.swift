@@ -8,6 +8,29 @@ import Testing
 /// TextKit 2 never laid out, which have no lines and so looked like spacers.
 @MainActor
 struct ChatTranscriptDrawnTests {
+    /// Settling rebuilds what shows (nothing can detect views that paint
+    /// nothing): it must leave the chat where you were reading.
+    @Test func settlingRebuildsWhatShowsWithoutMovingIt() async throws {
+        let items: [ChatItem] = (0..<60).map { .agentText(id: "a\($0)", text: "Reply \($0): " + String(repeating: "some words that wrap around ", count: 12)) }
+        let view = ChatTranscriptView(frame: NSRect(x: 0, y: 0, width: 640, height: 520))
+        let window = NSWindow(contentRect: NSRect(x: -6000, y: 0, width: 640, height: 520), styleMask: [.borderless],
+                              backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = view
+        window.orderFrontRegardless()   // offscreen
+        defer { window.orderOut(nil); window.close() }
+        view.update(items)
+        await Task { @MainActor in }.value
+        view.debugScrollToBottom()
+        view.layoutSubtreeIfNeeded()
+        window.displayIfNeeded()
+        let top = view.debugTopCharacter
+        view.debugSettle()
+        window.displayIfNeeded()
+        #expect(view.debugTopCharacter == top)
+        #expect(view.debugUndrawnVisibleHeight < 1)
+    }
+
     @Test func unlaidTextShowingIsSeenAndDrawnAgain() async throws {
         let paragraph = "Your real hub is already set up for this; you've been signing in to the wrong one. "
             + String(repeating: "The compose file shows the team, the proxy and the sign-in settings. ", count: 6)

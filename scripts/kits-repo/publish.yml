@@ -64,5 +64,5 @@ jobs:
         env:
           COSIGN_EXPERIMENTAL: "1"   # OCI 1.1 referrers: where sbx kit verify looks
         run: |
-          cosign sign --yes --registry-referrers-mode=oci-1-1 \
+          cosign sign --yes --new-bundle-format --registry-referrers-mode=oci-1-1 \
             "ghcr.io/xmas/${{ matrix.kit }}@${{ steps.build.outputs.digest }}"
