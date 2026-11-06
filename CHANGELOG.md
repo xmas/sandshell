@@ -4,6 +4,7 @@ A running log of what changed, newest first. Yes, we actually write these.
 
 ## v0.2.50 — "Note to Self"
 - **What you type is kept until it's sent.** The chat box saves as you type, for each session, and puts your text back after a reload, a reconnect, a sandbox that doesn't come up or quitting the app. Messages waiting to send come back too, and so does one that failed before any reply. Pasted images don't survive quitting.
+- **Getting back to a design session's board.** A palette icon on the session's sidebar row and in its title strip, and Show Board when you right-click the row, bring the board back beside the chat. View ▸ Open Board now opens beside a session too, instead of replacing it.
 - **Notes on a Canvas board.** ⌥-click an artboard, or right-click ▸ Add Note, and say what to change. Notes collect as numbered pins, then **Send to Chat** gives the agent one message naming each artboard and the element you pointed at, with a marked screenshot.
 - **Chat text has its own size.** ⌘+ / ⌘− / ⌘0 size the chat while you're in one, so it can go big for a screen share without touching your editor or terminals. Anywhere else they size those, as before. ⌥⌘+ / ⌥⌘− / ⌥⌘0 (View ▸ Make Chat Text Bigger, Make Chat Text Smaller, Chat Actual Size) size the chat from anywhere.
 - **Compact Session in Session details.** The ⓘ readout under the composer now has the button too.

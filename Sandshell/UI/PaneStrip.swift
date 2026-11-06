@@ -99,6 +99,8 @@ final class PaneStripView: NSView {
     var onRemote: ((NSView) -> Void)?
     /// A board pane's "Open in Full Screen Window".
     var onBoardWindow: (() -> Void)?
+    /// A design session's Show Board.
+    var onShowBoard: (() -> Void)?
 
     private let content = NSView()
     private let crumbs = NSView()
@@ -119,6 +121,7 @@ final class PaneStripView: NSView {
     private let remoteButton = StripIconButton()
     /// A board's own full-screen window (only a board pane has it).
     private let boardWindowButton = StripIconButton()
+    private let showBoardButton = StripIconButton()
     /// The switch's state (nil: hidden — not a chat).
     private(set) var remoteState: Bool?
 
@@ -174,6 +177,7 @@ final class PaneStripView: NSView {
              "pane-restart-session"),
             (boardWindowButton, "arrow.up.left.and.arrow.down.right", "Open in Full Screen Window",
              #selector(boardWindowClicked), "pane-board-window"),
+            (showBoardButton, "paintpalette", "Show Board", #selector(showBoardClicked), "pane-show-board"),
         ] {
             button.configureSymbol(symbol, label: tip, pointSize: Self.controlSymbol, weight: .regular, tint: nil,
                                    target: self, action: action, id: id)
@@ -182,6 +186,7 @@ final class PaneStripView: NSView {
         stopSessionButton.isHidden = true
         restartSessionButton.isHidden = true
         boardWindowButton.isHidden = true
+        showBoardButton.isHidden = true
         content.addSubview(remoteButton)
         remoteButton.isHidden = true
         restyleRemote()
@@ -298,7 +303,7 @@ final class PaneStripView: NSView {
         }
         for sep in separators { sep.textColor = c.stripSeparator }
         for b in [splitRightButton, splitDownButton, closeButton, stopSessionButton, restartSessionButton, remoteButton,
-                  boardWindowButton] {
+                  boardWindowButton, showBoardButton] {
             b.contentTintColor = c.stripCrumb
             b.hoverColor = c.stripHover
         }
@@ -342,7 +347,8 @@ final class PaneStripView: NSView {
         }
         x += Self.controlGap
         // The session's Remote Control, Stop and Restart, set off from the pane's own buttons.
-        let session = [restartSessionButton, stopSessionButton, remoteButton, boardWindowButton].filter { !$0.isHidden }
+        let session = [restartSessionButton, stopSessionButton, remoteButton, boardWindowButton, showBoardButton]
+            .filter { !$0.isHidden }
         if !session.isEmpty { x -= 6 }
         for button in session {
             x -= Self.controlSize
@@ -435,6 +441,17 @@ final class PaneStripView: NSView {
     @objc private func restartSessionClicked() { onRestartSession?() }
     @objc private func remoteClicked() { onRemote?(remoteButton) }
     @objc private func boardWindowClicked() { onBoardWindow?() }
+    @objc private func showBoardClicked() { onShowBoard?() }
+
+    /// Whether the pane shows a design session, so it offers the session's board.
+    var showsBoardButton: Bool {
+        get { !showBoardButton.isHidden }
+        set {
+            guard newValue != showsBoardButton else { return }
+            showBoardButton.isHidden = !newValue
+            needsLayout = true
+        }
+    }
 
     /// Whether the pane shows a board, so it offers the board's own window.
     var showsBoardWindowButton: Bool {

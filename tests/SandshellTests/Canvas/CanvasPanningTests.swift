@@ -194,3 +194,15 @@ struct CanvasNoteTests {
         #expect(canvas.notes.count == 1)
     }
 }
+
+/// A design session offers its board again, once it's been closed.
+@MainActor
+struct ShowBoardButtonTests {
+    @Test func theStripOffersItOnlyWhenAsked() {
+        let strip = PaneStripView(frame: NSRect(x: 0, y: 0, width: 600, height: 34))
+        #expect(!strip.showsBoardButton)
+        strip.showsBoardButton = true
+        #expect(strip.showsBoardButton)
+    }
+}
+

@@ -203,6 +203,8 @@ final class SessionCellView: NSTableCellView {
     private let renameBackdrop = NSView()
     private let timeLabel = NSTextField.sidebarLabel(.role(.code))
     private let closeButton = NSButton()
+    /// A design session's board: shows it again.
+    private let boardButton = NSButton.symbol("paintpalette", label: "Show Board", target: nil, action: nil, id: "session-show-board")
     private let glyphSlot = NSView()
     private var glyphWidth: NSLayoutConstraint!
     private let dot = StatusDotView()
@@ -234,7 +236,13 @@ final class SessionCellView: NSTableCellView {
         timeLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
         // The name takes the room; the time sits at the right edge.
         nameLabel.setContentHuggingPriority(.init(1), for: .horizontal)
-        let titleRow = NSStackView(views: [forkGlyph, nameLabel, timeLabel])
+        boardButton.target = self
+        boardButton.action = #selector(boardClicked)
+        boardButton.toolTip = "Show Board"
+        boardButton.isHidden = true
+        boardButton.setContentHuggingPriority(.required, for: .horizontal)
+        boardButton.setContentCompressionResistancePriority(.required, for: .horizontal)
+        let titleRow = NSStackView(views: [forkGlyph, nameLabel, boardButton, timeLabel])
         titleRow.orientation = .horizontal
         titleRow.distribution = .fill
         titleRow.alignment = .centerY
@@ -312,7 +320,9 @@ final class SessionCellView: NSTableCellView {
 
     /// Full configure: identity, layout, then the state-driven bits.
     func configure(_ session: Session, name: String, instruction: String?, density: SidebarDensity, nested: Bool,
-                   status: SessionRowStatus, time: String?, selected: Bool, live: Bool) {
+                   hasBoard: Bool = false, status: SessionRowStatus, time: String?, selected: Bool, live: Bool) {
+        boardButton.isHidden = !hasBoard
+        boardButton.contentTintColor = palette.muted
         badge.configure(session.agent)
         agentName = session.agent.displayName
         leading.constant = SidebarMetrics.rowInset + SidebarMetrics.rowPadding + (nested ? SidebarMetrics.childIndent : 0)
@@ -393,6 +403,10 @@ final class SessionCellView: NSTableCellView {
     override func mouseEntered(with event: NSEvent) { syncHover() }
     override func mouseExited(with event: NSEvent) { syncHover() }
     override func mouseMoved(with event: NSEvent) { syncHover() }
+
+    @objc private func boardClicked() {
+        if let sessionID { owner?.showBoard(of: sessionID) }
+    }
 
     @objc private func closeClicked() { if let sessionID { owner?.closeSessionFromRow(sessionID) } }
 

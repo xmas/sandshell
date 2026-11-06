@@ -136,6 +136,7 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
             if let self, pane === self.toolbarPane { self.onStatusChange?(text, working) }
         }
         pane.onClosePane = { [weak self, weak pane] in if let pane { self?.close(pane) } }
+        pane.onShowBoard = { [weak self] id in self?.openBoard(ofSession: id) }
         pane.newSessionMenu = { [weak self] in self?.newSessionMenu?() }
         pane.onSplit = { [weak self, weak pane] edge in
             if let self, let pane { self.split(pane, edge: edge, showing: nil) }
@@ -622,6 +623,22 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
         }
         split(pane, edge: .trailing, showing: nil)
         openBoard(folder)
+    }
+
+    /// A design session's board, from its sidebar row or title strip: focused
+    /// if it's open, else back beside the session.
+    func openBoard(ofSession id: UUID) {
+        guard let session = controller.session(id: id), let folder = controller.boardFolder(of: session) else { return }
+        guard let pane = panes.first(where: { $0.shownSession == id }) else {
+            controller.selection = .session(id)   // shows it, with its board beside it
+            return
+        }
+        openBoard(folder, beside: pane)
+    }
+
+    /// View ▸ Open Board: beside a session, which it would otherwise replace.
+    func presentBoard(_ folder: URL) {
+        if focused.shownSession != nil { openBoard(folder, beside: focused) } else { openBoard(folder) }
     }
 
     /// Show a board: focus the pane already showing it, else in the focused pane.

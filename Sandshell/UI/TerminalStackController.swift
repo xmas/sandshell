@@ -505,6 +505,8 @@ final class TerminalStackController: NSViewController {
     }
     /// Close this pane (title-strip ✕, shown when split).
     var onClosePane: (() -> Void)?
+    /// The title strip's Show Board, for this design session.
+    var onShowBoard: ((UUID) -> Void)?
     /// The sidebar's "+ New Session" menu (an empty pane's New Session).
     var newSessionMenu: (() -> NSMenu?)?
     /// Split this pane (title-strip buttons): a new empty pane on that side.
@@ -812,6 +814,9 @@ final class TerminalStackController: NSViewController {
         titleStrip.onSplitRight = { [weak self] in self?.onSplit?(.trailing) }
         titleStrip.onSplitDown = { [weak self] in self?.onSplit?(.bottom) }
         titleStrip.onClose = { [weak self] in self?.onClosePane?() }
+        titleStrip.onShowBoard = { [weak self] in
+            if let id = self?.activeSessionID { self?.onShowBoard?(id) }
+        }
         titleStrip.onBoardWindow = { [weak self] in
             if let board = self?.shownBoard { BoardWindowController.show(board) }
         }
@@ -1347,8 +1352,10 @@ final class TerminalStackController: NSViewController {
     private func updateSessionControls() {
         guard let id = activeSessionID, let session = controller.session(id: id) else {
             titleStrip.setRemote(nil)
+            titleStrip.showsBoardButton = false
             return titleStrip.setSessionControls(stop: nil, restart: nil)
         }
+        titleStrip.showsBoardButton = controller.boardFolder(of: session) != nil
         titleStrip.setSessionControls(stop: chats[id] != nil ? nil : terminals[id] != nil, restart: true)
         titleStrip.setRemote(session.isChat && RemoteHub.shared.isEnabled ? session.isRemote : nil)
     }
