@@ -205,17 +205,34 @@ actor SbxClient {
     }
 
     /// Rebuild an arbitrary listed sandbox from what it was built with: stop →
-    /// rm → recreate with the same agent + mounts (the specs from `sbx ls`).
+    /// rm → recreate with the same agent, mounts (the specs from `sbx ls`) and
+    /// kits (`sbx inspect`, read first: a kit list that can't be read leaves
+    /// the sandbox as it is, rather than bring it back without them).
     @discardableResult
     func rebuildSandbox(_ sandbox: Sandbox) async throws -> Sandbox {
         let kind = AgentKind(rawValue: sandbox.agent)
         if let error = Self.cannotRecreate(kind, sandbox: sandbox.name) { throw error }
-        Log.info(.sbx, "rebuilding sandbox “\(sandbox.name)” (\(sandbox.agent))")
+        guard let inspection = await inspect(sandbox.name) else {
+            throw SbxError.command("Couldn’t read the kits of “\(sandbox.name)”, so it was left as it is. Try again.")
+        }
+        let kits = (inspection.kits ?? []).map { KitStore.bundledKitName($0) ?? $0 }
+        Log.info(.sbx, "rebuilding sandbox “\(sandbox.name)” (\(sandbox.agent)) with kits \(kits)")
+        await signInToBerg(for: kits)
         _ = try? await stop(sandbox.name)
         _ = try? await remove(sandbox.name)
-        let agent = kind.createReference
-        let args = ["create", "--no-progress", "--name", sandbox.name, agent] + sandbox.workspaces
-        return try await createAndPoll(args, cwd: sandbox.primaryWorkdir, name: sandbox.name)
+        return try await createAndPoll(Self.recreateArguments(sandbox, kits: kits), cwd: sandbox.primaryWorkdir,
+                                       name: sandbox.name, waitForKitSetup: !kits.isEmpty)
+    }
+
+    /// `sbx create` for a sandbox being rebuilt with `kits`.
+    nonisolated static func recreateArguments(_ sandbox: Sandbox, kits: [String],
+                                              hub: BergHub? = BergHub.current()) -> [String] {
+        let agent = AgentKind(rawValue: sandbox.agent).createReference
+        return ["create", "--no-progress", "--name", sandbox.name]
+            // (Never the agent's own kit as a --kit too: sbx refuses a sandbox kit there.)
+            + kits.filter { $0 != agent }.flatMap { ["--kit", KitStore.resolve($0)] }
+            + KitStore.kitArguments(for: kits, hub: hub)
+            + [agent] + sandbox.workspaces
     }
 
     /// Why `agent`'s sandbox `name` can't be recreated, if it can't. A kit

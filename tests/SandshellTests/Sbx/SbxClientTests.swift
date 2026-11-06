@@ -197,3 +197,29 @@ struct SbxClientLaunchHoldTests {
         #expect(!SbxClient.launchUnderway())
     }
 }
+
+/// A rebuild brings a sandbox back with its kits (xmas-sandshell-udm6).
+struct RebuildArgumentsTests {
+    private let sandbox = Sandbox(name: "s", id: "1", agent: "shell", status: "running", workspaces: ["/w", "/x:ro"])
+
+    @Test func noKitsIsTheAgentAndMounts() {
+        #expect(SbxClient.recreateArguments(sandbox, kits: [], hub: nil)
+                == ["create", "--no-progress", "--name", "s", "shell", "/w", "/x:ro"])
+    }
+
+    @Test func kitsComeBackBeforeTheAgent() {
+        let args = SbxClient.recreateArguments(sandbox, kits: ["docker.io/sbx/github-ssh:latest"], hub: nil)
+        #expect(args == ["create", "--no-progress", "--name", "s", "--kit", "docker.io/sbx/github-ssh:latest",
+                         "shell", "/w", "/x:ro"])
+    }
+
+    @Test func theAgentsOwnKitIsntPassedAsAKit() {
+        #expect(!SbxClient.recreateArguments(sandbox, kits: ["shell"], hub: nil).contains("--kit"))
+    }
+
+    @Test func theBergKitKeepsItsHub() throws {
+        let hub = try #require(BergHub(hubURL: "https://hub.example.com"))
+        let args = SbxClient.recreateArguments(sandbox, kits: ["berg"], hub: hub)
+        #expect(args.contains("--kit-arg"))
+    }
+}
