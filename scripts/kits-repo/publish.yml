@@ -48,7 +48,7 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - uses: sigstore/cosign-installer@v3
+      - uses: sigstore/cosign-installer@v4   # cosign 3: Sigstore bundles, what sbx kit verify should read
       - name: Build and push
         id: build
         run: |
@@ -64,5 +64,5 @@ jobs:
         env:
           COSIGN_EXPERIMENTAL: "1"   # OCI 1.1 referrers: where sbx kit verify looks
         run: |
-          cosign sign --yes --new-bundle-format --registry-referrers-mode=oci-1-1 \
+          cosign sign --yes --registry-referrers-mode=oci-1-1 \
             "ghcr.io/xmas/${{ matrix.kit }}@${{ steps.build.outputs.digest }}"

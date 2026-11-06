@@ -5,7 +5,7 @@ A running log of what changed, newest first. Yes, we actually write these.
 ## v0.2.49 — "Smooth Operator"
 - **Auto-scroll eases in and out.** Following a reply used to jump to the end with each chunk. Now the view gathers speed, slows as it arrives, and a streaming reply is one continuous motion. Scrolling up stops it at once and leaves the view where you put it. With Reduce Motion on, it goes straight to the end.
 - **Another fix for blank chat replies.** A reply could be in the chat, laid out and normally colored, with nothing painted, and no check could see it. Now whenever a chat's text settles, what's on screen is rebuilt and repainted. It takes a couple of milliseconds and moves nothing.
-- **Published kits are signed in the format `sbx kit verify` is expected to read.** 0.2.48's signatures didn't pass it.
+- Signing Sandshell's published kits is still being sorted out: 0.2.49's signing step failed, so these kits aren't signed. The kits themselves published normally and work as usual.
 
 ## v0.2.48 — "Hands Free"
 - **Text size, the Mac way.** ⌘+ / ⌘− / ⌘0 (View ▸ Make Text Bigger, Make Text Smaller, Actual Size) resize what you read and write: chats, the composer, the Files editor and Markdown preview, and terminals. The sidebar, toolbar and pane strips stay as they are. One size for the app, kept across launches. ⌘0 used to bring up the Sandshell window; it's Actual Size now.
