@@ -331,7 +331,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let isNew = !RootFolderStore.all.contains { $0.path == key }
         let opened = windows.compactMap(\.workspaceController)
             .first { $0.rootURL.standardizedFileURL.path == workspaceURL.standardizedFileURL.path }
-        let current = opened?.policy ?? WorkspaceConfig.loadReportingProblems(root: workspaceURL, home: URL.homeDirectory).0.policy
+        // Only reads: an unreadable config.json is set aside below, if this goes ahead.
+        let saved = (try? WorkspaceConfig.load(root: workspaceURL)) ?? nil
+        let current = opened?.policy ?? saved?.policy ?? MountPolicy()
         let widened = (isNew ? [MountSpec(path: workspaceURL, readonly: false)] : []) + current.widened(by: extras)
         if !widened.isEmpty {
             let list = widened.map { "\($0.path.path(percentEncoded: false).tildeAbbreviated) (\($0.readonly ? "read-only" : "read-write"))" }
