@@ -215,10 +215,10 @@ struct ChatRendererTests {
         @Test func thoughtIsDimAndItalic() throws {
             let rendered = ChatRenderer.render(.thought(id: "t1", text: "pondering"), expanded: false)
             CRFixture.verifyFace(CRFixture.font(in: rendered, at: 1), matches: .role(.meta, weight: .semibold))
-            #expect(CRFixture.color(in: rendered, at: 1) == NSColor.tertiaryLabelColor)
+            #expect(CRFixture.color(in: rendered, at: 1) == NSColor.secondaryLabelColor)
             let text = try #require(CRFixture.range(of: "pondering", in: rendered))
             #expect(CRFixture.font(in: rendered, at: text.location)?.fontDescriptor.symbolicTraits.contains(.italic) == true)
-            #expect(CRFixture.color(in: rendered, at: text.location) == NSColor.tertiaryLabelColor)
+            #expect(CRFixture.color(in: rendered, at: text.location) == NSColor.secondaryLabelColor)
         }
     }
 

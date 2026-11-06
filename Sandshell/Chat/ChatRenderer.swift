@@ -374,9 +374,9 @@ enum ChatRenderer {
         let italic = NSFontManager.shared.convert(body, toHaveTrait: .italicFontMask)
         let lines = text.trimmingCharacters(in: .whitespacesAndNewlines).split(separator: "\n", omittingEmptySubsequences: false)
         let out = NSMutableAttributedString()
-        out.append(line("Thinking", font: .content(.meta, weight: .semibold), color: .tertiaryLabelColor))
+        out.append(line("Thinking", font: .content(.meta, weight: .semibold), color: .secondaryLabelColor))
         let shown = expanded ? lines[...] : lines.prefix(2)
-        out.append(line(shown.joined(separator: "\n"), font: italic, color: .tertiaryLabelColor))
+        out.append(line(shown.joined(separator: "\n"), font: italic, color: .secondaryLabelColor))
         if lines.count > 2 { out.append(link(expanded ? "Show less" : "Show more", id: "thought-\(id)")) }
         return out
     }
