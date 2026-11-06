@@ -100,4 +100,34 @@ struct BergKitTests {
         #expect(summary.displayName == name)
         #expect(summary.description == description)
     }
+
+    /// A kit that couldn't install berg says so: the pill and banner read `WARNING` lines.
+    @Test func theKitsProblemsAreWarnings() {
+        let line = "[berg kit] WARNING: berg not installed: no hub set. Run berg login <hub> on your Mac, then rebuild this sandbox"
+        #expect(KitStartupParser.warningText(line)?.hasPrefix("berg not installed") == true)
+        #expect(KitStartupParser.warningText("[berg kit] berg 1.0 from https://hub.example.com") == nil)
+    }
+
+    /// However the kit was added, it gets the hub and the sign-in.
+    @Test(arguments: [
+        "berg", "/Applications/Sandshell.app/Contents/Resources/kits/berg", "ghcr.io/xmas/berg:0.2.49",
+        "/Users/me/Code/sandshell-kits/berg", "/Users/me/Code/sandshell-kits/berg/",
+        "git+https://github.com/xmas/sandshell-kits.git#ref=v0.2.49&dir=berg",
+        "git+https://github.com/xmas/sandshell-kits.git#dir=berg&ref=v0.2.49",
+    ])
+    func theBergKitIsRecognised(ref: String) throws {
+        #expect(BergHub.isKit(ref))
+        let hub = try #require(BergHub(hubURL: "https://hub.example.com"))
+        #expect(!KitStore.kitArguments(for: [ref], hub: hub).isEmpty)
+    }
+
+    /// Someone else's kit of the same name isn't ours.
+    @Test(arguments: [
+        "/Users/me/my-kits/berg", "docker.io/sbx/github-ssh:latest",
+        "git+https://github.com/xmas/sandshell-kits.git#ref=v0.2.49&dir=sandshell-claude",
+        "git+https://github.com/someone/other.git#dir=berg",
+    ])
+    func otherKitsAreNot(ref: String) {
+        #expect(!BergHub.isKit(ref))
+    }
 }

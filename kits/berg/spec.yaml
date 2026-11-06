@@ -29,7 +29,7 @@ args:
     pattern: '^[A-Za-z0-9.-]+(:[0-9]+)?$'
     description: The hub's host for the network rule (localhost:<port> for one on this Mac — sbx's proxy names host.docker.internal localhost)
   bdVersion:
-    default: "1.3.3"
+    default: "1.3.4"
     pattern: '^[0-9]+\.[0-9]+\.[0-9]+$'
     description: beads (bd) release to install
     buildArg: BD_VERSION

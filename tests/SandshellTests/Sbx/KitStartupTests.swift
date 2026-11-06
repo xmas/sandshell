@@ -42,7 +42,7 @@ struct KitStartupTests {
         (.warning, "warning", true),
         (.failed(exitCode: 22), "failed (exit 22)", true),
         (.skipped, "skipped", true),
-        (.noSteps, "not run", false),
+        (.noSteps, "no start-up step", false),
     ])
     func outcomeLabelAndProblem(outcome: KitStartupOutcome, label: String, isProblem: Bool) {
         #expect(outcome.label == label)

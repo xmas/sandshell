@@ -114,7 +114,7 @@ enum KitStore {
 
     /// `--kit-arg`s the given kits take from this Mac (the berg kit's hub).
     static func kitArguments(for kits: [String], hub: BergHub? = BergHub.current()) -> [String] {
-        guard kits.contains(where: { bundledKitName($0) == BergHub.kitName }), let hub else { return [] }
+        guard kits.contains(where: BergHub.isKit), let hub else { return [] }
         return hub.kitArguments
     }
 

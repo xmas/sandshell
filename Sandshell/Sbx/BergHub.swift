@@ -18,6 +18,17 @@ struct BergHub: Equatable {
     /// The kit's name: its folder in `kits/`, its repository on ghcr.io.
     static let kitName = "berg"
 
+    /// Whether `ref` is the berg kit, however it was added: by name, from the
+    /// app or its published image, a clone of xmas/sandshell-kits, or that
+    /// repository's git reference. Anything else takes no hub or sign-in.
+    static func isKit(_ ref: String) -> Bool {
+        if KitStore.bundledKitName(ref) == kitName { return true }
+        let t = ref.hasSuffix("/") ? String(ref.dropLast()) : ref
+        if t.hasSuffix("/sandshell-kits/\(kitName)") { return true }
+        guard t.hasPrefix("git+"), t.contains("/sandshell-kits"), let fragment = t.split(separator: "#").last else { return false }
+        return fragment.split(separator: "&").map(String.init).contains("dir=\(kitName)")
+    }
+
     /// berg's config (`internal/cliconfig`: Go's user config dir), unless
     /// `BERG_CONFIG` says otherwise.
     static var configURL: URL {

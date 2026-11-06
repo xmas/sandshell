@@ -286,7 +286,7 @@ private struct KitStatusPill: View {
     var body: some View {
         let (label, color): (String, Color) = switch outcome {
         case .ok: ("ok", .green)
-        case .noSteps: ("not run", .orange)
+        case .noSteps: ("no start-up step", .secondary)
         case .running: ("installing…", .secondary)
         case .warning: ("warning", .orange)
         case .failed(let code): ("failed · exit \(code)", .red)

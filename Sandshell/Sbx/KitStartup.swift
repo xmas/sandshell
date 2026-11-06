@@ -31,7 +31,7 @@ enum KitStartupOutcome: Equatable {
         case .warning:                "warning"
         case .failed(let code):       "failed (exit \(code))"
         case .skipped:                "skipped"
-        case .noSteps:                "not run"
+        case .noSteps:                "no start-up step"
         }
     }
 

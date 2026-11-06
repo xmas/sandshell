@@ -179,7 +179,7 @@ actor SbxClient {
     /// berg signed in on this Mac there's nothing to give; the kit says so in
     /// the sandbox. Never under tests: it's the user's sbx.
     func signInToBerg(for kits: [String], hub: BergHub? = BergHub.current()) async {
-        guard kits.contains(where: { KitStore.bundledKitName($0) == BergHub.kitName }),
+        guard kits.contains(where: BergHub.isKit),
               !AutomatedRun.isActive, !AppDelegate.isHostingTests else { return }
         guard let hub else {
             return Log.info(.sbx, "berg kit: berg isn't signed in on this Mac (berg login <hub>); the sandbox's berg won't be")

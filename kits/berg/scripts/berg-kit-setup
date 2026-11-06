@@ -6,21 +6,23 @@
 #   berg-kit-setup --update   fetch berg again (the hub's current one)
 set -u
 say() { printf '[berg kit] %s\n' "$*" >&2; }
+# WARNING is what turns the kit's pill to "warning" and shows this in Sandshell.
+warn() { say "WARNING: $*"; }
 bin="$HOME/.local/bin"
 mkdir -p "$bin"
 
 # --- berg from the hub, with the token sbx's proxy puts on the request
 install_berg() {
   hub="${BERG_HUB_URL:-}"
-  if [ -z "$hub" ]; then say "no hub set (the kit's hub argument): berg not installed"; return; fi
+  if [ -z "$hub" ]; then warn "berg not installed: no hub set. Run berg login <hub> on your Mac, then rebuild this sandbox (or set the kit's hub argument)"; return; fi
   if [ -z "${BERG_TOKEN:-}" ]; then
-    say "no BERG_TOKEN: give sbx your berg token for the hub's host (Sandshell: Settings ▸ Kits ▸ berg)"
+    warn "berg not installed: no BERG_TOKEN. Give sbx your berg token for the hub's host (Sandshell: Settings ▸ Kits ▸ berg)"
     return
   fi
   case "$(uname -m)" in
     x86_64 | amd64) arch=amd64 ;;
     aarch64 | arm64) arch=arm64 ;;
-    *) say "no berg build for $(uname -m)"; return ;;
+    *) warn "berg not installed: no build for $(uname -m)"; return ;;
   esac
   tmp="$bin/.berg.$$"
   code=$(curl -sS -o "$tmp" -w '%{http_code}' -H "Authorization: Bearer $BERG_TOKEN" \
@@ -30,10 +32,10 @@ install_berg() {
   else
     rm -f "$tmp"
     case "$code" in
-      401) say "the hub refused the token (HTTP 401): give sbx a current berg token for its host" ;;
-      404) say "the hub has no berg download for tokens yet (HTTP 404): it needs Iceberg's /api/v1/download/berg route" ;;
-      000) say "can't reach $hub from the sandbox" ;;
-      *) say "berg download failed (HTTP $code) from $hub" ;;
+      401) warn "the hub refused the token (HTTP 401): give sbx a current berg token for its host" ;;
+      404) warn "the hub has no berg download for tokens yet (HTTP 404): it needs Iceberg's /api/v1/download/berg route" ;;
+      000) warn "can't reach $hub from the sandbox" ;;
+      *) warn "berg download failed (HTTP $code) from $hub" ;;
     esac
   fi
 }
