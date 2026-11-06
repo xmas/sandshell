@@ -26,3 +26,26 @@ struct FinishedRowsHideTests {
         #expect(!SubagentSummary.hides(run([]), tasks: []), "no agents yet")
     }
 }
+
+/// The row under a session says when its background tasks are running.
+struct BackgroundSummaryTests {
+    private func task(_ kind: BackgroundTask.Kind, _ state: BackgroundTask.State) -> BackgroundTask {
+        var task = BackgroundTask(id: UUID().uuidString, kind: kind, title: "t", startedAt: .now)
+        task.state = state
+        return task
+    }
+
+    @Test(arguments: [BackgroundTask.Kind.shell, .monitor])
+    func aRunningBackgroundTaskCountsAsRunning(kind: BackgroundTask.Kind) {
+        let summary = SubagentSummary(subagents: [], workflows: [], tasks: [task(kind, .running)])
+        #expect(summary.title == "1 background")
+        #expect(summary.runningText == "1 running")
+    }
+
+    @Test func aFinishedOneDoesnt() {
+        let summary = SubagentSummary(subagents: [], workflows: [], tasks: [task(.shell, .completed)])
+        #expect(summary.isEmpty)
+        #expect(summary.runningText == nil)
+    }
+}
+

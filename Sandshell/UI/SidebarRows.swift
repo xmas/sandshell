@@ -532,10 +532,10 @@ struct SubagentSummary: Equatable {
     init(subagents: [SubagentInfo], workflows: [WorkflowRun], tasks: [BackgroundTask]) {
         self.subagents = subagents.count
         self.workflows = workflows.count
-        running = subagents.count(where: \.isRunning) + workflows.count { run in
+        background = tasks.count { $0.isRunning && ($0.kind == .shell || $0.kind == .monitor) }
+        running = background + subagents.count(where: \.isRunning) + workflows.count { run in
             tasks.first { $0.runID == run.id }.map(\.isRunning) ?? !run.agentsSettled
         }
-        background = tasks.count { $0.isRunning && ($0.kind == .shell || $0.kind == .monitor) }
     }
 
     /// A subagent row hides itself once really done: its transcript says its
