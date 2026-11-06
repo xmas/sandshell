@@ -1,10 +1,12 @@
 import AppKit
+import SwiftUI
 import WebKit
 
 /// A board on a zoomable, pannable surface: each artboard a web view sized to
 /// it, titled above. Scroll anywhere or drag the empty space to pan (⌥-scroll
-/// scrolls a page itself); pinch to zoom. Watches the board folder and reloads what changed, so the
-/// agent's edits show as they land. See docs/canvas.md.
+/// scrolls a page itself); pinch to zoom; ⌥-click or right-click ▸ Add Note
+/// leaves a note on a page for the chat. Watches the board folder and reloads
+/// what changed, so the agent's edits show as they land. See docs/canvas.md.
 @MainActor
 final class CanvasView: NSView {
     private let scrollView = NSScrollView()
@@ -17,6 +19,13 @@ final class CanvasView: NSView {
     private var modified: [String: Date] = [:]
     private var watcher: FileWatcher?
     private var zoomedToFit = false
+    /// Notes waiting to go to the chat.
+    private(set) var notes: [CanvasNote] = []
+    private var notePopover: NSPopover?
+    private let notesBar = NSStackView()
+    private let notesLabel = NSTextField(labelWithString: "")
+    /// Instead of finding the chat (tests).
+    var onSendNotes: ((String, [ChatAttachment]) -> Bool)?
 
     /// Empty space around the artboards.
     static let margin: CGFloat = 120
@@ -43,7 +52,26 @@ final class CanvasView: NSView {
         messageLabel.textColor = .secondaryLabelColor
         messageLabel.isHidden = true
         addSubview(messageLabel)
+        let send = NSButton(title: "Send to Chat", target: self, action: #selector(sendNotesClicked))
+        send.setAccessibilityIdentifier("canvas-send-notes")
+        let clear = NSButton(title: "Clear", target: self, action: #selector(clearNotesClicked))
+        clear.setAccessibilityIdentifier("canvas-clear-notes")
+        notesLabel.font = .systemFont(ofSize: 13, weight: .medium)
+        notesBar.setViews([notesLabel, clear, send], in: .leading)
+        notesBar.orientation = .horizontal
+        notesBar.spacing = 10
+        notesBar.edgeInsets = NSEdgeInsets(top: 8, left: 14, bottom: 8, right: 10)
+        notesBar.wantsLayer = true
+        notesBar.layer?.cornerRadius = 10
+        notesBar.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
+        notesBar.layer?.borderWidth = 1
+        notesBar.layer?.borderColor = NSColor.separatorColor.cgColor
+        notesBar.translatesAutoresizingMaskIntoConstraints = false
+        notesBar.isHidden = true
+        addSubview(notesBar)
         NSLayoutConstraint.activate([
+            notesBar.centerXAnchor.constraint(equalTo: centerXAnchor),
+            notesBar.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -16),
             scrollView.topAnchor.constraint(equalTo: topAnchor),
             scrollView.bottomAnchor.constraint(equalTo: bottomAnchor),
             scrollView.leadingAnchor.constraint(equalTo: leadingAnchor),
@@ -63,6 +91,7 @@ final class CanvasView: NSView {
         self.folder = folder
         watcher = nil
         zoomedToFit = false
+        clearNotes()
         for view in artboardViews.values { view.removeFromSuperview() }
         artboardViews = [:]
         modified = [:]
@@ -110,6 +139,8 @@ final class CanvasView: NSView {
             guard let frame = frames[artboard.id] else { continue }
             let view = artboardViews[artboard.id] ?? {
                 let v = ArtboardView()
+                let id = artboard.id
+                v.onNote = { [weak self] point in self?.beginNote(on: id, at: point) }
                 document.addSubview(v)
                 artboardViews[artboard.id] = v
                 return v
@@ -154,6 +185,74 @@ final class CanvasView: NSView {
         scrollView.setMagnification(scrollView.magnification * factor, centeredAt: center)
     }
 
+    // MARK: Notes
+
+    /// ⌥-click on a page: what's there, then ask what to change.
+    private func beginNote(on id: String, at point: CGPoint) {
+        Task { [weak self] in
+            guard let self, let view = self.artboardViews[id] else { return }
+            let element = await view.element(at: point)
+            self.notePopover?.close()
+            #if DEBUG
+            self.debugNoteElement = element
+            #endif
+            let entry = CanvasNoteEntry(element: element?.selector) { [weak self] text, send in
+                self?.notePopover?.close()
+                self?.notePopover = nil
+                self?.addNote(CanvasNote(artboard: id, point: point, element: element, text: text))
+                if send { Task { [weak self] in await self?.sendNotes() } }
+            }
+            let anchor = view.noteAnchor
+            let rect = NSRect(x: point.x, y: anchor.isFlipped ? point.y : anchor.bounds.height - point.y, width: 1, height: 1)
+            _ = NSPopover.toggle(&self.notePopover, below: anchor, rect: rect) { .hosting(entry) }
+        }
+    }
+
+    func addNote(_ note: CanvasNote) {
+        notes.append(note)
+        showNotes()
+    }
+
+    private func clearNotes() {
+        notes = []
+        showNotes()
+    }
+
+    /// Each artboard's pins (numbered as in the message), and the bar.
+    private func showNotes() {
+        for (id, view) in artboardViews { view.setPins(marks(on: id)) }
+        notesLabel.stringValue = notes.count == 1 ? "1 note" : "\(notes.count) notes"
+        notesBar.isHidden = notes.isEmpty
+    }
+
+    private func marks(on id: String) -> [(number: Int, point: CGPoint)] {
+        notes.enumerated().filter { $0.element.artboard == id }.map { (number: $0.offset + 1, point: $0.element.point) }
+    }
+
+    /// The notes as one message, with a screenshot of each artboard they're
+    /// on. Kept if there's no chat to take them.
+    func sendNotes() async {
+        guard let board, !notes.isEmpty else { return }
+        var shots: [ChatAttachment] = []
+        var seen: Set<String> = []
+        for id in notes.map(\.artboard) where seen.insert(id).inserted {
+            guard let view = artboardViews[id], let image = await view.snapshot(),
+                  let png = CanvasNote.markedPNG(image, marks: marks(on: id)) else { continue }
+            shots.append(ChatAttachment(kind: .image(data: png, mimeType: "image/png", name: "\(id).png")))
+        }
+        let message = CanvasNote.message(notes, board: board)
+        let sent = onSendNotes?(message, shots)
+            ?? (NSApp.delegate as? AppDelegate)?.sendCanvasNotes(message, attachments: shots, board: board.folder) ?? false
+        if sent {
+            clearNotes()
+        } else {
+            Alerts.inform("No chat to send to", "Open a chat in this folder’s window, then send the notes.", in: window)
+        }
+    }
+
+    @objc private func sendNotesClicked() { Task { await sendNotes() } }
+    @objc private func clearNotesClicked() { clearNotes() }
+
     #if DEBUG
     var debugArtboardIDs: [String] { (board?.artboards ?? []).map(\.id).filter { artboardViews[$0] != nil } }
     var debugLoadedCount: Int { artboardViews.values.filter(\.hasLoaded).count }
@@ -161,6 +260,23 @@ final class CanvasView: NSView {
     var debugMessage: String? { messageLabel.isHidden ? nil : messageLabel.stringValue }
     var debugMagnification: CGFloat { scrollView.magnification }
     func debugPageText(_ id: String) async -> String? { await artboardViews[id]?.pageText() }
+    func debugElement(_ id: String, at point: CGPoint) async -> CanvasNote.Element? { await artboardViews[id]?.element(at: point) }
+    func debugPins(_ id: String) -> Int { artboardViews[id]?.pinCount ?? 0 }
+    var debugNotesBarShown: Bool { !notesBar.isHidden }
+    /// What the last note being written is pointing at.
+    private(set) var debugNoteElement: CanvasNote.Element?
+    var debugNotePopoverShown: Bool { notePopover?.isShown == true }
+    /// A click at `point` on an artboard's page, as the page gets it.
+    func debugClick(_ id: String, at point: CGPoint, option: Bool) {
+        guard let web = artboardViews[id]?.debugWebView, let window = web.window else { return }
+        let local = NSPoint(x: point.x, y: web.isFlipped ? point.y : web.bounds.height - point.y)
+        let event = NSEvent.mouseEvent(with: .leftMouseDown, location: web.convert(local, to: nil),
+                                       modifierFlags: option ? .option : [], timestamp: 0,
+                                       windowNumber: window.windowNumber, context: nil, eventNumber: 0,
+                                       clickCount: 1, pressure: 1)
+        if let event { web.mouseDown(with: event) }
+    }
+    var debugNotesBarText: String { notesLabel.stringValue }
     /// Where the view is on the board (the clip view's origin).
     var debugVisibleOrigin: NSPoint { scrollView.contentView.bounds.origin }
     /// A mouse wheel's scroll over an artboard's page, as the page gets it.
@@ -224,6 +340,26 @@ private final class CanvasDocumentView: NSView {
 private final class ArtboardWebView: WKWebView {
     /// Whether the scroll gesture under way goes to the page.
     private var scrollsPage = false
+    /// A note asked for at this point on the page (CSS pixels from the top left).
+    var onNote: ((CGPoint) -> Void)?
+
+    private func pagePoint(_ event: NSEvent) -> CGPoint {
+        let point = convert(event.locationInWindow, from: nil)
+        return CGPoint(x: point.x, y: isFlipped ? point.y : bounds.height - point.y)
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        guard event.modifierFlags.contains(.option), let onNote else { return super.mouseDown(with: event) }
+        onNote(pagePoint(event))
+    }
+
+    override func willOpenMenu(_ menu: NSMenu, with event: NSEvent) {
+        super.willOpenMenu(menu, with: event)
+        guard onNote != nil else { return }
+        let point = pagePoint(event)
+        menu.insertItem(.separator(), at: 0)
+        menu.insertItem(NSMenuItem("Add Note") { [weak self] in self?.onNote?(point) }, at: 0)
+    }
 
     override func scrollWheel(with event: NSEvent) {
         // Decided as a gesture starts and kept through its momentum; a mouse
@@ -243,12 +379,47 @@ private final class ArtboardWebView: WKWebView {
     }
 }
 
+/// A pin on a page: clicks go through it to the page.
+private final class ClickThroughView: NSView {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
+/// What to change, asked at the point a note is left.
+private struct CanvasNoteEntry: View {
+    var element: String?
+    /// The note, and whether to send now.
+    var onDone: (String, Bool) -> Void
+    @State private var text = ""
+
+    private var note: String { text.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let element {
+                Text(element).font(.role(.meta)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+            }
+            TextField("What should change?", text: $text, axis: .vertical)
+                .lineLimit(3...6)
+            HStack {
+                Spacer()
+                Button("Add Another") { onDone(note, false) }
+                Button("Send to Chat") { onDone(note, true) }.keyboardShortcut(.defaultAction)
+            }
+            .disabled(note.isEmpty)
+        }
+        .padding(12)
+        .frame(width: 300)
+    }
+}
+
 /// One artboard: its title, then the page in a web view of the artboard's size.
 @MainActor
 private final class ArtboardView: NSView, WKNavigationDelegate {
     static let titleHeight: CGFloat = 28
     private let titleLabel = NSTextField(labelWithString: "")
-    private let webView: WKWebView
+    private let webView: ArtboardWebView
+    private var pins: [NSView] = []
+    var onNote: ((CGPoint) -> Void)?
     private(set) var source: URL?
     private(set) var hasLoaded = false
     private(set) var reloads = 0
@@ -270,6 +441,7 @@ private final class ArtboardView: NSView, WKNavigationDelegate {
         titleLabel.lineBreakMode = .byTruncatingTail
         addSubview(titleLabel)
         webView.navigationDelegate = self
+        webView.onNote = { [weak self] point in self?.onNote?(point) }
         webView.allowsMagnification = false
         webView.wantsLayer = true
         webView.layer?.cornerRadius = 6
@@ -311,7 +483,40 @@ private final class ArtboardView: NSView, WKNavigationDelegate {
 
     #if DEBUG
     var debugWebView: WKWebView { webView }
+    var pinCount: Int { pins.count }
     #endif
+
+    /// Where a note's popover points from.
+    var noteAnchor: NSView { webView }
+
+    /// The element at `point`, from the page; nil if it won't say.
+    func element(at point: CGPoint) async -> CanvasNote.Element? {
+        let json = try? await webView.evaluateJavaScript(CanvasNote.elementScript(at: point)) as? String
+        return json.flatMap { try? JSONDecoder().decode(CanvasNote.Element.self, from: Data($0.utf8)) }
+    }
+
+    func snapshot() async -> NSImage? {
+        try? await webView.takeSnapshot(configuration: nil)
+    }
+
+    /// Numbered pins over the page where its notes point.
+    func setPins(_ marks: [(number: Int, point: CGPoint)]) {
+        for pin in pins { pin.removeFromSuperview() }
+        pins = marks.map { mark in
+            let label = NSTextField(labelWithString: "\(mark.number)")
+            label.font = .systemFont(ofSize: 12, weight: .bold)
+            label.textColor = .white
+            label.alignment = .center
+            label.frame = NSRect(x: 0, y: 3, width: 22, height: 16)
+            let pin = ClickThroughView(frame: NSRect(x: mark.point.x - 11, y: Self.titleHeight + mark.point.y - 11, width: 22, height: 22))
+            pin.wantsLayer = true
+            pin.layer?.cornerRadius = 11
+            pin.layer?.backgroundColor = NSColor.systemRed.cgColor
+            pin.addSubview(label)
+            addSubview(pin)
+            return pin
+        }
+    }
 
     func pageText() async -> String? {
         try? await webView.evaluateJavaScript("document.body ? document.body.innerText : ''") as? String

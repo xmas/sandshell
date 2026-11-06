@@ -390,6 +390,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         openWorkspace(workspaceURL)
     }
 
+    /// A board's notes, to a chat in the window on its folder; false if none
+    /// shows there. (The full-screen board has no chat of its own.)
+    @MainActor func sendCanvasNotes(_ text: String, attachments: [ChatAttachment], board: URL) -> Bool {
+        let path = board.standardizedFileURL.path(percentEncoded: false)
+        let trees = windows.filter { window in
+            guard let root = window.workspaceController?.rootURL.standardizedFileURL.path(percentEncoded: false) else { return false }
+            return path.hasPrefix(root.hasSuffix("/") ? root : root + "/")
+        }.compactMap(\.paneTree)
+        return trees.lazy.compactMap { $0.chatPane(forBoard: board) }.first?.sendToChat(text, attachments: attachments) ?? false
+    }
+
     /// App menu ▸ Check for Updates… — compares against the Homebrew cask.
     @MainActor @objc func checkForUpdates(_ sender: Any?) {
         Updater.shared.checkForUpdatesMenu()

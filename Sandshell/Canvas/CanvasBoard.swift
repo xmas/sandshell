@@ -1,4 +1,4 @@
-import Foundation
+import AppKit
 
 /// A Canvas board: `.sandshell/canvas/<board>/board.json` and the artboards'
 /// files beside it, written by the agent with its ordinary file tools (the
@@ -125,3 +125,87 @@ struct CanvasBoard: Equatable, Sendable {
         return path.hasPrefix(base.hasSuffix("/") ? base : base + "/") ? url : nil
     }
 }
+
+/// A note left on an artboard, for the agent: what to change, and what it's
+/// pointing at. See docs/canvas.md.
+struct CanvasNote: Equatable, Sendable {
+    /// The artboard's id in board.json.
+    var artboard: String
+    /// Where on the page, in its CSS pixels from the top left.
+    var point: CGPoint
+    /// The element under the point, from the page; nil if it couldn't say.
+    var element: Element?
+    var text: String
+
+    struct Element: Equatable, Sendable, Decodable {
+        var selector: String
+        var text: String
+    }
+
+    /// The notes as one chat message.
+    static func message(_ notes: [CanvasNote], board: CanvasBoard) -> String {
+        let one = notes.count == 1
+        let lines = notes.enumerated().map { i, note -> String in
+            let artboard = board.artboards.first { $0.id == note.artboard }
+            var place = "Artboard `\(note.artboard)`"
+            if let file = artboard?.file { place += " (\(file))" }
+            if let element = note.element {
+                place += ", at `\(element.selector)`"
+                if !element.text.isEmpty { place += " (“\(element.text)”)" }
+            }
+            return (one ? "" : "\(i + 1). ") + place + ":\n" + note.text
+        }
+        return "Canvas \(one ? "note" : "notes") on “\(board.title)” (\(board.folder.path(percentEncoded: false))):\n\n"
+            + lines.joined(separator: "\n\n")
+    }
+
+    /// Script that returns the element at (`x`, `y`) as JSON: `Element`, or null.
+    static func elementScript(at point: CGPoint) -> String {
+        """
+        (function (x, y) {
+          var at = document.elementFromPoint(x, y);
+          if (!at) return null;
+          function step(e) {
+            var s = e.tagName.toLowerCase();
+            if (e.id) return s + '#' + CSS.escape(e.id);
+            var names = Array.from(e.classList).slice(0, 2).map(CSS.escape);
+            if (names.length) s += '.' + names.join('.');
+            var parent = e.parentElement;
+            if (parent) {
+              var same = Array.from(parent.children).filter(function (k) { return k.tagName === e.tagName; });
+              if (same.length > 1) s += ':nth-of-type(' + (same.indexOf(e) + 1) + ')';
+            }
+            return s;
+          }
+          var path = [];
+          for (var e = at; e && e !== document.body && e !== document.documentElement; e = e.parentElement) {
+            path.unshift(step(e));
+            if (e.id) break;
+          }
+          return JSON.stringify({
+            selector: path.join(' > ') || 'body',
+            text: (at.innerText || at.textContent || '').trim().replace(/\\s+/g, ' ').slice(0, 120)
+          });
+        })(\(point.x), \(point.y))
+        """
+    }
+
+    /// `image` as a PNG with numbered marks where the notes point.
+    static func markedPNG(_ image: NSImage, marks: [(number: Int, point: CGPoint)]) -> Data? {
+        let marked = NSImage(size: image.size, flipped: true) { rect in
+            image.draw(in: rect)
+            for mark in marks {
+                let circle = NSRect(x: mark.point.x - 11, y: mark.point.y - 11, width: 22, height: 22)
+                NSColor.systemRed.setFill()
+                NSBezierPath(ovalIn: circle).fill()
+                let label = NSAttributedString(string: "\(mark.number)", attributes: [
+                    .font: NSFont.systemFont(ofSize: 13, weight: .bold), .foregroundColor: NSColor.white])
+                let size = label.size()
+                label.draw(at: NSPoint(x: circle.midX - size.width / 2, y: circle.midY - size.height / 2))
+            }
+            return true
+        }
+        return marked.tiffRepresentation.flatMap { NSBitmapImageRep(data: $0)?.representation(using: .png, properties: [:]) }
+    }
+}
+

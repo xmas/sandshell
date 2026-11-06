@@ -631,6 +631,16 @@ final class TerminalStackController: NSViewController {
     var debugCanvas: CanvasView? { shownBoard == nil ? nil : canvas }
     #endif
 
+    /// Whether this pane shows a live chat.
+    var showsChat: Bool { shownSession.map { chats[$0] != nil } ?? false }
+
+    /// Send a message to the chat this pane shows; false if it shows none.
+    func sendToChat(_ text: String, attachments: [ChatAttachment]) -> Bool {
+        guard let id = shownSession, let chat = chats[id] else { return false }
+        chat.applyDraft(text: text, urls: [], attachments: attachments, send: true)
+        return true
+    }
+
     /// Re-send this pane's identity/status to the window (it became focused).
     func reemitChrome() {
         if let board = shownBoard { return showCanvas(board) }

@@ -264,6 +264,16 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
         scheduleSave()
     }
 
+    /// The pane whose chat a board's notes go to: the board's own design
+    /// session, else the focused chat, else any chat showing.
+    func chatPane(forBoard folder: URL) -> TerminalStackController? {
+        let chats = panes.filter(\.showsChat)
+        return chats.first { pane in
+            pane.shownSession.flatMap(controller.session(id:)).flatMap(controller.boardFolder(of:))?
+                .standardizedFileURL == folder.standardizedFileURL
+        } ?? chats.first { $0 === focused } ?? chats.first
+    }
+
     /// A design session's board, in a pane beside it (unless one shows it).
     private func showBoardBeside(_ id: UUID) {
         guard let session = controller.session(id: id), let folder = controller.boardFolder(of: session),

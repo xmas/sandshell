@@ -63,11 +63,14 @@ board beside the chat.
 
 ## Notes back to the agent
 
-Click a point on an artboard, type a note, and **Send to Chat**: the chat
-gets a message naming the board, the artboard and the element under the click
-(a CSS selector and its text, from the page), with a screenshot of the
-artboard and the point marked, attached like any image. Several notes go as
-one message. The agent edits the file; the artboard reloads.
+⌥-click a point on an artboard (or right-click ▸ Add Note; a plain click is
+the page's), type a note, and **Send to Chat**: the chat gets a message naming
+the board, the artboard and the element under the click (a CSS selector and
+its text, from the page), with a screenshot of the artboard and the point
+marked, attached like any image. **Add Another** leaves a numbered pin and
+keeps going, and the notes go as one message. They go to the board's design
+session, else the focused chat, else any chat showing in the folder's window
+(`PaneTreeController.chatPane`). The agent edits the file; the artboard reloads.
 
 ## Phases
 
