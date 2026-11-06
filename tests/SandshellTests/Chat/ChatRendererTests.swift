@@ -1757,3 +1757,91 @@ fileprivate enum CRFixture {
         try body(paragraphs)
     }
 }
+
+/// What's typed and not sent survives whatever happens to the chat (`ComposerDrafts`).
+@MainActor
+@Suite(.serialized)
+struct ComposerDraftTests {
+    private func withDrafts(_ body: @MainActor (UUID) throws -> Void) throws {
+        let suite = "SandshellComposerDrafts-\(UUID().uuidString)"
+        let saved = ComposerDrafts.defaults
+        ComposerDrafts.defaults = try #require(UserDefaults(suiteName: suite))
+        defer {
+            ComposerDrafts.defaults.removePersistentDomain(forName: suite)
+            ComposerDrafts.defaults = saved
+        }
+        try body(UUID())
+    }
+
+    @Test func typingIsKeptAsItHappens() throws {
+        try withDrafts { id in
+            let composer = ChatComposerView(frame: NSRect(x: 0, y: 0, width: 400, height: 80))
+            composer.draftID = id
+            composer.debugTypeKeys("half a thought")
+            #expect(ComposerDrafts.typed(for: id) == "half a thought")
+        }
+    }
+
+    @Test func sendingClearsItAndARefusalDoesnt() throws {
+        try withDrafts { id in
+            let composer = ChatComposerView(frame: NSRect(x: 0, y: 0, width: 400, height: 80))
+            composer.draftID = id
+            composer.debugTypeKeys("hello")
+            composer.onSubmit = { _, _ in false }
+            composer.submitFromButton()
+            #expect(ComposerDrafts.typed(for: id) == "hello", "Nothing took it")
+            composer.onSubmit = { _, _ in true }
+            composer.submitFromButton()
+            #expect(ComposerDrafts.typed(for: id).isEmpty)
+        }
+    }
+
+    @Test func aNewChatGetsItBackQueuedMessagesFirst() throws {
+        try withDrafts { id in
+            ComposerDrafts.save(typed: "typed", for: id)
+            ComposerDrafts.save(queued: ["first", "second"], for: id)
+            #expect(ComposerDrafts.restore(for: id, keepQueued: true) == "first\n\nsecond\n\ntyped")
+            #expect(ComposerDrafts.queued(for: id).isEmpty)
+            #expect(ComposerDrafts.typed(for: id) == "first\n\nsecond\n\ntyped", "Still kept until it goes")
+        }
+    }
+
+    /// A reconnect hands queued messages to the next chat to send: not also in the field.
+    @Test func queuedMessagesBeingCarriedDontComeBackToo() throws {
+        try withDrafts { id in
+            ComposerDrafts.save(typed: "typed", for: id)
+            ComposerDrafts.save(queued: ["carried"], for: id)
+            #expect(ComposerDrafts.restore(for: id, keepQueued: false) == "typed")
+            #expect(ComposerDrafts.queued(for: id).isEmpty)
+        }
+    }
+
+    @Test func anUnsentMessageGoesBackAheadOfWhatsBeenTyped() throws {
+        try withDrafts { id in
+            ComposerDrafts.save(typed: "since", for: id)
+            ComposerDrafts.putBack("unsent", for: id)
+            #expect(ComposerDrafts.typed(for: id) == "unsent\n\nsince")
+        }
+    }
+
+    @Test func draftsAreBySession() throws {
+        try withDrafts { id in
+            ComposerDrafts.save(typed: "mine", for: id)
+            #expect(ComposerDrafts.typed(for: UUID()).isEmpty)
+            ComposerDrafts.forget(id)
+            #expect(ComposerDrafts.typed(for: id).isEmpty)
+        }
+    }
+
+    /// Added to what's there, never over it: restored text mustn't be replaced.
+    @Test func addingADraftKeepsWhatsThere() throws {
+        try withDrafts { id in
+            let composer = ChatComposerView(frame: NSRect(x: 0, y: 0, width: 400, height: 80))
+            composer.draftID = id
+            composer.setDraft("kept")
+            composer.addToDraft("added")
+            #expect(composer.debugText == "kept\n\nadded")
+        }
+    }
+}
+

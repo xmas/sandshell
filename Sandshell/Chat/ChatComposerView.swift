@@ -203,7 +203,40 @@ final class ChatComposerView: NSView, NSTextViewDelegate {
         textView.setSelectedRange(NSRange(location: (text as NSString).length, length: 0))
         textView.needsDisplay = true
         resize()
+        saveDraft()
     }
+
+    /// Add to what's in the composer, a paragraph after it.
+    func addToDraft(_ text: String) { setDraft(ComposerDrafts.joined([draftText, text])) }
+
+    /// The session whose draft this is: what's typed is kept for it (`ComposerDrafts`).
+    var draftID: UUID?
+
+    private func saveDraft() {
+        if let draftID { ComposerDrafts.save(typed: draftText, for: draftID) }
+    }
+
+    /// What's in the field as text, `@file` chips as `@relative/path`.
+    private var draftText: String {
+        var text = ""
+        guard let storage = textView.textStorage else { return text }
+        storage.enumerateAttribute(.attachment, in: NSRange(location: 0, length: storage.length)) { value, range, _ in
+            if let mention = value as? MentionAttachment {
+                text += "@" + mention.relative
+            } else if value == nil {
+                text += (storage.string as NSString).substring(with: range)
+            }
+        }
+        return text
+    }
+
+    /// Files and images waiting in the composer, handed over (the chat's closing).
+    func takeAttachments() -> [ChatAttachment] {
+        defer { attachments = [] }
+        return attachments
+    }
+
+    func addAttachments(_ new: [ChatAttachment]) { attach(new) }
 
     func submitFromButton() { submit() }
 
@@ -252,6 +285,7 @@ final class ChatComposerView: NSView, NSTextViewDelegate {
         resize()
         updateCompletion()
         updateGhost()
+        saveDraft()
     }
 
     func textViewDidChangeSelection(_ notification: Notification) {
@@ -431,16 +465,11 @@ final class ChatComposerView: NSView, NSTextViewDelegate {
     private func submit() {
         hideCompletion()
         // `@file` chips become `@relative/path` in the text, plus the file itself.
-        var text = ""
+        let text = draftText
         var mentioned: [URL] = []
         if let storage = textView.textStorage {
-            storage.enumerateAttribute(.attachment, in: NSRange(location: 0, length: storage.length)) { value, range, _ in
-                if let mention = value as? MentionAttachment {
-                    text += "@" + mention.relative
-                    mentioned.append(mention.url)
-                } else if value == nil {
-                    text += (storage.string as NSString).substring(with: range)
-                }
+            storage.enumerateAttribute(.attachment, in: NSRange(location: 0, length: storage.length)) { value, _, _ in
+                if let mention = value as? MentionAttachment { mentioned.append(mention.url) }
             }
         }
         let files = mentioned.map { url in
@@ -454,6 +483,7 @@ final class ChatComposerView: NSView, NSTextViewDelegate {
         history = nil
         textView.ghost = nil
         resize()
+        saveDraft()
     }
 
     #if DEBUG

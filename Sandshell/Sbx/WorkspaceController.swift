@@ -2234,7 +2234,7 @@ extension WorkspaceController {
         guard let index = state.sessions.firstIndex(where: { $0.id == id }) else { return }
         let closed = state.sessions.remove(at: index)
         recentlyClosed.append(closed)
-        if recentlyClosed.count > 20 { recentlyClosed.removeFirst() }
+        if recentlyClosed.count > 20 { ComposerDrafts.forget(recentlyClosed.removeFirst().id) }
         clearSelectionIfGone()
         saveState()
         // Undo puts it back where it was (it resumes its conversation when shown).

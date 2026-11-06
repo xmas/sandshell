@@ -389,8 +389,11 @@ final class SessionSurfaces {
     /// End a session's chat, wherever it's shown (or with no pane showing it).
     func closeChat(_ id: UUID) {
         guard let chat = chats.removeValue(forKey: id) else { return }
-        // A message queued behind its turn is kept for the session's next chat
-        // (a reconnect sends it) instead of vanishing.
+        // What's attached in the composer goes back in the next chat's, and a
+        // message queued behind its turn is kept for it (a reconnect sends it)
+        // instead of vanishing.
+        drafts[id, default: ChatDraft()].composer.attachments += chat.prepareToClose()
+        if drafts[id]?.message.isEmpty == true, drafts[id]?.composer.isEmpty == true { drafts[id] = nil }
         if let waiting = chat.session.takeQueued() {
             drafts[id, default: ChatDraft()].putFirst(text: waiting.text, attachments: waiting.attachments)
         }
@@ -1684,13 +1687,16 @@ final class TerminalStackController: NSViewController {
             surfaces.onLaunched(id)
             // The message goes when the agent is ready; the composer's part
             // stays there to be looked over.
-            if let draft = drafts.removeValue(forKey: id) {
+            let draft = drafts.removeValue(forKey: id)
+            view.restoreDraft(carryingQueued: draft?.message.isEmpty == false)
+            if let draft {
                 if !draft.message.isEmpty {
                     view.applyDraft(text: draft.message.text, urls: draft.message.urls,
                                     attachments: draft.message.attachments, send: true)
                 }
                 if !draft.composer.isEmpty {
-                    view.applyDraft(text: draft.composer.text, urls: draft.composer.urls, send: false)
+                    view.applyDraft(text: draft.composer.text, urls: draft.composer.urls,
+                                    attachments: draft.composer.attachments, send: false)
                 }
             }
         }

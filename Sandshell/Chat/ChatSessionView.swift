@@ -62,6 +62,9 @@ final class ChatSessionView: NSView {
         set { composer.resolveFileURLs = newValue }
     }
 
+    /// Keeps the queued messages on disk until they've gone.
+    private var queueSaver: AnyCancellable?
+
     init(session: ChatSession) {
         self.session = session
         super.init(frame: .zero)
@@ -145,10 +148,25 @@ final class ChatSessionView: NSView {
             let files = urls.map { ComposerTextView.attachment(for: resolveFileURLs?([$0]).first ?? $0) }
             session.sendWhenReady(text: text, attachments: attachments + files)
         } else {
-            if !text.isEmpty { composer.setDraft(text) }
+            if !text.isEmpty { composer.addToDraft(text) }
             if !urls.isEmpty { composer.addAttachments(urls: urls) }
+            if !attachments.isEmpty { composer.addAttachments(attachments) }
             composer.focus()
         }
+    }
+
+    /// Back in the field: what was typed and never went. `carryingQueued`: this
+    /// chat was handed the messages queued in the last one, to send.
+    func restoreDraft(carryingQueued: Bool) {
+        let text = ComposerDrafts.restore(for: session.ownSessionID, keepQueued: !carryingQueued)
+        if !text.isEmpty { composer.setDraft(text) }
+    }
+
+    /// The chat's closing: its queued messages are about to be handed on, and
+    /// what's on disk stays until they've gone. Returns the composer's attachments.
+    func prepareToClose() -> [ChatAttachment] {
+        queueSaver = nil
+        return composer.takeAttachments()
     }
 
     func addAttachments(from pasteboard: NSPasteboard) -> Bool {
@@ -174,6 +192,10 @@ final class ChatSessionView: NSView {
         permissionBar.isHidden = true
         permissionBar.setAccessibilityIdentifier("chat-permission")
 
+        let draftID = session.ownSessionID
+        composer.draftID = draftID
+        queueSaver = session.$queue.dropFirst().sink { ComposerDrafts.save(queued: $0.items.map(\.text), for: draftID) }
+        session.onUnsent = { [weak self] in self?.composer.setDraft(ComposerDrafts.typed(for: draftID)) }
         composer.onSubmit = { [weak self] text, attachments in
             guard let self else { return false }
             self.sendingWhenOtherAppIdles = false   // sent (or queued) by hand

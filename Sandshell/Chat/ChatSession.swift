@@ -202,7 +202,9 @@ final class ChatSession: ObservableObject {
     /// Tags the agent's processes for reaping (a claimed spare brings its own).
     private var tag: SbxCommand.ProcessTag
     /// The session's own id (`tag` is a warm spare's once one is claimed).
-    private let ownSessionID: UUID
+    let ownSessionID: UUID
+    /// A message came back unsent (its text is in `ComposerDrafts`).
+    var onUnsent: (() -> Void)?
     /// A fresh launch tag for a relaunch, so a reap of the last launch can't reach it.
     private func newLaunchTag() { tag = SbxCommand.ProcessTag(session: ownSessionID) }
     let containerName: String
@@ -622,6 +624,11 @@ final class ChatSession: ObservableObject {
                     notice("Stopped: \(reason)", isError: false)
                 }
             } catch {
+                // Nothing came back, so it may never have got there: back in the field.
+                if case .user? = items.last {
+                    ComposerDrafts.putBack(trimmed, for: ownSessionID)
+                    onUnsent?()
+                }
                 guard !isClosed, connection === conn else { return }
                 // The agent often streams the same failure as its reply first
                 // ("Failed to refresh…" then "Internal error: Failed to refresh…");

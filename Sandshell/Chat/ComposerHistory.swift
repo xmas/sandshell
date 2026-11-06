@@ -159,3 +159,52 @@ enum CommandGhost {
         return name.map { String($0.dropFirst(typed.count)) }
     }
 }
+
+/// What's been typed in a chat and hasn't gone: the field's text, and messages
+/// queued behind a start or a turn. Kept by session on disk, as it's typed, so
+/// a reload, a reconnect, a sandbox that never came up or the app going away
+/// can't take it; the chat puts it back in the field when it next comes up.
+/// (Text only: pasted images don't outlive the app.)
+@MainActor
+enum ComposerDrafts {
+    static var defaults = AppDelegate.isHostingTests
+        ? (UserDefaults(suiteName: "SandshellComposerDraftTests") ?? .standard) : .standard
+
+    private static func typedKey(_ id: UUID) -> String { "composerDraft.\(id.uuidString)" }
+    private static func queuedKey(_ id: UUID) -> String { "composerQueued.\(id.uuidString)" }
+
+    static func typed(for id: UUID) -> String { defaults.string(forKey: typedKey(id)) ?? "" }
+    static func queued(for id: UUID) -> [String] { defaults.stringArray(forKey: queuedKey(id)) ?? [] }
+
+    static func save(typed text: String, for id: UUID) {
+        if text.isEmpty { defaults.removeObject(forKey: typedKey(id)) } else { defaults.set(text, forKey: typedKey(id)) }
+    }
+
+    static func save(queued: [String], for id: UUID) {
+        if queued.isEmpty { defaults.removeObject(forKey: queuedKey(id)) } else { defaults.set(queued, forKey: queuedKey(id)) }
+    }
+
+    /// A message that didn't go, back ahead of what's been typed since.
+    static func putBack(_ text: String, for id: UUID) {
+        save(typed: joined([text, typed(for: id)]), for: id)
+    }
+
+    /// What goes back in the field, and the queued messages now that they're
+    /// there. Not those if the next chat is carrying them to send (`keepQueued`
+    /// false): they'd go twice.
+    static func restore(for id: UUID, keepQueued: Bool) -> String {
+        if keepQueued { save(typed: joined(queued(for: id) + [typed(for: id)]), for: id) }
+        save(queued: [], for: id)
+        return typed(for: id)
+    }
+
+    static func forget(_ id: UUID) {
+        save(typed: "", for: id)
+        save(queued: [], for: id)
+    }
+
+    static func joined(_ texts: [String]) -> String {
+        texts.filter { !$0.isEmpty }.joined(separator: "\n\n")
+    }
+}
+
