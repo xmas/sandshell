@@ -185,7 +185,7 @@ def suites():
     found = set()
     for file in root.rglob("*.swift"):
         found.update(re.findall(r"^(?:final class|struct|enum|class) (\w+)", file.read_text(), re.M))
-    return sorted(name for name in found if suite_has_tests(name, root))
+    return sorted(name for name in found if name.endswith("Tests") or suite_has_tests(name, root))
 
 
 SLOW = ("TranscriptReadableTests", "ChatTranscriptSettleTests")
