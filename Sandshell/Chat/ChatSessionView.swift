@@ -16,7 +16,8 @@ final class ChatSessionView: NSView {
     private let composer = ChatComposerView()
 
     /// The window's theme: Send takes its accent.
-    func applyTheme(_ c: ThemeColors) { composer.sendButton.accent = (c.accent, c.accentFg) }
+    /// The send button wears the folder's sidebar color.
+    func applySendColor(sidebarHex: String) { composer.sendButton.accent = ComposerSendButton.accent(sidebarHex: sidebarHex) }
     #if DEBUG
     var debugSendAccent: NSColor? { composer.sendButton.accent?.fill }
     #endif

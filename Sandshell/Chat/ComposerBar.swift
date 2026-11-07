@@ -228,8 +228,14 @@ final class ComposerSendButton: NSButton {
     var debugOrbiting: Bool { !orbit.isHidden && orbit.animation(forKey: Self.orbitKey) != nil }
     #endif
 
-    /// Send's fill and its arrow: the window theme's accent (nil: the composer's ink).
+    /// Send's fill and its arrow (nil: the composer's ink).
     var accent: (fill: NSColor, ink: NSColor)? { didSet { needsDisplay = true } }
+
+    /// The folder's sidebar color, with an arrow that reads on it.
+    static func accent(sidebarHex: String) -> (fill: NSColor, ink: NSColor) {
+        let fill = NSColor.hex(sidebarHex)
+        return (fill, fill.perceivedIsDark ? .white : .black)
+    }
 
     override var intrinsicContentSize: NSSize { NSSize(width: Self.diameter, height: Self.diameter) }
     override var isEnabled: Bool { didSet { needsDisplay = true } }

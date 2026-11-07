@@ -258,3 +258,15 @@ struct ComposerBarTests {
         #expect(button.accessibilityIdentifier() == "chat-send-stop")
     }
 }
+
+/// The send button wears the folder's sidebar color, with an arrow that reads on it.
+@MainActor
+struct ComposerSendColorTests {
+    @Test(arguments: [("1f2937", NSColor.white), ("f4f1ea", NSColor.black)])
+    func theArrowReadsOnTheSidebarColor(hex: String, ink: NSColor) {
+        let accent = ComposerSendButton.accent(sidebarHex: hex)
+        #expect(accent.fill == NSColor.hex(hex))
+        #expect(accent.ink == ink)
+    }
+}
+
