@@ -167,13 +167,25 @@ def release(ws, version):
     print(f"Release {version} started: confirm it on the Mac. Progress: release.log")
 
 
+def suite_has_tests(name, root):
+    """Whether `name`'s body, up to the next top-level type, holds a test."""
+    for file in root.rglob("*.swift"):
+        text = file.read_text()
+        match = re.search(rf"^(?:final class|struct|enum|class) {name}\b", text, re.M)
+        if match:
+            rest = text[match.end():]
+            end = re.search(r"^(?:final class|struct|enum|class) \w+", rest, re.M)
+            return "@Test" in (rest[:end.start()] if end else rest)
+    return False
+
+
 def suites():
     """Every top-level test suite: each batch has to finish inside the gateway's minute."""
     root = Path(__file__).resolve().parent.parent / "tests" / "SandshellTests"
     found = set()
     for file in root.rglob("*.swift"):
-        found.update(re.findall(r"^(?:@\S+.*\n)*struct (\w+)", file.read_text(), re.M))
-    return sorted(name for name in found if name.endswith("Tests"))
+        found.update(re.findall(r"^(?:final class|struct|enum|class) (\w+)", file.read_text(), re.M))
+    return sorted(name for name in found if suite_has_tests(name, root))
 
 
 SLOW = ("TranscriptReadableTests", "ChatTranscriptSettleTests")
@@ -186,15 +198,20 @@ def test_all(ws):
     batches += [rest[i:i + 40] for i in range(0, len(rest), 40)]
     passed = failed = skipped = 0
     for batch in batches:
-        arguments = {"workspaceIdentifier": ws, "tests": [{"targetName": TARGET, "testIdentifier": n} for n in batch]}
         run = {}
-        for _ in range(3):
+        for _ in range(12):
+            arguments = {"workspaceIdentifier": ws, "tests": [{"targetName": TARGET, "testIdentifier": n} for n in batch]}
+            answer = call("RunSomeTests", arguments)
             try:
-                run = json.loads(call("RunSomeTests", arguments) or "{}")
+                run = json.loads(answer or "{}")
             except ValueError:
                 run = {}
             if run.get("counts"):
                 break
+            # A helper type that only looked like a suite.
+            missing = re.search(r"Test '(\w+)' not found", answer or "")
+            if missing and missing.group(1) in batch:
+                batch.remove(missing.group(1))
         counts = run.get("counts")
         if not counts:
             print(f"No result for {batch[0]} and {len(batch) - 1} more: {json.dumps(run)[:300]}")
