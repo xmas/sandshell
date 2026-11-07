@@ -379,7 +379,8 @@ enum SelfTest {
               "under the composer: attach, model, effort and the readout")
         check(chat.modes.isEmpty || view.debugBarShown.contains("chat-mode"), "and the approval mode")
         check(view.debugSendMode == .send && view.debugSendEnabled, "idle: the round button is Send")
-        check(view.debugSendAccent == window.workspaceController.map { NSColor.hex($0.rootProfile.sidebarHex) },
+        check(view.debugSendAccent == window.workspaceController.map {
+                  ComposerSendButton.accent(sidebarHex: $0.rootProfile.sidebarHex, dark: $0.theme.colors.isDark).fill },
               "in the folder's sidebar color")
         let send = view.debugSendButtonFrame, pill = view.debugComposer.convert(view.debugComposer.bounds, to: view)
         check(pill.contains(send) && send.width == 24, "it sits inside the pill (\(send) in \(pill))")

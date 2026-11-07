@@ -105,6 +105,44 @@ struct ChatTranscriptSettleTests {
         #expect(view.debugRefreshes > before)
     }
 
+    /// ⌘+ in a chat: the text comes back at the new size, on screen.
+    @Test(arguments: [nil, 0.0, 0.4] as [Double?])
+    func changingTheTextSizeKeepsTheTextShowing(scrolledTo fraction: Double?) async throws {
+        let suite = "SandshellZoomBlank-\(UUID().uuidString)"
+        let saved = TextZoom.defaults
+        TextZoom.defaults = try #require(UserDefaults(suiteName: suite))
+        defer {
+            TextZoom.defaults.removePersistentDomain(forName: suite)
+            TextZoom.defaults = saved
+        }
+        let view = ChatTranscriptView(frame: NSRect(x: 0, y: 0, width: 640, height: 720))
+        let window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 640, height: 720), styleMask: [.borderless],
+                              backing: .buffered, defer: false)
+        defer { window.orderOut(nil); window.close() }
+        window.isReleasedWhenClosed = false
+        window.alphaValue = 0.01
+        window.ignoresMouseEvents = true
+        window.contentView = view
+        window.orderFrontRegardless()
+        view.update(items(60))
+        await wait(0.2)
+        view.layoutSubtreeIfNeeded()
+        if let fraction { view.debugScroll(toFraction: fraction) }
+        await wait(0.2)
+        window.displayIfNeeded()
+        #expect(Set(pixels(view)).count > 8, "Text to start with")
+        for step in 1...3 {
+            NotificationCenter.default.post(name: ChatTextZoom.didChange, object: nil)   // as ⌘+ does
+            ChatTextZoom.scale = [1.15, 1.3, 1.5][step - 1]
+            await wait(0.9)
+            view.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
+            #expect(view.debugUndrawnVisibleHeight < 1, "Step \(step): undrawn")
+            #expect(view.debugUnlaidVisibleHeight < 1, "Step \(step): unlaid")
+            #expect(Set(pixels(view)).count > 8, "Step \(step): nothing on screen")
+        }
+    }
+
     @Test(arguments: [0.0, 0.1, 0.37, 0.5, 0.83, 1.0])
     func notAPixelMoves(fraction: Double) async {
         let (view, window) = await make(items(150))
@@ -195,3 +233,123 @@ struct ChatTranscriptSettleTests {
     }
 }
 #endif
+
+#if DEBUG
+/// The text of a chat can actually be read: rendered on its background, light
+/// and dark, at every text size, the contrast of the pixels themselves. (A
+/// check that text exists passes for black text on a black panel.)
+@MainActor
+@Suite(.serialized)
+struct TranscriptReadableTests {
+    private final class Panel: NSView {
+        var fill: NSColor = .black
+        override func draw(_ dirtyRect: NSRect) { fill.setFill(); bounds.fill() }
+    }
+
+    private func items(_ turns: Int) -> [ChatItem] {
+        (0..<turns).flatMap { i -> [ChatItem] in
+            [.user(id: UUID(), text: "Question \(i): what should we do about the \(i)th thing?", attachments: []),
+             .thought(id: "t\(i)", text: "Thinking about the \(i)th thing for a moment."),
+             .agentText(id: "a\(i)", text: "## Part \(i)\n\nA paragraph with `inline code` and **bold**, long enough to wrap.\n\n```swift\nlet x = \(i)\n```")]
+        }
+    }
+
+    private func luminance(_ c: NSColor) -> Double {
+        guard let c = c.usingColorSpace(.sRGB) else { return 0 }
+        func f(_ v: CGFloat) -> Double { v <= 0.03928 ? Double(v) / 12.92 : pow((Double(v) + 0.055) / 1.055, 2.4) }
+        return 0.2126 * f(c.redComponent) + 0.7152 * f(c.greenComponent) + 0.0722 * f(c.blueComponent)
+    }
+
+    /// The strongest contrast on `view` against `background`.
+    private func bestContrast(_ view: NSView, background: NSColor) throws -> Double {
+        let rep = try #require(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+        view.cacheDisplay(in: view.bounds, to: rep)
+        let bg = luminance(background)
+        var best = 1.0
+        for y in stride(from: 0, to: rep.pixelsHigh, by: 3) {
+            for x in stride(from: 0, to: rep.pixelsWide, by: 3) {
+                guard let c = rep.colorAt(x: x, y: y) else { continue }
+                let l = luminance(c)
+                best = max(best, (max(l, bg) + 0.05) / (min(l, bg) + 0.05))
+            }
+        }
+        return best
+    }
+
+    private func window(dark: Bool) -> (NSWindow, Panel, ChatTranscriptView) {
+        let window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 640, height: 720), styleMask: [.borderless],
+                              backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.alphaValue = 0.01
+        window.ignoresMouseEvents = true
+        window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+        let panel = Panel(frame: NSRect(x: 0, y: 0, width: 640, height: 720))
+        panel.fill = dark ? .hex("0f1219") : .white
+        let view = ChatTranscriptView(frame: panel.bounds)
+        view.autoresizingMask = [.width, .height]
+        panel.addSubview(view)
+        window.contentView = panel
+        window.orderFrontRegardless()
+        return (window, panel, view)
+    }
+
+    /// A long chat, read from partway up, sized up and down with replies still
+    /// coming: no help from here, just the run loop, as in the app.
+    @Test(arguments: [(true, 0.5), (true, 0.9), (false, 0.9)] as [(Bool, Double)])
+    func aLongChatStaysReadableThroughSizeChanges(dark: Bool, fraction: Double) async throws {
+        let suite = "SandshellReadableLong-\(UUID().uuidString)"
+        let saved = TextZoom.defaults
+        TextZoom.defaults = try #require(UserDefaults(suiteName: suite))
+        defer {
+            TextZoom.defaults.removePersistentDomain(forName: suite)
+            TextZoom.defaults = saved
+        }
+        let (window, panel, view) = window(dark: dark)
+        defer { window.orderOut(nil); window.close() }
+        view.debugEasesFollow = true
+        var all = items(120)
+        view.update(all)
+        try await Task.sleep(for: .milliseconds(800))
+        view.debugScroll(toFraction: fraction)
+        try await Task.sleep(for: .milliseconds(400))
+        var failures: [String] = []
+        for (step, scale) in ([1.3, 1.75, 1.15, 1] as [CGFloat]).enumerated() {
+            ChatTextZoom.scale = scale
+            all.append(.agentText(id: "more\(step)", text: "And another reply number \(step), still arriving."))
+            view.update(all)
+            try await Task.sleep(for: .milliseconds(900))
+            window.displayIfNeeded()
+            let contrast = try bestContrast(panel, background: panel.fill)
+            let line = "step \(step) x\(scale): contrast \(String(format: "%.1f", contrast)), undrawn \(Int(view.debugUndrawnVisibleHeight)), "
+                + "unlaid \(Int(view.debugUnlaidVisibleHeight)), y \(Int(view.debugScrollY)) of \(Int(view.debugDocumentHeight))"
+            if contrast < 7 || view.debugUndrawnVisibleHeight >= 1 || view.debugUnlaidVisibleHeight >= 1 { failures.append(line) }
+        }
+        #expect(failures.isEmpty, Comment(rawValue: failures.joined(separator: " | ")))
+    }
+
+    @Test(arguments: [true, false], [1, 0.75, 1.5, 2.5] as [CGFloat])
+    func aChatCanBeReadAtEverySize(dark: Bool, scale: CGFloat) async throws {
+        let suite = "SandshellReadable-\(UUID().uuidString)"
+        let saved = TextZoom.defaults
+        TextZoom.defaults = try #require(UserDefaults(suiteName: suite))
+        defer {
+            TextZoom.defaults.removePersistentDomain(forName: suite)
+            TextZoom.defaults = saved
+        }
+        let (window, panel, view) = window(dark: dark)
+        defer { window.orderOut(nil); window.close() }
+        view.debugEasesFollow = true
+        view.update(items(40))
+        try await Task.sleep(for: .milliseconds(300))
+        view.layoutSubtreeIfNeeded()
+        ChatTextZoom.scale = scale   // what ⌘+ and ⌘− do; the chat redraws itself
+        try await Task.sleep(for: .seconds(1.2))
+        view.layoutSubtreeIfNeeded()
+        window.displayIfNeeded()
+        let contrast = try bestContrast(panel, background: panel.fill)
+        #expect(contrast >= 7, "\(dark ? "dark" : "light") at \(scale): best contrast \(contrast)")
+        #expect(view.debugUndrawnVisibleHeight < 1)
+    }
+}
+#endif
+

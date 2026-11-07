@@ -303,9 +303,10 @@ final class SidebarListController: NSViewController {
     private var sidebarTheme: ThemeColors { sidebarTheme(for: controller.rootProfile) }
 
     private func sidebarTheme(for p: RootProfile) -> ThemeColors {
-        let dark = NSColor.hex(p.sidebarHex).perceivedIsDark
+        let dark = NSColor.hex(p.sidebarHex).prefersLightInk
         var c = ThemeColors.base(dark: dark)
         c.sidebar = .hex(p.sidebarHex)
+        c.sidebarFg = c.sidebar.readableInk
         c.accent = .hex(p.colorHex)
         // Derive muted text from the foreground as a translucent tint rather than a
         // fixed slate-gray — a flat gray reads as washed-out over a vivid sidebar,

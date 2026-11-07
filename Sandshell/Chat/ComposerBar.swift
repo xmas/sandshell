@@ -231,10 +231,12 @@ final class ComposerSendButton: NSButton {
     /// Send's fill and its arrow (nil: the composer's ink).
     var accent: (fill: NSColor, ink: NSColor)? { didSet { needsDisplay = true } }
 
-    /// The folder's sidebar color, with an arrow that reads on it.
-    static func accent(sidebarHex: String) -> (fill: NSColor, ink: NSColor) {
-        let fill = NSColor.hex(sidebarHex)
-        return (fill, fill.perceivedIsDark ? .white : .black)
+    /// The folder's sidebar color, with an arrow that reads on it. On a dark
+    /// chat a dark sidebar color is lifted, or the button sinks into the pill.
+    static func accent(sidebarHex: String, dark: Bool) -> (fill: NSColor, ink: NSColor) {
+        let color = NSColor.hex(sidebarHex)
+        let fill = dark && color.perceivedIsDark ? color.blended(withFraction: 0.3, of: .white) ?? color : color
+        return (fill, fill.prefersLightInk ? .white : .black)
     }
 
     override var intrinsicContentSize: NSSize { NSSize(width: Self.diameter, height: Self.diameter) }

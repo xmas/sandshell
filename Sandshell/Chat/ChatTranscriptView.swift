@@ -153,10 +153,38 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
         segments = []
         textView.textStorage?.setAttributedString(NSAttributedString())
         apply(items)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in self?.redrawEverythingAfterSizeChange() }
         guard !stickToBottom else { return }
         textView.layoutSubtreeIfNeeded()
         scrollView.contentView.scroll(to: NSPoint(x: 0, y: (fraction * textView.frame.height).rounded()))
         scrollView.reflectScrolledClipView(scrollView.contentView)
+    }
+
+    /// A size change remade all the text. A blank chat has followed one with
+    /// everything laid out and nothing on screen (xmas-sandshell-7x7), so lay it
+    /// all out again, and say what shows: only the app's own log can tell.
+    private func redrawEverythingAfterSizeChange() {
+        guard let tlm = textView.textLayoutManager else { return }
+        programmaticScroll = true
+        textView.keepingTopLine { tlm.invalidateLayout(for: tlm.documentRange) }
+        programmaticScroll = false
+        layoutAndRedrawVisibleText()
+        textHeightChanged()
+        var elements = 0, empty = 0
+        func count(_ view: NSView) {
+            for sub in view.subviews {
+                if NSStringFromClass(type(of: sub)).contains("ViewportElement") {
+                    elements += 1
+                    if sub.layer?.contents == nil { empty += 1 }
+                }
+                count(sub)
+            }
+        }
+        count(textView)
+        let visible = textView.visibleRect
+        Log.info(.app, "chat: text size \(ChatTextZoom.scale): \(elements) text views, \(empty) with no layer contents, "
+                 + "visible y \(Int(visible.minY))+\(Int(visible.height)) of \(Int(textView.frame.height)), "
+                 + "text \(textView.textStorage?.length ?? 0), undrawn \(Int(undrawnVisibleHeight)), appearance \(effectiveAppearance.name.rawValue)")
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -248,6 +276,15 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
 
     private static let jumpSize: CGFloat = 30
 
+    /// A floating control's colors, as this view's appearance has them: out
+    /// here a system color can resolve as light, a white chip in a dark chat.
+    private func paintChip(_ chip: NSView, fill: NSColor) {
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            chip.layer?.backgroundColor = fill.cgColor
+            chip.layer?.borderColor = NSColor.separatorColor.cgColor
+        }
+    }
+
     /// More below than shows: the fade and the ↓ button; at the end, neither.
     private func updateEndCues() {
         let doc = document.frame.height, clip = scrollView.contentView.bounds
@@ -265,8 +302,7 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
             jumpButton.isHidden = !more
             jumpButton.setAccessibilityElement(more)
         }
-        jumpButton.layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
-        jumpButton.layer?.borderColor = NSColor.separatorColor.cgColor
+        paintChip(jumpButton, fill: .controlBackgroundColor)
     }
 
     /// ↓: to the newest, and follow it again.
@@ -906,8 +942,7 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
         }
         // Just the buttons, no highlight behind the reply.
         let area = hit.frame.insetBy(dx: -10, dy: -6)
-        replyActions.layer?.backgroundColor = NSColor.textBackgroundColor.cgColor
-        replyActions.layer?.borderColor = NSColor.separatorColor.cgColor
+        paintChip(replyActions, fill: .textBackgroundColor)
         // Fork is from a reply; your own messages just copy.
         forkButton?.isHidden = onFork == nil || !isReply(hit.index)
         let size = replyActions.fittingSize
@@ -962,8 +997,7 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
             return
         }
         hoveredBlock = hit.range
-        blockActions.layer?.backgroundColor = NSColor.textBackgroundColor.cgColor
-        blockActions.layer?.borderColor = NSColor.separatorColor.cgColor
+        paintChip(blockActions, fill: .textBackgroundColor)
         let size = blockActions.fittingSize
         blockActions.frame = NSRect(x: frame.maxX - size.width - 6, y: frame.minY + 6,
                                     width: size.width, height: size.height)

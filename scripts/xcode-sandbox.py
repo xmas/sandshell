@@ -8,7 +8,7 @@ here. A chat doesn't get these as tools (docs/extensions.md), so this speaks
 MCP to the gateway itself, through the sandbox's proxy.
 
   scripts/xcode-sandbox.py build                build app and tests; errors listed
-  scripts/xcode-sandbox.py test                 build, then every test
+  scripts/xcode-sandbox.py test                 build, then every test, in batches
   scripts/xcode-sandbox.py test FooTests ...    build, then these suites or tests
   scripts/xcode-sandbox.py log [warning]        the last build's issues
   scripts/xcode-sandbox.py release 1.2.3        start a release on the Mac (Publish
@@ -19,6 +19,8 @@ MCP to the gateway itself, through the sandbox's proxy.
 Exits non-zero unless the build succeeded and the tests really passed. Never
 trust a quiet answer: a build returns an empty response, and a first test run
 after one can too, so results come from the build log and a run's own summary.
+The gateway ends a call at about a minute while Xcode carries on, so a test run
+longer than that reads as no result: run fewer suites.
 
 It drives the user's real Xcode, which must have Sandshell.xcodeproj open. A
 new source file needs `xcodegen generate` on the Mac first.
@@ -165,6 +167,48 @@ def release(ws, version):
     print(f"Release {version} started: confirm it on the Mac. Progress: release.log")
 
 
+def suites():
+    """Every top-level test suite: each batch has to finish inside the gateway's minute."""
+    root = Path(__file__).resolve().parent.parent / "tests" / "SandshellTests"
+    found = set()
+    for file in root.rglob("*.swift"):
+        found.update(re.findall(r"^(?:@\S+.*\n)*struct (\w+)", file.read_text(), re.M))
+    return sorted(name for name in found if name.endswith("Tests"))
+
+
+SLOW = ("TranscriptReadableTests", "ChatTranscriptSettleTests")
+
+
+def test_all(ws):
+    names = suites()
+    batches = [[name] for name in SLOW if name in names]
+    rest = [name for name in names if name not in SLOW]
+    batches += [rest[i:i + 40] for i in range(0, len(rest), 40)]
+    passed = failed = skipped = 0
+    for batch in batches:
+        arguments = {"workspaceIdentifier": ws, "tests": [{"targetName": TARGET, "testIdentifier": n} for n in batch]}
+        run = {}
+        for _ in range(3):
+            try:
+                run = json.loads(call("RunSomeTests", arguments) or "{}")
+            except ValueError:
+                run = {}
+            if run.get("counts"):
+                break
+        counts = run.get("counts")
+        if not counts:
+            print(f"No result for {batch[0]} and {len(batch) - 1} more: {json.dumps(run)[:300]}")
+            return False
+        passed += counts.get("passed", 0)
+        failed += counts.get("failed", 0)
+        skipped += counts.get("skipped", 0)
+        for result in run.get("results", []):
+            if result.get("state") not in ("Passed", "Skipped"):
+                print(f"  {result.get('state')} {result.get('identifier')}: " + " | ".join(result.get("errorMessages") or [])[:400])
+    print(f"{passed + failed + skipped} tests in {len(batches)} batches: {passed} passed, {failed} failed, {skipped} skipped")
+    return failed == 0 and passed > 0
+
+
 def main():
     command = sys.argv[1] if len(sys.argv) > 1 else "help"
     if command == "tools":
@@ -180,7 +224,8 @@ def main():
         release(workspace(), sys.argv[2] if len(sys.argv) > 2 else "")
     elif command == "test":
         ws = workspace()
-        return 0 if build(ws) and test(ws, sys.argv[2:]) else 1
+        names = sys.argv[2:]
+        return 0 if build(ws) and (test(ws, names) if names else test_all(ws)) else 1
     else:
         print(__doc__)
     return 0

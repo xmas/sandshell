@@ -264,9 +264,81 @@ struct ComposerBarTests {
 struct ComposerSendColorTests {
     @Test(arguments: [("1f2937", NSColor.white), ("f4f1ea", NSColor.black)])
     func theArrowReadsOnTheSidebarColor(hex: String, ink: NSColor) {
-        let accent = ComposerSendButton.accent(sidebarHex: hex)
+        let accent = ComposerSendButton.accent(sidebarHex: hex, dark: false)
         #expect(accent.fill == NSColor.hex(hex))
         #expect(accent.ink == ink)
+    }
+}
+
+/// Every theme, light and dark: what's read on what meets WCAG contrast, and
+/// the dark header stays quiet.
+@MainActor
+struct ThemeContrastTests {
+    private func luminance(_ c: NSColor) -> Double {
+        guard let c = c.usingColorSpace(.sRGB) else { return 0 }
+        func f(_ v: CGFloat) -> Double { v <= 0.03928 ? Double(v) / 12.92 : pow((Double(v) + 0.055) / 1.055, 2.4) }
+        return 0.2126 * f(c.redComponent) + 0.7152 * f(c.greenComponent) + 0.0722 * f(c.blueComponent)
+    }
+    private func contrast(_ a: NSColor, _ b: NSColor) -> Double {
+        let (x, y) = (luminance(a), luminance(b))
+        return (max(x, y) + 0.05) / (min(x, y) + 0.05)
+    }
+
+    @Test(arguments: [true, false])
+    func everyThemeIsReadable(dark: Bool) {
+        let text = ThemeColors.base(dark: dark).text
+        var problems: [String] = []
+        for theme in SidebarTheme.all {
+            let bar = NSColor.hex(RootProfile.mainBarTone(forIcon: theme.bright, dark: dark))
+            let panel = NSColor.hex(RootProfile.mainTone(forIcon: theme.bright, dark: dark))
+            if contrast(text, bar) < 4.5 { problems.append("\(theme.id) header \(contrast(text, bar))") }
+            if contrast(text, panel) < 7 { problems.append("\(theme.id) panel \(contrast(text, panel))") }
+            let send = ComposerSendButton.accent(sidebarHex: theme.deep, dark: dark)
+            if contrast(send.ink, send.fill) < 3 { problems.append("\(theme.id) send \(contrast(send.ink, send.fill))") }
+            let sidebar = NSColor.hex(theme.deep)
+            let ink = sidebar.readableInk
+            if contrast(ink, sidebar) < 4.5 { problems.append("\(theme.id) sidebar \(contrast(ink, sidebar))") }
+        }
+        #expect(problems.isEmpty, Comment(rawValue: problems.joined(separator: ", ")))
+    }
+
+    @Test func theDarkHeaderIsQuietInEveryTheme() {
+        for theme in SidebarTheme.all {
+            let bar = NSColor.hex(RootProfile.mainBarTone(forIcon: theme.bright, dark: true)).usingColorSpace(.sRGB)
+            #expect((bar?.saturationComponent ?? 1) <= 0.26, "\(theme.id)")
+            #expect((bar?.brightnessComponent ?? 1) <= 0.2, "\(theme.id)")
+        }
+    }
+
+    @Test func aDarkSendButtonStandsOffADarkChat() {
+        let sidebar = "1f2937"
+        #expect(contrast(ComposerSendButton.accent(sidebarHex: sidebar, dark: true).fill, .hex("1f2230")) >= 1.7)
+    }
+}
+
+/// Built-in caffeinate: on only while something's working, and only if wanted.
+@MainActor
+@Suite(.serialized)
+struct KeepAwakeTests {
+    @Test func holdsOnlyWhileWorking() throws {
+        let suite = "SandshellKeepAwake-\(UUID().uuidString)"
+        let saved = KeepAwake.defaults
+        KeepAwake.defaults = try #require(UserDefaults(suiteName: suite))
+        defer {
+            KeepAwake.defaults.removePersistentDomain(forName: suite)
+            KeepAwake.defaults = saved
+        }
+        var working = true
+        KeepAwake.shared.start { working }
+        #expect(KeepAwake.isEnabled, "On unless turned off")
+        #expect(KeepAwake.shared.isHolding)
+        working = false
+        KeepAwake.shared.update()
+        #expect(!KeepAwake.shared.isHolding)
+        working = true
+        KeepAwake.isEnabled = false
+        KeepAwake.shared.update()
+        #expect(!KeepAwake.shared.isHolding, "Off means off")
     }
 }
 

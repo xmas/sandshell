@@ -20,6 +20,8 @@ enum MainMenu {
         appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Check for Updates…",
                         action: #selector(AppDelegate.checkForUpdates(_:)), keyEquivalent: "")
+        appMenu.addItem(withTitle: "Keep Mac Awake While Agents Work",
+                        action: #selector(AppDelegate.toggleKeepAwake(_:)), keyEquivalent: "")
         appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Settings…",
                         action: #selector(AppDelegate.openSettings(_:)), keyEquivalent: ",")

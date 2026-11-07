@@ -228,6 +228,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.activate()
         installShortcutMonitor()
         Updater.shared.checkInBackground()
+        KeepAwake.shared.start { [weak self] in
+            self?.windows.contains { $0.workspaceController?.isAgentWorking == true } ?? false
+        }
 
         // Only watch the pasteboard for OSC-52-copied URLs while Sandshell is
         // the active app, so a copy made in another app never triggers it.
@@ -402,6 +405,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }.compactMap(\.paneTree)
         return trees.lazy.compactMap { $0.chatPane(forBoard: board) }.first?.sendToChat(text, attachments: attachments) ?? false
     }
+
+    @MainActor @objc func toggleKeepAwake(_ sender: Any?) { KeepAwake.isEnabled.toggle() }
 
     /// App menu ▸ Check for Updates… — compares against the Homebrew cask.
     @MainActor @objc func checkForUpdates(_ sender: Any?) {
@@ -1084,6 +1089,9 @@ extension AppDelegate: NSMenuItemValidation {
             item.state = RemoteHub.shared.checkChat != nil ? .on : .off
             return true
         #endif
+        case #selector(toggleKeepAwake(_:)):
+            item.state = KeepAwake.isEnabled ? .on : .off
+            return true
         case #selector(makeTextBigger(_:)): return textZoomIsChat ? ChatTextZoom.canZoomIn : TextZoom.canZoomIn
         case #selector(makeTextSmaller(_:)): return textZoomIsChat ? ChatTextZoom.canZoomOut : TextZoom.canZoomOut
         case #selector(makeTextActualSize(_:)): return textZoomIsChat ? !ChatTextZoom.isActualSize : !TextZoom.isActualSize

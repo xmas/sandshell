@@ -13,7 +13,9 @@ enum TextZoom {
     /// Posted when `scale` changes; content re-renders at the new size.
     static let didChange = Notification.Name("SandshellTextZoomDidChange")
 
-    static var defaults = UserDefaults.standard
+    /// (Hosted tests keep to their own: they'd read the person's text size.)
+    static var defaults = AppDelegate.isHostingTests
+        ? (UserDefaults(suiteName: "SandshellTextZoomTests") ?? .standard) : .standard
 
     /// The current size, one of `steps`.
     static var scale: CGFloat {

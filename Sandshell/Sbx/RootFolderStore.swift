@@ -57,16 +57,17 @@ struct RootProfile: Codable, Hashable, Identifiable {
                     : c.withHSB(saturation: 0.10, brightness: 0.97).hexString
     }
 
-    /// Title-bar accent: theme `border` (light) or a mid-dark `deep` (dark).
+    /// Title-bar accent: theme `border` (light), or in dark a quiet tone of the
+    /// hue, just above the panel: a saturated bar tires the eye on a dark screen.
     /// The border is slightly more saturated than the tint, giving the title bar a
     /// clear hue hit while staying light enough for dark text.
     static func mainBarTone(forIcon hex: String, dark: Bool) -> String {
         if let t = SidebarTheme.find(bright: hex) {
-            return dark ? NSColor.hex(t.deep).withHSB(saturation: 0.52, brightness: 0.30).hexString
+            return dark ? NSColor.hex(t.deep).withHSB(saturation: 0.22, brightness: 0.17).hexString
                         : t.border
         }
         let c = NSColor.hex(hex)
-        return dark ? c.withHSB(saturation: 0.52, brightness: 0.30).hexString
+        return dark ? c.withHSB(saturation: 0.22, brightness: 0.17).hexString
                     : c.withHSB(saturation: 0.20, brightness: 0.90).hexString
     }
 

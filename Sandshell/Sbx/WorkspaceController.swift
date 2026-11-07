@@ -1517,6 +1517,12 @@ extension WorkspaceController {
 
     func runtime(_ id: UUID) -> SessionRuntime? { runtimes[id] }
 
+    /// A turn is running here, or a background task is.
+    var isAgentWorking: Bool {
+        runtimes.values.contains { SessionRowStatus.state(of: $0) == .working }
+            || backgroundTasks.values.contains { $0.contains(where: \.isRunning) }
+    }
+
     func backgroundTasks(_ id: UUID) -> [BackgroundTask] { backgroundTasks[id] ?? [] }
     func runningBackgroundTasks(_ id: UUID) -> Int { backgroundTasks[id]?.count(where: \.isRunning) ?? 0 }
 

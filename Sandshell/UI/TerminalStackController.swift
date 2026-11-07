@@ -996,7 +996,8 @@ final class TerminalStackController: NSViewController {
         controller.theme.$colors.dropFirst().sink { [weak self] c in self?.applyTheme(c) }
             .store(in: &cancellables)
         controller.$rootProfile.dropFirst().sink { [weak self] profile in
-            for chat in self?.chats.values.map({ $0 }) ?? [] { chat.applySendColor(sidebarHex: profile.sidebarHex) }
+            guard let self else { return }
+            for chat in self.chats.values { chat.applySendColor(sidebarHex: profile.sidebarHex, dark: self.theme.isDark) }
         }.store(in: &cancellables)
         // Kit startup findings arrive asynchronously after the container is up.
         // (`@Committed` publishes after the store, so reading the controller here
@@ -1049,7 +1050,7 @@ final class TerminalStackController: NSViewController {
         kitBanner.applyTheme(c)
         buildLogView.applyTheme(c)
         titleStrip.applyTheme(c)
-        for chat in chats.values { chat.applySendColor(sidebarHex: controller.rootProfile.sidebarHex) }
+        for chat in chats.values { chat.applySendColor(sidebarHex: controller.rootProfile.sidebarHex, dark: c.isDark) }
         updateFocusRing()
     }
 
@@ -1671,7 +1672,7 @@ final class TerminalStackController: NSViewController {
                 }
             }
             let view = ChatSessionView(session: chat)
-            view.applySendColor(sidebarHex: controller.rootProfile.sidebarHex)
+            view.applySendColor(sidebarHex: controller.rootProfile.sidebarHex, dark: theme.isDark)
             attachInspector(to: view, chat: chat, sessionID: id)
             // None of these is this pane's: the chat moves to whichever pane shows it.
             view.onReconnect = { [weak surfaces = self.surfaces] in surfaces?.paneShowing(id)?.reconnectChat(id) }

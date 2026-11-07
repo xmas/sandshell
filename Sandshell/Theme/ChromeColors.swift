@@ -4,6 +4,33 @@ import AppKit
 /// resolved palette so every theme (and dark mode) gets its own: the design's
 /// values are the default light theme's — a sidebar a step between the title
 /// bar and the panes, hairlines a shade darker than the title bar, a white pill.
+extension NSColor {
+    /// WCAG relative luminance.
+    var relativeLuminance: Double {
+        guard let c = usingColorSpace(.sRGB) else { return 0 }
+        func channel(_ v: CGFloat) -> Double { v <= 0.03928 ? Double(v) / 12.92 : pow((Double(v) + 0.055) / 1.055, 2.4) }
+        return 0.2126 * channel(c.redComponent) + 0.7152 * channel(c.greenComponent) + 0.0722 * channel(c.blueComponent)
+    }
+
+    /// WCAG contrast ratio with `other`.
+    func contrast(with other: NSColor) -> Double {
+        let (a, b) = (relativeLuminance, other.relativeLuminance)
+        return (max(a, b) + 0.05) / (min(a, b) + 0.05)
+    }
+
+    /// Text for this color as a background: the theme's, or pure white or
+    /// black on a vivid mid-tone, where the theme's softer inks fall short.
+    var readableInk: NSColor {
+        let ink = ThemeColors.base(dark: prefersLightInk).text
+        return contrast(with: ink) >= 4.5 ? ink : prefersLightInk ? .white : .black
+    }
+
+    /// Whether light text reads better on this color than dark text does.
+    var prefersLightInk: Bool {
+        contrast(with: ThemeColors.base(dark: true).text) >= contrast(with: ThemeColors.base(dark: false).text)
+    }
+}
+
 extension ThemeColors {
     /// The Files sidebar's background: halfway from the title bar to the panes.
     var filesSidebar: NSColor { mix(titleBar, panel, 0.5) }
