@@ -83,6 +83,8 @@ scripts/run-self-tests.sh --quick        # no agent turns, no sandboxes created 
 scripts/run-self-tests.sh --only files,commits --skip-build
 ```
 
+A run removes the sandboxes under its root and the kit images it added, however it ends (`--keep-images` to debug). `scripts/prune-kit-images.sh [--dry-run]` removes every `sandbox-kit-assembled` tag no sandbox uses.
+
 The runner builds the dev bundle, makes or resets each scenario's fixture under `/tmp/sandshell-selftests` (`scripts/selftest_fixtures.py`: git repos, session lists in `state.json`, kit dirs, removed sandboxes), runs it, and prints a summary (results in `<root>/results/<time>/<scenario>/`). Add a scenario's fixture there when you add a scenario.
 
 Scripted end-to-end checks inside the real app (`App/SelfTest.swift`): launch a Debug binary with `-SandshellSelfTest <scenario> -SandshellSelfTestOut <dir> -openWindowRoots '("<workspace>")'`; it drives the window offscreen (transparent, click-through, never activates), writes PASS/FAIL lines to `<dir>/selftest.log` plus snapshots, and quits. Scenarios: `panes`, `pane-buttons`, `files-alone`, `files`, `files-relaunch`, `chat`, `fork`, `follow`, `links`, `canvas`, `open-quickly`, `title-strip`, `building`, `alerts`, `background`, `sandbox-access`, `launch-failure`, `legacy-kits`, `kits`, `agents`, `search`, `sidebar`, `remote` — each documents the workspace fixture it expects. Build a separate bundle id for these (`PRODUCT_BUNDLE_IDENTIFIER=com.xmas.sandshell.dev`, `-derivedDataPath build-dev`) so they don't touch your own app's defaults. Chat scenarios use the signed-in account (a few tiny turns).

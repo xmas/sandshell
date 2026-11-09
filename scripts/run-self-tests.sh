@@ -8,6 +8,7 @@
 #   scripts/run-self-tests.sh --quick         no agent turns, no sandboxes created from scratch
 #   scripts/run-self-tests.sh --only a,b      just these scenarios
 #   scripts/run-self-tests.sh --skip-build    reuse the last dev build
+#   scripts/run-self-tests.sh --keep-images   leave this run's sbx kit images (debugging)
 #
 # Builds a separate dev bundle (com.xmas.sandshell.dev, build-dev/) so your own
 # Sandshell and its settings are untouched. Fixtures live under
@@ -16,6 +17,8 @@
 # Two runs at once (e.g. from separate worktrees) need their own root and
 # bundle id: SANDSHELL_SELFTEST_ROOT=/tmp/st-a SANDSHELL_SELFTEST_BUNDLE_ID=com.xmas.sandshell.dev-a
 # Never puts up a dialog (Diagnostics/AutomatedRun.swift).
+# However a run ends, it removes the sandboxes under its root and the kit images
+# it added (scripts/prune-kit-images.sh), leaving those another live run may own.
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -23,13 +26,14 @@ FIX="${SANDSHELL_SELFTEST_ROOT:-/tmp/sandshell-selftests}"
 BUNDLE_ID="${SANDSHELL_SELFTEST_BUNDLE_ID:-com.xmas.sandshell.dev}"
 APP="$ROOT/build-dev/Build/Products/Debug/Sandshell.app/Contents/MacOS/Sandshell"
 HELP="$ROOT/scripts/selftest_fixtures.py"
-QUICK=0 SKIP_BUILD=0 ONLY=""
+QUICK=0 SKIP_BUILD=0 ONLY="" KEEP_IMAGES=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --quick) QUICK=1 ;;
     --skip-build) SKIP_BUILD=1 ;;
+    --keep-images) KEEP_IMAGES=1 ;;
     --only) [[ $# -ge 2 ]] || { echo "--only needs a list" >&2; exit 2; }; ONLY=",$2,"; shift ;;
-    -h|--help) sed -n 2,17p "$0"; exit 0 ;;
+    -h|--help) sed -n 2,20p "$0"; exit 0 ;;
     *) echo "unknown option $1" >&2; exit 2 ;;
   esac
   shift
@@ -57,6 +61,36 @@ fixture() { python3 "$HELP" "$FIX" "$@"; }
 KITDIRS=()
 while IFS= read -r line; do KITDIRS+=("$line"); done < <(fixture kitdirs)
 
+# What sbx had when this run began, where other runs can see it.
+PRUNE="$ROOT/scripts/prune-kit-images.sh"
+RUNS="/tmp/sandshell-selftest-runs"
+SNAPSHOT="$RUNS/$$.tags"
+mkdir -p "$RUNS"
+"$PRUNE" --snapshot "$SNAPSHOT" || { rm -f "$SNAPSHOT"; echo "couldn't list kit images: this run will leave its own behind" >&2; }
+
+LAUNCH_PID=""
+cleanup() {
+  local code=$?
+  trap - EXIT INT TERM
+  if [[ -n "$LAUNCH_PID" ]]; then
+    kill "$LAUNCH_PID" 2>/dev/null
+    wait "$LAUNCH_PID" 2>/dev/null
+  fi
+  echo ""
+  echo "==> Cleaning up"
+  fixture rm-root-sandboxes | sed 's/^/   /'
+  if [[ $KEEP_IMAGES == 1 ]]; then
+    echo "   kit images kept (--keep-images)"
+  elif [[ -f "$SNAPSHOT" ]]; then
+    "$PRUNE" --new-since "$SNAPSHOT" --registry "$RUNS" --self "$$" 2>&1 | sed 's/^/   /'
+  fi
+  rm -f "$SNAPSHOT"
+  exit "$code"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
 # Run the app on a workspace. bootstrap: just open and quit (so the app writes
 # its config.json for a fixture's config edits).
 LIMIT=600   # seconds a scenario may take (set per kind in run)
@@ -64,7 +98,11 @@ launch() {   # launch <scenario> <fixture> <outdir> [extra args…]
   local scenario="$1" ws="$FIX/$2" out="$3"; shift 3
   mkdir -p "$out"; rm -f "$out/selftest.log"
   perl -e "alarm $LIMIT; exec @ARGV" "$APP" -SandshellSelfTest "$scenario" -SandshellSelfTestOut "$out" "$@" \
-    -openWindowRoots "(\"$ws\")" > "$out/run.log" 2>&1
+    -openWindowRoots "(\"$ws\")" > "$out/run.log" 2>&1 &
+  # In the background, so an interrupt is handled now, not when the scenario ends.
+  LAUNCH_PID=$!
+  wait "$LAUNCH_PID"
+  LAUNCH_PID=""
 }
 
 PASSED=() FAILED=()

@@ -267,11 +267,29 @@ def rm_sandboxes(d, twins_only=False):
             sh("sbx", "rm", "--force", b["name"], check=False)
             print(f"removed sandbox {b['name']}" + (f" (made from {main})" if twin else ""))
 
+def rm_root_sandboxes(root):
+    """Every sandbox whose main folder is under this root (not another run's root)."""
+    real = os.path.realpath(root) + os.sep
+    try:
+        boxes = json.loads(sh("sbx", "ls", "--json", check=False) or "[]")
+    except json.JSONDecodeError:
+        print("couldn't list sandboxes", file=sys.stderr)
+        return
+    if isinstance(boxes, dict): boxes = boxes.get("sandboxes", [])
+    for b in boxes:
+        spaces = [w.split(":")[0] for w in (b.get("workspaces") or [])]
+        if spaces and os.path.realpath(spaces[0]).startswith(real):
+            sh("sbx", "rm", "--force", b["name"], check=False)
+            print(f"removed sandbox {b['name']}")
+
 def main():
     root, cmd = sys.argv[1], sys.argv[2]
     os.makedirs(root, exist_ok=True)
     if cmd == "kitdirs":
         print("\n".join(kitdirs(root)))
+        return
+    if cmd == "rm-root-sandboxes":
+        rm_root_sandboxes(root)
         return
     name = sys.argv[3]
     d = os.path.join(root, name)
