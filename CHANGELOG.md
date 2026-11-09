@@ -2,6 +2,16 @@
 
 A running log of what changed, newest first. Yes, we actually write these.
 
+## v0.2.51 — "Night Shift"
+- **Replies in serif.** The agent's replies now read in New York, and what you write stays sans-serif. Settings ▸ Editor has a Chat section to change either one to any font you have.
+- **Your terminal looks like your Ghostty.** If you use Ghostty and haven't picked a terminal palette here, Sandshell uses your Ghostty theme and colors, light and dark. Settings ▸ Terminal still lets you choose another.
+- **Sandshell keeps your Mac awake while agents work.** A long turn or background task can finish overnight. Turn it off under Sandshell ▸ Keep Mac Awake While Agents Work. The display can still sleep, and a closed lid still sleeps the Mac unless it's on power with an external display.
+- **Changing the chat's text size no longer blanks the chat.** ⌘+ and ⌘− could leave all the text invisible.
+- **Calmer dark mode.** The header is a quiet tone instead of a saturated color, and the Copy button no longer turns into a white block.
+- **Readable sidebars on every theme.** Text on bright sidebar colors was hard to read. It now picks whichever color actually reads.
+- **The send button wears your sidebar color.**
+- **Running background tasks show as running** on the row under their session.
+
 ## v0.2.50 — "Note to Self"
 - **What you type is kept until it's sent.** The chat box saves as you type, for each session, and puts your text back after a reload, a reconnect, a sandbox that doesn't come up or quitting the app. Messages waiting to send come back too, and so does one that failed before any reply. Pasted images don't survive quitting.
 - **Getting back to a design session's board.** A palette icon on the session's sidebar row and in its title strip, and Show Board when you right-click the row, bring the board back beside the chat. View ▸ Open Board now opens beside a session too, instead of replacing it.
