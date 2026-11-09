@@ -265,6 +265,22 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
         scheduleSave()
     }
 
+    /// A board's notes to its design session, queued behind any running turn,
+    /// shown or not (one not started yet takes them when it does); else to a
+    /// chat showing here.
+    func sendNotes(_ text: String, attachments: [ChatAttachment], board: URL) -> Bool {
+        guard let id = controller.designSession(forBoard: board) else {
+            return chatPane(forBoard: board)?.sendToChat(text, attachments: attachments) ?? false
+        }
+        if let chat = surfaces.chats[id] {
+            chat.applyDraft(text: text, urls: [], attachments: attachments, send: true)
+        } else {
+            surfaces.drafts[id, default: ChatDraft()].message.add(text: text, attachments: attachments)
+            controller.selection = .session(id)
+        }
+        return true
+    }
+
     /// The pane whose chat a board's notes go to: the board's own design
     /// session, else the focused chat, else any chat showing.
     func chatPane(forBoard folder: URL) -> TerminalStackController? {

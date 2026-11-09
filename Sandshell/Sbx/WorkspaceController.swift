@@ -1517,6 +1517,11 @@ extension WorkspaceController {
 
     func runtime(_ id: UUID) -> SessionRuntime? { runtimes[id] }
 
+    /// The design session whose board is `folder`.
+    func designSession(forBoard folder: URL) -> UUID? {
+        state.sessions.first { boardFolder(of: $0)?.standardizedFileURL == folder.standardizedFileURL }?.id
+    }
+
     /// A turn is running here, or a background task is.
     var isAgentWorking: Bool {
         runtimes.values.contains { SessionRowStatus.state(of: $0) == .working }

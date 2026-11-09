@@ -403,7 +403,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let root = window.workspaceController?.rootURL.standardizedFileURL.path(percentEncoded: false) else { return false }
             return path.hasPrefix(root.hasSuffix("/") ? root : root + "/")
         }.compactMap(\.paneTree)
-        return trees.lazy.compactMap { $0.chatPane(forBoard: board) }.first?.sendToChat(text, attachments: attachments) ?? false
+        return trees.contains { $0.sendNotes(text, attachments: attachments, board: board) }
     }
 
     @MainActor @objc func toggleKeepAwake(_ sender: Any?) { KeepAwake.isEnabled.toggle() }

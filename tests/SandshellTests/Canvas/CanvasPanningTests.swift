@@ -59,6 +59,34 @@ struct CanvasPanningTests {
         #expect(canvas.debugVisibleOrigin == before)
     }
 
+    /// A trackpad gesture from start to finish, and what comes after it: the
+    /// board was jumping to the bottom. It stays where the fingers left it.
+    @Test func aTrackpadGesturePansAndStaysPut() async throws {
+        let (canvas, window, folder) = try await canvas()
+        defer { canvas.show(nil); window.orderOut(nil); window.close(); try? FileManager.default.removeItem(at: folder) }
+        canvas.zoom(by: 2)
+        let start = canvas.debugVisibleOrigin
+        canvas.debugGesture(over: "a", dx: -30, dy: -20, phase: 1)
+        for _ in 0..<5 { canvas.debugGesture(over: "a", dx: -30, dy: -20, phase: 2) }
+        canvas.debugGesture(over: "a", dx: 0, dy: 0, phase: 4)
+        let end = canvas.debugVisibleOrigin
+        #expect(end.x > start.x && end.y > start.y)
+        #expect(abs(end.x - start.x) < 800 && abs(end.y - start.y) < 800, "By what the fingers moved, no jump")
+        try await Task.sleep(for: .milliseconds(500))
+        #expect(canvas.debugVisibleOrigin == end, "Nothing moves it afterwards")
+        canvas.debugGesture(over: "a", dx: 40, dy: 25, phase: 1)
+        #expect(canvas.debugVisibleOrigin.x < end.x && canvas.debugVisibleOrigin.y < end.y, "And it comes back the other way")
+    }
+
+    @Test func scrollingEmptySpacePansTooInEveryDirection() async throws {
+        let (canvas, window, folder) = try await canvas()
+        defer { canvas.show(nil); window.orderOut(nil); window.close(); try? FileManager.default.removeItem(at: folder) }
+        let start = canvas.debugVisibleOrigin
+        canvas.debugScrollBoard(dx: 50, dy: -40)
+        #expect(canvas.debugVisibleOrigin.x < start.x, "Left")
+        #expect(canvas.debugVisibleOrigin.y > start.y, "Down: diagonal, both at once")
+    }
+
     @Test func aFittedBoardStillPansButNeverOutOfSight() async throws {
         let (canvas, window, folder) = try await canvas()
         defer { canvas.show(nil); window.orderOut(nil); window.close(); try? FileManager.default.removeItem(at: folder) }
@@ -68,7 +96,8 @@ struct CanvasPanningTests {
         for _ in 0..<30 { scroll(canvas, dx: -3000, dy: -3000) }
         let far = canvas.debugVisibleOrigin
         for _ in 0..<3 { scroll(canvas, dx: -3000, dy: -3000) }
-        #expect(canvas.debugVisibleOrigin == far, "Stops with the board still in view")
+        #expect(abs(canvas.debugVisibleOrigin.x - far.x) < 0.5 && abs(canvas.debugVisibleOrigin.y - far.y) < 0.5,
+                "Stops with the board still in view")
     }
 }
 
@@ -88,7 +117,7 @@ struct CanvasNoteTests {
         #expect(CanvasNote.message([note], board: board()) == """
         Canvas note on “Onboarding” (/w/.sandshell/canvas/onboarding):
 
-        Artboard `welcome` (welcome.html), at `main > button.cta` (“Get started”):
+        Artboard `welcome` (welcome.html), at `main > button.cta` (“Get started”), point (0, 0):
         Make this bolder
         """)
     }
@@ -99,15 +128,15 @@ struct CanvasNoteTests {
             CanvasNote(artboard: "app", point: .zero, element: .init(selector: "body", text: ""), text: "Second"),
         ], board: board())
         #expect(message.hasPrefix("Canvas notes on"))
-        #expect(message.contains("1. Artboard `welcome` (welcome.html):\nFirst"))
-        #expect(message.contains("2. Artboard `app`, at `body`:\nSecond"), "A URL artboard has no file, and no text means no quote")
+        #expect(message.contains("1. Artboard `welcome` (welcome.html), point (0, 0):\nFirst"))
+        #expect(message.contains("2. Artboard `app`, at `body`, point (0, 0):\nSecond"), "A URL artboard has no file, and no text means no quote")
     }
 
     @Test func aMarkedScreenshotIsAPicture() throws {
         let image = NSImage(size: NSSize(width: 100, height: 80), flipped: false) { rect in
             NSColor.white.setFill(); rect.fill(); return true
         }
-        let png = try #require(CanvasNote.markedPNG(image, marks: [(number: 1, point: CGPoint(x: 20, y: 10))]))
+        let png = try #require(CanvasNote.markedPNG(image, marks: [CanvasNote.Mark(number: 1, point: CGPoint(x: 20, y: 10))]))
         let marked = try #require(NSBitmapImageRep(data: png))
         #expect(marked.pixelsWide >= 100)
         let scale = CGFloat(marked.pixelsWide) / 100
@@ -183,6 +212,62 @@ struct CanvasNoteTests {
         }
         #expect(mime == "image/png" && name == "a.png")
         #expect(canvas.notes.isEmpty && !canvas.debugNotesBarShown && canvas.debugPins("a") == 0)
+    }
+
+    @Test func anAreaIsDescribedInTheMessage() {
+        let note = CanvasNote(artboard: "welcome", point: CGPoint(x: 60, y: 90),
+                              area: CGRect(x: 10, y: 20, width: 100, height: 140), element: nil, text: "Tighten this")
+        #expect(CanvasNote.message([note], board: board()).contains("(welcome.html), area 100×140 at (10, 20):\nTighten this"))
+    }
+
+    private let cards = """
+    <body style="margin:0"><section id="s" style="position:absolute;left:0;top:0;width:300px;height:200px">
+    <div id="one" style="position:absolute;left:10px;top:10px;width:100px;height:50px">One</div>
+    <div id="two" style="position:absolute;left:150px;top:10px;width:100px;height:50px">Two</div></section></body>
+    """
+
+    @Test func withCommentOffAClickIsThePages() async throws {
+        let (canvas, window, folder) = try await canvas(cards)
+        defer { window.orderOut(nil); window.close(); try? FileManager.default.removeItem(at: folder) }
+        #expect(!canvas.debugOverlayShown("a"))
+        canvas.setCommenting(true)
+        #expect(canvas.debugOverlayShown("a"))
+        canvas.setCommenting(false)
+        #expect(!canvas.debugOverlayShown("a"))
+    }
+
+    @Test func aClickInCommentModeIsAboutWhatsThere() async throws {
+        let (canvas, window, folder) = try await canvas(cards)
+        defer { window.orderOut(nil); window.close(); try? FileManager.default.removeItem(at: folder) }
+        canvas.setCommenting(true)
+        canvas.layoutSubtreeIfNeeded()
+        canvas.debugCommentGesture("a", from: CGPoint(x: 40, y: 30))
+        let end = Date().addingTimeInterval(5)
+        while canvas.debugNoteElement == nil, Date() < end { try await Task.sleep(for: .milliseconds(50)) }
+        #expect(canvas.debugNoteElement?.selector == "section#s > div#one" || canvas.debugNoteElement?.selector == "div#one")
+        #expect(canvas.debugNotePopoverShown)
+    }
+
+    @Test func aDragIsAboutTheSmallestThingAroundIt() async throws {
+        let (canvas, window, folder) = try await canvas(cards)
+        defer { window.orderOut(nil); window.close(); try? FileManager.default.removeItem(at: folder) }
+        canvas.setCommenting(true)
+        canvas.layoutSubtreeIfNeeded()
+        canvas.debugCommentGesture("a", from: CGPoint(x: 30, y: 20), to: CGPoint(x: 220, y: 50))
+        let end = Date().addingTimeInterval(5)
+        while canvas.debugNoteElement == nil, Date() < end { try await Task.sleep(for: .milliseconds(50)) }
+        #expect(canvas.debugNoteElement?.selector == "section#s", "Across both cards: their section")
+    }
+
+    @Test func aShakyClickIsAClickNotAnArea() async throws {
+        let (canvas, window, folder) = try await canvas(cards)
+        defer { window.orderOut(nil); window.close(); try? FileManager.default.removeItem(at: folder) }
+        canvas.setCommenting(true)
+        canvas.layoutSubtreeIfNeeded()
+        canvas.debugCommentGesture("a", from: CGPoint(x: 40, y: 30), to: CGPoint(x: 43, y: 31))
+        let end = Date().addingTimeInterval(5)
+        while canvas.debugNoteElement == nil, Date() < end { try await Task.sleep(for: .milliseconds(50)) }
+        #expect(canvas.debugNoteElement?.selector.hasSuffix("div#one") == true)
     }
 
     @Test func notesStayIfThereIsNoChat() async throws {

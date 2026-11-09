@@ -133,9 +133,18 @@ struct CanvasNote: Equatable, Sendable {
     var artboard: String
     /// Where on the page, in its CSS pixels from the top left.
     var point: CGPoint
-    /// The element under the point, from the page; nil if it couldn't say.
+    /// A dragged-out region of the page, when it's about an area.
+    var area: CGRect?
+    /// The element under the point (around the area), from the page; nil if it couldn't say.
     var element: Element?
     var text: String
+
+    /// A note's place on a screenshot or a page.
+    struct Mark: Equatable {
+        var number: Int
+        var point: CGPoint
+        var area: CGRect? = nil
+    }
 
     struct Element: Equatable, Sendable, Decodable {
         var selector: String
@@ -153,18 +162,37 @@ struct CanvasNote: Equatable, Sendable {
                 place += ", at `\(element.selector)`"
                 if !element.text.isEmpty { place += " (“\(element.text)”)" }
             }
+            place += note.position
             return (one ? "" : "\(i + 1). ") + place + ":\n" + note.text
         }
         return "Canvas \(one ? "note" : "notes") on “\(board.title)” (\(board.folder.path(percentEncoded: false))):\n\n"
             + lines.joined(separator: "\n\n")
     }
 
-    /// Script that returns the element at (`x`, `y`) as JSON: `Element`, or null.
-    static func elementScript(at point: CGPoint) -> String {
-        """
+    /// Where on the page, in its CSS pixels.
+    private var position: String {
+        if let area {
+            return ", area \(Int(area.width))×\(Int(area.height)) at (\(Int(area.minX)), \(Int(area.minY)))"
+        }
+        return ", point (\(Int(point.x)), \(Int(point.y)))"
+    }
+
+    /// Script that returns the element at (`x`, `y`) as JSON: `Element`, or
+    /// null. With `area`: the smallest element around it, from its middle.
+    static func elementScript(at point: CGPoint, area: CGRect? = nil) -> String {
+        let box = area.map { "{ l: \($0.minX), t: \($0.minY), r: \($0.maxX), b: \($0.maxY) }" } ?? "null"
+        return """
         (function (x, y) {
           var at = document.elementFromPoint(x, y);
           if (!at) return null;
+          var area = \(box);
+          if (area) {
+            while (at.parentElement) {
+              var r = at.getBoundingClientRect();
+              if (r.left <= area.l && r.top <= area.t && r.right >= area.r && r.bottom >= area.b) break;
+              at = at.parentElement;
+            }
+          }
           function step(e) {
             var s = e.tagName.toLowerCase();
             if (e.id) return s + '#' + CSS.escape(e.id);
@@ -191,11 +219,18 @@ struct CanvasNote: Equatable, Sendable {
     }
 
     /// `image` as a PNG with numbered marks where the notes point.
-    static func markedPNG(_ image: NSImage, marks: [(number: Int, point: CGPoint)]) -> Data? {
+    static func markedPNG(_ image: NSImage, marks: [Mark]) -> Data? {
         let marked = NSImage(size: image.size, flipped: true) { rect in
             image.draw(in: rect)
             for mark in marks {
-                let circle = NSRect(x: mark.point.x - 11, y: mark.point.y - 11, width: 22, height: 22)
+                if let area = mark.area {
+                    let outline = NSBezierPath(rect: area)
+                    outline.lineWidth = 2
+                    NSColor.systemRed.setStroke()
+                    outline.stroke()
+                }
+                let center = mark.area.map { CGPoint(x: $0.minX, y: $0.minY) } ?? mark.point
+                let circle = NSRect(x: center.x - 11, y: center.y - 11, width: 22, height: 22)
                 NSColor.systemRed.setFill()
                 NSBezierPath(ovalIn: circle).fill()
                 let label = NSAttributedString(string: "\(mark.number)", attributes: [
