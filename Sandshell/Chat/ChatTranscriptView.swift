@@ -150,9 +150,9 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
     @objc private func textZoomChanged() {
         let height = max(textView.frame.height, 1)
         let fraction = scrollView.contentView.bounds.minY / height
-        segments = []
-        textView.textStorage?.setAttributedString(NSAttributedString())
-        apply(items)
+        // In place, as a table's refit is: emptying the text first took the
+        // document to nothing and left it to rebuild from there.
+        apply(items, force: Set(segments.map(\.id)))
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in self?.redrawEverythingAfterSizeChange() }
         guard !stickToBottom else { return }
         textView.layoutSubtreeIfNeeded()
@@ -368,6 +368,7 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
         drop(textView)
     }
     func debugCheckDrawn() { checkDrawn() }
+    var debugTextStorage: NSTextStorage? { textView.textStorage }
     /// Text changed, or the view moved, as far as the drawn check hears.
     func debugChanged() { visibleTextNeedsRefresh = true; checkDrawnSoon() }
     /// What's scrolled to the top of the transcript, as a text offset.

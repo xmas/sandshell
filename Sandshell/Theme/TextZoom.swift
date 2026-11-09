@@ -114,6 +114,50 @@ enum ChatTextZoom {
     }
 }
 
+/// The chat's typefaces (Settings ▸ Editor): the agent's replies, and what you
+/// write. A change re-renders open chats, as a size change does.
+@MainActor
+enum ChatFonts {
+    static let system = "System"
+    static let newYork = "New York"
+    static let replyKey = "chatReplyFont"
+    static let messageKey = "chatMessageFont"
+
+    static var reply: String {
+        get { TextZoom.defaults.string(forKey: replyKey) ?? newYork }
+        set { set(newValue, forKey: replyKey) }
+    }
+
+    static var message: String {
+        get { TextZoom.defaults.string(forKey: messageKey) ?? system }
+        set { set(newValue, forKey: messageKey) }
+    }
+
+    private static func set(_ family: String, forKey key: String) {
+        TextZoom.defaults.set(family, forKey: key)
+        NotificationCenter.default.post(name: ChatTextZoom.didChange, object: nil)
+    }
+
+    /// System, New York, then what's installed.
+    static var families: [String] {
+        [system, newYork] + NSFontManager.shared.availableFontFamilies.filter { !$0.hasPrefix(".") && $0 != newYork }
+    }
+
+    /// `role` in `family`, at the chat's text size.
+    static func font(_ family: String, _ role: TypeRole = .body) -> NSFont {
+        let size = ChatTextZoom.scaled(role.pointSize)
+        let standard = NSFont.systemFont(ofSize: size, weight: role.weight)
+        switch family {
+        case system: return standard
+        case newYork:
+            return standard.fontDescriptor.withDesign(.serif).flatMap { NSFont(descriptor: $0, size: size) } ?? standard
+        default:
+            let traits: NSFontTraitMask = role.weight >= .semibold ? .boldFontMask : []
+            return NSFontManager.shared.font(withFamily: family, traits: traits, weight: 5, size: size) ?? standard
+        }
+    }
+}
+
 extension NSFont {
     /// A type role in content (chat, composer): grows with View ▸ Make Chat Text Bigger.
     @MainActor static func content(_ role: TypeRole) -> NSFont { content(role, weight: role.weight) }

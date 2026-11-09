@@ -1,6 +1,7 @@
 #if DEBUG
 import AppKit
 import Testing
+import os
 @testable import Sandshell
 
 /// Rebuilding what shows when text settles (`refreshVisibleText`) mustn't be
@@ -116,7 +117,7 @@ struct ChatTranscriptSettleTests {
             TextZoom.defaults = saved
         }
         let view = ChatTranscriptView(frame: NSRect(x: 0, y: 0, width: 640, height: 720))
-        let window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 640, height: 720), styleMask: [.borderless],
+        let window = NSWindow(contentRect: NSRect(x: -6000, y: 0, width: 640, height: 720), styleMask: [.borderless],
                               backing: .buffered, defer: false)
         defer { window.orderOut(nil); window.close() }
         window.isReleasedWhenClosed = false
@@ -277,7 +278,7 @@ struct TranscriptReadableTests {
     }
 
     private func window(dark: Bool) -> (NSWindow, Panel, ChatTranscriptView) {
-        let window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 640, height: 720), styleMask: [.borderless],
+        let window = NSWindow(contentRect: NSRect(x: -6000, y: 0, width: 640, height: 720), styleMask: [.borderless],
                               backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.alphaValue = 0.01
@@ -291,6 +292,36 @@ struct TranscriptReadableTests {
         window.contentView = panel
         window.orderFrontRegardless()
         return (window, panel, view)
+    }
+
+    /// Every item at the new size, without the text ever going away.
+    @Test(arguments: [1.15, 1.5, 0.85] as [CGFloat])
+    func aSizeChangeNeverEmptiesTheChat(scale: CGFloat) async throws {
+        let suite = "SandshellNeverEmpty-\(UUID().uuidString)"
+        let saved = TextZoom.defaults
+        TextZoom.defaults = try #require(UserDefaults(suiteName: suite))
+        defer {
+            TextZoom.defaults.removePersistentDomain(forName: suite)
+            TextZoom.defaults = saved
+        }
+        let (window, _, view) = window(dark: true)
+        defer { window.orderOut(nil); window.close() }
+        view.update(items(10))
+        try await Task.sleep(for: .milliseconds(300))
+        let storage = try #require(view.debugTextStorage)
+        let before = try #require(storage.attribute(.font, at: 1, effectiveRange: nil) as? NSFont).pointSize
+        nonisolated(unsafe) let watched = storage
+        let shortest = OSAllocatedUnfairLock(initialState: storage.length)
+        let token = NotificationCenter.default.addObserver(forName: NSTextStorage.didProcessEditingNotification,
+                                                           object: storage, queue: nil) { _ in
+            shortest.withLock { $0 = min($0, watched.length) }
+        }
+        defer { NotificationCenter.default.removeObserver(token) }
+        ChatTextZoom.scale = scale
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(shortest.withLock { $0 } > 0, "The text went away")
+        let after = try #require(storage.attribute(.font, at: 1, effectiveRange: nil) as? NSFont).pointSize
+        #expect(after == (before * scale * 2).rounded() / 2)
     }
 
     /// A long chat, read from partway up, sized up and down with replies still

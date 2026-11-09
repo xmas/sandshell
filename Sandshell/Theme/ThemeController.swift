@@ -54,6 +54,7 @@ final class ThemeController: ObservableObject {
     private var appearanceObserver: AnyCancellable?
 
     init(prefs: ThemePreferences) {
+        GhosttyTheme.reload()   // a new window picks up an edited Ghostty config
         self.prefs = prefs
         resolve(mainDark: AppAppearance.shared.isDark)
         // Follow the one global appearance source — when it flips light/dark, every
@@ -134,7 +135,7 @@ final class ThemeController: ObservableObject {
             return (prefs.customTerminalLight ?? fallback.light,
                     prefs.customTerminalDark ?? fallback.dark)
         }
-        let preset = TerminalThemes.preset(named: prefs.terminalThemeName) ?? TerminalThemes.sandshell
+        let preset = TerminalThemes.preset(named: prefs.effectiveTerminalThemeName) ?? TerminalThemes.sandshell
         return (preset.light, preset.dark)
     }
 }

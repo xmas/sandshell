@@ -99,6 +99,44 @@ struct TextZoomTests {
         }
     }
 
+    private func font(_ text: NSAttributedString, _ needle: String) throws -> NSFont {
+        let at = (text.string as NSString).range(of: needle).location
+        try #require(at != NSNotFound)
+        return try #require(text.attribute(.font, at: at, effectiveRange: nil) as? NSFont)
+    }
+
+    @Test func repliesAreSerifAndYourMessagesAreNotByDefault() throws {
+        try withZoom {
+            let reply = try font(ChatRenderer.render(.agentText(id: "a", text: "Hello there"), expanded: false), "Hello")
+            let mine = try font(ChatRenderer.render(.user(id: UUID(), text: "Hello there", attachments: []), expanded: false), "Hello")
+            #expect(reply.fontName != NSFont.systemFont(ofSize: reply.pointSize).fontName, "New York")
+            #expect(reply.fontDescriptor.symbolicTraits.contains(.classOldStyleSerifs)
+                    || reply.fontDescriptor.withDesign(.serif) != nil)
+            #expect(mine.fontName == NSFont.systemFont(ofSize: mine.pointSize).fontName)
+            #expect(mine.pointSize == reply.pointSize)
+        }
+    }
+
+    @Test func eachFontCanBeChanged() throws {
+        try withZoom {
+            ChatFonts.reply = "Menlo"
+            ChatFonts.message = "Courier"
+            let reply = try font(ChatRenderer.render(.agentText(id: "a", text: "Hello"), expanded: false), "Hello")
+            let mine = try font(ChatRenderer.render(.user(id: UUID(), text: "Hello", attachments: []), expanded: false), "Hello")
+            #expect(reply.familyName == "Menlo")
+            #expect(mine.familyName == "Courier")
+            ChatFonts.reply = ChatFonts.system
+            let plain = try font(ChatRenderer.render(.agentText(id: "a", text: "Hello"), expanded: false), "Hello")
+            #expect(plain.fontName == NSFont.systemFont(ofSize: plain.pointSize).fontName)
+        }
+    }
+
+    @Test func aMissingFontFallsBackToTheSystemOne() throws {
+        try withZoom {
+            #expect(ChatFonts.font("No Such Font").pointSize == TypeRole.body.pointSize)
+        }
+    }
+
     /// ⌘+ ⌘− ⌘0 size the chat you're in, and everything else otherwise.
     @Test func theKeysKnowWhenYoureInAChat() {
         let transcript = ChatTranscriptView()

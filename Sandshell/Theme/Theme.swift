@@ -147,6 +147,13 @@ struct ThemePreferences: Codable, Equatable {
     var darkBackgroundHex = "0c0d11"
     /// Selected terminal theme preset name, or `TerminalThemes.customName`.
     var terminalThemeName = "Sandshell"
+    /// A palette was picked in Settings; until then Ghostty's theme is used, if it's installed.
+    var terminalThemeChosen = false
+    /// The palette to show: the one picked, or Ghostty's if none has been.
+    var effectiveTerminalThemeName: String {
+        !terminalThemeChosen && terminalThemeName == "Sandshell" && GhosttyTheme.current != nil
+            ? TerminalThemes.ghosttyName : terminalThemeName
+    }
     /// Hand-edited palettes (only consulted when `terminalThemeName == "Custom"`).
     var customTerminalLight: TerminalPalette?
     var customTerminalDark: TerminalPalette?
@@ -181,6 +188,7 @@ struct ThemePreferences: Codable, Equatable {
         lightBackgroundHex = try c.decodeIfPresent(String.self, forKey: .lightBackgroundHex) ?? "ffffff"
         darkBackgroundHex = try c.decodeIfPresent(String.self, forKey: .darkBackgroundHex) ?? "0c0d11"
         terminalThemeName = try c.decodeIfPresent(String.self, forKey: .terminalThemeName) ?? "Sandshell"
+        terminalThemeChosen = try c.decodeIfPresent(Bool.self, forKey: .terminalThemeChosen) ?? false
         customTerminalLight = try c.decodeIfPresent(TerminalPalette.self, forKey: .customTerminalLight)
         customTerminalDark = try c.decodeIfPresent(TerminalPalette.self, forKey: .customTerminalDark)
         terminalCursorStyle = try c.decodeIfPresent(CursorStyleSetting.self, forKey: .terminalCursorStyle) ?? .theme

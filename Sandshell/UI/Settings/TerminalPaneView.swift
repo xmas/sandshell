@@ -12,10 +12,19 @@ struct TerminalPaneView: View {
 
     private var isCustom: Bool { theme.prefs.terminalThemeName == TerminalThemes.customName }
 
+    /// Shows Ghostty's theme until a palette is picked; picking one sticks.
+    private var paletteChoice: Binding<String> {
+        Binding(get: { theme.prefs.effectiveTerminalThemeName }, set: { name in
+            theme.prefs.terminalThemeChosen = true
+            theme.prefs.terminalThemeName = name
+        })
+    }
+
     var body: some View {
         Form {
             Section("Theme") {
-                Picker("Palette", selection: $theme.prefs.terminalThemeName) {
+                Picker("Palette", selection: paletteChoice) {
+                    if GhosttyTheme.current != nil { Text(TerminalThemes.ghosttyName).tag(TerminalThemes.ghosttyName) }
                     ForEach(TerminalThemes.presets) { Text($0.name).tag($0.name) }
                     Divider()
                     Text("Custom").tag(TerminalThemes.customName)
@@ -73,7 +82,7 @@ struct TerminalPaneView: View {
 
     private var shownPalette: TerminalPalette {
         if isCustom { return CustomPaletteEditor.palette(in: theme.prefs, dark: editingDark) }
-        let preset = TerminalThemes.preset(named: theme.prefs.terminalThemeName) ?? TerminalThemes.sandshell
+        let preset = TerminalThemes.preset(named: theme.prefs.effectiveTerminalThemeName) ?? TerminalThemes.sandshell
         return editingDark ? preset.dark : preset.light
     }
 
@@ -86,7 +95,7 @@ struct TerminalPaneView: View {
     private func seedCustomIfNeeded(from themeName: String) {
         if theme.prefs.customTerminalLight == nil || theme.prefs.customTerminalDark == nil { seedCustom(from: themeName) }
     }
-    private func seedCustomFromCurrent() { seedCustom(from: theme.prefs.terminalThemeName) }
+    private func seedCustomFromCurrent() { seedCustom(from: theme.prefs.effectiveTerminalThemeName) }
     private func seedCustom(from themeName: String) {
         let preset = TerminalThemes.preset(named: themeName) ?? TerminalThemes.sandshell
         if theme.prefs.customTerminalLight == nil { theme.prefs.customTerminalLight = preset.light }

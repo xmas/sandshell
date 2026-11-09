@@ -63,7 +63,7 @@ final class ChatComposerView: NSView, NSTextViewDelegate {
         textView.isRichText = true
         textView.importsGraphics = false
         textView.allowsUndo = true
-        textView.font = .content(.body)
+        textView.font = ChatFonts.font(ChatFonts.message)
         NotificationCenter.default.addObserver(self, selector: #selector(textZoomChanged), name: ChatTextZoom.didChange, object: nil)
         // One line sits centered in the 40 pt field (48 with the pill's own padding).
         textView.textContainerInset = NSSize(width: 0, height: 12)
@@ -515,7 +515,7 @@ final class ChatComposerView: NSView, NSTextViewDelegate {
 
     /// View ▸ Make Chat Text Bigger / Smaller: the draft (and what's typed next) at the new size.
     @objc private func textZoomChanged() {
-        let font = NSFont.content(.body)
+        let font = ChatFonts.font(ChatFonts.message)
         textView.font = font
         textView.typingAttributes[.font] = font
         textView.needsDisplay = true

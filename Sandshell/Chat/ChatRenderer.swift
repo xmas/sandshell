@@ -211,12 +211,12 @@ enum ChatRenderer {
                        isExpanded: (String) -> Bool = { _ in false }) -> NSAttributedString {
         switch item {
         case .user(_, let text, let attachments):
-            var paras = text.isEmpty ? [] : plainParagraphs(text, font: body)
+            var paras = text.isEmpty ? [] : plainParagraphs(text, font: ChatFonts.font(ChatFonts.message))
             paras += attachments.map { line("📎 \($0)", font: mono, color: .secondaryLabelColor) }
             if paras.isEmpty { return NSAttributedString() }
             return spaced(blocked(paras, .user), before: 14, after: 6)
         case .agentText(_, let text):
-            return spaced(markdown(text, width: width), before: 4, after: 4)
+            return spaced(markdown(text, prose: .reply, width: width), before: 4, after: 4)
         case .thought(let id, let text):
             return spaced(thought(id: id, text: text, expanded: expanded), before: 2, after: 2)
         case .tool(let call):
@@ -566,6 +566,12 @@ enum ChatRenderer {
     /// Typeface for Markdown prose (code, tables and inline code stay monospaced).
     struct Prose {
         var serif: Bool
+        /// The family chosen in Settings (`ChatFonts`), for a reply.
+        var family: String?
+        /// The agent's replies.
+        @MainActor static var reply: Prose {
+            Prose(serif: ChatFonts.reply != ChatFonts.system, family: ChatFonts.reply)
+        }
         /// Chat transcript: the system font.
         static let chat = Prose(serif: false)
         /// A Markdown document (Files preview): New York.
@@ -573,6 +579,7 @@ enum ChatRenderer {
 
         /// A type role in the prose face.
         @MainActor func font(_ role: TypeRole = .body) -> NSFont {
+            if let family { return ChatFonts.font(family, role) }
             let system = NSFont.content(role)
             guard serif, let serif = system.fontDescriptor.withDesign(.serif) else { return system }
             return NSFont(descriptor: serif, size: system.pointSize) ?? system

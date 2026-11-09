@@ -6,9 +6,22 @@ struct EditorPaneView: View {
     @ObservedObject var settings: EditorSettings
 
     private var prefs: Binding<EditorPreferences> { $settings.prefs }
+    @State private var replyFont = ChatFonts.reply
+    @State private var messageFont = ChatFonts.message
 
     var body: some View {
         Form {
+            Section("Chat") {
+                Picker("Replies", selection: $replyFont) {
+                    ForEach(ChatFonts.families, id: \.self) { Text($0).tag($0) }
+                }
+                .onChange(of: replyFont) { _, family in ChatFonts.reply = family }
+                Picker("Your Messages", selection: $messageFont) {
+                    ForEach(ChatFonts.families, id: \.self) { Text($0).tag($0) }
+                }
+                .onChange(of: messageFont) { _, family in ChatFonts.message = family }
+            }
+
             Section("Text") {
                 Stepper(value: prefs.fontSize, in: EditorPreferences.fontSizes, step: 0.5) {
                     LabeledContent("Font Size", value: settings.prefs.fontSize.formatted(.number.precision(.fractionLength(0...1))) + " pt")

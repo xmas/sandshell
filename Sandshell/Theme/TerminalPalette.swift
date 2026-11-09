@@ -38,6 +38,135 @@ struct TerminalPalette: Codable, Equatable {
     var redColor: NSColor { .hex(ansi.indices.contains(1) ? ansi[1] : "c0392b") }
 }
 
+/// The user's Ghostty theme, read from Ghostty's config: `theme = X` or
+/// `theme = dark:X,light:Y`, with the config's own colors on top.
+enum GhosttyTheme {
+    /// Nil when Ghostty isn't here (and always under tests: never the real home).
+    nonisolated(unsafe) private(set) static var current: (light: TerminalPalette, dark: TerminalPalette)? = read()
+
+    static func reload() { current = read() }
+
+    private static func read() -> (light: TerminalPalette, dark: TerminalPalette)? {
+        guard !AppDelegate.isHostingTests else { return nil }
+        return load(home: FileManager.default.homeDirectoryForCurrentUser,
+                    xdg: ProcessInfo.processInfo.environment["XDG_CONFIG_HOME"],
+                    apps: [URL(filePath: "/Applications/Ghostty.app")])
+    }
+
+    struct Settings: Equatable {
+        var theme: String?
+        var background, foreground, cursor, selection: String?
+        var palette: [Int: String] = [:]
+        var includes: [String] = []
+    }
+
+    /// `#abc`, `abc`, `#aabbcc` or `aabbcc`, as `aabbcc`; nil for anything else.
+    static func hex(_ value: String) -> String? {
+        var s = value.lowercased()
+        if s.hasPrefix("#") { s.removeFirst() }
+        guard s.allSatisfy(\.isHexDigit) else { return nil }
+        if s.count == 3 { s = s.map { "\($0)\($0)" }.joined() }
+        return s.count == 6 ? s : nil
+    }
+
+    static func parse(_ text: String) -> Settings {
+        var out = Settings()
+        for raw in text.split(whereSeparator: \.isNewline) {
+            let line = raw.trimmingCharacters(in: .whitespaces)
+            guard !line.hasPrefix("#"), let equals = line.firstIndex(of: "=") else { continue }
+            let key = line[..<equals].trimmingCharacters(in: .whitespaces)
+            var value = line[line.index(after: equals)...].trimmingCharacters(in: .whitespaces)
+            if value.count >= 2, value.hasPrefix("\""), value.hasSuffix("\"") { value = String(value.dropFirst().dropLast()) }
+            switch key {
+            case "theme": out.theme = value
+            case "background": out.background = hex(value) ?? out.background
+            case "foreground": out.foreground = hex(value) ?? out.foreground
+            case "cursor-color": out.cursor = hex(value) ?? out.cursor
+            case "selection-background": out.selection = hex(value) ?? out.selection
+            case "config-file": out.includes.append(value)
+            case "palette":
+                let parts = value.split(separator: "=", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
+                if parts.count == 2, let index = Int(parts[0]), (0..<16).contains(index), let color = hex(parts[1]) {
+                    out.palette[index] = color
+                }
+            default: break
+            }
+        }
+        return out
+    }
+
+    /// `base` with `later` on top.
+    static func merged(_ base: Settings, _ later: Settings) -> Settings {
+        var out = later
+        out.theme = later.theme ?? base.theme
+        out.background = later.background ?? base.background
+        out.foreground = later.foreground ?? base.foreground
+        out.cursor = later.cursor ?? base.cursor
+        out.selection = later.selection ?? base.selection
+        out.palette = base.palette.merging(later.palette) { _, new in new }
+        return out
+    }
+
+    /// The (light, dark) theme names of a `theme` value.
+    static func names(_ value: String) -> (light: String, dark: String) {
+        var light: String?, dark: String?, plain: String?
+        for part in value.split(separator: ",").map({ $0.trimmingCharacters(in: .whitespaces) }) {
+            if part.hasPrefix("light:") { light = String(part.dropFirst(6)).trimmingCharacters(in: .whitespaces) }
+            else if part.hasPrefix("dark:") { dark = String(part.dropFirst(5)).trimmingCharacters(in: .whitespaces) }
+            else { plain = part }
+        }
+        return (light ?? plain ?? dark ?? "", dark ?? plain ?? light ?? "")
+    }
+
+    static func palette(_ s: Settings, base: TerminalPalette) -> TerminalPalette {
+        var ansi = base.ansi
+        for (index, color) in s.palette where ansi.indices.contains(index) { ansi[index] = color }
+        return TerminalPalette(background: s.background ?? base.background, foreground: s.foreground ?? base.foreground,
+                               cursor: s.cursor ?? s.foreground ?? base.cursor, selection: s.selection ?? base.selection, ansi: ansi)
+    }
+
+    /// `file`'s settings with the `config-file`s it names, later ones on top.
+    private static func settings(of file: URL, seen: inout Set<String>) -> Settings? {
+        guard seen.count < 32, seen.insert(file.standardizedFileURL.path).inserted,
+              let text = try? String(contentsOf: file, encoding: .utf8) else { return nil }
+        var out = parse(text)
+        for var include in out.includes {
+            if include.hasPrefix("?") { include.removeFirst() }
+            let target = include.hasPrefix("/") ? URL(filePath: include) : file.deletingLastPathComponent().appending(path: include)
+            if let more = settings(of: target, seen: &seen) { out = merged(out, more) }
+        }
+        return out
+    }
+
+    static func load(home: URL, xdg: String?, apps: [URL]) -> (light: TerminalPalette, dark: TerminalPalette)? {
+        let fm = FileManager.default
+        let configHome = xdg.flatMap { $0.isEmpty ? nil : URL(filePath: $0) } ?? home.appending(path: ".config")
+        let folders = [configHome.appending(path: "ghostty"), home.appending(path: "Library/Application Support/com.mitchellh.ghostty")]
+        let files = folders.flatMap { [$0.appending(path: "config"), $0.appending(path: "config.ghostty")] }
+            .filter { fm.fileExists(atPath: $0.path(percentEncoded: false)) }
+        let app = apps.first { fm.fileExists(atPath: $0.path(percentEncoded: false)) }
+        guard app != nil || !files.isEmpty else { return nil }
+        var config = Settings()
+        var seen: Set<String> = []
+        for file in files { if let found = settings(of: file, seen: &seen) { config = merged(config, found) } }
+        func side(_ name: String?, base: TerminalPalette) -> TerminalPalette {
+            var theme = Settings()
+            if let name, !name.isEmpty {
+                let places = (name.hasPrefix("/") ? [URL(filePath: name)] : folders.map { $0.appending(path: "themes/\(name)") })
+                    + (app.map { [$0.appending(path: "Contents/Resources/ghostty/themes/\(name)")] } ?? [])
+                if let found = places.first(where: { fm.fileExists(atPath: $0.path(percentEncoded: false)) }),
+                   let text = try? String(contentsOf: found, encoding: .utf8) { theme = parse(text) }
+            }
+            var overrides = config
+            overrides.theme = nil
+            return palette(merged(theme, overrides), base: base)
+        }
+        let picked = config.theme.map(names)
+        let base = TerminalThemes.alabasterAfterglow   // Ghostty's own default colors
+        return (side(picked?.light, base: base.light), side(picked?.dark, base: base.dark))
+    }
+}
+
 /// A named built-in terminal theme with a light and dark variant.
 struct TerminalThemePreset: Identifiable, Equatable {
     let name: String
@@ -49,6 +178,8 @@ struct TerminalThemePreset: Identifiable, Equatable {
 enum TerminalThemes {
     /// Sentinel name stored in preferences when the user has hand-edited colors.
     static let customName = "Custom"
+    /// Whatever theme Ghostty is set to, when it's installed.
+    static let ghosttyName = "Ghostty"
 
     /// All built-in presets, in display order. The first is the default.
     static let presets: [TerminalThemePreset] = [
@@ -57,7 +188,10 @@ enum TerminalThemes {
     ]
 
     static func preset(named name: String) -> TerminalThemePreset? {
-        presets.first { $0.name == name }
+        if name == ghosttyName, let theme = GhosttyTheme.current {
+            return TerminalThemePreset(name: ghosttyName, light: theme.light, dark: theme.dark)
+        }
+        return presets.first { $0.name == name }
     }
 
     // MARK: Presets
