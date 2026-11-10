@@ -1413,12 +1413,10 @@ final class SidebarListController: NSViewController {
             menu.addItem(menuItem("Copy \(targets.count) Sessions", #selector(contextCopy), object: targets))
             return menu
         }
-        if controller.boardFolder(of: session) != nil {
-            let id = session.id
-            let board = NSMenuItem("Show Board") { [weak self] in self?.showBoard(of: id) }
-            board.image = NSImage(systemSymbolName: "paintpalette", accessibilityDescription: nil)
-            menu.addItem(board)
-        }
+        let boardSession = session.id
+        let board = NSMenuItem("Show Board") { [weak self] in self?.showBoard(of: boardSession) }
+        board.image = NSImage(systemSymbolName: "paintpalette", accessibilityDescription: nil)
+        menu.addItem(board)
         menu.addItem(menuItem("Rename…", #selector(contextRename), object: session.id))
         menu.addItem(menuItem("Close Session", #selector(contextCloseSession), object: session.id))
         menu.addItem(.separator())
@@ -1609,8 +1607,7 @@ extension SidebarListController: NSTableViewDelegate {
         let cell = SessionCellView(owner: self, palette: palette)
         cell.sessionID = id
         cell.configure(session, name: controller.displayName(of: session), instruction: instruction(id),
-                       density: density, nested: nestedForkIDs.contains(id),
-                       hasBoard: controller.boardFolder(of: session) != nil, status: status(id), time: timeText(id),
+                       density: density, nested: nestedForkIDs.contains(id), status: status(id), time: timeText(id),
                        selected: isSelected(id), live: controller.runtime(id)?.isLive == true)
         return cell
     }

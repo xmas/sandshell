@@ -291,3 +291,40 @@ struct ShowBoardButtonTests {
     }
 }
 
+/// Any session can have a board: making one, and telling a running chat.
+@MainActor
+struct SessionBoardTests {
+    private func withRoot(_ body: (URL) throws -> Void) throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "boards-\(UUID().uuidString)", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try body(root)
+    }
+
+    @Test func eachNewBoardIsItsOwnAndLoads() throws {
+        try withRoot { root in
+            let first = try CanvasBoard.create(root: root)
+            let second = try CanvasBoard.create(root: root)
+            #expect(first.relative == ".sandshell/canvas/design")
+            #expect(second.relative == ".sandshell/canvas/design-2")
+            guard case .success(let board) = CanvasBoard.load(folder: second.folder) else {
+                Issue.record("It doesn't load")
+                return
+            }
+            #expect(board.title == "Design 2" && board.artboards.isEmpty)
+            #expect(CanvasBoard.list(root: root).count == 2)
+        }
+    }
+
+    @Test func aNoticeGoesAheadOfTheMessage() {
+        let blocks = ChatSession.promptBlocks("hello", [], notice: ChatSession.boardNotice(board: "/w/.sandshell/canvas/design"))
+        #expect(blocks.count == 2)
+        #expect(blocks[0]["text"]?.string?.contains("/w/.sandshell/canvas/design") == true)
+        #expect(blocks[1]["text"]?.string == "hello")
+    }
+
+    @Test func withNoNoticeTheMessageIsAlone() {
+        #expect(ChatSession.promptBlocks("hello", []).count == 1)
+    }
+}
+

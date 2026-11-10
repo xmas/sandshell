@@ -505,7 +505,7 @@ final class TerminalStackController: NSViewController {
     }
     /// Close this pane (title-strip ✕, shown when split).
     var onClosePane: (() -> Void)?
-    /// The title strip's Show Board, for this design session.
+    /// The title strip's Show Board, for this session.
     var onShowBoard: ((UUID) -> Void)?
     /// The sidebar's "+ New Session" menu (an empty pane's New Session).
     var newSessionMenu: (() -> NSMenu?)?
@@ -1359,7 +1359,7 @@ final class TerminalStackController: NSViewController {
             titleStrip.showsBoardButton = false
             return titleStrip.setSessionControls(stop: nil, restart: nil)
         }
-        titleStrip.showsBoardButton = controller.boardFolder(of: session) != nil
+        titleStrip.showsBoardButton = true
         titleStrip.setSessionControls(stop: chats[id] != nil ? nil : terminals[id] != nil, restart: true)
         titleStrip.setRemote(session.isChat && RemoteHub.shared.isEnabled ? session.isRemote : nil)
     }

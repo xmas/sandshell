@@ -61,6 +61,11 @@ don't read: their `CLAUDE_CONFIG_DIR` is the host's). `/sandshell:canvas`
 starts a board from the chat. A link to a board's file in a reply opens the
 board beside the chat.
 
+Any session can have a board: the palette icon on its sidebar row and title
+strip opens it, made the first time. A chat already running is told with your
+next message (`ChatSession.noteBoard`); a design session and a relaunched chat
+at launch. Terminal sessions get the board but no word to the agent.
+
 ## Notes back to the agent
 
 Turn on **Comment** at the board's corner, then click a spot or drag out an area

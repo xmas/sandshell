@@ -499,6 +499,21 @@ final class ChatSession: ObservableObject {
         return .object(meta)
     }
 
+    /// Told to the agent with the next message, once (not shown in the transcript).
+    private var pendingBoardNotice: String?
+
+    /// A board was added while this chat runs: its launch instructions can't change.
+    func noteBoard(_ board: String) { pendingBoardNotice = Self.boardNotice(board: board) }
+
+    static func boardNotice(board: String) -> String {
+        """
+        [Sandshell: this session now has a Canvas board at \(board), shown beside this chat and reloading \
+        as you write. When asked for a design, put it there as artboards: board.json lists them as \
+        {"title": "…", "artboards": [{"id": "…", "title": "…", "file": "page.html", "width": 390, "height": 844}]}, \
+        with one HTML page per artboard in that folder.]
+        """
+    }
+
     static func designInstructions(board: String) -> String {
         """
         This is a Sandshell design session. Its Canvas board is \(board) (board.json and a page per \
@@ -580,7 +595,8 @@ final class ChatSession: ObservableObject {
         if !trimmed.isEmpty, !retryingTurn { onPrompt?(trimmed) }
         stopped = false
 
-        let blocks = Self.promptBlocks(trimmed, attachments)
+        let blocks = Self.promptBlocks(trimmed, attachments, notice: pendingBoardNotice)
+        pendingBoardNotice = nil
         phase = .running
         var params: JSONValue = ["sessionId": .string(sid), "prompt": .array(blocks)]
         if agent == .claude {
@@ -651,8 +667,9 @@ final class ChatSession: ObservableObject {
     }
 
     /// A prompt's ACP content: its text, then its files and images.
-    static func promptBlocks(_ text: String, _ attachments: [ChatAttachment]) -> [JSONValue] {
+    static func promptBlocks(_ text: String, _ attachments: [ChatAttachment], notice: String? = nil) -> [JSONValue] {
         var blocks: [JSONValue] = []
+        if let notice { blocks.append(["type": "text", "text": .string(notice)]) }
         if !text.isEmpty { blocks.append(["type": "text", "text": .string(text)]) }
         for a in attachments {
             switch a.kind {

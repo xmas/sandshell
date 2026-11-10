@@ -641,10 +641,17 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
         openBoard(folder)
     }
 
-    /// A design session's board, from its sidebar row or title strip: focused
-    /// if it's open, else back beside the session.
+    /// A session's board, from its sidebar row or title strip: focused if it's
+    /// open, else beside the session, made the first time.
     func openBoard(ofSession id: UUID) {
-        guard let session = controller.session(id: id), let folder = controller.boardFolder(of: session) else { return }
+        guard let session = controller.session(id: id) else { return }
+        let existing = controller.boardFolder(of: session)
+        guard let folder = existing ?? controller.addBoard(to: id) else { return }
+        if existing == nil {
+            // A chat that's already running was told nothing at launch.
+            let path = controller.sandboxWorkdir(folder.path(percentEncoded: false), agent: session.containerAgentKind)
+            surfaces.chats[id]?.session.noteBoard(path)
+        }
         guard let pane = panes.first(where: { $0.shownSession == id }) else {
             controller.selection = .session(id)   // shows it, with its board beside it
             return

@@ -99,7 +99,7 @@ final class PaneStripView: NSView {
     var onRemote: ((NSView) -> Void)?
     /// A board pane's "Open in Full Screen Window".
     var onBoardWindow: (() -> Void)?
-    /// A design session's Show Board.
+    /// A session's Show Board.
     var onShowBoard: (() -> Void)?
 
     private let content = NSView()
@@ -443,7 +443,7 @@ final class PaneStripView: NSView {
     @objc private func boardWindowClicked() { onBoardWindow?() }
     @objc private func showBoardClicked() { onShowBoard?() }
 
-    /// Whether the pane shows a design session, so it offers the session's board.
+    /// Whether the pane shows a session, so it offers the session's board.
     var showsBoardButton: Bool {
         get { !showBoardButton.isHidden }
         set {

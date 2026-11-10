@@ -33,6 +33,23 @@ struct CanvasBoard: Equatable, Sendable {
         root.appending(path: ".sandshell/canvas", directoryHint: .isDirectory)
     }
 
+    /// Make a new empty board, under the first free name (design, design-2, …).
+    /// Its folder, and that relative to `root` (what a session keeps).
+    static func create(root: URL) throws -> (folder: URL, relative: String) {
+        let boards = boardsFolder(root: root)
+        var name = "design"
+        var n = 1
+        while FileManager.default.fileExists(atPath: boards.appending(path: name).path(percentEncoded: false)) {
+            n += 1
+            name = "design-\(n)"
+        }
+        let folder = boards.appending(path: name, directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let title = n == 1 ? "Design" : "Design \(n)"
+        try Data(#"{"title": "\#(title)", "artboards": []}"#.utf8).write(to: folder.appending(path: fileName))
+        return (folder, ".sandshell/canvas/\(name)")
+    }
+
     /// The board a path is in (`<root>/.sandshell/canvas/<board>/…`, the folder
     /// itself included), if that board has a board.json.
     static func folder(containing url: URL, root: URL) -> URL? {

@@ -203,7 +203,7 @@ final class SessionCellView: NSTableCellView {
     private let renameBackdrop = NSView()
     private let timeLabel = NSTextField.sidebarLabel(.role(.code))
     private let closeButton = NSButton()
-    /// A design session's board: shows it again.
+    /// The session's board: shows it, made the first time.
     private let boardButton = NSButton.symbol("paintpalette", label: "Show Board", target: nil, action: nil, id: "session-show-board")
     private let glyphSlot = NSView()
     private var glyphWidth: NSLayoutConstraint!
@@ -239,7 +239,6 @@ final class SessionCellView: NSTableCellView {
         boardButton.target = self
         boardButton.action = #selector(boardClicked)
         boardButton.toolTip = "Show Board"
-        boardButton.isHidden = true
         boardButton.setContentHuggingPriority(.required, for: .horizontal)
         boardButton.setContentCompressionResistancePriority(.required, for: .horizontal)
         let titleRow = NSStackView(views: [forkGlyph, nameLabel, boardButton, timeLabel])
@@ -320,8 +319,7 @@ final class SessionCellView: NSTableCellView {
 
     /// Full configure: identity, layout, then the state-driven bits.
     func configure(_ session: Session, name: String, instruction: String?, density: SidebarDensity, nested: Bool,
-                   hasBoard: Bool = false, status: SessionRowStatus, time: String?, selected: Bool, live: Bool) {
-        boardButton.isHidden = !hasBoard
+                   status: SessionRowStatus, time: String?, selected: Bool, live: Bool) {
         boardButton.contentTintColor = palette.muted
         badge.configure(session.agent)
         agentName = session.agent.displayName

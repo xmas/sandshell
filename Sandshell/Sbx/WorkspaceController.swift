@@ -2093,32 +2093,37 @@ extension WorkspaceController {
         } else {
             return nil
         }
-        let boards = CanvasBoard.boardsFolder(root: rootURL)
-        var name = "design"
-        var n = 1
-        while FileManager.default.fileExists(atPath: boards.appending(path: name).path(percentEncoded: false)) {
-            n += 1
-            name = "design-\(n)"
-        }
-        let folder = boards.appending(path: name, directoryHint: .isDirectory)
+        let relative: String
         do {
-            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-            let title = n == 1 ? "Design" : "Design \(n)"
-            try Data(#"{"title": "\#(title)", "artboards": []}"#.utf8).write(to: folder.appending(path: CanvasBoard.fileName))
+            relative = try CanvasBoard.create(root: rootURL).relative
         } catch {
             lastError = "Couldn’t make a board in .sandshell/canvas: \(error.localizedDescription)"
             return nil
         }
         guard var s = addSession(folderID: folderID, agent: .claude, name: "New Design", chat: true),
               let index = state.sessions.firstIndex(where: { $0.id == s.id }) else { return nil }
-        s.board = ".sandshell/canvas/\(name)"
+        s.board = relative
         state.sessions[index].board = s.board
         saveState()
         selection = .session(s.id)
         return s
     }
 
-    /// A design session's board folder (nil for any other session, or a board gone).
+    /// Give a session a board of its own; its folder. Nil if one couldn't be made.
+    func addBoard(to id: UUID) -> URL? {
+        guard let index = state.sessions.firstIndex(where: { $0.id == id }) else { return nil }
+        do {
+            let made = try CanvasBoard.create(root: rootURL)
+            state.sessions[index].board = made.relative
+            saveState()
+            return made.folder
+        } catch {
+            lastError = "Couldn’t make a board in .sandshell/canvas: \(error.localizedDescription)"
+            return nil
+        }
+    }
+
+    /// A session's board folder (nil without one, or with one that's gone).
     func boardFolder(of session: Session) -> URL? {
         guard let board = session.board else { return nil }
         let folder = rootURL.appending(path: board, directoryHint: .isDirectory)
