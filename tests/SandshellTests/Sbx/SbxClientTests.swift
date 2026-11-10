@@ -223,3 +223,33 @@ struct RebuildArgumentsTests {
         #expect(args.contains("--kit-arg"))
     }
 }
+
+/// When Claude Code will stop at the folder-trust question.
+struct ClaudeFolderTrustTests {
+    private func config(_ trusted: [String: Bool]) -> Data {
+        let projects = trusted.mapValues { ["hasTrustDialogAccepted": $0, "other": 1] as [String: Any] }
+        return try! JSONSerialization.data(withJSONObject: ["projects": projects, "numStartups": 3])
+    }
+
+    @Test(arguments: [
+        (["/w/app": true], "/w/app", true),
+        (["/w/app": false], "/w/app", false),
+        ([:], "/w/app", false),
+        (["/w/other": true], "/w/app", false),
+        (["/w": true], "/w/app/deep", true),
+        (["/w/app": true], "/w/app/", true),
+        (["/w/application": true], "/w/app", false),
+    ] as [([String: Bool], String, Bool)])
+    func readsTheRecord(trusted: [String: Bool], workdir: String, expected: Bool) {
+        #expect(ClaudeFolderTrust.isTrusted(workdir: workdir, config: config(trusted)) == expected)
+    }
+
+    @Test func anUnreadableRecordSaysNothing() {
+        #expect(ClaudeFolderTrust.isTrusted(workdir: "/w", config: Data("{not json".utf8)) == nil)
+    }
+
+    @Test func noProjectsAtAllIsNotTrusted() {
+        #expect(ClaudeFolderTrust.isTrusted(workdir: "/w", config: Data("{}".utf8)) == false)
+    }
+}
+

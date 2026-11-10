@@ -386,6 +386,22 @@ final class SessionSurfaces {
         Self.all.add(self)
     }
 
+    /// A terminal Claude stops at the folder-trust question until it's answered:
+    /// the session needs you, until Claude records the answer or the terminal goes.
+    func watchFolderTrust(_ id: UUID, workdir: String, terminal: TerminalSession) {
+        let home = controller.home
+        guard ClaudeFolderTrust.isTrusted(workdir: workdir, home: home) == false else { return }
+        Log.info(.workspace, "claude hasn't been told to trust \(workdir): the terminal will ask")
+        controller.setWaiting(id, true, for: "you to trust this folder")
+        Task { [weak self, weak terminal] in
+            while let self, let terminal, self.terminals[id] === terminal,
+                  ClaudeFolderTrust.isTrusted(workdir: workdir, home: home) == false {
+                try? await Task.sleep(for: .seconds(1))
+            }
+            self?.controller.setWaiting(id, false)
+        }
+    }
+
     /// End a session's chat, wherever it's shown (or with no pane showing it).
     func closeChat(_ id: UUID) {
         guard let chat = chats.removeValue(forKey: id) else { return }
@@ -1488,6 +1504,10 @@ final class TerminalStackController: NSViewController {
                 resumeID: resumeID,
                 claude: claudeOptions)
             // Not this pane's: the terminal moves to whichever pane shows it.
+            if session.agent == .claude {
+                surfaces.watchFolderTrust(id, workdir: controller.sandboxWorkdir(session.workdir, agent: session.containerAgentKind),
+                                          terminal: terminal)
+            }
             terminal.onProcessExit = { [weak surfaces = self.surfaces] in surfaces?.runtime.terminalDidExit(id) }
             addTerminalView(terminal.view)
             terminals[id] = terminal

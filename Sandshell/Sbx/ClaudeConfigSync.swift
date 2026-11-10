@@ -1,5 +1,29 @@
 import Foundation
 
+/// Whether Claude Code will stop at "Is this a project you trust?" in a folder:
+/// its `.claude.json` records the answer per path, and a yes covers what's under it.
+enum ClaudeFolderTrust {
+    /// Nil when the record can't be read: it can't be said to be needed.
+    static func isTrusted(workdir: String, config: Data) -> Bool? {
+        guard let root = (try? JSONSerialization.jsonObject(with: config)) as? [String: Any] else { return nil }
+        let projects = root["projects"] as? [String: Any] ?? [:]
+        var path = URL(filePath: workdir).standardizedFileURL.path(percentEncoded: false)
+        while true {
+            if path.count > 1, path.hasSuffix("/") { path.removeLast() }
+            if ((projects[path] as? [String: Any])?["hasTrustDialogAccepted"] as? Bool) == true { return true }
+            guard path != "/" else { return false }
+            path = (path as NSString).deletingLastPathComponent
+            if path.isEmpty { return false }
+        }
+    }
+
+    /// From the record the sandbox's Claude reads (`$CLAUDE_CONFIG_DIR` = `~/.claude`).
+    static func isTrusted(workdir: String, home: URL) -> Bool? {
+        guard let data = try? Data(contentsOf: home.appending(path: ".claude/.claude.json")) else { return nil }
+        return isTrusted(workdir: workdir, config: data)
+    }
+}
+
 /// Ports sbx-ui's `sync_user_mcp_servers` and `sync_claude_credentials_from_keychain`
 /// (projects.rs). Must be called before each session launch so claude inside the
 /// container sees the same MCP servers and OAuth tokens as the host claude.
