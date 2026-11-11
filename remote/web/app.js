@@ -4,6 +4,10 @@
 "use strict";
 
 const $ = (id) => document.getElementById(id);
+// Inside Sandshell's own window (ChatWebView): the app hands this page the
+// chat's events and takes its commands; no server, no pairing, no list.
+const native = window.webkit?.messageHandlers?.sandshell;
+if (native) document.documentElement.classList.add("embedded");
 const el = {
   app: $("app"), listPane: $("list-pane"), chatPane: $("chat-pane"), checkPane: $("check-pane"), placeholder: $("placeholder"),
   host: $("host"), conn: $("conn"), sessions: $("sessions"), empty: $("empty"),
@@ -59,6 +63,12 @@ function open(id) {
   if (state.stream) state.stream.close();
   state.current = id;
   resetTranscript();
+  if (native) {
+    state.stream = { close() {} };
+    setConn("on");
+    native.postMessage({ name: "ready" });
+    return;
+  }
   const url = "/api/events" + (id ? "?session=" + encodeURIComponent(id) : "");
   const stream = new EventSource(url);
   state.stream = stream;
@@ -80,6 +90,12 @@ function open(id) {
     });
   }
 }
+
+// The app's events, as the stream's would arrive.
+window.sandshellReceive = (name, data) => {
+  handle(name, data);
+  for (const listen of state.listeners) listen(name, data);
+};
 
 function setConn(how) {
   el.conn.className = "conn " + (how === "on" ? "on" : how === "off" ? "off" : "");
@@ -710,6 +726,11 @@ async function command(name, body, button, session = state.current) {
   if (!session) return false;
   if (button) button.disabled = true;
   try {
+    if (native) {
+      const r = await native.postMessage({ name, body: JSON.stringify(body ?? {}) });
+      if (r.status >= 300) { flash((JSON.parse(r.body || "{}")).error || "Sandshell said no (" + r.status + ")"); return false; }
+      return true;
+    }
     const r = await post(`/api/sessions/${session}/${name}`, body);
     if (!r.ok) { flash((await r.json().catch(() => ({}))).error || "The Mac said no (" + r.status + ")"); return false; }
     return true;
@@ -953,6 +974,7 @@ async function pair(answer) {
 // ---------- Start ----------
 
 (async () => {
+  if (native) { route(); return; }
   // A pairing link (QR code, AirDrop): /pair#<secret>.
   if (location.pathname === "/pair" && location.hash.length > 1) {
     const secret = decodeURIComponent(location.hash.slice(1));

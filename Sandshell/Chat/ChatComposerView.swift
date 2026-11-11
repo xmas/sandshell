@@ -159,6 +159,12 @@ final class ChatComposerView: NSView, NSTextViewDelegate {
 
     func focus() { window?.makeFirstResponder(textView) }
 
+    /// The chat shows as a web page: this field stays out of the keyboard's way.
+    var keepsKeyboardAway: Bool {
+        get { textView.keepsKeyboardAway }
+        set { textView.keepsKeyboardAway = newValue }
+    }
+
     /// The `+` control's "Mention a File": an `@` at the caret, which opens
     /// the workspace's files (a space first if it would join a word).
     func startMention() {
@@ -589,6 +595,8 @@ final class ChatComposerView: NSView, NSTextViewDelegate {
 /// NSTextView that turns dropped/pasted files and images into attachments
 /// instead of inserting them as text.
 final class ComposerTextView: NSTextView {
+    var keepsKeyboardAway = false
+    override var acceptsFirstResponder: Bool { !keepsKeyboardAway && super.acceptsFirstResponder }
     var onAttach: (([ChatAttachment]) -> Void)?
     var onResign: (() -> Void)?
     /// Find actions, which should search the transcript rather than the draft.

@@ -300,8 +300,13 @@ final class RemoteHub: ObservableObject {
         return chat
     }
 
+    func chatToDrive(_ id: UUID) throws(CommandError) -> ChatSession { try chat(id) }
+
     func send(_ id: UUID, text: String, images: [ChatAttachment]) throws(CommandError) {
-        let chat = try chat(id)
+        try Self.send(chat(id), text: text, images: images)
+    }
+
+    static func send(_ chat: ChatSession, text: String, images: [ChatAttachment]) throws(CommandError) {
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !images.isEmpty else {
             throw .invalid("Nothing to send")
         }
@@ -313,20 +318,29 @@ final class RemoteHub: ObservableObject {
     }
 
     func answerPermission(_ id: UUID, permission: String, option: String?) throws(CommandError) {
-        let chat = try chat(id)
+        try Self.answerPermission(chat(id), permission: permission, option: option)
+    }
+
+    static func answerPermission(_ chat: ChatSession, permission: String, option: String?) throws(CommandError) {
         guard let p = chat.permission, p.id.compactString == permission else { throw .stale }
         if let option, !p.options.contains(where: { $0.id == option }) { throw .invalid("No such option") }
         chat.answerPermission(p, optionID: option)
     }
 
     func answerQuestion(_ id: UUID, question: String, answer: AgentQuestion.Answer) throws(CommandError) {
-        let chat = try chat(id)
+        try Self.answerQuestion(chat(id), question: question, answer: answer)
+    }
+
+    static func answerQuestion(_ chat: ChatSession, question: String, answer: AgentQuestion.Answer) throws(CommandError) {
         guard let q = chat.question, q.id == question else { throw .stale }
         chat.answerQuestion(q, answer)
     }
 
     func setMode(_ id: UUID, mode: String) throws(CommandError) {
-        let chat = try chat(id)
+        try Self.setMode(chat(id), mode: mode)
+    }
+
+    static func setMode(_ chat: ChatSession, mode: String) throws(CommandError) {
         guard chat.modes.contains(where: { $0.id == mode }) else { throw .invalid("No such mode") }
         chat.setMode(mode)
     }

@@ -176,7 +176,7 @@ final class RemoteRoutes {
 
     // MARK: Commands
 
-    private struct SendBody: Decodable {
+    fileprivate struct SendBody: Decodable {
         struct Image: Decodable { let name: String?; let mimeType: String; let data: String }
         let text: String?
         let images: [Image]?
@@ -186,8 +186,16 @@ final class RemoteRoutes {
     private struct ModeBody: Decodable { let mode: String }
 
     private func command(_ name: String, session id: UUID, body: Data) -> HTTPServer.Response {
+        Self.command(name, body: body) { [hub] () throws(RemoteHub.CommandError) in try hub.chatToDrive(id) }
+    }
+
+    /// A command, decoded and run on `chat`: the phone's POSTs and the app's
+    /// own chat page (`ChatWebView`) both come through here.
+    static func command(_ name: String, body: Data,
+                        chat: () throws(RemoteHub.CommandError) -> ChatSession) -> HTTPServer.Response {
         func decode<T: Decodable>(_ type: T.Type) -> T? { try? JSONDecoder().decode(type, from: body) }
         do throws(RemoteHub.CommandError) {
+            let chat = try chat()
             switch name {
             case "send":
                 guard let b = decode(SendBody.self) else { return .error(400, "Expected {text, images}") }
@@ -199,20 +207,20 @@ final class RemoteRoutes {
                     images.append(ChatAttachment(kind: .image(data: data, mimeType: image.mimeType,
                                                               name: image.name ?? "Image \(i + 1)")))
                 }
-                try hub.send(id, text: b.text ?? "", images: images)
+                try RemoteHub.send(chat, text: b.text ?? "", images: images)
             case "cancel":
-                try hub.cancel(id)
+                chat.cancel()
             case "permission":
                 guard let b = decode(PermissionBody.self) else { return .error(400, "Expected {permission, option}") }
-                try hub.answerPermission(id, permission: b.permission, option: b.option)
+                try RemoteHub.answerPermission(chat, permission: b.permission, option: b.option)
             case "question":
                 guard let b = decode(QuestionBody.self), let answer = RemoteWire.answer(b.action, content: b.content) else {
                     return .error(400, "Expected {question, action, content}")
                 }
-                try hub.answerQuestion(id, question: b.question, answer: answer)
+                try RemoteHub.answerQuestion(chat, question: b.question, answer: answer)
             case "mode":
                 guard let b = decode(ModeBody.self) else { return .error(400, "Expected {mode}") }
-                try hub.setMode(id, mode: b.mode)
+                try RemoteHub.setMode(chat, mode: b.mode)
             default:
                 return .error(404, "No such command")
             }
@@ -231,7 +239,9 @@ final class RemoteRoutes {
 
     /// The web client's folder: the bundle's, or (DEBUG) `SandshellRemoteWebRoot`
     /// — the checkout's `remote/web`, to edit it without rebuilding.
-    private var webRoot: URL? {
+    var webRoot: URL? { Self.webRoot }
+
+    static var webRoot: URL? {
         #if DEBUG
         if let path = UserDefaults.standard.string(forKey: "SandshellRemoteWebRoot") {
             return URL(filePath: path, directoryHint: .isDirectory)

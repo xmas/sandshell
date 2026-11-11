@@ -407,6 +407,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @MainActor @objc func toggleKeepAwake(_ sender: Any?) { KeepAwake.isEnabled.toggle() }
+    @MainActor @objc func toggleChatWebView(_ sender: Any?) { ChatWebView.isEnabled.toggle() }
 
     /// App menu ▸ Check for Updates… — compares against the Homebrew cask.
     @MainActor @objc func checkForUpdates(_ sender: Any?) {
@@ -1089,6 +1090,9 @@ extension AppDelegate: NSMenuItemValidation {
             item.state = RemoteHub.shared.checkChat != nil ? .on : .off
             return true
         #endif
+        case #selector(toggleChatWebView(_:)):
+            item.state = ChatWebView.isEnabled ? .on : .off
+            return true
         case #selector(toggleKeepAwake(_:)):
             item.state = KeepAwake.isEnabled ? .on : .off
             return true

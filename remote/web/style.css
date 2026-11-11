@@ -278,3 +278,9 @@ details[open] > summary::after { transform: rotate(90deg); }
 .check-results .summary { font-weight: 700; }
 
 @keyframes pulse { 50% { opacity: 0.35; } }
+
+/* Inside Sandshell's own window: just the chat (the window has the rest). */
+.embedded #list-pane, .embedded #placeholder, .embedded #back, .embedded #chat-title,
+.embedded #chat-sub, .embedded .conn, .embedded #pair-pane, .embedded #check-pane { display: none !important; }
+.embedded #chat-pane > .bar { min-height: 0; padding-top: 4px; padding-bottom: 4px; }
+

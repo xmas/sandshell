@@ -1692,6 +1692,7 @@ final class TerminalStackController: NSViewController {
                 }
             }
             let view = ChatSessionView(session: chat)
+            if ChatWebView.isEnabled { view.useWebView() }
             view.applySendColor(sidebarHex: controller.rootProfile.sidebarHex, dark: theme.isDark)
             attachInspector(to: view, chat: chat, sessionID: id)
             // None of these is this pane's: the chat moves to whichever pane shows it.

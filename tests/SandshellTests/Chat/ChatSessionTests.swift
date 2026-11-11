@@ -1,3 +1,4 @@
+import AppKit
 #if DEBUG
 import Foundation
 import Testing
@@ -208,3 +209,57 @@ struct ChatSessionTests {
     }
 }
 #endif
+
+/// The chat as the Remote Control web page, inside the app (`ChatWebView`).
+@MainActor
+struct ChatWebViewTests {
+    private let session = ChatSession(title: "Claude", containerName: "test-sandbox", workdir: "/nonexistent/work",
+                                      home: "/nonexistent/home")
+
+    private func chunk(_ text: String, messageID: String) -> JSONValue {
+        ["sessionUpdate": "agent_message_chunk", "content": ["type": "text", "text": .string(text)], "messageId": .string(messageID)]
+    }
+
+    private func showing() async throws -> (ChatWebView, NSWindow) {
+        let web = ChatWebView(chat: session) { [session] in
+            RemoteWire.SessionSummary(id: session.ownSessionID, name: "Test", agent: "claude", agentName: "Claude",
+                                      folder: "~/w", phase: .init(session.phase), waiting: nil, isCheck: false)
+        }
+        let window = NSWindow(contentRect: NSRect(x: -6000, y: 0, width: 700, height: 600), styleMask: [.borderless],
+                              backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        web.frame = window.contentView!.bounds
+        window.contentView!.addSubview(web)
+        window.orderFrontRegardless()
+        let end = Date().addingTimeInterval(10)
+        while !web.isReady, Date() < end { try await Task.sleep(for: .milliseconds(50)) }
+        try #require(web.isReady, "The page loaded and said it's ready")
+        return (web, window)
+    }
+
+    private func transcript(_ web: ChatWebView, contains text: String) async throws -> Bool {
+        let end = Date().addingTimeInterval(5)
+        while Date() < end {
+            if (await web.debugTranscriptText())?.contains(text) == true { return true }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        return false
+    }
+
+    @Test func thePageShowsTheChatAndFollowsIt() async throws {
+        session.debugApply(chunk("Hello from the agent", messageID: "m1"))
+        let (web, window) = try await showing()
+        defer { window.orderOut(nil); window.close() }
+        #expect(try await transcript(web, contains: "Hello from the agent"), "The state")
+        session.debugApply(chunk("And then some more", messageID: "m2"))
+        #expect(try await transcript(web, contains: "And then some more"), "A patch")
+    }
+
+    @Test func commandsGoThroughTheSameRoutesAsAPhones() async throws {
+        let (web, window) = try await showing()
+        defer { window.orderOut(nil); window.close() }
+        #expect(await web.debugRun("return await command('cancel', {})") == true)
+        #expect(await web.debugRun("return await command('mode', {mode: 'no-such-mode'})") == false, "Refused, as over HTTP")
+    }
+}
+
