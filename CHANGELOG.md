@@ -2,6 +2,15 @@
 
 A running log of what changed, newest first. Yes, we actually write these.
 
+## v0.2.52 — "While You Were Out"
+- **Chat text stays put.** The conversation is now drawn by the same web page Remote Control uses, inside the chat. Resizing the window, or a long reply streaming in, could leave text invisible; that drawing code is gone. The chat box, model and effort choosers, permission and question cards stay as they were. File paths that exist still open in Files, replies still have Copy and Fork, code blocks have their own Copy, a turn's changed files still have Undo, and a run of tool calls is one quiet line ("Ran 2 commands and read a file") that opens to the calls.
+- **Chats keep running after you quit.** A Claude or Codex turn in progress finishes in its sandbox when Sandshell quits or its window closes, and the chat picks up where it is when you're back, including a question it asked meanwhile. An idle chat stops as before. A sandbox needs rebuilding once to get this (Settings ▸ Sandboxes ▸ Rebuild); until then chats stop on quit as before. Turn it off in Settings ▸ General ▸ While You're Away.
+- **Sandshell in the menu bar.** One icon shows what needs you, what's working and what finished, across all your windows; pick a session to go to it. It also has Keep Mac Awake. Hide it from its menu or in Settings.
+- **The Mac stays awake for a turn left running** after you quit, and, if you turn it on, while Remote Control is on and the Mac is plugged in.
+- **Agents can tell you things.** In a rebuilt sandbox, `sandshell-notify "The build passed"` from any agent or terminal shows a Mac notification (click it to open the session), and a banner on devices following the chat with Remote Control. Claude chats know about it, so "tell me when the tests pass" works.
+- **Review comments in Files.** Click a line number in a diff to comment on it: ↩ sends it to the session's agent as before, ⌥↩ adds it to a review instead. Commented lines are marked, and the review goes as one message (⌘↩).
+- **Remote Control:** runs of tool calls are one line on your phone too, tables render in every shape replies use, and a phone that misses an update catches up instead of showing the chat wrong.
+
 ## v0.2.51 — "Night Shift"
 - **Replies in serif.** The agent's replies now read in New York, and what you write stays sans-serif. Settings ▸ Editor has a Chat section to change either one to any font you have.
 - **Your terminal looks like your Ghostty.** If you use Ghostty and haven't picked a terminal palette here, Sandshell uses your Ghostty theme and colors, light and dark. Settings ▸ Terminal still lets you choose another.
