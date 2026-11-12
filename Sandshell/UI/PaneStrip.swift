@@ -319,11 +319,14 @@ final class PaneStripView: NSView {
         content.alphaValue = dimsUnfocused && !isFocusedPane && !hovering ? 0.4 : 1
     }
 
+    /// Only our own area: AppKit keeps the tooltip's among `trackingAreas` too.
+    private var hoverArea: NSTrackingArea?
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
-        trackingAreas.forEach(removeTrackingArea)
-        addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
-                                       owner: self))
+        if let hoverArea { removeTrackingArea(hoverArea) }
+        let area = NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect], owner: self)
+        addTrackingArea(area)
+        hoverArea = area
     }
 
     override func mouseEntered(with event: NSEvent) { hovering = true; updateEmphasis() }
@@ -676,11 +679,14 @@ final class StripCrumb: NSView {
         return true
     }
 
+    /// Only our own area: AppKit keeps the tooltip's among `trackingAreas` too.
+    private var hoverArea: NSTrackingArea?
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
-        trackingAreas.forEach(removeTrackingArea)
-        addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
-                                       owner: self))
+        if let hoverArea { removeTrackingArea(hoverArea) }
+        let area = NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect], owner: self)
+        addTrackingArea(area)
+        hoverArea = area
     }
 
     override func mouseEntered(with event: NSEvent) { hovering = onPress != nil }
@@ -716,11 +722,14 @@ final class StripIconButton: NSButton {
 
     override var isEnabled: Bool { didSet { alphaValue = isEnabled ? 1 : 0.45; if !isEnabled { hovering = false } } }
 
+    /// Only our own area: AppKit keeps the tooltip's among `trackingAreas` too.
+    private var hoverArea: NSTrackingArea?
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
-        trackingAreas.forEach(removeTrackingArea)
-        addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
-                                       owner: self))
+        if let hoverArea { removeTrackingArea(hoverArea) }
+        let area = NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect], owner: self)
+        addTrackingArea(area)
+        hoverArea = area
     }
 
     override func mouseEntered(with event: NSEvent) { hovering = isEnabled }

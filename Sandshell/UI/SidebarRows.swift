@@ -737,10 +737,14 @@ final class SidebarIconButton: NSControl {
     }
     @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
 
+    /// Only our own area: AppKit keeps the tooltip's among `trackingAreas` too.
+    private var hoverArea: NSTrackingArea?
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
-        trackingAreas.forEach(removeTrackingArea)
-        addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect], owner: self))
+        if let hoverArea { removeTrackingArea(hoverArea) }
+        let area = NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect], owner: self)
+        addTrackingArea(area)
+        hoverArea = area
     }
     override func mouseEntered(with event: NSEvent) {
         hovering = true

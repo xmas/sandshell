@@ -105,29 +105,25 @@ struct TextZoomTests {
         return try #require(text.attribute(.font, at: at, effectiveRange: nil) as? NSFont)
     }
 
-    @Test func repliesAreSerifAndYourMessagesAreNotByDefault() throws {
+    /// The transcript page's fonts (`ChatWebTranscript.cssFamily`): replies in
+    /// New York, your messages in the system font, unless Settings says otherwise.
+    @Test @MainActor func repliesAreSerifAndYourMessagesAreNotByDefault() throws {
         try withZoom {
-            let reply = try font(ChatRenderer.render(.agentText(id: "a", text: "Hello there"), expanded: false), "Hello")
-            let mine = try font(ChatRenderer.render(.user(id: UUID(), text: "Hello there", attachments: []), expanded: false), "Hello")
-            #expect(reply.fontName != NSFont.systemFont(ofSize: reply.pointSize).fontName, "New York")
-            #expect(reply.fontDescriptor.symbolicTraits.contains(.classOldStyleSerifs)
-                    || reply.fontDescriptor.withDesign(.serif) != nil)
-            #expect(mine.fontName == NSFont.systemFont(ofSize: mine.pointSize).fontName)
-            #expect(mine.pointSize == reply.pointSize)
+            #expect(ChatWebTranscript.cssFamily(ChatFonts.reply).hasPrefix("ui-serif"))
+            #expect(ChatWebTranscript.cssFamily(ChatFonts.message).hasPrefix("-apple-system"))
         }
     }
 
-    @Test func eachFontCanBeChanged() throws {
+    @Test @MainActor func eachFontCanBeChanged() throws {
         try withZoom {
             ChatFonts.reply = "Menlo"
             ChatFonts.message = "Courier"
-            let reply = try font(ChatRenderer.render(.agentText(id: "a", text: "Hello"), expanded: false), "Hello")
-            let mine = try font(ChatRenderer.render(.user(id: UUID(), text: "Hello", attachments: []), expanded: false), "Hello")
-            #expect(reply.familyName == "Menlo")
-            #expect(mine.familyName == "Courier")
+            #expect(ChatWebTranscript.cssFamily(ChatFonts.reply).hasPrefix("\"Menlo\""))
+            #expect(ChatWebTranscript.cssFamily(ChatFonts.message).hasPrefix("\"Courier\""))
             ChatFonts.reply = ChatFonts.system
-            let plain = try font(ChatRenderer.render(.agentText(id: "a", text: "Hello"), expanded: false), "Hello")
-            #expect(plain.fontName == NSFont.systemFont(ofSize: plain.pointSize).fontName)
+            #expect(ChatWebTranscript.cssFamily(ChatFonts.reply).hasPrefix("-apple-system"))
+            #expect(ChatWebTranscript.cssFamily("Evil\"; } body { x") == "\"Evil; } body { x\", -apple-system, system-ui, sans-serif",
+                    "a family can't close its quotes")
         }
     }
 
@@ -139,7 +135,7 @@ struct TextZoomTests {
 
     /// ⌘+ ⌘− ⌘0 size the chat you're in, and everything else otherwise.
     @Test func theKeysKnowWhenYoureInAChat() {
-        let transcript = ChatTranscriptView()
+        let transcript = ChatWebTranscript(source: ItemsTranscript())
         let inside = NSView()
         transcript.addSubview(inside)
         #expect(ChatTextZoom.isInChat(transcript))

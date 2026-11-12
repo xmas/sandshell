@@ -360,6 +360,7 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
             emptyLabel.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -16),
             emptyLabel.centerYAnchor.constraint(equalTo: container.centerYAnchor),
         ])
+        setUpReviewBar(in: root)
         view = root
         show(nil)
     }
@@ -879,13 +880,13 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
             guard let self, self.showsChanges(of: file, in: target) else { return }
             if untracked {
                 self.shownPatches = nil
-                target.textStorage?.setAttributedString(Self.renderDiff(unstaged, untracked: true, editable: !file.isDirty))
+                self.setChanges(Self.renderDiff(unstaged, untracked: true, editable: !file.isDirty), in: target)
                 return
             }
             let patches = (file: file, unstaged: FilePatch(unstaged), staged: FilePatch(staged))
             self.shownPatches = patches
-            target.textStorage?.setAttributedString(
-                Self.renderChanges(unstaged: patches.unstaged, staged: patches.staged, editable: !file.isDirty))
+            self.setChanges(Self.renderChanges(unstaged: patches.unstaged, staged: patches.staged, editable: !file.isDirty),
+                            in: target)
         }
     }
 
@@ -934,7 +935,7 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
             case .uncommitted: break
             }
             out.append(Self.renderDiff(diff))
-            target.textStorage?.setAttributedString(out)
+            self.setChanges(out, in: target)
         }
     }
 
@@ -1104,6 +1105,12 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
     var onAskAgent: ((String) -> Void)?
     private var askPopover: NSPopover?
 
+    /// Comments on diff lines waiting to go to the agent together (a review),
+    /// across files: their line numbers are marked, and the bar sends them.
+    private(set) var reviewComments: [DiffComment] = [] { didSet { showReview() } }
+    private let reviewBar = NSStackView()
+    private let reviewLabel = NSTextField(labelWithString: "")
+
     /// A line number in a diff was clicked: a box under it for what to change.
     private func askAboutLine(_ line: Int, removed: Bool, at charIndex: Int) {
         guard let file = current, onAskAgent != nil else { return NSSound.beep() }
@@ -1114,14 +1121,19 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
         var code = String(paragraph.dropFirst(6))
         if let first = code.first, "+- ".contains(first) { code.removeFirst() }
         code = code.trimmingCharacters(in: .newlines)
+        let spot = (file: file.url.plainPath, line: line, removed: removed)
+        let earlier = reviewComments.first { ($0.file, $0.line, $0.removed) == spot }
+        let field = AskField(placeholder: "Tell the agent what to change at line \(line)",
+                             text: earlier?.text ?? "", others: reviewComments.count - (earlier == nil ? 0 : 1))
         let path = displayPath(file.url)
-        let field = AskField(placeholder: "Tell the agent what to change at line \(line)")
-        field.onSubmit = { [weak self] comment in
+        let comment = { (said: String) in
+            DiffComment(path: path, file: spot.file, line: line, removed: removed, code: code, text: said)
+        }
+        field.onSubmit = { [weak self] said, send in
             guard let self else { return }
             self.askPopover?.close()
-            let place = removed ? "the removed line \(line) of" : "line \(line) of"
-            let message = "At \(place) `\(path)`:\n```\n\(code)\n```\n\(comment)"
-            self.onAskAgent?(message)
+            self.addToReview(comment(said))
+            if send { self.sendReview() }
         }
         var rect = shown.firstRect(forCharacterRange: NSRange(location: charIndex, length: 5), actualRange: nil)
         rect = shown.window?.convertFromScreen(rect) ?? rect
@@ -1130,6 +1142,86 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
         askPopover = nil
         NSPopover.toggle(&askPopover, below: shown, rect: rect) { field }
         field.focus()
+    }
+
+    /// Add a comment to the review (in place of one already on that line).
+    func addToReview(_ comment: DiffComment) {
+        if let i = reviewComments.firstIndex(where: { $0.isOnSameLine(as: comment) }) {
+            reviewComments[i] = comment
+        } else {
+            reviewComments.append(comment)
+        }
+    }
+
+    /// The review, as one message, to the session's agent.
+    @objc func sendReview() {
+        guard !reviewComments.isEmpty else { return }
+        guard let ask = onAskAgent else { return NSSound.beep() }
+        ask(DiffComment.message(reviewComments))
+        reviewComments = []
+    }
+
+    @objc private func clearReview() { reviewComments = [] }
+
+    /// Show a diff, its commented lines marked.
+    private func setChanges(_ text: NSAttributedString, in target: TranscriptTextView) {
+        target.textStorage?.setAttributedString(text)
+        markComments(in: target)
+    }
+
+    /// The commented lines' numbers in the accent colour, the comment as their tooltip.
+    private func markComments(in target: TranscriptTextView) {
+        guard let storage = target.textStorage, let file = current?.url.plainPath else { return }
+        let here = reviewComments.filter { $0.file == file }
+        storage.beginEditing()
+        storage.enumerateAttribute(.link, in: NSRange(location: 0, length: storage.length)) { value, range, _ in
+            guard let url = value as? URL, url.scheme == Self.askScheme, let line = Int(url.lastPathComponent) else { return }
+            let removed = url.host() == "old"
+            if let c = here.first(where: { $0.line == line && $0.removed == removed }) {
+                storage.addAttributes([.foregroundColor: NSColor.controlAccentColor,
+                                       .font: NSFont.monospacedSystemFont(ofSize: 12, weight: .bold),
+                                       .toolTip: "Your comment: \(c.text)"], range: range)
+            } else {
+                storage.addAttributes([.foregroundColor: NSColor.tertiaryLabelColor, .font: Self.diffFont,
+                                       .toolTip: "Tell the agent what to change at line \(line)"], range: range)
+            }
+        }
+        storage.endEditing()
+    }
+
+    private func setUpReviewBar(in root: NSView) {
+        reviewLabel.font = .role(.bodyEmphasis)
+        let clear = NSButton(title: "Clear", target: self, action: #selector(clearReview))
+        clear.toolTip = "Drop these comments"
+        let send = NSButton(title: "Send to Agent", target: self, action: #selector(sendReview))
+        send.keyEquivalent = "\r"
+        send.keyEquivalentModifierMask = [.command]
+        send.toolTip = "Send the comments to the session’s agent as one message (⌘↩)"
+        reviewBar.setViews([reviewLabel, clear, send], in: .leading)
+        reviewBar.orientation = .horizontal
+        reviewBar.spacing = 10
+        reviewBar.edgeInsets = NSEdgeInsets(top: 6, left: 12, bottom: 6, right: 8)
+        reviewBar.wantsLayer = true
+        reviewBar.layer?.cornerRadius = 10
+        reviewBar.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
+        reviewBar.layer?.borderWidth = 1
+        reviewBar.layer?.borderColor = NSColor.separatorColor.cgColor
+        reviewBar.isHidden = true
+        reviewBar.setAccessibilityIdentifier("files-review-bar")
+        reviewBar.translatesAutoresizingMaskIntoConstraints = false
+        root.addSubview(reviewBar)
+        NSLayoutConstraint.activate([
+            reviewBar.centerXAnchor.constraint(equalTo: root.centerXAnchor),
+            reviewBar.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -12),
+            reviewBar.leadingAnchor.constraint(greaterThanOrEqualTo: root.leadingAnchor, constant: 12),
+        ])
+    }
+
+    private func showReview() {
+        let n = reviewComments.count
+        reviewLabel.stringValue = n == 1 ? "1 comment" : "\(n) comments"
+        reviewBar.isHidden = n == 0
+        if isViewLoaded { markComments(in: changesView) }
     }
 
     #if DEBUG
@@ -1147,7 +1239,7 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
         }
         guard let found else { return false }
         askAboutLine(line, removed: false, at: found)
-        (askPopover?.contentViewController as? AskField)?.submit(comment)
+        (askPopover?.contentViewController as? AskField)?.submit(comment, send: true)
         return true
     }
     #endif
@@ -1734,12 +1826,18 @@ final class LineNumberRuler: NSRulerView {
 /// The "what should change here?" box under a diff line: Return sends it.
 @MainActor
 final class AskField: NSViewController, NSTextFieldDelegate {
-    var onSubmit: ((String) -> Void)?
+    /// The comment, and whether to send it now (with the review) or add it.
+    var onSubmit: ((String, Bool) -> Void)?
     private let field = NSTextField()
     private let placeholder: String
+    private let text: String
+    /// Comments already waiting in the review (they go with a send).
+    private let others: Int
 
-    init(placeholder: String) {
+    init(placeholder: String, text: String = "", others: Int = 0) {
         self.placeholder = placeholder
+        self.text = text
+        self.others = others
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -1747,13 +1845,15 @@ final class AskField: NSViewController, NSTextFieldDelegate {
 
     override func loadView() {
         field.placeholderString = placeholder
+        field.stringValue = text
         field.font = .role(.body)
         field.bezelStyle = .roundedBezel
         field.delegate = self
         field.target = self
         field.action = #selector(enter)
         field.setAccessibilityIdentifier("files-ask-field")
-        let hint = NSTextField(labelWithString: "↩ send to the session · esc to cancel")
+        let with = others == 0 ? "" : " with the \(others == 1 ? "other comment" : "\(others) others")"
+        let hint = NSTextField(labelWithString: "↩ send\(with) · ⌥↩ add to the review · esc to cancel")
         hint.font = .role(.meta)
 
         hint.textColor = .tertiaryLabelColor
@@ -1768,12 +1868,47 @@ final class AskField: NSViewController, NSTextFieldDelegate {
 
     func focus() { view.window?.makeFirstResponder(field) }
 
-    @objc private func enter() { submit(field.stringValue) }
+    /// ↩ sends; ⌥↩ adds it to the review, to send with others.
+    @objc private func enter() {
+        submit(field.stringValue, send: NSApp.currentEvent?.modifierFlags.contains(.option) != true)
+    }
 
-    func submit(_ text: String) {
+    func submit(_ text: String, send: Bool) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        onSubmit?(trimmed)
+        onSubmit?(trimmed, send)
+    }
+}
+
+/// A comment on a diff line in Files, for the session's agent.
+struct DiffComment: Equatable, Sendable {
+    /// The file as shown (relative to its repository).
+    var path: String
+    /// The file's own path (to find its lines again).
+    var file: String
+    var line: Int
+    /// On a removed line (numbered in the old file).
+    var removed: Bool
+    /// The line's code.
+    var code: String
+    var text: String
+
+    func isOnSameLine(as other: DiffComment) -> Bool {
+        file == other.file && line == other.line && removed == other.removed
+    }
+
+    private var place: String { "\(removed ? "the removed line \(line) of" : "line \(line) of") `\(path)`" }
+    private var body: String { "At \(place):\n```\n\(code)\n```\n\(text)" }
+
+    /// The comments as one message: just the one, or a numbered review in file order.
+    static func message(_ comments: [DiffComment]) -> String {
+        guard comments.count > 1 else { return comments.first?.body ?? "" }
+        let ordered = comments.enumerated().sorted { a, b in
+            a.element.path != b.element.path ? a.element.path.localizedStandardCompare(b.element.path) == .orderedAscending
+                : a.element.line != b.element.line ? a.element.line < b.element.line : a.offset < b.offset
+        }.map(\.element)
+        return "Review comments on the changes:\n\n"
+            + ordered.enumerated().map { "\($0.offset + 1). \($0.element.body)" }.joined(separator: "\n\n")
     }
 }
 

@@ -60,6 +60,23 @@ final class NotificationManager: NSObject {
             identifier: Self.needsInputID(sessionID), content: content, trigger: nil))
     }
 
+    /// An agent asked to tell the person something (`sandshell-notify`).
+    func sendAgentNote(sessionID: UUID?, agentName: String, sessionName: String?, title: String?, message: String) {
+        guard !AutomatedRun.isActive else { return }
+        let content = UNMutableNotificationContent()
+        let title = title.flatMap { $0.isEmpty ? nil : $0 }
+        content.title = title ?? [agentName, sessionName].compactMap { $0 }.joined(separator: " — ")
+        if title != nil, let sessionName { content.subtitle = "\(agentName) — \(sessionName)" }
+        content.body = message.count > 300 ? String(message.prefix(297)) + "…" : message
+        content.sound = .default
+        if let sessionID {
+            content.threadIdentifier = sessionID.uuidString
+            content.userInfo = ["sessionID": sessionID.uuidString]
+        }
+        UNUserNotificationCenter.current().add(UNNotificationRequest(
+            identifier: "note-\(UUID().uuidString)", content: content, trigger: nil))
+    }
+
     /// The agent stopped waiting (answered, cancelled, or its chat closed):
     /// take its "needs you" out of Notification Center.
     func withdrawNeedsInput(sessionID: UUID) {

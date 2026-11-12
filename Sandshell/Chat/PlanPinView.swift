@@ -251,3 +251,8 @@ final class PlanPinRow: NSView {
 
     required init?(coder: NSCoder) { fatalError() }
 }
+
+/// A plain top-down view (the pinned plan's scrolling list).
+final class FlippedView: NSView {
+    override var isFlipped: Bool { true }
+}

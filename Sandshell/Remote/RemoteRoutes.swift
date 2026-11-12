@@ -189,8 +189,7 @@ final class RemoteRoutes {
         Self.command(name, body: body) { [hub] () throws(RemoteHub.CommandError) in try hub.chatToDrive(id) }
     }
 
-    /// A command, decoded and run on `chat`: the phone's POSTs and the app's
-    /// own chat page (`ChatWebView`) both come through here.
+    /// A command, decoded and run on `chat` (a device's POST).
     static func command(_ name: String, body: Data,
                         chat: () throws(RemoteHub.CommandError) -> ChatSession) -> HTTPServer.Response {
         func decode<T: Decodable>(_ type: T.Type) -> T? { try? JSONDecoder().decode(type, from: body) }

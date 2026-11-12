@@ -1,0 +1,3 @@
+#!/bin/sh
+# Notify the person running Sandshell (see sandshell-notify.mjs).
+exec /opt/sandshell/bin/node /opt/sandshell/sandshell-notify.mjs "$@"

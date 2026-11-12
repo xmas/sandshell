@@ -384,6 +384,10 @@ final class SessionSurfaces {
         self.controller = controller
         backgroundTasks.start()
         Self.all.add(self)
+        // A note from a chat that started on a warm spare names the spare.
+        controller.sessionForProcess = { [weak self] process in
+            self?.chats.first { $0.value.session.processSessionID == process }?.key
+        }
     }
 
     /// A terminal Claude stops at the folder-trust question until it's answered:
@@ -403,7 +407,9 @@ final class SessionSurfaces {
     }
 
     /// End a session's chat, wherever it's shown (or with no pane showing it).
-    func closeChat(_ id: UUID) {
+    /// `detaching` (quitting, the window closing): leave its agent running if
+    /// it's held, so a turn in progress finishes and the next launch takes it up.
+    func closeChat(_ id: UUID, detaching: Bool = false) {
         guard let chat = chats.removeValue(forKey: id) else { return }
         // What's attached in the composer goes back in the next chat's, and a
         // message queued behind its turn is kept for it (a reconnect sends it)
@@ -414,12 +420,20 @@ final class SessionSurfaces {
             drafts[id, default: ChatDraft()].putFirst(text: waiting.text, attachments: waiting.attachments)
         }
         let wasWorking = chat.session.phase == .running
-        chat.session.close()
+        let left = detaching && chat.session.isHeld
+        if left {
+            if chat.session.detach(), let sid = chat.session.sessionID {
+                KeepAwake.shared.whileHeld(container: chat.session.containerName, conversation: sid)
+            }
+        } else {
+            chat.session.close()
+        }
         // It won't say it stopped (closed sessions don't report): say so here.
         if wasWorking { _ = controller.reportActivity(id, working: false, at: .now) }
         // Its processes may not carry this session's tag (a warm spare's):
-        // the next launch for this session reaps them by theirs too.
-        leftoverProcesses[id] = chat.session.processMatch
+        // the next launch for this session reaps them by theirs too — unless
+        // they were left running for it to take up.
+        if !left { leftoverProcesses[id] = chat.session.processMatch }
         chat.removeFromSuperview()
         controller.setLive(id, false)
         controller.setWaiting(id, false)   // its question went with it
@@ -1502,7 +1516,9 @@ final class TerminalStackController: NSViewController {
                 workdir: controller.sandboxWorkdir(session.workdir, agent: session.containerAgentKind),
                 theme: controller.theme,
                 resumeID: resumeID,
-                claude: claudeOptions)
+                claude: claudeOptions,
+                notifyDir: controller.sandboxWorkdir(AgentNotes.directory(root: controller.rootURL).path(percentEncoded: false),
+                                                     agent: session.containerAgentKind))
             // Not this pane's: the terminal moves to whichever pane shows it.
             if session.agent == .claude {
                 surfaces.watchFolderTrust(id, workdir: controller.sandboxWorkdir(session.workdir, agent: session.containerAgentKind),
@@ -1644,7 +1660,7 @@ final class TerminalStackController: NSViewController {
                 resumeID = tid
             }
             Log.info(.workspace, "launching \(current.agent.rawValue) chat in “\(containerName)” at \(current.workdir)\(resumeID.map { " (resume \($0))" } ?? "")")
-            await reapLeftovers(id, in: containerName)
+            await reapLeftovers(id, in: containerName, forChat: true)
             let proxyAuth = await SbxClient.shared.hasAnthropicSecret(sandbox: containerName)
             let unavailable = await Self.missingCredential(for: current.agent, container: containerName,
                                                            home: controller.home)
@@ -1661,6 +1677,8 @@ final class TerminalStackController: NSViewController {
                                    designBoard: controller.boardFolder(of: current).map {
                                        controller.sandboxWorkdir($0.path(percentEncoded: false), agent: current.containerAgentKind)
                                    })
+            chat.notifyDir = controller.sandboxWorkdir(AgentNotes.directory(root: controller.rootURL).path(percentEncoded: false),
+                                                       agent: current.containerAgentKind)
             chat.onSessionID = { [controller] sid in controller.setTranscriptID(id, sid) }
             chat.onClosed = { [controller] why in controller.setStopped(id, why) }
             chat.onUnexpectedExit = { [surfaces] in surfaces.onChatAgentExit(id) }
@@ -1692,7 +1710,6 @@ final class TerminalStackController: NSViewController {
                 }
             }
             let view = ChatSessionView(session: chat)
-            if ChatWebView.isEnabled { view.useWebView() }
             view.applySendColor(sidebarHex: controller.rootProfile.sidebarHex, dark: theme.isDark)
             attachInspector(to: view, chat: chat, sessionID: id)
             // None of these is this pane's: the chat moves to whichever pane shows it.
@@ -1822,9 +1839,11 @@ final class TerminalStackController: NSViewController {
     /// Before (re)launching a session: end anything a crash, kill or earlier
     /// launch of it left running — by its own tag and, for a chat that ran on
     /// a warm spare, by that spare's. A session this run just made has none.
-    private func reapLeftovers(_ id: UUID, in container: String) async {
+    /// `forChat`: spare a chat's agent left running (held), for the launch to take up.
+    private func reapLeftovers(_ id: UUID, in container: String, forChat: Bool = false) async {
         if !SbxClient.takeFirstLaunch(id) {
-            await SbxClient.reapSessionProcessesAndWait(container: container, match: "SANDSHELL_SESSION=\(id.uuidString)")
+            await SbxClient.reapSessionProcessesAndWait(container: container, match: "SANDSHELL_SESSION=\(id.uuidString)",
+                                                        sparing: forChat ? SbxCommand.holdMarker : nil)
         }
         if let match = surfaces.leftoverProcesses.removeValue(forKey: id) {
             await SbxClient.reapSessionProcessesAndWait(container: container, match: match)
@@ -1876,7 +1895,7 @@ final class TerminalStackController: NSViewController {
         for wc in searchWindows.values { wc.close() }
         searchWindows.removeAll()
         let ran = Set(chats.keys).union(terminals.keys).union(pending)
-        for id in Array(chats.keys) { closeChat(id) }
+        for id in Array(chats.keys) { surfaces.closeChat(id, detaching: true) }
         for id in Array(terminals.keys) { dropTerminal(id) }
         runtime.stopAll()
         surfaces.releasedToOthers(ran)

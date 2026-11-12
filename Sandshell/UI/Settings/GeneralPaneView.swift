@@ -10,6 +10,9 @@ struct GeneralPaneView: View {
     /// The stepper's minutes. The interval isn't published, so the pane keeps
     /// its own copy and takes another window's change when it next redraws.
     @State private var archiveMinutes: Double
+    @AppStorage(ChatSession.keepsRunningKey) private var keepChatsRunning = true
+    @AppStorage(StatusMenuController.key) private var menuBarStatus = true
+    @State private var keepAwake = KeepAwake.isEnabled
 
     init(controller: WorkspaceController) {
         self.controller = controller
@@ -33,6 +36,18 @@ struct GeneralPaneView: View {
                         Text(agent.displayName).tag(agent)
                     }
                 }
+            }
+            Section {
+                Toggle("Keep chats running when Sandshell quits", isOn: $keepChatsRunning)
+                Toggle("Keep the Mac awake while agents work", isOn: $keepAwake)
+                    .onChange(of: keepAwake) { _, on in KeepAwake.isEnabled = on }
+                Toggle("Show agents’ status in the menu bar", isOn: $menuBarStatus)
+                    .onChange(of: menuBarStatus) { _, on in StatusMenuController.isEnabled = on }
+            } header: {
+                Text("While You’re Away")
+            } footer: {
+                Text("A Claude or Codex chat’s turn finishes in its sandbox after Sandshell quits or its window closes, "
+                     + "and the chat picks up where it is when you’re back. These settings are for every folder.")
             }
             SandboxImageSection(controller: controller)
             Section("Archive") {

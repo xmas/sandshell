@@ -1,0 +1,3 @@
+#!/bin/sh
+# Keeps a chat's agent running when Sandshell goes away (see sandshell-hold.mjs).
+exec /opt/sandshell/bin/node /opt/sandshell/sandshell-hold.mjs "$@"

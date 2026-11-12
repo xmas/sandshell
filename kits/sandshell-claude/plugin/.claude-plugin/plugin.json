@@ -1,5 +1,5 @@
 {
   "name": "sandshell",
-  "description": "What Sandshell adds to its Claude chats: the Canvas (boards of artboards beside the chat).",
+  "description": "What Sandshell adds to its Claude chats: the Canvas (boards of artboards beside the chat), and notifying you (sandshell-notify).",
   "version": "1.0.0"
 }

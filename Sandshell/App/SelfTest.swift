@@ -110,7 +110,7 @@ enum SelfTest {
         case "launch-failure": await launchFailure(window)
         case "legacy-kits": await legacyKits(window)
         case "fork": await fork(window)
-        case "links": links()
+        case "links": await links()
         case "transcript-draw": await transcriptDraw()
         case "tool-groups": await toolGroups()
         case "tables": await tables()
@@ -159,6 +159,38 @@ enum SelfTest {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline { if condition() { return true }; await wait(0.25) }
         return condition()
+    }
+
+    /// `until`, for a condition that asks a page.
+    static func untilAsync(_ timeout: Double, _ condition: () async -> Bool) async -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline { if await condition() { return true }; await wait(0.2) }
+        return await condition()
+    }
+
+    /// A transcript page on its own, offscreen, showing `items` (no chat, no agent).
+    private static func webTranscript(_ items: [ChatItem], size: NSSize = NSSize(width: 720, height: 900),
+                                      workdir: String? = nil) async -> (view: ChatWebTranscript, source: ItemsTranscript, window: NSWindow) {
+        let source = ItemsTranscript()
+        source.items = items
+        let view = ChatWebTranscript(source: source)
+        view.workdir = workdir
+        let window = NSWindow(contentRect: NSRect(origin: NSPoint(x: -6000, y: 0), size: size), styleMask: [.borderless],
+                              backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.ignoresMouseEvents = true
+        window.contentView = view
+        window.orderFrontRegardless()
+        check(await view.debugSettled(), "the transcript page shows its \(items.count) items")
+        return (view, source, window)
+    }
+
+    /// The page's tables, a row a line, cells tab-separated.
+    private static func pageTables(_ view: ChatWebTranscript) async -> [String] {
+        await view.debugValue("""
+            return [...document.querySelectorAll('.item.text table')].map(t =>
+              [...t.rows].map(r => [...r.cells].map(c => c.innerText.trim()).join('\\t')).join('\\n'))
+            """) as? [String] ?? []
     }
 
     private static func snapshot(_ window: MainWindowController, _ name: String) {
@@ -468,12 +500,15 @@ enum SelfTest {
         chat.debugApply(plan(done: 3))
         await wait(0.6)
 
-        // The transcript's card: three kinds of mark, under an unseen "Plan: 3 of 6 done".
-        let marks = view.debugTranscript.debugPlanMarks
-        check(marks == [.completed, .completed, .completed, .inProgress, .pending, .pending],
-              "the plan's card draws done, in-progress and to-do marks (\(marks))")
-        check(view.debugTranscript.debugText.contains("Plan: 3 of 6 done\n☑ Read the failing test"),
-              "and says how far it is to VoiceOver")
+        // The transcript's card: three kinds of mark, labelled "Plan: 3 of 6 done".
+        let page = view.debugTranscript
+        let want = ["completed", "completed", "completed", "in_progress", "pending", "pending"]
+        func marks() async -> [String] {
+            await page.debugValue("return [...document.querySelectorAll('.item.plan li')].map(l => l.className)") as? [String] ?? []
+        }
+        check(await untilAsync(5) { await marks() == want }, "the plan's card marks done, in-progress and to-do steps (\(await marks()))")
+        let label = await page.debugValue("return document.querySelector('.item.plan .plan')?.getAttribute('aria-label')") as? String
+        check(label == "Plan: 3 of 6 done", "and says how far it is to VoiceOver (\(label ?? "-"))")
 
         // Pinned above the composer: one line, the step it's on with its spinner.
         check(!pin.isHidden && !pin.isExpanded, "the running turn's plan is pinned above the composer, closed")
@@ -1271,26 +1306,9 @@ enum SelfTest {
         snapshot(window, "details-popover")
         v.debugClickReadout()
         check(await until(3) { !v.debugDetailsShown }, "and a second click closes them")
-        // A long conversation, at its end: the text there is laid out (drawn), not blank until a resize.
-        let long: [ChatItem] = (0..<120).flatMap { i -> [ChatItem] in
-            [.user(id: UUID(), text: "Question \(i)?", attachments: []),
-             .agentText(id: "long-\(i)", text: "Answer \(i): " + String(repeating: "words go here ", count: 30))]
-        }
-        v.debugTranscript.debugApplyNow(long)
-        v.debugTranscript.debugScrollToBottom()
-        await wait(0.5)
-        check(v.debugTranscript.debugViewportReachesEnd, "a long conversation shows its end once scrolled there")
-        snapshot(window, "long-transcript")
-        check(!v.debugTranscript.debugEndCuesShown, "at the end: no fade and no ↓")
-        v.debugTranscript.debugScroll(toY: 0)
-        await wait(0.3)
-        check(v.debugTranscript.debugEndCuesShown && v.debugTranscript.debugFadeEdge == "bottom",
-              "scrolled up: the text fades out at the bottom (\(v.debugTranscript.debugFadeEdge)) and ↓ shows")
-        snapshot(window, "long-transcript-scrolled-up")
-        v.debugTranscript.debugJumpToNewest()
-        await wait(0.3)
-        check(!v.debugTranscript.debugEndCuesShown && v.debugTranscript.debugViewportReachesEnd,
-              "↓ jumps to the newest, and the cues go")
+        // The reply shows in the transcript.
+        check(await untilAsync(10) { await v.debugTranscript.debugTranscriptText().contains("PONG") },
+              "the reply shows in the transcript")
         v.debugComposer.debugType((1...60).map { "line \($0)" }.joined(separator: "\n"))
         v.layoutSubtreeIfNeeded()
         let field = v.debugComposer.debugFieldHeight
@@ -1309,12 +1327,11 @@ enum SelfTest {
             w.setFrame(NSRect(x: before.minX, y: before.minY, width: 1700, height: before.height), display: true)
             await wait(0.5)
             v.layoutSubtreeIfNeeded()
-            let col = v.debugColumn
+            let col = await v.debugColumn()
             log("column: window \(Int(w.frame.width)), pane \(Int(v.bounds.width)), composer x \(Int(col.composer.minX)) w \(Int(col.composer.width)), text \(Int(col.text.minX))–\(Int(col.text.maxX))")
-            check(col.composer.width <= ChatTranscriptView.readableWidth + 1
+            check(col.composer.width <= ChatWebTranscript.readableWidth + 1
                   && abs(col.composer.midX - v.bounds.midX) < 2, "a wide pane centers the composer, at most the readable width")
-            // (A legacy scroller takes width from the transcript's right: its center moves left by half.)
-            check(col.text.width <= ChatTranscriptView.readableWidth + 1 && abs(col.text.midX - col.composer.midX) <= 9,
+            check(col.text.width <= ChatWebTranscript.readableWidth + 1 && abs(col.text.midX - col.composer.midX) <= 9,
                   "the transcript's text sits in the same column (\(Int(col.text.minX))–\(Int(col.text.maxX)))")
             // The column mustn't hold the pane to its width: the sidebar still resizes.
             if let split = w.contentViewController as? NSSplitViewController, let side = split.splitViewItems.first {
@@ -1325,18 +1342,6 @@ enum SelfTest {
                 split.splitView.layoutSubtreeIfNeeded()
                 check(abs(sidebar.frame.width - 300) < 1, "with a chat showing, the sidebar's divider moves (\(Int(sidebar.frame.width)))")
             }
-            // The window can't outgrow the screen: a transcript on its own, wider.
-            let wide = ChatTranscriptView(frame: NSRect(x: 0, y: 0, width: 1600, height: 400))
-            wide.layoutSubtreeIfNeeded()
-            let text = wide.debugTextColumn
-            log("1600-wide transcript: text \(Int(text.minX))–\(Int(text.maxX))")
-            check(abs(text.width - ChatTranscriptView.readableWidth) < 1 && abs(text.midX - 800) <= 9,
-                  "a wide transcript centers its text in an 800-point column")
-            // Resizing a wide pane (the sidebar sliding) moves the text, never lays it out again.
-            wide.setFrameSize(NSSize(width: 1300, height: 400))
-            wide.layoutSubtreeIfNeeded()
-            check(wide.debugTextViewWidth == ChatTranscriptView.readableWidth + 40 && abs(wide.debugTextColumn.midX - 650) <= 9,
-                  "a narrower but still wide pane keeps the text's width, centered")
             w.setFrame(before, display: true)
             await wait(0.3)
         }
@@ -1452,7 +1457,7 @@ enum SelfTest {
         check(!subagentRowShown(), "Hide Finished hides it again")
         SubagentWindowController.show(ws.subagents[s.id]?.first ?? info, workspace: ws)
         let viewer = SubagentWindowController.debugWindow(info.id)
-        check(await until(10) { !(viewer?.debugTranscriptText.isEmpty ?? true) }, "its transcript opens read-only")
+        check(await untilAsync(10) { !((await viewer?.debugTranscriptText()) ?? "").isEmpty }, "its transcript opens read-only")
         viewer?.window?.close()
         // A workflow run beside it (made in this session's folder the way Claude Code writes one).
         let runDir = info.transcript.deletingLastPathComponent().appendingPathComponent("workflows/wf_selftest-1")
@@ -2536,17 +2541,15 @@ enum SelfTest {
         check(await until(180) { c.phase == .ready && said(c).contains("BETA-TWO") }, "second reply")
 
         if let view = tree.surfaces.chats[s.id] {
-            view.debugTranscript.debugHoverFirstReply()
-            await wait(0.4)
-            check(view.debugTranscript.debugReplyActionsShown && view.debugTranscript.debugForkShown,
-                  "hovering a reply shows Copy / Fork")
-            snapshot(window, "fork-hover")
-            view.debugTranscript.debugHoverActionsTop()
-            check(view.debugTranscript.debugReplyActionsShown, "the bar stays up with the pointer on its top half")
-            view.debugTranscript.debugHoverFirstUserMessage()
-            await wait(0.2)
-            check(view.debugTranscript.debugReplyActionsShown && !view.debugTranscript.debugForkShown,
-                  "hovering your own message shows Copy alone")
+            let page = view.debugTranscript
+            check(await page.debugRun("""
+                const bar = document.querySelector('.item.text .actions');
+                return !!bar && !!bar.querySelector('.act-copy') && getComputedStyle(bar.querySelector('.act-fork')).display !== 'none'
+                """) == true, "a reply offers Copy / Fork")
+            check(await page.debugRun("""
+                const bar = document.querySelector('.item.user .actions');
+                return !!bar && !!bar.querySelector('.act-copy') && !bar.querySelector('.act-fork')
+                """) == true, "your own message offers Copy alone")
         }
         let first = c.items.compactMap { if case .agentText(_, let t) = $0 { t } else { nil } }.first { $0.contains("ALPHA-ONE") } ?? "ALPHA-ONE"
         guard let forked = ws.forkChat(s.id, upTo: first) else { return check(false, "fork created") }
@@ -3084,29 +3087,25 @@ enum SelfTest {
             call("t5", "execute", "`sed -n 1,40p Sandshell/Chat/ChatTranscriptView.swift`",
                  "sed -n 1,40p Sandshell/Chat/ChatTranscriptView.swift | head -20", "in_progress"),
         ]
-        let view = ChatTranscriptView(frame: NSRect(x: 0, y: 0, width: 640, height: 520))
-        let host = NSWindow(contentRect: view.frame, styleMask: [.borderless], backing: .buffered, defer: false)
-        host.isReleasedWhenClosed = false
-        host.alphaValue = 0
-        host.contentView = view
-        view.update(items)
-        await wait(0.4)
-        let text = view.debugText
-        log("collapsed:\n\(text)")
-        check(text.contains("Ran git status --short  ›"), "one command reads as “Ran git status --short ›”")
-        check(text.contains("Ran 2 commands and read a file  ›  · 1 failed"), "a mixed run is summed up, with its failure")
-        check(text.contains("Running sed -n 1,40p Sandshell/Chat/ChatTranscriptVie…  ›"), "a running command says Running, cut short")
-        check(!text.contains("M Sandshell/App/SelfTest.swift") && !text.contains("no Package.swift"),
-              "cards stay closed until asked")
-        snapshot(view, "tool-groups-collapsed")
-        view.debugToggle("group-t2")
-        await wait(0.3)
-        let open = view.debugText
-        check(open.contains("Ran 2 commands and read a file  ⌄") && open.contains("no Package.swift"),
-              "clicking a group opens its cards")
-        check(!open.contains("M Sandshell/App/SelfTest.swift"), "other groups stay closed")
-        snapshot(view, "tool-groups-open")
-        host.close()
+        let (view, _, host) = await webTranscript(items, size: NSSize(width: 640, height: 520))
+        defer { host.close() }
+        func lines() async -> [String] {
+            await view.debugValue("return [...document.querySelectorAll('.tool-group')].map(b => b.textContent)") as? [String] ?? []
+        }
+        let collapsed = await lines()
+        log("collapsed: \(collapsed)")
+        check(collapsed.contains("Ran git status --short  ›"), "one command reads as “Ran git status --short ›”")
+        check(collapsed.contains("Ran 2 commands and read a file  ›  · 1 failed"), "a mixed run is summed up, with its failure")
+        check(collapsed.contains("Running sed -n 1,40p Sandshell/Chat/ChatTranscriptVie…  ›"), "a running command says Running, cut short")
+        let shown = await view.debugTranscriptText()
+        check(!shown.contains("Read SelfTest.swift") && !shown.contains("swift build"), "the calls stay hidden until asked")
+        _ = await view.debugRun("document.querySelectorAll('.tool-group')[1].click(); return true")
+        await wait(0.2)
+        let open = await view.debugTranscriptText()
+        check(await lines().contains("Ran 2 commands and read a file  ⌄  · 1 failed") && open.contains("Read SelfTest.swift")
+              && open.contains("swift build"), "clicking a run's line shows its calls")
+        check(await view.debugRun("return document.querySelector('.item.tool').classList.contains('collapsed')") == true,
+              "other runs stay closed")
     }
 
     // MARK: Chat extras (Undo, background tasks, MCP)
@@ -3405,13 +3404,12 @@ enum SelfTest {
 
     // MARK: Tables
 
-    /// Markdown tables render as grids fitted to the column: header semibold
-    /// over a rule, long cells wrapping inside their column, rules between
-    /// rows; no stray ** or table pipes. Covers the shapes replies use: no
-    /// outer pipes, alignment rows, escaped pipes, code/bold/links in cells,
-    /// wide tables, a table right under a paragraph line, in a list item or a
-    /// quote, a table streamed in chunks, and one refitted to a narrower pane.
-    /// Only a table with more columns than can fit becomes records.
+    /// Markdown tables render as tables in the transcript page; no stray ** or
+    /// table pipes. Covers the shapes replies use: no outer pipes, alignment
+    /// rows, escaped pipes, code/bold/links in cells, `<br>` in a cell, wide
+    /// tables, a table right under a paragraph line, in a list item or a
+    /// quote, and a table streamed in chunks (a header alone is text until its
+    /// delimiter row arrives). A table wider than the column scrolls sideways.
     private static func tables() async {
         let small = """
             | Size | Price | Note |
@@ -3455,60 +3453,38 @@ enum SelfTest {
         let many = "| " + (1...16).map { "Column \($0)" }.joined(separator: " | ") + " |\n|"
             + String(repeating: "---|", count: 16) + "\n| " + (1...16).map { "value \($0)" }.joined(separator: " | ") + " |"
 
-        let view = ChatTranscriptView(frame: NSRect(x: 0, y: 0, width: 720, height: 1500))
-        let host = NSWindow(contentRect: view.frame, styleMask: [.borderless], backing: .buffered, defer: false)
-        host.isReleasedWhenClosed = false
-        host.alphaValue = 0
-        host.contentView = view
-        view.update([.agentText(id: "s", text: small), .agentText(id: "w", text: wide),
-                     .agentText(id: "x", text: shapes), .agentText(id: "6", text: six)])
-        await wait(0.4)
-        var text = view.debugText
-        log("rendered:\n\(text)")
+        let (view, source, host) = await webTranscript([.agentText(id: "s", text: small), .agentText(id: "w", text: wide),
+                                                         .agentText(id: "x", text: shapes), .agentText(id: "6", text: six)],
+                                                        size: NSSize(width: 720, height: 1500))
+        defer { host.close() }
+        let text = await view.debugTranscriptText()
+        var tables = await pageTables(view)
+        log("tables:\n\(tables.joined(separator: "\n--\n"))")
+        func has(_ cells: String...) -> Bool { tables.contains { t in cells.allSatisfy { t.contains($0) } } }
         check(!text.contains("**") && !text.contains("|---") && !text.contains("|-|") && !text.contains(":-:"),
               "no raw Markdown in tables")
-        check(text.contains("S\t$1\tcheap") && text.contains("Size\tPrice\tNote"), "a small table is a grid on tab stops")
-        check(text.contains("Problem\tA local model runs"), "a wide table stays a grid: its long cells wrap")
-        check(text.contains("Unsloth Studio\tHatch (feat/approval-gate)"), "headers keep their inline code")
-        check(text.contains("Escaped | pipe\ta | b\tsee the docs"), "escaped pipes stay in their cell; links render")
-        check(text.contains("What each one is\n") && !text.contains("What each one is\t"),
-              "a table right under a paragraph line")
-        check(text.contains("Key\tValue\tCount") && text.contains("alpha\tone\t1"), "a table without outer pipes")
-        check(text.contains("beta\ttwo\t22\n\tlines\t\n"), "<br> breaks a cell's line")
-        check(text.contains("Suite\tTests") && text.contains("Chat\t12"), "a table in a list item")
-        check(text.contains("Quoted\tTable") && text.contains("q1\tq2"), "a table in a quote")
-        check(text.contains("Scenario\tResult\tTime\tFixture\tNotes\tOwner") && text.contains("files\tPASS\t12 s"),
-              "six columns with long cells stay a grid")
-        snapshot(view, "tables")
+        check(has("Size\tPrice\tNote", "S\t$1\tcheap"), "a small table is a table")
+        check(has("Problem\tA local model runs"), "a wide table stays a table: its long cells wrap")
+        check(has("Unsloth Studio\tHatch (feat/approval-gate)"), "headers keep their inline code")
+        check(has("Escaped | pipe\ta | b\tsee the docs"), "escaped pipes stay in their cell; links render")
+        check(text.contains("What each one is") && !has("What each one is"), "a table right under a paragraph line")
+        check(has("Key\tValue\tCount", "alpha\tone\t1"), "a table without outer pipes")
+        check(has("beta\ttwo\nlines\t22"), "<br> breaks a cell's line")
+        check(has("Suite\tTests", "Chat\t12"), "a table in a list item")
+        check(has("Quoted\tTable", "q1\tq2"), "a table in a quote")
+        check(has("Scenario\tResult\tTime\tFixture\tNotes\tOwner", "files\tPASS\t12 s"), "six columns with long cells stay a table")
 
         // Streamed: the header first (text until its delimiter row arrives), then rows.
         let streamed = "Here you go:\n\n| Name | Status |\n|---|---|\n| one | done |\n| two | running |"
         let cut = streamed.range(of: "|---")!.lowerBound
-        view.update([.agentText(id: "t", text: String(streamed[..<cut]))])
-        await wait(0.3)
-        check(view.debugText.contains("| Name | Status |"), "mid-stream, a lone header row is text")
-        view.update([.agentText(id: "t", text: String(streamed.prefix(streamed.count - 12)))])
-        await wait(0.3)
-        check(view.debugText.contains("Name\tStatus") && view.debugText.contains("one\tdone"),
+        source.items = [.agentText(id: "t", text: String(streamed[..<cut]))]
+        check(await untilAsync(5) { await view.debugTranscriptText().contains("| Name | Status |") }, "mid-stream, a lone header row is text")
+        source.items = [.agentText(id: "t", text: String(streamed.prefix(streamed.count - 12)))]
+        check(await untilAsync(5) { tables = await pageTables(view); return has("Name\tStatus", "one\tdone") },
               "once its delimiter row arrives, it's a table")
-        view.update([.agentText(id: "t", text: streamed), .agentText(id: "m", text: many)])
-        await wait(0.3)
-        text = view.debugText
-        check(text.contains("two\trunning"), "the finished table has every row")
-        check(text.contains("Column 2\tvalue 2"), "a table with more columns than fit becomes records")
-        snapshot(view, "tables-streamed")
-
-        // A narrower pane refits the tables: the long cells wrap onto more lines.
-        view.update([.agentText(id: "w", text: wide)])
-        await wait(0.3)
-        let lines = view.debugText.split(separator: "\n").count
-        host.setContentSize(NSSize(width: 460, height: 1500))
-        view.layoutSubtreeIfNeeded()
-        await wait(0.4)
-        check(view.debugText.split(separator: "\n").count > lines, "a narrower pane wraps the table's cells onto more lines")
-        check(view.debugText.contains("Problem\tA local model"), "and it's still a grid")
-        snapshot(view, "tables-narrow")
-        host.close()
+        source.items = [.agentText(id: "t", text: streamed), .agentText(id: "m", text: many)]
+        check(await untilAsync(5) { tables = await pageTables(view); return has("two\trunning") }, "the finished table has every row")
+        check(has("Column 16", "value 16"), "a table with many columns keeps them all (it scrolls)")
     }
 
     // MARK: Title strip
@@ -3747,153 +3723,82 @@ enum SelfTest {
 
     // MARK: Transcript drawing
 
-    /// The transcript lays out what shows, whatever changes its size or text: a
-    /// long reply streamed in (at the end, or scrolled up), then the chat
-    /// growing taller without a live resize (the plan pin or a long draft
-    /// going, a tiled window). No agent: the items are made here.
+    /// Every item the chat has shows in the transcript, with its text, however
+    /// the transcript changes size or the text changes: replies streamed in
+    /// while the window is resized, tools that start and finish in place, a
+    /// thought that grows, scrolled to the end or up. No agent: the items are
+    /// made here.
     private static func transcriptDraw() async {
-        let view = ChatTranscriptView()
-        let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1100, height: 900), styleMask: [.titled, .resizable],
-                         backing: .buffered, defer: false)
-        w.isReleasedWhenClosed = false
-        w.alphaValue = 0
-        w.ignoresMouseEvents = true
-        w.contentView = view
-        w.orderBack(nil)
-        defer { w.orderOut(nil) }
-        func unlaid(_ what: String) async {
-            await wait(0.3)
-            let gap = view.debugUnlaidVisibleHeight
-            check(gap < 1, "\(what): TextKit has laid out what shows (\(Int(gap)) pt not)")
-            let undrawn = view.debugUndrawnVisibleHeight
-            check(undrawn < 1, "\(what): every line showing has a view drawing it (\(Int(undrawn)) pt not)")
-        }
         var items: [ChatItem] = (0..<12).flatMap { i -> [ChatItem] in
             [.user(id: UUID(), text: "Question \(i)?", attachments: []),
              .agentText(id: "a\(i)", text: "Answer \(i): " + String(repeating: "words go here ", count: 40))]
         }
-        items.append(.thought(id: "t", text: String(repeating: "thinking about where to look ", count: 30)))
-        view.debugApplyNow(items)
-        view.debugScrollToBottom()
-        await unlaid("a conversation at its end")
+        let (view, source, w) = await webTranscript(items, size: NSSize(width: 1100, height: 900))
+        defer { w.close() }
+        /// Every item is on the page, each with the text it should have.
+        func allShown(_ what: String) async {
+            let settled = await view.debugSettled()
+            // Each item's last line, as it reads (no Markdown): it's what streamed in last.
+            func marker(_ item: RemoteWire.Item) -> String {
+                let raw = item.tool?.title ?? item.text ?? ""
+                let last = raw.split(separator: "\n").last.map(String.init) ?? raw
+                let plain = last.replacing(/\[([^\]]*)\]\([^)]*\)/) { $0.output.1 }
+                    .replacing("**", with: "").replacing("`", with: "").trimmingCharacters(in: .whitespaces)
+                return String((plain.hasPrefix("- ") ? plain.dropFirst(2) : Substring(plain)).prefix(30))
+            }
+            let want = RemoteWire.items(source.items, session: source.feedID).map { ($0.id, marker($0)) }
+            let shown = await view.debugValue(
+                "return [...document.querySelectorAll('#transcript > .item')].map(n => [n.dataset.id, n.textContent])") as? [[String]] ?? []
+            let page = Dictionary(shown.compactMap { $0.count == 2 ? ($0[0], $0[1]) : nil }, uniquingKeysWith: { $1 })
+            let missing = want.filter { id, text in !(page[id]?.contains(text) ?? false) }
+            check(settled && missing.isEmpty, "\(what): every item shows with its text (\(want.count) items, missing \(missing.map(\.0)))")
+        }
+        await allShown("a conversation")
 
-        // A long Markdown reply, streamed in chunks.
         let lines = (0..<160).map { i in i % 12 == 0 ? "\n**Section \(i / 12)**\n" : "- [Document number \(i)](https://example.com/doc/\(i)) (Jan \(i % 28 + 1))" }
-        func stream(_ id: String) async {
+        let sizes = [NSSize(width: 1100, height: 900), NSSize(width: 520, height: 400), NSSize(width: 1600, height: 700),
+                     NSSize(width: 760, height: 1000)]
+        func stream(_ id: String, resizing: Bool) async {
             var text = ""
-            for chunk in stride(from: 0, to: lines.count, by: 8) {
+            for (n, chunk) in stride(from: 0, to: lines.count, by: 8).enumerated() {
                 text += lines[chunk..<min(chunk + 8, lines.count)].joined(separator: "\n") + "\n"
-                view.update(items + [.agentText(id: id, text: text)])
+                source.items = items + [.agentText(id: id, text: text)]
+                if resizing { w.setContentSize(sizes[n % sizes.count]) }
                 await wait(0.03)
             }
             items.append(.agentText(id: id, text: text))
         }
-        await stream("r1")
-        await unlaid("a reply streamed in at the end")
-        view.debugScroll(toY: max(0, view.debugDocHeight - 2600))
-        await unlaid("scrolled up")
-        await stream("r2")
-        await unlaid("a reply streamed in while scrolled up")
+        await stream("r1", resizing: false)
+        await allShown("a reply streamed in at the end")
+        await stream("r2", resizing: true)
+        await allShown("a reply streamed in while the window was resized")
+        _ = await view.debugRun("document.getElementById('transcript').scrollTop = 0; return true")
+        await stream("r3", resizing: true)
+        await allShown("a reply streamed in, scrolled up, while resized")
 
-        // Taller, with no live resize: what's newly shown must be laid out too.
-        view.debugScrollToBottom()
-        await wait(0.2)
-        w.setContentSize(NSSize(width: 1100, height: 400))
-        await unlaid("the chat made shorter")
-        w.setContentSize(NSSize(width: 1100, height: 900))
-        await unlaid("the chat made taller again (not a live resize)")
-        view.debugScroll(toY: max(0, view.debugDocHeight - 3000))
-        await wait(0.2)
-        w.setContentSize(NSSize(width: 1100, height: 400))
-        await wait(0.2)
-        w.setContentSize(NSSize(width: 1100, height: 900))
-        await unlaid("taller again while scrolled up")
-
-        // A turn as Claude streams it: a reply, tools that start and finish
-        // in place, a thought that grows in place, then the answer after it —
-        // whether following the end or scrolled up a little.
-        for (n, follow) in [(5, true), (6, false)] {
-            view.debugScrollToBottom()
-            await wait(0.2)
-            if !follow { view.debugScroll(toY: max(0, view.debugDocHeight - 1200)) }
-            let base = items
-            var turn: [ChatItem] = [.user(id: UUID(), text: "This is all gonna be google drive", attachments: []),
-                                    .agentText(id: "p\(n)", text: "Drive is the right place to look. I'll check the kit docs and the skill.")]
-            for t in 0..<3 {
-                var call = ChatItem.ToolCall(id: "c\(n)-\(t)", title: "Run a command \(t)", kind: "execute", status: "pending", output: "", diffs: [])
-                turn.append(.tool(call))
-                view.update(base + turn)
-                await wait(0.05)
-                call.status = "completed"; call.output = String(repeating: "output ", count: 40)
-                turn[turn.count - 1] = .tool(call)
-                view.update(base + turn)
-                await wait(0.05)
-            }
-            var thought = ""
-            for word in String(repeating: "gws isn't installed in the sandbox, so I'll check the Mac via the bridge instead ", count: 6).split(separator: " ") {
-                thought += word + " "
-                view.update(base + turn + [.thought(id: "th\(n)", text: thought)])
-                await wait(0.005)
-            }
-            turn.append(.thought(id: "th\(n)", text: thought))
-            var answer = ""
-            for chunk in stride(from: 0, to: lines.count, by: 6) {
-                answer += lines[chunk..<min(chunk + 6, lines.count)].joined(separator: "\n") + "\n"
-                view.update(base + turn + [.agentText(id: "ans\(n)", text: answer)])
-                await wait(0.02)
-            }
-            items = base + turn + [.agentText(id: "ans\(n)", text: answer)]
-            await unlaid("a turn with tools and a growing thought, then its answer (\(follow ? "following" : "scrolled up"))")
-            if !follow {
-                view.debugJumpToNewest()
-                await unlaid("then ↓ to its end")
-            }
+        // A turn as Claude streams it: tools that start and finish in place, a
+        // thought that grows in place, then the answer after it.
+        for t in 0..<3 {
+            var call = ChatItem.ToolCall(id: "c\(t)", title: "Run a command \(t)", kind: "execute", status: "pending", output: "", diffs: [])
+            items.append(.tool(call))
+            source.items = items
+            await wait(0.05)
+            call.status = "completed"; call.output = String(repeating: "output ", count: 40)
+            items[items.count - 1] = .tool(call)
+            source.items = items
+            w.setContentSize(sizes[t % sizes.count])
         }
-
-        // The whole window out of view while the turn ran (another Space,
-        // minimized, behind other apps), then back.
-        for follow in [true, false] {
-            view.debugScrollToBottom()
-            await wait(0.2)
-            if !follow { view.debugScroll(toY: max(0, view.debugDocHeight - 1500)) }
-            w.orderOut(nil)
-            await wait(0.2)
-            let id = "away-\(follow)"
-            var thought = ""
-            for word in String(repeating: "checking whether it's installed on the Mac instead ", count: 5).split(separator: " ") {
-                thought += word + " "
-                view.update(items + [.thought(id: id + "-t", text: thought)])
-                await wait(0.005)
-            }
-            await stream(id)
-            items.insert(.thought(id: id + "-t", text: thought), at: items.count - 1)
-            w.orderBack(nil)
-            await unlaid("a turn streamed in while the window was away, back (\(follow ? "following" : "scrolled up"))")
-            view.debugJumpToNewest()
-            await unlaid("and at its end")
+        var thought = ""
+        for _ in 0..<20 {
+            thought += "thinking about where to look "
+            source.items = items + [.thought(id: "th", text: thought)]
+            await wait(0.02)
         }
-
-        // Streamed while it didn't show (another session in the pane, the
-        // terminal view): shown again, the reply is there, drawn.
-        view.debugScrollToBottom()
-        await wait(0.2)
-        view.isHidden = true
-        await stream("r3")
-        view.isHidden = false
-        await unlaid("a reply streamed in while hidden, shown again")
-        view.removeFromSuperview()
-        w.contentView = NSView()
-        await stream("r4")
-        w.contentView = view
-        await unlaid("a reply streamed in out of the window, put back")
-
-        // However it happens, text showing with no view drawing it is found and drawn again.
-        view.debugDropFragmentViews()
-        let lost = view.debugUndrawnVisibleHeight
-        check(lost > 100, "the check sees text drawn by no view (\(Int(lost)) pt)")
-        view.debugCheckDrawn()
-        let left = view.debugUndrawnVisibleHeight
-        check(left < 1, "and draws it again (\(Int(left)) pt left)")
+        items.append(.thought(id: "th", text: thought))
+        items.append(.agentText(id: "end", text: "Here is the answer, after all that."))
+        source.items = items
+        w.setContentSize(NSSize(width: 1100, height: 900))
+        await allShown("a turn with tools and a thought, resized as it ran")
     }
 
     // MARK: Canvas
@@ -3978,55 +3883,39 @@ enum SelfTest {
 
     // MARK: Links
 
-    /// Paths that exist (relative or absolute, with :line) and URLs become links.
-    private static func links() {
-        let view = ChatTranscriptView()
-        view.workdir = FileManager.default.currentDirectoryPath
-        view.debugApplyNow([.agentText(id: "a", text:
+    /// Paths that exist on this Mac (relative or absolute, with :line, with
+    /// spaces) and URLs become links in the transcript page; Copy on a code
+    /// block copies its code; a transcript that can't fork offers Copy alone.
+    private static func links() async {
+        let cwd = FileManager.default.currentDirectoryPath
+        let (view, _, host) = await webTranscript([.agentText(id: "a", text:
             "See Sandshell/Chat/ChatSessionView.swift:12, the docs at https://example.com/x, "
-            + "/usr/bin/git and /no/such/thing.swift.")])
-        let links = view.debugLinks
-        log("links: \(links.map { "\($0.0) → \($0.1)" })")
-        check(links.contains { $0.0 == "Sandshell/Chat/ChatSessionView.swift" && $0.1.hasSuffix("ChatSessionView.swift#L12") },
-              "a relative path with :line links to the file at that line")
-        check(links.contains { $0.0 == "https://example.com/x" }, "a URL is a link")
-        check(links.contains { $0.0 == "/usr/bin/git" }, "an absolute path that exists is a link")
-        check(!links.contains { $0.0.contains("no/such") }, "a path that doesn't exist isn't")
-
-        // No fork handler here (as in a subagent's window): the hover bar is Copy alone.
-        view.frame = NSRect(x: 0, y: 0, width: 600, height: 400)
-        view.layoutSubtreeIfNeeded()
-        view.debugHoverFirstReply()
-        check(view.debugReplyActionsShown && !view.debugForkShown, "a transcript that can't fork hovers Copy alone")
-
-        // Code blocks and tables have their own Copy: just that block's code, or the table's Markdown.
-        let blocks = ChatTranscriptView()
-        blocks.pasteboard = NSPasteboard(name: NSPasteboard.Name("com.xmas.sandshell.selftest"))
-        defer { blocks.pasteboard.releaseGlobally() }
-        blocks.frame = NSRect(x: 0, y: 0, width: 600, height: 800)
-        let table = "| a | b |\n|---|---|\n| 1 | 2 |"
-        // A tool card too: all its output, not just the lines it shows.
-        let toolOutput = (1...20).map { "line \($0)" }.joined(separator: "\n")
-        let call = ChatItem.ToolCall(id: "t1", title: "Read the docs", kind: "read", status: "completed", output: toolOutput, diffs: [])
-        blocks.debugApplyNow([.agentText(id: "c", text:
-            "Here:\n\n```json\n{\n  \"x\": 1\n}\n```\n\nAnd:\n\n\(table)\n\nDone."), .tool(call)])
-        blocks.debugToggle("group-t1")   // the "Used 1 tool" line, opened
-        blocks.layoutSubtreeIfNeeded()
-        for (n, expected, what) in [(0, "{\n  \"x\": 1\n}", "a code block's Copy copies its code, no fences"),
-                                    (1, table, "a table's Copy copies its Markdown"),
-                                    (2, "Read the docs\n\n" + toolOutput, "a tool card's Copy copies its title and whole output")] {
-            blocks.debugHoverBlock(n)
-            check(blocks.debugBlockCopyShown, "hovering block \(n) shows its Copy")
-            blocks.pasteboard.clearContents()
-            blocks.debugCopyHoveredBlock()
-            let copied = blocks.pasteboard.string(forType: .string)
-            if copied != expected { log("block \(n) copied: \(copied ?? "nothing")") }
-            check(copied == expected, what)
+            + "/usr/bin/git and /no/such/thing.swift.\n\n```json\n{\n  \"x\": 1\n}\n```")], workdir: cwd)
+        defer { host.close() }
+        func pageLinks() async -> [[String]] {
+            await view.debugValue("""
+                return [...document.querySelectorAll('.item a')].map(a => [a.textContent, a.dataset.path || a.href, a.dataset.line || ''])
+                """) as? [[String]] ?? []
         }
-        let shot = NSWindow(contentRect: blocks.frame, styleMask: [.borderless], backing: .buffered, defer: false)
-        shot.contentView = blocks
-        blocks.debugHoverBlock(0)
-        snapshot(shot, "block-copy")
+        check(await untilAsync(5) { await pageLinks().contains { $0[0] == "/usr/bin/git" } }, "the Mac's file links reach the page")
+        let links = await pageLinks()
+        log("links: \(links)")
+        check(links.contains { $0[0] == "Sandshell/Chat/ChatSessionView.swift" && $0[1].hasSuffix("ChatSessionView.swift") && $0[2] == "12" },
+              "a relative path with :line links to the file at that line")
+        check(links.contains { $0[0] == "https://example.com/x" }, "a URL is a link")
+        check(links.contains { $0[0] == "/usr/bin/git" }, "an absolute path that exists is a link")
+        check(!links.contains { $0[0].contains("no/such") }, "a path that doesn't exist isn't")
+
+        // No fork handler here (as in a subagent's window): Copy alone.
+        check(await view.debugRun("return getComputedStyle(document.querySelector('.act-fork')).display === 'none'") == true,
+              "a transcript that can't fork offers Copy alone")
+        // A code block's Copy: just its code, no fences.
+        view.pasteboard = NSPasteboard(name: NSPasteboard.Name("com.xmas.sandshell.selftest"))
+        defer { view.pasteboard.releaseGlobally() }
+        view.pasteboard.clearContents()
+        _ = await view.debugRun("document.querySelector('.copy-code').click(); return true")
+        check(await until(3) { view.pasteboard.string(forType: .string) == "{\n  \"x\": 1\n}" },
+              "a code block's Copy copies its code, no fences (\(view.pasteboard.string(forType: .string) ?? "nothing"))")
 
         // Paths with spaces: quoted, backslash-escaped, or bare.
         let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("sandshell-links-\(UUID().uuidString.prefix(6))")
@@ -4034,18 +3923,13 @@ enum SelfTest {
         try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
         try? "hi".write(to: file, atomically: true, encoding: .utf8)
         defer { try? FileManager.default.removeItem(at: dir) }
-        let spaced = ChatTranscriptView()
-        spaced.workdir = dir.path
-        spaced.debugApplyNow([.agentText(id: "b", text:
-            "Quoted `My Folder/Read Me.txt:3`, escaped My\\ Folder/Read\\ Me.txt, and bare \(file.path), done. "
-            + "Not `My Folder/Nope.txt`.")])
-        let spacedLinks = spaced.debugLinks
-        log("spaced links: \(spacedLinks.map { "\($0.0) → \($0.1)" })")
-        check(spacedLinks.contains { $0.0 == "My Folder/Read Me.txt" && $0.1.hasSuffix("#L3") },
-              "a quoted path with spaces links, with its line")
-        check(spacedLinks.contains { $0.0 == "My\\ Folder/Read\\ Me.txt" }, "a backslash-escaped path links")
-        check(spacedLinks.contains { $0.0 == file.path }, "a bare absolute path with spaces links whole")
-        check(!spacedLinks.contains { $0.0.contains("Nope") }, "a quoted path that doesn't exist doesn't")
+        let spaced = FileLinks.find(in: "Quoted My Folder/Read Me.txt:3, escaped My\\ Folder/Read\\ Me.txt, and bare \(file.path), done. "
+                                    + "Not My Folder/Nope.txt.", code: ["My Folder/Read Me.txt:3", "My Folder/Nope.txt"], workdir: dir.path)
+        log("spaced links: \(spaced.map { "\($0.text) → \($0.path):\($0.line ?? 0)" })")
+        check(spaced.contains { $0.text == "My Folder/Read Me.txt" && $0.line == 3 }, "a quoted path with spaces links, with its line")
+        check(spaced.contains { $0.text == "My\\ Folder/Read\\ Me.txt" }, "a backslash-escaped path links")
+        check(spaced.contains { $0.text == file.path }, "a bare absolute path with spaces links whole")
+        check(!spaced.contains { $0.text.contains("Nope") }, "a quoted path that doesn't exist doesn't")
     }
 }
 /// A drag for the self-tests: what AppKit hands a drop target.

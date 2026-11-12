@@ -8,6 +8,9 @@ const $ = (id) => document.getElementById(id);
 // chat's events and takes its commands; no server, no pairing, no list.
 const native = window.webkit?.messageHandlers?.sandshell;
 if (native) document.documentElement.classList.add("embedded");
+// A chat's transcript in Sandshell's own window (ChatWebTranscript): the
+// window has the composer and cards; this page is the conversation.
+const transcriptOnly = !!native && document.documentElement.classList.contains("transcript-only");
 const el = {
   app: $("app"), listPane: $("list-pane"), chatPane: $("chat-pane"), checkPane: $("check-pane"), placeholder: $("placeholder"),
   host: $("host"), conn: $("conn"), sessions: $("sessions"), empty: $("empty"),
@@ -29,6 +32,9 @@ const state = {
   omitted: 0,
   pending: [],            // images to attach: {name, mimeType, data, url}
   stream: null,
+  rev: null,              // the revision shown (state and patches carry one)
+  openGroups: new Set(),  // runs of tool calls opened (by their first call's id)
+  resyncing: false,
   listeners: new Set(),   // (event, data) => void, for /check
 };
 
@@ -59,10 +65,11 @@ el.checkBack.addEventListener("click", () => go("/"));
 
 // ---------- The event stream ----------
 
-function open(id) {
+// `keep`: leave what's shown until the state replaces it (a resync).
+function open(id, keep = false) {
   if (state.stream) state.stream.close();
   state.current = id;
-  resetTranscript();
+  if (!keep) resetTranscript();
   if (native) {
     state.stream = { close() {} };
     setConn("on");
@@ -82,7 +89,7 @@ function open(id) {
       checkPaired().then((ok) => { if (ok && state.stream === stream) setTimeout(() => open(state.current), 3000); });
     }
   };
-  for (const name of ["hello", "sessions", "state", "patch", "gone"]) {
+  for (const name of ["hello", "sessions", "state", "patch", "gone", "alert"]) {
     stream.addEventListener(name, (e) => {
       const data = JSON.parse(e.data);
       handle(name, data);
@@ -102,7 +109,30 @@ function setConn(how) {
   el.conn.title = how === "on" ? "Connected" : how === "off" ? "Disconnected" : "Connecting…";
 }
 
+// A patch that doesn't follow on from what's shown, or one that didn't apply,
+// would leave the page wrong from then on: ask for everything instead.
 function handle(name, data) {
+  try {
+    receive(name, data);
+  } catch (err) {
+    console.error("Sandshell: couldn't apply the " + name, err);
+    resync();
+  }
+}
+
+function resync() {
+  if (state.resyncing) return;
+  state.resyncing = true;
+  // Again within a moment (the state itself wouldn't apply): not in a tight loop.
+  const soon = Date.now() - (state.lastResync || 0) < 2000;
+  state.lastResync = Date.now();
+  setTimeout(() => {
+    if (native) native.postMessage({ name: "resync" });
+    else open(state.current, true);   // a new stream starts with the state
+  }, soon ? 1000 : 0);
+}
+
+function receive(name, data) {
   switch (name) {
     case "hello":
       el.host.textContent = data.host;
@@ -115,6 +145,8 @@ function handle(name, data) {
     case "state":
       if (data.session.id !== state.current) return;
       resetTranscript();
+      state.rev = data.rev ?? null;
+      state.resyncing = false;
       state.omitted = data.omitted;
       for (const item of data.items) { state.items.set(item.id, item); state.order.push(item.id); }
       state.status = data.status;
@@ -122,7 +154,16 @@ function handle(name, data) {
       break;
     case "patch":
       if (data.session !== state.current) return;
+      if (state.resyncing) return;   // the state on its way covers it
+      if (data.base != null && state.rev != null && data.base !== state.rev) { resync(); return; }
       applyPatch(data);
+      if (data.rev != null) state.rev = data.rev;
+      break;
+    case "alert":
+      showAlert(data);
+      break;
+    case "config":
+      configure(data);
       break;
     case "gone":
       if (data.session === state.current) {
@@ -131,6 +172,30 @@ function handle(name, data) {
       }
       break;
   }
+}
+
+// An agent's note (sandshell-notify): a banner, tapped to open its chat; a
+// system notification too where the browser allows one and the page is hidden.
+function showAlert(a) {
+  if (native) return;   // the Mac shows its own
+  const name = state.sessions.find((s) => s.id === a.session)?.name;
+  if (document.hidden && "Notification" in window && Notification.permission === "granted") {
+    const n = new Notification(a.title, { body: a.message, tag: "note-" + a.session });
+    n.onclick = () => { window.focus(); go("/s/" + a.session); n.close(); };
+  }
+  navigator.vibrate?.(120);
+  const b = document.createElement("button");
+  b.className = "alert";
+  b.type = "button";
+  const t = document.createElement("strong");
+  t.textContent = a.title;
+  const m = document.createElement("span");
+  m.textContent = a.message;
+  b.append(t, m);
+  if (name && name !== a.title) { const s = document.createElement("small"); s.textContent = name; b.append(s); }
+  b.addEventListener("click", () => { b.remove(); go("/s/" + a.session); });
+  document.body.append(b);
+  setTimeout(() => b.remove(), 12000);
 }
 
 function setSessions(list) {
@@ -174,6 +239,7 @@ function span(cls, text) {
 // ---------- Transcript ----------
 
 function resetTranscript() {
+  state.rev = null;
   state.items = new Map();
   state.order = [];
   state.nodes = new Map();
@@ -186,6 +252,8 @@ function resetTranscript() {
 
 function applyPatch(p) {
   const stick = nearBottom();
+  // The runs' lines aren't items: off while the items take their places.
+  for (const h of el.transcript.querySelectorAll(":scope > .tool-group")) h.remove();
   for (const item of p.upserts) {
     if (!state.items.has(item.id) && !p.order) state.order.push(item.id);
     state.items.set(item.id, item);
@@ -196,7 +264,8 @@ function applyPatch(p) {
   }
   if (p.order) {
     state.order = p.order;
-    for (const id of [...state.items.keys()]) if (!p.order.includes(id)) { state.items.delete(id); state.nodes.get(id)?.remove(); state.nodes.delete(id); }
+    const keep = new Set(p.order);
+    for (const id of [...state.items.keys()]) if (!keep.has(id)) { state.items.delete(id); state.nodes.get(id)?.remove(); state.nodes.delete(id); }
   }
   // Put every node in order (cheap: only moves what's out of place).
   let prev = el.transcript.querySelector(".omitted");
@@ -208,6 +277,7 @@ function applyPatch(p) {
     prev = node;
   }
   if (p.status) state.status = p.status;
+  groupTools();
   renderCards();
   renderStatus();
   if (stick) scrollToBottom();
@@ -227,6 +297,7 @@ function renderAll(scroll) {
     nodes.push(node);
   }
   el.transcript.replaceChildren(...nodes);
+  groupTools();
   renderCards();
   renderStatus();
   if (scroll) scrollToBottom();
@@ -242,6 +313,12 @@ function scrollToBottom() {
 }
 
 function renderItem(item) {
+  const div = buildItem(item);
+  if (transcriptOnly) decorate(item, div);
+  return div;
+}
+
+function buildItem(item) {
   const div = document.createElement("div");
   div.className = "item " + item.kind;
   div.dataset.id = item.id;
@@ -290,6 +367,8 @@ function renderItem(item) {
         ul.append(li);
       }
       box.append(h, ul);
+      const plan = item.plan || [];
+      box.setAttribute("aria-label", "Plan: " + plan.filter((e) => e.status === "completed").length + " of " + plan.length + " done");
       div.append(box);
       break;
     }
@@ -428,29 +507,54 @@ function markdown(src) {
   return out.join("");
 }
 
+// A table's delimiter row: | --- | :--: | ---: | (outer pipes optional).
+const delimiterRow = /^\s*\|?\s*:?-{1,}:?\s*(\|\s*:?-{1,}:?\s*)*\|?\s*$/;
+
+// A row's cells: split on pipes that aren't escaped, without the outer ones.
+function cells(row) {
+  let r = row.trim();
+  if (r.startsWith("|")) r = r.slice(1);
+  if (r.endsWith("|") && !r.endsWith("\\|")) r = r.slice(0, -1);
+  return r.split(/(?<!\\)\|/).map((c) => c.trim().replace(/\\\|/g, "|"));
+}
+
+// A table starts at a row with a pipe whose next line is a delimiter row
+// (so a header streamed in alone stays text until its delimiter arrives).
+function tableAt(lines, i) {
+  const head = lines[i], next = lines[i + 1];
+  if (next === undefined || !head.includes("|") || !delimiterRow.test(next) || !next.includes("-")) return null;
+  const header = cells(head);
+  if (header.length < 2 && !head.trim().startsWith("|")) return null;
+  const align = cells(next).map((c) => c.startsWith(":") && c.endsWith(":") ? "center" : c.endsWith(":") ? "right" : "");
+  const rows = [];
+  let j = i + 2;
+  while (j < lines.length && lines[j].trim() && lines[j].includes("|") && !delimiterRow.test(lines[j])) rows.push(cells(lines[j++]));
+  const cell = (tag, text, k) => `<${tag}${align[k] ? ` style="text-align:${align[k]}"` : ""}>` + inline(text).replace(/&lt;br\s*\/?&gt;/gi, "<br>") + `</${tag}>`;
+  const html = '<div class="table-wrap"><table><thead><tr>' + header.map((h, k) => cell("th", h, k)).join("") + "</tr></thead><tbody>"
+    + rows.map((r) => "<tr>" + header.map((_, k) => cell("td", r[k] ?? "", k)).join("") + "</tr>").join("") + "</tbody></table></div>";
+  return { html, end: j };
+}
+
 function blocks(text) {
   const lines = text.split("\n");
   const html = [];
-  let para = [], list = null, quote = [], table = [];
+  let para = [], list = null, quote = [];
   const flushPara = () => { if (para.length) { html.push("<p>" + inline(para.join("<br>")) + "</p>"); para = []; } };
   const flushList = () => { if (list) { html.push(`<${list.tag}>` + list.items.map((x) => "<li>" + inline(x) + "</li>").join("") + `</${list.tag}>`); list = null; } };
-  const flushQuote = () => { if (quote.length) { html.push("<blockquote>" + inline(quote.join("<br>")) + "</blockquote>"); quote = []; } };
-  const flushTable = () => {
-    if (!table.length) return;
-    const rows = table.filter((r) => !/^\|?\s*:?-{2,}/.test(r)).map((r) => r.replace(/^\||\|$/g, "").split("|").map((c) => inline(c.trim())));
-    html.push('<div class="table-wrap"><table>' + rows.map((r, i) => "<tr>" + r.map((c) => (i ? "<td>" : "<th>") + c + (i ? "</td>" : "</th>")).join("") + "</tr>").join("") + "</table></div>");
-    table = [];
-  };
-  const flushAll = () => { flushPara(); flushList(); flushQuote(); flushTable(); };
-  for (const line of lines) {
+  // A quote holds blocks of its own (a table, a list).
+  const flushQuote = () => { if (quote.length) { html.push("<blockquote>" + blocks(quote.join("\n")) + "</blockquote>"); quote = []; } };
+  const flushAll = () => { flushPara(); flushList(); flushQuote(); };
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
     let m;
-    if (!line.trim()) { flushAll(); continue; }
-    if ((m = line.match(/^(#{1,6})\s+(.*)$/))) { flushAll(); const n = Math.min(m[1].length + 1, 4); html.push(`<h${n}>` + inline(m[2]) + `</h${n}>`); continue; }
-    if (/^\s*\|.*\|\s*$/.test(line)) { flushPara(); flushList(); flushQuote(); table.push(line.trim()); continue; }
-    flushTable();
-    if ((m = line.match(/^\s*[-*+]\s+(.*)$/))) { flushPara(); flushQuote(); if (!list || list.tag !== "ul") { flushList(); list = { tag: "ul", items: [] }; } list.items.push(m[1]); continue; }
-    if ((m = line.match(/^\s*\d+[.)]\s+(.*)$/))) { flushPara(); flushQuote(); if (!list || list.tag !== "ol") { flushList(); list = { tag: "ol", items: [] }; } list.items.push(m[1]); continue; }
     if ((m = line.match(/^&gt;\s?(.*)$/))) { flushPara(); flushList(); quote.push(m[1]); continue; }
+    flushQuote();
+    if (!line.trim()) { flushAll(); continue; }
+    const table = tableAt(lines, i);
+    if (table) { flushAll(); html.push(table.html); i = table.end - 1; continue; }
+    if ((m = line.match(/^(#{1,6})\s+(.*)$/))) { flushAll(); const n = Math.min(m[1].length + 1, 4); html.push(`<h${n}>` + inline(m[2]) + `</h${n}>`); continue; }
+    if ((m = line.match(/^\s*[-*+]\s+(.*)$/))) { flushPara(); if (!list || list.tag !== "ul") { flushList(); list = { tag: "ul", items: [] }; } list.items.push(m[1]); continue; }
+    if ((m = line.match(/^\s*\d+[.)]\s+(.*)$/))) { flushPara(); if (!list || list.tag !== "ol") { flushList(); list = { tag: "ol", items: [] }; } list.items.push(m[1]); continue; }
     if (/^\s*([-*_])\s*\1\s*\1[\s\1]*$/.test(line)) { flushAll(); html.push("<hr>"); continue; }
     if (list) { list.items[list.items.length - 1] += " " + line.trim(); continue; }
     para.push(line);
@@ -971,9 +1075,310 @@ async function pair(answer) {
   }
 }
 
+// ---------- Tool calls: a run of them is one quiet line, opening to the calls ----------
+
+const verbWords = {
+  run: ["Ran", "Running", "a command", "commands"],
+  read: ["Read", "Reading", "a file", "files"],
+  edit: ["Edited", "Editing", "a file", "files"],
+  search: ["Searched", "Searching", "once", "times"],
+  fetch: ["Fetched", "Fetching", "a page", "pages"],
+  other: ["Used", "Using", "a tool", "tools"],
+};
+
+function toolVerb(kind) {
+  switch ((kind || "").toLowerCase()) {
+    case "execute": case "bash": case "bashoutput": return "run";
+    case "read": case "notebookread": return "read";
+    case "edit": case "delete": case "move": case "write": case "multiedit": case "notebookedit": return "edit";
+    case "search": case "grep": case "glob": case "ls": return "search";
+    case "fetch": case "webfetch": case "websearch": return "fetch";
+    default: return "other";
+  }
+}
+
+// "Ran git status --short", "Ran 2 commands and read a file", "Running …".
+function groupSummary(tools, running) {
+  const clean = (s) => (s || "").replace(/`/g, "").trim();
+  if (tools.length === 1) {
+    const t = tools[0], verb = toolVerb(t.kind), w = verbWords[verb];
+    const lead = running ? w[1] : w[0];
+    const raw = clean(t.input || t.title);
+    const first = raw.split("\n")[0];
+    switch (verb) {
+      case "run": {
+        const short = first.length > 48 ? first.slice(0, 45) : first;
+        return short ? lead + " " + short + (short !== raw ? "…" : "") : lead + " " + w[2];
+      }
+      case "read": case "edit": {
+        const name = first.split("/").pop();
+        return name ? lead + " " + name : lead + " " + w[2];
+      }
+      case "search": return first ? lead + " for " + (first.length > 40 ? first.slice(0, 37) + "…" : first) : lead;
+      case "fetch": { let host = ""; try { host = new URL(first).host; } catch {} return lead + " " + (host || w[2]); }
+      default: {
+        const title = clean(t.title || t.kind);
+        return title.length > 60 ? title.slice(0, 57) + "…" : title;
+      }
+    }
+  }
+  const counts = new Map();
+  for (const t of tools) { const v = toolVerb(t.kind); counts.set(v, (counts.get(v) || 0) + 1); }
+  const phrases = [...counts].map(([verb, n], i) => {
+    const w = verbWords[verb], lead = running ? w[1] : w[0];
+    const object = n === 1 ? w[2] : verb === "search" ? n + " times" : n + " " + w[3];
+    return (i === 0 ? lead : lead.toLowerCase()) + " " + object;
+  });
+  return new Intl.ListFormat("en", { type: "conjunction" }).format(phrases) + (running ? "…" : "");
+}
+
+// Before each run of tool calls, its line; the calls show when it's open.
+function groupTools() {
+  for (const h of el.transcript.querySelectorAll(":scope > .tool-group")) h.remove();
+  let run = [];
+  const flush = () => {
+    if (!run.length) return;
+    const id = run[0].dataset.id;
+    const tools = run.map((n) => state.items.get(n.dataset.id)?.tool).filter(Boolean);
+    const running = tools.some((t) => t.status === "pending" || t.status === "in_progress");
+    const failed = tools.filter((t) => t.status === "failed").length;
+    const open = state.openGroups.has(id);
+    const line = document.createElement("button");
+    line.type = "button";
+    line.className = "tool-group" + (running ? " running" : "");
+    line.dataset.group = id;
+    line.title = open ? "Hide the tool calls" : "Show the tool calls";
+    line.setAttribute("aria-expanded", open);
+    line.textContent = groupSummary(tools, running) + (open ? "  ⌄" : "  ›");
+    if (failed) line.append(span("failed", failed === 1 && tools.length === 1 ? "  · failed" : "  · " + failed + " failed"));
+    el.transcript.insertBefore(line, run[0]);
+    for (const n of run) n.classList.toggle("collapsed", !open);
+    run = [];
+  };
+  for (const node of [...el.transcript.children]) {
+    if (node.classList.contains("tool")) run.push(node); else flush();
+  }
+  flush();
+}
+
+el.transcript.addEventListener("click", (e) => {
+  const line = e.target.closest(".tool-group");
+  if (!line) return;
+  const id = line.dataset.group;
+  if (state.openGroups.has(id)) state.openGroups.delete(id); else state.openGroups.add(id);
+  groupTools();
+});
+
+// ---------- In Sandshell's window: the transcript's own parts ----------
+
+const fileLinks = { byItem: new Map(), asked: new Map(), timers: new Map() };
+const ui = {};
+
+function configure(c) {
+  state.config = c;
+  const root = document.documentElement;
+  root.classList.toggle("can-fork", !!c.canFork);
+  root.classList.toggle("can-undo", !!c.canUndo);
+  if (c.replyFont) root.style.setProperty("--reply-font", c.replyFont);
+  if (c.messageFont) root.style.setProperty("--message-font", c.messageFont);
+}
+
+function post(name, fields) {
+  return native.postMessage({ name, body: JSON.stringify(fields ?? {}) });
+}
+
+function button(cls, label, title) {
+  const b = document.createElement("button");
+  b.type = "button";
+  b.className = cls;
+  b.textContent = label;
+  if (title) b.title = title;
+  return b;
+}
+
+// Copy and Fork on a reply, Copy on your message, Copy on a code block,
+// Undo on a turn's changes; file paths that exist on the Mac become links.
+function decorate(item, div) {
+  if (item.kind === "text" || (item.kind === "user" && item.text)) {
+    const bar = document.createElement("div");
+    bar.className = "actions";
+    bar.append(button("act-copy", "Copy", item.kind === "text" ? "Copy Reply" : "Copy Message"));
+    if (item.kind === "text") bar.append(button("act-fork", "Fork", "Fork to New Chat"));
+    div.append(bar);
+  }
+  for (const pre of div.querySelectorAll(".text pre, .item.text > pre")) {
+    const wrap = document.createElement("div");
+    wrap.className = "code";
+    pre.replaceWith(wrap);
+    wrap.append(pre, button("copy-code", "Copy", "Copy Code"));
+  }
+  if (item.kind === "changes" && item.turn && !item.restored) {
+    const undo = button("act-undo", "Undo", "Put these files back as they were before this turn");
+    undo.dataset.turn = item.turn;
+    div.append(" ", undo);
+  }
+  if (["text", "user", "thought", "notice", "tool", "changes"].includes(item.kind)) linkFiles(item.id, div);
+}
+
+// What an item shows, without its buttons.
+function shownText(node) {
+  const copy = node.cloneNode(true);
+  for (const b of copy.querySelectorAll(".actions, button")) b.remove();
+  return copy;
+}
+
+// The Mac finds the paths that name files (it can look on disk); the page
+// links them. Known links go on at once (a streaming reply re-renders), and
+// the Mac is asked again once the text settles.
+function linkFiles(id, node) {
+  const known = fileLinks.byItem.get(id);
+  if (known?.length) wrapFileLinks(node, known);
+  clearTimeout(fileLinks.timers.get(id));
+  fileLinks.timers.set(id, setTimeout(() => askFileLinks(id), known ? 400 : 120));
+}
+
+async function askFileLinks(id) {
+  fileLinks.timers.delete(id);
+  const node = state.nodes.get(id);
+  if (!node || !node.isConnected) return;
+  const text = shownText(node).textContent;
+  if (!text.trim() || fileLinks.asked.get(id) === text) return;
+  fileLinks.asked.set(id, text);
+  const code = [...node.querySelectorAll("code")].filter((c) => !c.closest("pre")).map((c) => c.textContent);
+  let links;
+  try { links = JSON.parse((await post("fileLinks", { text, code })).body).links || []; } catch { return; }
+  fileLinks.byItem.set(id, links);
+  const now = state.nodes.get(id);
+  if (now && links.length) wrapFileLinks(now, links);
+}
+
+function wrapFileLinks(node, links) {
+  const byText = new Map(links.map((l) => [l.text, l]));
+  const alternatives = [...byText.keys()].sort((a, b) => b.length - a.length)
+    .map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  if (!alternatives.length) return;
+  const re = new RegExp("(?<![\\w/.~-])(" + alternatives.join("|") + ")(?![\\w/@+-])", "g");
+  const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT, {
+    acceptNode: (n) => n.parentElement?.closest("a, button, .actions") ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT,
+  });
+  const texts = [];
+  while (walker.nextNode()) texts.push(walker.currentNode);
+  for (const t of texts) {
+    const s = t.nodeValue;
+    re.lastIndex = 0;
+    let m, last = 0;
+    const frag = document.createDocumentFragment();
+    while ((m = re.exec(s))) {
+      const link = byText.get(m[1]);
+      frag.append(s.slice(last, m.index));
+      const a = document.createElement("a");
+      a.className = "file";
+      a.href = "#";
+      a.dataset.path = link.path;
+      if (link.line != null) a.dataset.line = link.line;
+      a.title = link.path + (link.line != null ? ":" + link.line : "");
+      a.textContent = m[1];
+      frag.append(a);
+      last = m.index + m[1].length;
+    }
+    if (last) { frag.append(s.slice(last)); t.replaceWith(frag); }
+  }
+}
+
+function copied(b) {
+  const was = b.textContent;
+  b.textContent = "Copied";
+  b.classList.add("done");
+  setTimeout(() => { b.textContent = was; b.classList.remove("done"); }, 1200);
+}
+
+function onTranscriptClick(e) {
+  const target = e.target.closest("a, button");
+  if (!target || !el.transcript.contains(target)) return;
+  const node = target.closest(".item");
+  const item = node && state.items.get(node.dataset.id);
+  if (target.matches("a.file")) {
+    e.preventDefault();
+    post("openFile", { path: target.dataset.path, line: target.dataset.line ? +target.dataset.line : null });
+  } else if (target.matches("a[href]")) {
+    e.preventDefault();
+    post("openURL", { url: target.href });
+  } else if (target.matches(".act-copy") && item) {
+    const html = shownText(node);
+    post("copy", { text: item.text || "", html: item.kind === "text" ? html.innerHTML : "" });
+    copied(target);
+  } else if (target.matches(".act-fork") && item) {
+    post("fork", { text: item.text || "" });
+  } else if (target.matches(".copy-code")) {
+    post("copy", { text: target.parentElement.querySelector("pre").textContent });
+    copied(target);
+  } else if (target.matches(".act-undo")) {
+    post("undo", { turn: target.dataset.turn });
+  }
+}
+
+// Find (⌘F, ⌘G, ⇧⌘G come from the window).
+function find(action) {
+  if (!ui.find) {
+    const bar = document.createElement("div");
+    bar.id = "find";
+    const input = document.createElement("input");
+    input.type = "search";
+    input.placeholder = "Find";
+    input.setAttribute("aria-label", "Find in the conversation");
+    const count = document.createElement("span");
+    count.className = "count";
+    const prev = button("prev", "‹", "Previous (⇧⌘G)");
+    const next = button("next", "›", "Next (⌘G)");
+    const done = button("done", "Done");
+    bar.append(input, count, prev, next, done);
+    document.body.append(bar);
+    ui.find = { bar, input, count };
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); find(e.shiftKey ? "previous" : "next"); }
+      if (e.key === "Escape") { e.preventDefault(); find("hide"); }
+    });
+    input.addEventListener("input", () => { getSelection().removeAllRanges(); if (input.value) find("next"); else count.textContent = ""; });
+    prev.addEventListener("click", () => find("previous"));
+    next.addEventListener("click", () => find("next"));
+    done.addEventListener("click", () => find("hide"));
+  }
+  const f = ui.find;
+  if (action === "hide") { f.bar.classList.remove("shown"); return; }
+  if (action === "show" || !f.bar.classList.contains("shown")) {
+    f.bar.classList.add("shown");
+    f.input.focus();
+    f.input.select();
+    if (action === "show") return;
+  }
+  if (!f.input.value) return;
+  // window.find searches from the selection: keep it out of the find field.
+  f.input.blur();
+  const found = window.find(f.input.value, false, action === "previous", true);
+  f.count.textContent = found ? "" : "Not found";
+}
+
+function setUpTranscript() {
+  el.transcript.addEventListener("click", onTranscriptClick);
+  window.sandshellFind = find;
+  ui.jump = button("jump", "↓", "Jump to the Newest");
+  ui.jump.hidden = true;
+  ui.jump.addEventListener("click", () => scrollToBottom());
+  document.body.append(ui.jump);
+  el.transcript.addEventListener("scroll", () => { ui.jump.hidden = nearBottom(); }, { passive: true });
+}
+
 // ---------- Start ----------
 
+// The window (or phone) changed size: what was at the end stays at the end.
+{
+  let pinned = true;
+  el.transcript.addEventListener("scroll", () => { pinned = nearBottom(); }, { passive: true });
+  new ResizeObserver(() => { if (pinned) el.transcript.scrollTop = el.transcript.scrollHeight; }).observe(el.transcript);
+}
+
 (async () => {
+  if (transcriptOnly) setUpTranscript();
   if (native) { route(); return; }
   // A pairing link (QR code, AirDrop): /pair#<secret>.
   if (location.pathname === "/pair" && location.hash.length > 1) {

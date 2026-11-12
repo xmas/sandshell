@@ -61,7 +61,7 @@ enum ChatTextZoom {
     static func isInChat(_ responder: NSResponder?) -> Bool {
         var view = responder as? NSView
         while let current = view {
-            if current is ChatSessionView || current is ChatTranscriptView { return true }
+            if current is ChatSessionView || current is ChatWebTranscript { return true }
             view = current.superview
         }
         return false

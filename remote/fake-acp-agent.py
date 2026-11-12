@@ -18,6 +18,9 @@ claude-agent-acp does, and answers each prompt by what it asks for:
 
 Run by Sandshell (DEBUG) for the Remote check session, and by the unit
 tests. --no-steering: refuse `_session/steering` as an agent without it does.
+--held-mid-turn <launch>: be an agent sandshell-hold kept running mid-turn,
+as a launch that takes it up sees it — the supervisor's hello, the turn so far
+replayed on `session/load`, then the rest of the turn and `_sandshell/turnEnded`.
 """
 import base64
 import itertools
@@ -38,6 +41,7 @@ steered = []          # texts steered into the running turn
 steered_lock = threading.Lock()
 supports_steering = "--no-steering" not in sys.argv
 ids = itertools.count(1)
+held_launch = sys.argv[sys.argv.index("--held-mid-turn") + 1] if "--held-mid-turn" in sys.argv else None
 used_tokens = [1200]
 
 
@@ -241,6 +245,19 @@ def handle(message):
         respond(rid, {"protocolVersion": 1, "agentCapabilities": {"loadSession": True}, "authMethods": []})
     elif method == "session/new":
         respond(rid, {"sessionId": str(uuid.uuid4()), "modes": MODES})
+    elif method == "session/load" and held_launch:
+        session = params.get("sessionId")
+        update(session, {"sessionUpdate": "user_message_chunk", "content": {"type": "text", "text": "build it"}})
+        update(session, {"sessionUpdate": "agent_message_chunk", "messageId": "held",
+                         "content": {"type": "text", "text": "Building while you were away."}})
+        respond(rid, {"modes": MODES})
+
+        def finish_held():
+            time.sleep(0.8)
+            update(session, {"sessionUpdate": "agent_message_chunk", "messageId": "held",
+                             "content": {"type": "text", "text": " Done."}})
+            write({"jsonrpc": "2.0", "method": "_sandshell/turnEnded", "params": {"stopReason": "end_turn", "error": None}})
+        threading.Thread(target=finish_held, daemon=True).start()
     elif method == "session/load":
         respond(rid, {"modes": MODES})
     elif method == "session/set_mode":
@@ -267,6 +284,9 @@ def handle(message):
 def main():
     sys.stderr.write("sandshell-launch: up\n")
     sys.stderr.flush()
+    if held_launch:
+        write({"jsonrpc": "2.0", "method": "_sandshell/hold",
+               "params": {"launch": held_launch, "session": None, "running": True, "reattached": True}})
     for line in sys.stdin:
         line = line.strip()
         if not line:

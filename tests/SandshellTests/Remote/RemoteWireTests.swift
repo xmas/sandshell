@@ -90,6 +90,28 @@ struct RemoteWireItemTests {
         #expect(tool.images.last?.hasSuffix("/images/tool-t1/1") == true)
     }
 
+    /// Claude's "I'll read A" → tool → "and B" in one API message: both texts
+    /// carry the message's id. On the wire each needs its own, or a device
+    /// keying its views by id shows only the second.
+    @Test func aRepeatedIDGetsItsOwnOnTheWire() {
+        let read = ChatItem.ToolCall(id: "t1", title: "Read A", kind: "read", status: "completed", output: "", diffs: [])
+        let chat: [ChatItem] = [.agentText(id: "msg_1", text: "I'll read A"), .tool(read),
+                                .agentText(id: "msg_1", text: "and B"), .thought(id: "msg_1", text: "Hmm"),
+                                .agentText(id: "msg_1", text: "done")]
+        let items = RemoteWire.items(chat, session: Wire.session)
+        #expect(items.map(\.id) == ["text-msg_1", "tool-t1", "text-msg_1~2", "thought-msg_1", "text-msg_1~3"])
+        #expect(items.map(\.text) == ["I'll read A", nil, "and B", "Hmm", "done"])
+    }
+
+    @Test func streamingTheRepeatOnlyTouchesIt() throws {
+        let first: [ChatItem] = [.agentText(id: "msg_1", text: "I'll read A"), .agentText(id: "msg_1", text: "and")]
+        let later: [ChatItem] = [.agentText(id: "msg_1", text: "I'll read A"), .agentText(id: "msg_1", text: "and B")]
+        let patch = try #require(Wire.patch(RemoteWire.items(first, session: Wire.session),
+                                            RemoteWire.items(later, session: Wire.session)))
+        #expect(patch.upserts == [Wire.text("text-msg_1~2", "and B")])
+        #expect(patch.order == nil)
+    }
+
     @Test func imageLooksUpByAddress() {
         let id = UUID()
         let call = ChatItem.ToolCall(id: "t1", title: "Read", kind: "read", status: "completed", output: "",
@@ -146,5 +168,105 @@ struct RemoteSessionFlagTests {
         s.isRemote = true
         let back = try JSONDecoder().decode(Session.self, from: try JSONEncoder().encode(s))
         #expect(back.isRemote)
+    }
+}
+
+// MARK: - Feed: what a chat's devices are sent next
+
+struct RemoteWireFeedTests {
+    private static func text(_ id: String, _ text: String) -> ChatItem { .agentText(id: id, text: text) }
+    private static func tool(_ id: String, _ status: String) -> ChatItem {
+        .tool(.init(id: id, title: "Read", kind: "read", status: status, output: "", diffs: []))
+    }
+
+    private func started(_ items: [ChatItem]) -> RemoteWire.Feed {
+        var feed = RemoteWire.Feed(session: Wire.session)
+        _ = feed.state(items, status: Wire.status())
+        return feed
+    }
+
+    @Test func streamingSendsOnlyTheItemThatGrew() throws {
+        var feed = started([Self.text("a", "Hi"), Self.tool("t1", "completed"), Self.text("b", "Hel")])
+        let patchResult = feed.patch([Self.text("a", "Hi"), Self.tool("t1", "completed"), Self.text("b", "Hello")],
+                                            status: Wire.status())
+        let patch = try #require(patchResult)
+        #expect(patch.upserts == [Wire.text("text-b", "Hello")])
+        #expect(patch.order == nil)
+        #expect(patch.base == 1)
+        #expect(patch.rev == 2)
+    }
+
+    @Test func aToolUpdateAndANewItemGoTogether() throws {
+        var feed = started([Self.tool("t1", "pending")])
+        let patchResult = feed.patch([Self.tool("t1", "completed"), Self.text("a", "Done")], status: Wire.status())
+        let patch = try #require(patchResult)
+        #expect(patch.upserts.map(\.id) == ["tool-t1", "text-a"])
+        #expect(patch.upserts.first?.tool?.status == "completed")
+        #expect(patch.order == nil)
+    }
+
+    @Test func nothingChangedIsNoPatchAndNoNewRevision() {
+        let items = [Self.text("a", "Hi")]
+        var feed = started(items)
+        let again = feed.patch(items, status: Wire.status())
+        #expect(again == nil)
+        #expect(feed.rev == 1)
+        let joined = feed.state(items, status: Wire.status())
+        #expect(joined.rev == 1, "A device joining doesn't put the others behind")
+    }
+
+    @Test func eachPatchFollowsOnFromTheLast() throws {
+        var feed = started([])
+        let firstResult = feed.patch([Self.text("a", "1")], status: Wire.status())
+        let first = try #require(firstResult)
+        let secondResult = feed.patch([Self.text("a", "12")], status: Wire.status())
+        let second = try #require(secondResult)
+        #expect(second.base == first.rev)
+    }
+
+    @Test(arguments: [
+        // A reload emptied the chat.
+        ([String](), [String]()),
+        // An item went from the middle.
+        (["a", "c"], ["text-a", "text-c"]),
+        // A retry replaced the last reply.
+        (["a", "b", "x"], ["text-a", "text-b", "text-x"]),
+    ])
+    func anyOtherChangeSendsTheOrderWhole(newIDs: [String], order: [String]) throws {
+        var feed = started(["a", "b", "c"].map { Self.text($0, $0) })
+        let patchResult = feed.patch(newIDs.map { Self.text($0, $0) }, status: Wire.status())
+        let patch = try #require(patchResult)
+        #expect(patch.order == order)
+        #expect(feed.items.map(\.id) == order)
+    }
+
+    @Test func repeatedIDsStayUniqueAcrossPatches() throws {
+        var feed = started([Self.text("m", "Before"), Self.tool("t1", "completed")])
+        let patchResult = feed.patch([Self.text("m", "Before"), Self.tool("t1", "completed"), Self.text("m", "Aft")],
+                                            status: Wire.status())
+        let patch = try #require(patchResult)
+        #expect(patch.upserts.map(\.id) == ["text-m~2"])
+        let nextResult = feed.patch([Self.text("m", "Before"), Self.tool("t1", "completed"), Self.text("m", "After")],
+                                           status: Wire.status())
+        let next = try #require(nextResult)
+        #expect(next.upserts == [Wire.text("text-m~2", "After")], "The repeat keeps its id as it streams")
+    }
+
+    @Test func theStatusAloneCanGoWhileItemsAreHeld() throws {
+        var feed = started([Self.text("a", "Hi")])
+        let patchResult = feed.patch(status: Wire.status(.running))
+        let patch = try #require(patchResult)
+        #expect(patch.upserts.isEmpty)
+        #expect(patch.status?.phase == .running)
+        #expect(patch.base == 1)
+        let same = feed.patch(status: Wire.status(.running))
+        #expect(same == nil)
+    }
+
+    @Test func theStateMatchesWhatItemsGives() {
+        let chat: [ChatItem] = [Self.text("m", "a"), Self.tool("t", "completed"), Self.text("m", "b")]
+        var feed = RemoteWire.Feed(session: Wire.session)
+        let state = feed.state(chat, status: Wire.status())
+        #expect(state.items == RemoteWire.items(chat, session: Wire.session))
     }
 }

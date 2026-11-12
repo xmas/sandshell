@@ -34,11 +34,6 @@ final class RemoteHub: ObservableObject {
     }
 
     private var sources: [UUID: Source] = [:]
-    private var watches: [UUID: AnyCancellable] = [:]
-    /// What the subscribers of each session were last sent (the next patch's base).
-    private var sent: [UUID: (items: [RemoteWire.Item], status: RemoteWire.Status)] = [:]
-    private var dirty: Set<UUID> = []
-    private var flushScheduled = false
     private var refreshScheduled = false
     private var subscribers: [ObjectIdentifier: Subscriber] = [:]
     private var lastSummaries: [RemoteWire.SessionSummary] = []
@@ -136,20 +131,23 @@ final class RemoteHub: ObservableObject {
         }
         #endif
         for id in Set(sources.keys).subtracting(found.keys) {
-            watches[id] = nil
-            sent[id] = nil
-            dirty.remove(id)
+            sources[id]?.chat.feed.stopListening(self)
             for sub in subscribers.values where sub.session == id { sub.stream.send("gone", ["session": id]) }
         }
+        var restarted: [UUID] = []
         for (id, source) in found where sources[id]?.chat !== source.chat {
-            // A new chat (or the session's chat was relaunched): its followers start over.
-            if sources[id] != nil {
-                sent[id] = nil
-                for sub in subscribers.values where sub.session == id { sub.stream.send("state", state(id, source)) }
-            }
-            watches[id] = source.chat.objectWillChange.sink { [weak self] _ in self?.markDirty(id) }
+            sources[id]?.chat.feed.stopListening(self)
+            // What changed, to the devices following it (`ChatFeed`).
+            source.chat.feed.listen(self) { hub, event in hub.forward(event, of: id) }
+            if sources[id] != nil { restarted.append(id) }
         }
         sources = found
+        // The session's chat was relaunched (a new one): its followers start over.
+        for id in restarted {
+            guard let source = sources[id] else { continue }
+            let first = state(id, source)
+            for sub in subscribers.values where sub.session == id { sub.stream.send("state", first) }
+        }
         broadcastSummaries()
         servingWanted = isEnabled && (!found.isEmpty || anyRemote || RemotePairing.shared.current != nil)
         setServing(servingWanted)
@@ -161,6 +159,14 @@ final class RemoteHub: ObservableObject {
         }
     }
 
+    /// An agent's note (`sandshell-notify`): to every device listening, if
+    /// its session is one they may see.
+    func alert(session: UUID, title: String, message: String) {
+        guard sources[session] != nil else { return }
+        let alert = RemoteWire.Alert(session: session, title: title, message: message)
+        for sub in subscribers.values { sub.stream.send("alert", alert) }
+    }
+
     private func broadcastSummaries() {
         let now = summaries
         guard now != lastSummaries else { return }
@@ -170,55 +176,37 @@ final class RemoteHub: ObservableObject {
 
     // MARK: Changes
 
-    private func markDirty(_ id: UUID) {
-        dirty.insert(id)
-        guard !flushScheduled else { return }
-        flushScheduled = true
-        // `objectWillChange` fires before the change: read it a beat later,
-        // once for a burst (streamed text arrives a few words at a time).
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { [weak self] in
-            guard let self else { return }
-            self.flushScheduled = false
-            self.flush()
+    /// A chat's change, to the devices following it; the list's summaries too
+    /// (its phase, what it waits for).
+    private func forward(_ event: ChatFeed.Event, of id: UUID) {
+        guard let source = sources[id] else { return }
+        let followers = subscribers.values.filter { $0.session == id }
+        if !followers.isEmpty {
+            switch event {
+            case .state(let now):
+                let state = state(of: source, now)
+                for sub in followers { sub.stream.send("state", state) }
+            case .patch(let patch):
+                for sub in followers { sub.stream.send("patch", patch) }
+            }
         }
-    }
-
-    /// Send each changed session's followers what changed.
-    private func flush() {
-        let ids = dirty
-        dirty = []
-        for id in ids { flush(id) }
         broadcastSummaries()
     }
 
-    private func flush(_ id: UUID) {
-        guard let source = sources[id] else { return }
-        let followers = subscribers.values.filter { $0.session == id }
-        guard !followers.isEmpty else { sent[id] = nil; return }
-        let items = RemoteWire.items(source.chat.items, session: id)
-        let status = RemoteWire.Status(source.chat)
-        if let base = sent[id], let patch = RemoteWire.patch(session: id, from: base.items, to: items,
-                                                             oldStatus: base.status, newStatus: status) {
-            for sub in followers { sub.stream.send("patch", patch) }
-        }
-        sent[id] = (items, status)
+    /// A session's state as a device first sees it: the base of the next
+    /// patch (`ChatFeed.state` sends what's pending to those following first).
+    private func state(_ id: UUID, _ source: Source) -> RemoteWire.State {
+        state(of: source, source.chat.feed.state())
     }
 
-    /// A session's state as a device first sees it; it's also the base of
-    /// the next patch (so flush what's pending first).
-    private func state(_ id: UUID, _ source: Source) -> RemoteWire.State {
-        let items = RemoteWire.items(source.chat.items, session: id)
-        let status = RemoteWire.Status(source.chat)
-        sent[id] = (items, status)
-        let shown = items.suffix(RemoteWire.initialItemLimit)
-        return RemoteWire.State(session: source.summary(), status: status, items: Array(shown),
-                                omitted: items.count - shown.count)
+    private func state(of source: Source, _ now: ChatFeed.Snapshot) -> RemoteWire.State {
+        let shown = now.items.suffix(RemoteWire.initialItemLimit)
+        return RemoteWire.State(session: source.summary(), status: now.status, items: Array(shown),
+                                omitted: now.items.count - shown.count, rev: now.rev)
     }
 
     func state(_ id: UUID) -> RemoteWire.State? {
-        guard let source = sources[id] else { return nil }
-        if dirty.contains(id) { dirty.remove(id); flush(id) }
-        return state(id, source)
+        sources[id].map { state(id, $0) }
     }
 
     // MARK: Devices
@@ -240,8 +228,9 @@ final class RemoteHub: ObservableObject {
 
     /// A device opened an event stream (following `session`, if it named one).
     func attach(_ stream: HTTPServer.EventStream, following session: UUID?, caller: RemoteRoutes.Caller = .thisMac) {
-        // Its first state is the next patch's base for everyone following it.
-        if let session, dirty.contains(session) { dirty.remove(session); flush(session) }
+        // Its first state, before it's following: what's pending goes to those
+        // already following first, so they keep their place (not to it).
+        let first = session.flatMap { id in sources[id].map { state(id, $0) } }
         let sub = Subscriber(stream: stream, session: session, device: caller.deviceID)
         let key = ObjectIdentifier(sub)
         subscribers[key] = sub
@@ -254,8 +243,8 @@ final class RemoteHub: ObservableObject {
         Log.info(.app, "remote: \(stream.peer) following\(session.map { " \($0)" } ?? " the list")")
         stream.send("hello", hello(for: caller))
         guard let session else { return }
-        if let source = sources[session] {
-            stream.send("state", state(session, source))
+        if let first {
+            stream.send("state", first)
         } else {
             stream.send("gone", ["session": session])
         }

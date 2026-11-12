@@ -228,9 +228,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.activate()
         installShortcutMonitor()
         Updater.shared.checkInBackground()
-        KeepAwake.shared.start { [weak self] in
+        KeepAwake.shared.start(isWorking: { [weak self] in
             self?.windows.contains { $0.workspaceController?.isAgentWorking == true } ?? false
-        }
+        }, isServingRemote: { RemoteHub.shared.isEnabled && RemoteHub.shared.port != nil })
+        StatusMenuController.shared.start(windows: { [weak self] in self?.windows ?? [] },
+                                          onSelect: { [weak self] id in self?.selectSessionAnywhere(id) })
 
         // Only watch the pasteboard for OSC-52-copied URLs while Sandshell is
         // the active app, so a copy made in another app never triggers it.
@@ -244,14 +246,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Ask for notification permission and wire up the tap → select-session handler.
         NotificationManager.shared.requestPermission()
-        NotificationManager.shared.onSessionTap = { [weak self] id in
-            guard let self else { return }
-            // The window running the session (another window on its folder only
-            // says it's open elsewhere), else the first window that has it.
-            let window = self.windows.first { $0.isRunning(id) }
-                ?? self.windows.first { $0.workspaceController?.session(id: id) != nil }
-            window?.selectSession(id)
-        }
+        NotificationManager.shared.onSessionTap = { [weak self] id in self?.selectSessionAnywhere(id) }
+    }
+
+    /// Show a session: in the window running it (another window on its folder
+    /// only says it's open elsewhere), else the first window that has it.
+    @MainActor func selectSessionAnywhere(_ id: UUID) {
+        let window = windows.first { $0.isRunning(id) }
+            ?? windows.first { $0.workspaceController?.session(id: id) != nil }
+        _ = window?.selectSession(id)
     }
 
     /// Receive `sandshell://open?…` Apple Events sent by the CLI.
@@ -407,7 +410,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @MainActor @objc func toggleKeepAwake(_ sender: Any?) { KeepAwake.isEnabled.toggle() }
-    @MainActor @objc func toggleChatWebView(_ sender: Any?) { ChatWebView.isEnabled.toggle() }
 
     /// App menu ▸ Check for Updates… — compares against the Homebrew cask.
     @MainActor @objc func checkForUpdates(_ sender: Any?) {
@@ -1090,9 +1092,6 @@ extension AppDelegate: NSMenuItemValidation {
             item.state = RemoteHub.shared.checkChat != nil ? .on : .off
             return true
         #endif
-        case #selector(toggleChatWebView(_:)):
-            item.state = ChatWebView.isEnabled ? .on : .off
-            return true
         case #selector(toggleKeepAwake(_:)):
             item.state = KeepAwake.isEnabled ? .on : .off
             return true

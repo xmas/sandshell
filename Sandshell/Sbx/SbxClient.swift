@@ -475,10 +475,11 @@ actor SbxClient {
     /// env), since they outlive the host-side `sbx exec`. Fire-and-forget from
     /// sync teardown paths; `waitForReaps` lets app quit give them a moment.
     @discardableResult
-    nonisolated static func reapSessionProcesses(container: String, match: String, immediate: Bool = false) -> Process? {
+    nonisolated static func reapSessionProcesses(container: String, match: String, immediate: Bool = false,
+                                                 sparing: String? = nil) -> Process? {
         let p = Process()
         p.executableURL = URL(filePath: PathFixer.sbxPath())
-        p.arguments = ["exec", container, "sh", "-c", SbxCommand.reapScript(match: match, immediate: immediate)]
+        p.arguments = ["exec", container, "sh", "-c", SbxCommand.reapScript(match: match, immediate: immediate, sparing: sparing)]
         p.standardInput = FileHandle.nullDevice
         p.standardOutput = FileHandle.nullDevice
         p.standardError = FileHandle.nullDevice
@@ -493,10 +494,11 @@ actor SbxClient {
     /// the relaunch would kill the new process too, if it matches it. Past
     /// `timeout` the reap is stopped rather than left to land late.
     nonisolated static func reapSessionProcessesAndWait(container: String, match: String, immediate: Bool = false,
-                                                        timeout: TimeInterval = 45) async {
+                                                        sparing: String? = nil, timeout: TimeInterval = 45) async {
         // Unstructured, so a cancelled caller still waits out the reap.
         await Task {
-            guard let p = reapSessionProcesses(container: container, match: match, immediate: immediate) else { return }
+            guard let p = reapSessionProcesses(container: container, match: match, immediate: immediate,
+                                               sparing: sparing) else { return }
             let deadline = Date.now.addingTimeInterval(timeout)
             while p.isRunning, Date.now < deadline { try? await Task.sleep(for: .milliseconds(50)) }
             if p.isRunning {

@@ -8,7 +8,9 @@ final class SubagentWindowController: NSWindowController, NSWindowDelegate {
 
     private var info: SubagentInfo
     private weak var workspace: WorkspaceController?
-    private let transcript = ChatTranscriptView()
+    /// Its items, read from its transcript, for the page to show.
+    private let items = ItemsTranscript()
+    private let transcript: ChatWebTranscript
     private let status = NSTextField(labelWithString: "")
     private var follow: Task<Void, Never>?
     private var lastModified: Date?
@@ -24,12 +26,13 @@ final class SubagentWindowController: NSWindowController, NSWindowDelegate {
 
     #if DEBUG
     static func debugWindow(_ id: String) -> SubagentWindowController? { open[id] }
-    var debugTranscriptText: String { transcript.debugText }
+    func debugTranscriptText() async -> String { await transcript.debugTranscriptText() }
     #endif
 
     private init(_ info: SubagentInfo, workspace: WorkspaceController) {
         self.info = info
         self.workspace = workspace
+        transcript = ChatWebTranscript(source: items)
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 620, height: 640),
                               styleMask: [.titled, .closable, .resizable, .miniaturizable], backing: .buffered, defer: true)
         window.title = info.title
@@ -132,7 +135,7 @@ final class SubagentWindowController: NSWindowController, NSWindowDelegate {
         lastModified = modified
         Task { [weak self] in
             let items = await Task.detached(priority: .utility) { SubagentScanner.items(url) }.value
-            self?.transcript.update(items)
+            self?.items.items = items
         }
     }
 

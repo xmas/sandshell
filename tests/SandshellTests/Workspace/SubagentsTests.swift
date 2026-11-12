@@ -607,8 +607,9 @@ extension SubagentsTests {
 
         @Test func textIsOnlyJoinedOntoTheItemRightBeforeIt() {
             let call = SubagentsFixture.toolCall(id: "t1")
-            let items = fold([.text(messageID: "m1", "Before."), .toolUse(call), .text(messageID: "m1", "After.")])
-            #expect(items == [.agentText(id: "m1", text: "Before."), .tool(call), .agentText(id: "m1", text: "After.")])
+            let items = fold([.text(messageID: "m1", "Before."), .toolUse(call), .text(messageID: "m1", "After."),
+                              .text(messageID: "m1", "More.")])
+            #expect(items == [.agentText(id: "m1", text: "Before."), .tool(call), .agentText(id: "m1~2", text: "After.\n\nMore.")])
         }
 
         @Test func thoughtsAreNeverJoinedAndAreNumberedByPosition() {

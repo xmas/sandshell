@@ -167,7 +167,8 @@ final class TerminalSession {
          workdir: String,
          theme: ThemeController,
          resumeID: String? = nil,
-         claude: SbxCommand.ClaudeOptions? = nil) {
+         claude: SbxCommand.ClaudeOptions? = nil,
+         notifyDir: String? = nil) {
         self.sessionID = sessionID
         self.theme = theme
         self.containerName = containerName
@@ -178,7 +179,7 @@ final class TerminalSession {
         let sbxPath = PathFixer.sbxPath()
         let body = SbxCommand.sessionScript(
             containerName: containerName, workdir: workdir, agent: agent,
-            sbxPath: sbxPath, home: home, resumeID: resumeID, claude: claude, tag: tag)
+            sbxPath: sbxPath, home: home, resumeID: resumeID, claude: claude, tag: tag, notifyDir: notifyDir)
 
         let scriptURL = Self.writeScript(body)
         self.scriptURL = scriptURL

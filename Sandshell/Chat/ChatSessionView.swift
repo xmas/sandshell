@@ -10,7 +10,7 @@ import SwiftUI
 final class ChatSessionView: NSView {
     let session: ChatSession
 
-    private let transcript = ChatTranscriptView()
+    private let transcript: ChatWebTranscript
     /// Until the first message: a sea of creatures, and where this runs.
     private lazy var emptyState = NSHostingView(rootView: ChatEmptyState(
         agent: session.title.capitalized, folder: (session.workdir as NSString).lastPathComponent))
@@ -48,10 +48,6 @@ final class ChatSessionView: NSView {
     /// A Claude model picked here, until the chat relaunches on it.
     private var pendingModel: String??
     private var bag: Set<AnyCancellable> = []
-    /// History replayed while resuming, shown in one go when it's done.
-    private var heldReplay: [ChatItem]?
-    /// Reloading to catch up with another app: keep the old transcript up meanwhile.
-    private var heldForCatchUp = false
     /// The user chose to send while another app is mid-turn.
     private var sendDespiteOtherApp = false
     /// "Send When It Finishes": the composer's message goes once the other app is idle.
@@ -71,6 +67,7 @@ final class ChatSessionView: NSView {
 
     init(session: ChatSession) {
         self.session = session
+        transcript = ChatWebTranscript(source: session)
         super.init(frame: .zero)
         composer.agentName = session.title
         buildLayout()
@@ -91,7 +88,7 @@ final class ChatSessionView: NSView {
     }
 
     #if DEBUG
-    var debugTranscript: ChatTranscriptView { transcript }
+    var debugTranscript: ChatWebTranscript { transcript }
     var debugComposer: ChatComposerView { composer }
     var debugComposerEnabled: Bool { composer.isEnabled }
     var debugQueuedView: QueuedPromptsView { queuedView }
@@ -144,23 +141,6 @@ final class ChatSessionView: NSView {
         composer.addAttachments(urls: urls)
         composer.focus()
     }
-
-    /// Show the chat as the web page, over the native chat (left in place,
-    /// its composer kept from taking the keyboard).
-    func useWebView() {
-        let web = ChatWebView(chat: session) { [weak self, session] in
-            RemoteWire.SessionSummary(id: session.ownSessionID, name: self?.sessionName?() ?? session.title,
-                                      agent: session.agent.rawValue, agentName: session.agent.displayName,
-                                      folder: session.workdir.tildeAbbreviated, phase: .init(session.phase),
-                                      waiting: session.waitingFor, isCheck: false)
-        }
-        web.frame = bounds
-        web.autoresizingMask = [.width, .height]
-        addSubview(web, positioned: .above, relativeTo: nil)
-        composer.keepsKeyboardAway = true
-        webChat = web
-    }
-    private(set) var webChat: ChatWebView?
 
     /// Start from a draft: text in the composer and files as attachments, or
     /// sent straight away.
@@ -282,7 +262,7 @@ final class ChatSessionView: NSView {
         // It only *wants* that width, below the window's split view (260): a
         // stronger pull shrinks this pane to it and pins the sidebar at its widest.
         addLayoutGuide(readable)
-        let fill = readable.widthAnchor.constraint(equalToConstant: ChatTranscriptView.readableWidth + 32)
+        let fill = readable.widthAnchor.constraint(equalToConstant: ChatWebTranscript.readableWidth + 32)
         fill.priority = .init(100)
         NSLayoutConstraint.activate([
             column.leadingAnchor.constraint(equalTo: leadingAnchor),
@@ -292,7 +272,7 @@ final class ChatSessionView: NSView {
             readable.centerXAnchor.constraint(equalTo: column.centerXAnchor),
             readable.topAnchor.constraint(equalTo: column.topAnchor),
             readable.bottomAnchor.constraint(equalTo: column.bottomAnchor),
-            readable.widthAnchor.constraint(lessThanOrEqualToConstant: ChatTranscriptView.readableWidth + 32),
+            readable.widthAnchor.constraint(lessThanOrEqualToConstant: ChatWebTranscript.readableWidth + 32),
             readable.leadingAnchor.constraint(greaterThanOrEqualTo: column.leadingAnchor),
             readable.trailingAnchor.constraint(lessThanOrEqualTo: column.trailingAnchor),
             fill,
@@ -325,21 +305,11 @@ final class ChatSessionView: NSView {
     // MARK: Binding
 
     private func bind() {
+        // The transcript follows the chat by itself (`ChatFeed`); here, only
+        // whether there's anything yet. (A catch-up keeps the old transcript up.)
         session.$items.sink { [weak self] items in
-            guard let self else { return }
-            if self.session.isCatchingUp {
-                self.heldForCatchUp = true
-                return
-            }
+            guard let self, !self.session.isCatchingUp else { return }
             self.showEmptyState(items.isEmpty)
-            // Resuming replays the whole history before the session is ready:
-            // draw it once at the end (already at the bottom), not message by
-            // message as a long scroll.
-            if case .starting = self.session.phase, !items.isEmpty {
-                self.heldReplay = items
-                return
-            }
-            self.transcript.update(items)
         }.store(in: &bag)
         session.$permission.sink { [weak self] in self?.showPermission($0) }.store(in: &bag)
         session.$question.sink { [weak self] in self?.showQuestion($0) }.store(in: &bag)
@@ -360,15 +330,7 @@ final class ChatSessionView: NSView {
         }.store(in: &bag)
         session.$phase.sink { [weak self] phase in
             guard let self else { return }
-            if case .starting = phase {} else if let held = self.heldReplay {
-                self.heldReplay = nil
-                self.heldForCatchUp = false
-                self.transcript.update(self.session.items.isEmpty ? held : self.session.items)
-            } else if self.heldForCatchUp {
-                self.heldForCatchUp = false
-                self.showEmptyState(self.session.items.isEmpty)
-                self.transcript.update(self.session.items)
-            }
+            if case .starting = phase {} else { self.showEmptyState(self.session.items.isEmpty) }
             self.showPhase(phase)
         }.store(in: &bag)
         // Usage (and, for Claude, the model it answered with) → the readout.
@@ -725,8 +687,8 @@ final class ChatSessionView: NSView {
     var debugQuestionHasKeyboard: Bool { questionHost.map { keyboardIsIn($0) } ?? false }
     var debugComposerHasKeyboard: Bool { keyboardIsIn(composer) }
     /// The composer's frame and the transcript's text column, in this view.
-    var debugColumn: (composer: NSRect, text: NSRect) {
-        (composer.convert(composer.bounds, to: self), transcript.convert(transcript.debugTextColumn, to: self))
+    func debugColumn() async -> (composer: NSRect, text: NSRect) {
+        (composer.convert(composer.bounds, to: self), transcript.convert(await transcript.debugTextColumn(), to: self))
     }
     #endif
 
@@ -858,147 +820,5 @@ extension ChatSessionView {
             do { try markdown.write(to: url, atomically: true, encoding: .utf8) }
             catch { Alerts.inform("Couldn’t export the conversation.", error.localizedDescription, in: window) }
         }
-    }
-}
-
-// MARK: - The chat as a web page
-
-/// The chat in the Remote Control web page (`remote/web`), the same page a
-/// phone loads: here its state and patches come straight from this chat, and
-/// its commands go back through `RemoteRoutes.command`, as a phone's POSTs do.
-/// It isn't one of `RemoteHub`'s sessions, so no device can see a chat this way.
-@MainActor
-final class ChatWebView: NSView {
-    static let key = "chatUsesWebView"
-    /// On by default on this branch; View ▸ Chat in Web View.
-    static var isEnabled: Bool {
-        get { UserDefaults.standard.object(forKey: key) as? Bool ?? true }
-        set { UserDefaults.standard.set(newValue, forKey: key) }
-    }
-    static let scheme = "sandshell-web"
-
-    let chat: ChatSession
-    private let summary: () -> RemoteWire.SessionSummary
-    private(set) var webView: WKWebView!
-    private let relay = Relay()
-    private var watch: AnyCancellable?
-    private var sent: (items: [RemoteWire.Item], status: RemoteWire.Status)?
-    private var flushScheduled = false
-    private(set) var isReady = false
-
-    init(chat: ChatSession, summary: @escaping () -> RemoteWire.SessionSummary) {
-        self.chat = chat
-        self.summary = summary
-        super.init(frame: .zero)
-        relay.owner = self
-        let config = WKWebViewConfiguration()
-        config.setURLSchemeHandler(relay, forURLScheme: Self.scheme)
-        config.userContentController.addScriptMessageHandler(relay, contentWorld: .page, name: "sandshell")
-        webView = WKWebView(frame: bounds, configuration: config)
-        webView.autoresizingMask = [.width, .height]
-        webView.pageZoom = ChatTextZoom.scale
-        addSubview(webView)
-        webView.load(URLRequest(url: URL(string: "\(Self.scheme)://app/s/\(chat.ownSessionID.uuidString)")!))
-        watch = chat.objectWillChange.sink { [weak self] _ in self?.markDirty() }
-        NotificationCenter.default.addObserver(self, selector: #selector(zoomChanged), name: ChatTextZoom.didChange, object: nil)
-    }
-
-    @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
-
-    @objc private func zoomChanged() { webView.pageZoom = ChatTextZoom.scale }
-
-    /// To the page: `window.sandshellReceive(name, data)`, as an event stream would.
-    private func send(_ name: String, _ value: some Encodable) {
-        guard isReady, let data = try? JSONEncoder().encode(value), var json = String(data: data, encoding: .utf8) else { return }
-        json = json.replacingOccurrences(of: "\u{2028}", with: "\\u2028").replacingOccurrences(of: "\u{2029}", with: "\\u2029")
-        webView.evaluateJavaScript("window.sandshellReceive(\"\(name)\", \(json))", completionHandler: nil)
-    }
-
-    private func current() -> (items: [RemoteWire.Item], status: RemoteWire.Status) {
-        (RemoteWire.items(chat.items, session: chat.ownSessionID), RemoteWire.Status(chat))
-    }
-
-    /// The page is loaded and listening: everything, then patches from here.
-    fileprivate func pageReady() {
-        isReady = true
-        send("hello", RemoteHub.Hello(host: Host.current().localizedName ?? "This Mac", sessions: [summary()]))
-        let now = current()
-        sent = now
-        send("state", RemoteWire.State(session: summary(), status: now.status, items: now.items, omitted: 0))
-    }
-
-    private func markDirty() {
-        guard isReady, !flushScheduled else { return }
-        flushScheduled = true
-        // objectWillChange comes before the change: read it a beat later, once for a burst.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { [weak self] in
-            guard let self else { return }
-            self.flushScheduled = false
-            let now = self.current()
-            if let base = self.sent, let patch = RemoteWire.patch(session: self.chat.ownSessionID, from: base.items, to: now.items,
-                                                                   oldStatus: base.status, newStatus: now.status) {
-                self.send("patch", patch)
-            }
-            self.sent = now
-        }
-    }
-
-    fileprivate func command(_ name: String, body: String) -> [String: Any] {
-        let response = RemoteRoutes.command(name, body: Data(body.utf8)) { [chat] () throws(RemoteHub.CommandError) in chat }
-        return ["status": response.status, "body": String(data: response.body, encoding: .utf8) ?? ""]
-    }
-
-    /// The page's files, and the chat's images at the addresses the page uses.
-    fileprivate func serve(_ url: URL) -> (data: Data, type: String)? {
-        let parts = url.path(percentEncoded: false).split(separator: "/").map(String.init)
-        if parts.count == 6, parts[0] == "api", parts[1] == "sessions", parts[3] == "images", let index = Int(parts[5]) {
-            return RemoteWire.image(in: chat.items, item: parts[4], index: index).map { ($0, "application/octet-stream") }
-        }
-        guard let root = RemoteRoutes.webRoot?.standardizedFileURL else { return nil }
-        let name = parts.isEmpty || parts.first == "s" ? "index.html" : parts.joined(separator: "/")
-        let file = root.appending(path: name).standardizedFileURL
-        guard file.path(percentEncoded: false).hasPrefix(root.path(percentEncoded: false)),
-              let data = try? Data(contentsOf: file) else { return nil }
-        return (data, RemoteRoutes.contentType(file.pathExtension))
-    }
-
-    #if DEBUG
-    func debugTranscriptText() async -> String? {
-        try? await webView.evaluateJavaScript("document.getElementById('transcript').innerText") as? String
-    }
-    func debugRun(_ script: String) async -> Bool? {
-        (try? await webView.callAsyncJavaScript(script, contentWorld: .page)) as? Bool
-    }
-    #endif
-
-    /// WebKit keeps its handlers: this one holds the view weakly.
-    private final class Relay: NSObject, WKScriptMessageHandlerWithReply, WKURLSchemeHandler {
-        weak var owner: ChatWebView?
-
-        func userContentController(_ controller: WKUserContentController,
-                                   didReceive message: WKScriptMessage) async -> (Any?, String?) {
-            guard let owner, let body = message.body as? [String: Any], let name = body["name"] as? String else {
-                return (nil, "Not a command")
-            }
-            if name == "ready" {
-                owner.pageReady()
-                return (["status": 200, "body": "{}"], nil)
-            }
-            return (owner.command(name, body: body["body"] as? String ?? "{}"), nil)
-        }
-
-        func webView(_ webView: WKWebView, start task: any WKURLSchemeTask) {
-            guard let url = task.request.url, let found = owner?.serve(url) else {
-                task.didFailWithError(URLError(.fileDoesNotExist))
-                return
-            }
-            let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1",
-                                           headerFields: ["Content-Type": found.type])!
-            task.didReceive(response)
-            task.didReceive(found.data)
-            task.didFinish()
-        }
-
-        func webView(_ webView: WKWebView, stop task: any WKURLSchemeTask) {}
     }
 }

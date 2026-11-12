@@ -117,6 +117,23 @@ struct SbxCommandTests {
             #expect(script.hasPrefix(#"M='A B'\''C'; "#))
         }
 
+        @Test(arguments: [false, true])
+        func aSparedMarkerKeepsThoseProcessesOut(immediate: Bool) {
+            let match = "SANDSHELL_SESSION=\(UUID().uuidString)"
+            let script = SbxCommand.reapScript(match: match, immediate: immediate, sparing: SbxCommand.holdMarker)
+            #expect(script.hasPrefix("M=\(match); S=SANDSHELL_HOLD=1; "))
+            let spare = #"grep -qxF "$M" && ! { tr '\0' '\n' < "$d/environ"; } 2>/dev/null | grep -qxF "$S" && kill -"#
+            #expect(script.components(separatedBy: spare).count - 1 == (immediate ? 1 : 2),
+                    "every scan leaves what carries the marker")
+        }
+
+        @Test(arguments: [false, true])
+        func nothingSparedIsTheSameScript(immediate: Bool) {
+            let match = "SANDSHELL_LAUNCH=\(UUID().uuidString)"
+            #expect(SbxCommand.reapScript(match: match, immediate: immediate, sparing: nil)
+                    == SbxCommand.reapScript(match: match, immediate: immediate))
+        }
+
         @Test(.tags(.sbxCommandEdgeCase), arguments: [false, true])
         func signalPlaceholderNeverRewritesTheMatch(immediate: Bool) {
             let script = SbxCommand.reapScript(match: "SIGNAL=SIGHUP", immediate: immediate)
@@ -478,6 +495,43 @@ struct SbxCommandTests {
             #expect(chat.body == Expected.launchEcho + Expected.pathSetup + " " + program)
         }
 
+        // MARK: held (keeps running while Sandshell is away)
+
+        @Test(arguments: [AgentKind.claude, .codex])
+        func aHeldChatRunsUnderTheSupervisorWhereTheKitHasIt(agent: AgentKind) throws {
+            let entry = try #require(SbxCommand.kitEntryPoints[agent])
+            let plain = try #require(Fixture.chat(agent: agent, home: home))
+            let held = try #require(SbxCommand.acpArguments(agent: agent, containerName: Fixture.container,
+                                                            workdir: Fixture.workdir, home: home, hold: .on(attach: nil)))
+            let body = try Invocation(held).body
+            let before = try Invocation(plain).body
+            let expected = before.replacing("exec \(entry)",
+                with: "[ -x /opt/sandshell/bin/sandshell-hold ] && exec /opt/sandshell/bin/sandshell-hold -- \(entry); exec \(entry)")
+            #expect(body == expected, "the supervisor, else the agent as before (a sandbox built without it)")
+        }
+
+        @Test func aHeldChatTakesUpItsConversationsAgent() throws {
+            let held = try #require(SbxCommand.acpArguments(agent: .claude, containerName: Fixture.container,
+                                                            workdir: Fixture.workdir, home: home,
+                                                            hold: .on(attach: "it's-1")))
+            let body = try Invocation(held).body
+            #expect(body.contains(#"exec /opt/sandshell/bin/sandshell-hold --attach 'it'\''s-1' -- /opt/sandshell/bin/sandshell-claude-acp"#))
+        }
+
+        @Test func geminiIsNeverHeld() throws {
+            let held = SbxCommand.acpArguments(agent: .gemini, containerName: Fixture.container,
+                                               workdir: Fixture.workdir, home: home, hold: .on(attach: "x"))
+            #expect(held == Fixture.chat(agent: .gemini, home: home), "Gemini has no kit, so no supervisor")
+        }
+
+        @Test func theNotifyFolderIsInTheEnvironment() throws {
+            let args = try #require(SbxCommand.acpArguments(agent: .claude, containerName: Fixture.container,
+                                                            workdir: Fixture.workdir, home: home,
+                                                            notifyDir: "/ws/.sandshell/notify"))
+            let env = try Invocation(args).env
+            #expect(env.last == "SANDSHELL_NOTIFY_DIR=/ws/.sandshell/notify")
+        }
+
         @Test(.disabled(if: HostDefaults.inferenceGatewayConfigured, "the inference gateway brings its own auth"))
         func proxyAuthPrecedesTheClaudeAdapter() throws {
             let chat = try Fixture.parsedChat(agent: .claude, home: home, sbxProxyAuth: true)
@@ -668,7 +722,7 @@ extension SbxCommandTests {
 
     /// The in-sandbox shell text `SbxCommand` is expected to emit.
     fileprivate enum Expected {
-        static let pathSetup = #"P="$PATH"; [ -d "/home/agent/.cargo/bin" ] && P="/home/agent/.cargo/bin:$P"; [ -d "$HOME/bin" ] && P="$HOME/bin:$P"; [ -d "$HOME/.local/bin" ] && P="$HOME/.local/bin:$P"; export PATH="$P";"#
+        static let pathSetup = #"P="$PATH"; [ -d "/home/agent/.cargo/bin" ] && P="/home/agent/.cargo/bin:$P"; [ -d "$HOME/bin" ] && P="$HOME/bin:$P"; [ -d "$HOME/.local/bin" ] && P="$HOME/.local/bin:$P"; [ -d /opt/sandshell/tools ] && P="$P:/opt/sandshell/tools"; export PATH="$P";"#
 
         static let proxyAuth = #"F="$HOME/.claude/.credentials.json"; T=$(sed -n 's/.*"accessToken":"\([^"]*\)".*/\1/p' "$F" 2>/dev/null); if [ -n "$T" ]; then export CLAUDE_CODE_OAUTH_TOKEN="$T"; S=$(sed -n 's/.*"scopes":\[\([^]]*\)\].*/\1/p' "$F" 2>/dev/null | tr -d '"' | tr ',' ' '); export CLAUDE_CODE_OAUTH_SCOPES="${S:-user:inference user:profile user:sessions:claude_code user:mcp_servers user:file_upload}"; fi;"#
 

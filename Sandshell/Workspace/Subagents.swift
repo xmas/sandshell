@@ -139,10 +139,10 @@ enum SubagentScanner {
                 let id = UUID(uuidString: String(format: "00000000-0000-0000-0000-%012x", items.count))!
                 items.append(.user(id: id, text: text, attachments: []))
             case .text(let mid, let text):
-                if case .agentText(let id, let t)? = items.last, id == mid {
+                if case .agentText(let id, let t)? = items.last, ChatItem.id(id, isOfMessage: mid) {
                     items[items.count - 1] = .agentText(id: id, text: t + "\n\n" + text)
                 } else {
-                    items.append(.agentText(id: mid, text: text))
+                    items.append(.agentText(id: ChatItem.newID(forMessage: mid, thought: false, in: items), text: text))
                 }
             case .thought(let mid, let text): items.append(.thought(id: "\(mid)-\(items.count)", text: text))
             case .toolUse(let call):

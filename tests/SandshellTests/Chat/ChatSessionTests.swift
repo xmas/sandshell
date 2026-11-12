@@ -4,6 +4,27 @@ import Foundation
 import Testing
 @testable import Sandshell
 
+/// `ChatItem.newID` / `id(_:isOfMessage:)`: one message's items, each with its own id.
+struct ChatItemMessageIDTests {
+    @Test(arguments: [
+        ([], "m1"),
+        ([ChatItem.agentText(id: "m1", text: "a")], "m1~2"),
+        ([.agentText(id: "m1", text: "a"), .agentText(id: "m1~2", text: "b")], "m1~3"),
+        // A thought of the same message doesn't take a text's id.
+        ([.thought(id: "m1", text: "a")], "m1"),
+        // Nor does another message whose id starts the same.
+        ([.agentText(id: "m10", text: "a")], "m1"),
+    ])
+    func aNewTextGetsTheFirstFreeID(items: [ChatItem], expected: String) {
+        #expect(ChatItem.newID(forMessage: "m1", thought: false, in: items) == expected)
+    }
+
+    @Test(arguments: [("m1", true), ("m1~2", true), ("m1~12", true), ("m10", false), ("m1~", false), ("m1~x", false), ("m", false)])
+    func anIDIsItsMessagesOnlyWithANumberedSuffix(id: String, isOfM1: Bool) {
+        #expect(ChatItem.id(id, isOfMessage: "m1") == isOfM1)
+    }
+}
+
 /// `ChatSession`: folding the agent's `session/update`s into transcript items
 /// (on a chat that's never started), and what it says about credentials.
 @MainActor
@@ -51,6 +72,33 @@ struct ChatSessionTests {
         session.debugApply(Self.chunk(" more", messageID: "m1"))
         session.debugApply(Self.chunk("Two", messageID: "m2"))
         #expect(session.items == [.agentText(id: "m1", text: "One more"), .agentText(id: "m2", text: "Two")])
+    }
+
+    /// Claude's "I'll read A" → tool → "and B" in one API message: one
+    /// messageId, two items, each with its own id (a view keyed by id would
+    /// otherwise show only the second).
+    @Test(arguments: [false, true])
+    func oneMessageOnBothSidesOfAToolCallIsTwoItemsWithTheirOwnIDs(thought: Bool) {
+        session.debugApply(Self.chunk("I'll read A", thought: thought, messageID: "m1"))
+        session.debugApply(Self.toolCall("t1"))
+        session.debugApply(Self.chunk("and", thought: thought, messageID: "m1"))
+        session.debugApply(Self.chunk(" B", thought: thought, messageID: "m1"))
+        session.debugApply(Self.toolCall("t2"))
+        session.debugApply(Self.chunk("done", thought: thought, messageID: "m1"))
+        let make: (String, String) -> ChatItem = { thought ? .thought(id: $0, text: $1) : .agentText(id: $0, text: $1) }
+        #expect(session.items.filter { if case .tool = $0 { false } else { true } }
+                == [make("m1", "I'll read A"), make("m1~2", "and B"), make("m1~3", "done")])
+        #expect(Set(session.items.map(\.id)).count == session.items.count)
+    }
+
+    @Test func aTurnFollowedFromAnotherAppKeepsEachTextsOwnID() {
+        let read = ChatItem.ToolCall(id: "t1", title: "Read A", kind: "read", status: "pending", output: "", diffs: [])
+        session.applyExternal(.init(events: [.text(messageID: "m1", "I'll read A"), .toolUse(read),
+                                             .text(messageID: "m1", "and B"), .text(messageID: "m1", "and C")],
+                                    sawConversation: true))
+        let texts = session.items.compactMap { if case .agentText(let id, let t) = $0 { (id, t) } else { nil } }
+        #expect(texts.map(\.0) == ["ext-m1", "ext-m1~2"])
+        #expect(texts.map(\.1) == ["I'll read A", "and B\n\nand C"])
     }
 
     @Test(.tags(.edgeCase))
@@ -210,9 +258,10 @@ struct ChatSessionTests {
 }
 #endif
 
-/// The chat as the Remote Control web page, inside the app (`ChatWebView`).
+/// A chat's transcript: the Remote Control web page in its transcript-only
+/// mode (`ChatWebTranscript`).
 @MainActor
-struct ChatWebViewTests {
+struct ChatWebTranscriptTests {
     private let session = ChatSession(title: "Claude", containerName: "test-sandbox", workdir: "/nonexistent/work",
                                       home: "/nonexistent/home")
 
@@ -220,12 +269,11 @@ struct ChatWebViewTests {
         ["sessionUpdate": "agent_message_chunk", "content": ["type": "text", "text": .string(text)], "messageId": .string(messageID)]
     }
 
-    private func showing() async throws -> (ChatWebView, NSWindow) {
-        let web = ChatWebView(chat: session) { [session] in
-            RemoteWire.SessionSummary(id: session.ownSessionID, name: "Test", agent: "claude", agentName: "Claude",
-                                      folder: "~/w", phase: .init(session.phase), waiting: nil, isCheck: false)
-        }
-        let window = NSWindow(contentRect: NSRect(x: -6000, y: 0, width: 700, height: 600), styleMask: [.borderless],
+    private func showing(size: NSSize = NSSize(width: 700, height: 600)) async throws -> (ChatWebTranscript, NSWindow) {
+        // A started chat: one still starting (replaying its history) has its items held.
+        session.debugSetPhase(.ready)
+        let web = ChatWebTranscript(source: session)
+        let window = NSWindow(contentRect: NSRect(origin: NSPoint(x: -6000, y: 0), size: size), styleMask: [.borderless],
                               backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         web.frame = window.contentView!.bounds
@@ -237,10 +285,10 @@ struct ChatWebViewTests {
         return (web, window)
     }
 
-    private func transcript(_ web: ChatWebView, contains text: String) async throws -> Bool {
+    private func transcript(_ web: ChatWebTranscript, contains text: String) async throws -> Bool {
         let end = Date().addingTimeInterval(5)
         while Date() < end {
-            if (await web.debugTranscriptText())?.contains(text) == true { return true }
+            if await web.debugTranscriptText().contains(text) { return true }
             try await Task.sleep(for: .milliseconds(50))
         }
         return false
@@ -255,11 +303,254 @@ struct ChatWebViewTests {
         #expect(try await transcript(web, contains: "And then some more"), "A patch")
     }
 
-    @Test func commandsGoThroughTheSameRoutesAsAPhones() async throws {
+    /// The page's items: id and text (a thought's body, a tool's title).
+    private func pageItems(_ web: ChatWebTranscript) async throws -> [String] {
+        let js = """
+            [...document.querySelectorAll('#transcript > .item')].map(n => {
+              const c = n.cloneNode(true);
+              c.querySelectorAll('.actions, button').forEach(b => b.remove());
+              return n.dataset.id + '|' + (c.querySelector('.body') || c.querySelector('.title') || c).textContent.trim();
+            })
+            """
+        return try await web.webView.evaluateJavaScript(js) as? [String] ?? []
+    }
+
+    /// What the page should show: every item, in order, with its text.
+    private func expectedItems() -> [String] {
+        RemoteWire.items(session.items, session: session.ownSessionID).map { item in
+            let text = item.text ?? item.tool?.title ?? item.plan.map { "Plan" + $0.map(\.content).joined() } ?? ""
+            return item.id + "|" + text.trimmingCharacters(in: .whitespaces)
+        }
+    }
+
+    /// Waits for the page to settle on what the chat has.
+    private func settles(_ web: ChatWebTranscript) async throws -> (page: [String], chat: [String]) {
+        let end = Date().addingTimeInterval(5)
+        var page: [String] = []
+        while Date() < end {
+            page = try await pageItems(web)
+            if page == expectedItems() { break }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        return (page, expectedItems())
+    }
+
+    /// A Claude turn at streaming speed, many times over: thinking, text, a
+    /// tool and its updates, text after it in the same message, a plan. At
+    /// each pause the page must show exactly the chat's items and their text.
+    @Test(.timeLimit(.minutes(2)))
+    func aLongStreamedChatShowsEveryItemsText() async throws {
         let (web, window) = try await showing()
         defer { window.orderOut(nil); window.close() }
-        #expect(await web.debugRun("return await command('cancel', {})") == true)
-        #expect(await web.debugRun("return await command('mode', {mode: 'no-such-mode'})") == false, "Refused, as over HTTP")
+        var rng = SystemRandomNumberGenerator()
+        func pause() async throws { try await Task.sleep(for: .milliseconds(Int.random(in: 0...12, using: &rng))) }
+        func stream(_ words: String, mid: String, thought: Bool = false) async throws {
+            for word in words.split(separator: " ") {
+                session.debugApply(["sessionUpdate": .string(thought ? "agent_thought_chunk" : "agent_message_chunk"),
+                                    "content": ["type": "text", "text": .string(word + " ")], "messageId": .string(mid)])
+                try await pause()
+            }
+        }
+        for round in 0..<12 {
+            let mid = "msg_\(round)"
+            try await stream("Thinking about round \(round) and what to do next here", mid: mid, thought: true)
+            try await stream("Round \(round): I'll read the first file and then the second one", mid: mid)
+            let tool = "toolu_\(round)"
+            session.debugApply(["sessionUpdate": "tool_call", "toolCallId": .string(tool), "title": .string("Read file \(round)"),
+                                "kind": "read", "status": "pending"])
+            try await pause()
+            session.debugApply(["sessionUpdate": "tool_call_update", "toolCallId": .string(tool), "status": "in_progress"])
+            try await pause()
+            try await stream("and also round \(round) has a second look", mid: mid)
+            session.debugApply(["sessionUpdate": "tool_call_update", "toolCallId": .string(tool), "status": "completed",
+                                "content": [["type": "content", "content": ["type": "text", "text": "line one\nline two"]]]])
+            session.debugApply(["sessionUpdate": "plan", "entries": [["content": .string("Step \(round)"), "status": "in_progress"]]])
+            try await stream("Done with round \(round) and everything looks fine", mid: "msg_\(round)_end")
+            if round % 3 == 2 {
+                let (page, chat) = try await settles(web)
+                let missing = chat.filter { !page.contains($0) }, extra = page.filter { !chat.contains($0) }
+                if page != chat {
+                    Issue.record("Round \(round), \(page.count) on the page, \(chat.count) in the chat. Missing: \(missing). Extra: \(extra)")
+                }
+                if page != chat { return }
+            }
+        }
+    }
+
+    /// A page that missed a patch (or couldn't apply one) asks for the state
+    /// and shows the chat again, instead of staying wrong.
+    @Test func aPageThatLostItsPlaceCatchesUp() async throws {
+        session.debugApply(chunk("First reply", messageID: "m1"))
+        let (web, window) = try await showing()
+        defer { window.orderOut(nil); window.close() }
+        #expect(try await transcript(web, contains: "First reply"))
+        // As if a patch went missing: the page is at a revision the Mac isn't.
+        _ = try await web.webView.evaluateJavaScript("state.rev = -1; true")
+        session.debugApply(chunk("Second reply", messageID: "m2"))
+        let (page, chat) = try await settles(web)
+        #expect(page == chat)
+        // And one that throws while applying.
+        _ = try await web.webView.evaluateJavaScript("window.__render = renderItem; renderItem = () => { throw new Error('boom') }; true")
+        session.debugApply(chunk("Third reply", messageID: "m3"))
+        try await Task.sleep(for: .milliseconds(300))
+        _ = try await web.webView.evaluateJavaScript("renderItem = window.__render; true")
+        session.debugApply(chunk(" and more", messageID: "m3"))
+        let (after, now) = try await settles(web)
+        #expect(after == now)
+    }
+
+    /// A resume replaying its history: the page keeps what it shows and gets
+    /// the result once (as the native transcript does), not every step of it.
+    @Test func aReplayIsShownOnceItsDone() async throws {
+        session.debugApply(chunk("Before the replay", messageID: "m1"))
+        let (web, window) = try await showing()
+        defer { window.orderOut(nil); window.close() }
+        #expect(try await transcript(web, contains: "Before the replay"))
+        session.debugSetPhase(.starting)
+        session.debugApply(chunk("Replayed", messageID: "m2"))
+        try await Task.sleep(for: .milliseconds(400))
+        let held = try await pageItems(web)
+        #expect(held == ["text-m1|Before the replay"], "Held while starting")
+        session.debugSetPhase(.ready)
+        let (page, chat) = try await settles(web)
+        #expect(page == chat)
+    }
+
+    /// The page is the conversation alone: the window has the composer and cards.
+    @Test func itShowsTheTranscriptAlone() async throws {
+        let (web, window) = try await showing()
+        defer { window.orderOut(nil); window.close() }
+        #expect(await web.debugRun("""
+            return ['composer', 'cards'].every(id => getComputedStyle(document.getElementById(id)).display === 'none')
+              && getComputedStyle(document.querySelector('#chat-pane > .bar')).display === 'none'
+            """) == true)
+        // Chat commands aren't the transcript's to send.
+        #expect(await web.debugRun("return (await post('cancel', {})).status === 200") != true)
+    }
+
+    /// Copy, Fork and Undo reach the window; a file link opens the file.
+    @Test func itsButtonsReachTheWindow() async throws {
+        let (web, window) = try await showing()
+        defer { window.orderOut(nil); window.close() }
+        var forked: String?, undone: String?, opened: (URL, Int?)?
+        web.onFork = { forked = $0 }
+        web.onUndo = { undone = $0 }
+        web.onOpenFile = { opened = ($0, $1) }
+        web.pasteboard = NSPasteboard(name: NSPasteboard.Name("com.xmas.sandshell.test-\(UUID().uuidString)"))
+        defer { web.pasteboard.releaseGlobally() }
+        session.debugApply(chunk("The **answer**.", messageID: "m1"))
+        session.debugApply(["sessionUpdate": "session_info_update", "_meta": ["jetbrains": ["air": ["agentFileChangeReport": [
+            "status": "reported", "requestId": "turn-1", "paths": ["a.txt"]]]]]])
+        #expect(try await transcript(web, contains: "The answer."))
+        _ = await web.debugRun("document.querySelector('.item.text .act-copy').click(); return true")
+        #expect(await until { web.pasteboard.string(forType: .string) == "The **answer**." }, "Copy: the reply's Markdown")
+        _ = await web.debugRun("document.querySelector('.item.text .act-fork').click(); return true")
+        #expect(await until { forked == "The **answer**." })
+        if session.items.contains(where: { if case .fileChanges = $0 { true } else { false } }) {
+            _ = await web.debugRun("document.querySelector('.act-undo')?.click(); return true")
+            #expect(await until { undone == "turn-1" })
+        }
+        _ = await web.debugRun("return (await post('openFile', {path: '/tmp/x.swift', line: 7})).status === 200")
+        #expect(await until { opened?.0 == URL(filePath: "/tmp/x.swift") && opened?.1 == 7 })
+    }
+
+    /// Paths the Mac finds on disk become links; others don't.
+    @Test func fileLinksComeFromTheMac() async throws {
+        let dir = URL.temporaryDirectory.appending(path: "sandshell-links-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir.appending(path: "src"), withIntermediateDirectories: true)
+        try Data("x".utf8).write(to: dir.appending(path: "src/app.swift"))
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let (web, window) = try await showing()
+        defer { window.orderOut(nil); window.close() }
+        web.workdir = dir.path
+        session.debugApply(chunk("Look at src/app.swift:12 and src/nope.swift.", messageID: "m1"))
+        let found = await until(timeout: 5) {
+            await web.debugValue("return [...document.querySelectorAll('a.file')].map(a => a.textContent + '|' + a.dataset.line)") as? [String]
+                == ["src/app.swift|12"]
+        }
+        #expect(found)
+    }
+
+    /// Resizing the window while replies stream in, again and again: the page
+    /// ends up with every item, each with its text, and paints it.
+    @Test(.timeLimit(.minutes(2)))
+    func resizingWhileStreamingLosesNoText() async throws {
+        let (web, window) = try await showing()
+        defer { window.orderOut(nil); window.close() }
+        let sizes = [NSSize(width: 700, height: 600), NSSize(width: 360, height: 300), NSSize(width: 1400, height: 900),
+                     NSSize(width: 520, height: 1200)]
+        for round in 0..<6 {
+            for (n, word) in "Round \(round) streams in word by word while the window keeps changing size".split(separator: " ").enumerated() {
+                session.debugApply(chunk(String(word) + " ", messageID: "r\(round)"))
+                window.setContentSize(sizes[(round + n) % sizes.count])
+                try await Task.sleep(for: .milliseconds(Int.random(in: 0...15)))
+            }
+            session.debugApply(["sessionUpdate": "tool_call", "toolCallId": .string("t\(round)"), "title": .string("Read file \(round)"),
+                                "kind": "read", "status": "completed"])
+        }
+        window.setContentSize(NSSize(width: 700, height: 600))
+        let (page, chat) = try await settles(web)
+        #expect(page == chat)
+        // And painted: the end of the conversation, on screen, isn't blank.
+        _ = await web.debugRun("document.getElementById('transcript').scrollTop = 1e9; return true")
+        try await Task.sleep(for: .milliseconds(200))
+        let shot = try await web.webView.takeSnapshot(configuration: nil)
+        let rep = try #require(shot.tiffRepresentation.flatMap(NSBitmapImageRep.init(data:)))
+        var inked = 0
+        for y in stride(from: 0, to: rep.pixelsHigh, by: 3) {
+            for x in stride(from: 0, to: rep.pixelsWide, by: 3) {
+                if let c = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB), c.alphaComponent > 0.5,
+                   abs(c.brightnessComponent - 0.5) > 0.2 { inked += 1 }
+            }
+        }
+        #expect(inked > 50, "text painted on screen (\(inked) inked samples)")
+    }
+
+    private func until(timeout: TimeInterval = 3, _ condition: () async -> Bool) async -> Bool {
+        let end = Date().addingTimeInterval(timeout)
+        while Date() < end {
+            if await condition() { return true }
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        return await condition()
+    }
+}
+
+/// `FileLinks`: what in a chat's text names a file on this Mac.
+struct FileLinksTests {
+    private let files: Set<String> = ["/w/src/app.swift", "/w/My Folder/Read Me.txt", "/usr/bin/git", "/w/docs/notes.md"]
+
+    private func find(_ text: String, code: [String] = []) -> [FileLinks.Link] {
+        FileLinks.find(in: text, code: code, workdir: "/w") { files.contains($0) }
+    }
+
+    @Test func relativeAndAbsolutePathsThatExist() {
+        let links = find("See src/app.swift:12, /usr/bin/git and src/missing.swift.")
+        #expect(links == [FileLinks.Link(text: "src/app.swift", path: "/w/src/app.swift", line: 12),
+                          FileLinks.Link(text: "/usr/bin/git", path: "/usr/bin/git", line: nil)])
+    }
+
+    @Test func urlsArentFiles() {
+        #expect(find("https://example.com/docs/notes.md").isEmpty)
+    }
+
+    @Test(arguments: [
+        ("In `My Folder/Read Me.txt:3` it says", ["My Folder/Read Me.txt:3"], "My Folder/Read Me.txt", 3),
+        ("Quoted \"My Folder/Read Me.txt\" too", [], "My Folder/Read Me.txt", nil),
+        ("Bare /w/My Folder/Read Me.txt, done", [], "/w/My Folder/Read Me.txt", nil),
+        ("Escaped My\\ Folder/Read\\ Me.txt here", [], "My\\ Folder/Read\\ Me.txt", nil),
+    ] as [(String, [String], String, Int?)])
+    func pathsWithSpaces(text: String, code: [String], link: String, line: Int?) {
+        let found = find(text, code: code)
+        #expect(found.contains { $0.text == link && $0.path == "/w/My Folder/Read Me.txt" && $0.line == line }, "\(found)")
+    }
+
+    @Test func eachPathOnce() {
+        #expect(find("docs/notes.md and docs/notes.md again").count == 1)
+    }
+
+    @Test func noFolderNoLinks() {
+        #expect(FileLinks.find(in: "src/app.swift", workdir: "") { _ in true }.isEmpty)
     }
 }
 

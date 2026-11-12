@@ -6,6 +6,7 @@ import SwiftUI
 struct RemoteControlSettingsSection: View {
     @ObservedObject var hub: RemoteHub
     @ObservedObject var devices: RemoteDevices
+    @State private var keepAwake = KeepAwake.isEnabledForRemote
 
     var body: some View {
         Section {
@@ -29,6 +30,14 @@ struct RemoteControlSettingsSection: View {
                         Button("Manage…") { RemoteDevicesWindowController.shared.show() }
                     }
                 }
+                Toggle(isOn: $keepAwake) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Keep this Mac awake for Remote Control")
+                        Text("While it’s on its power adapter, so your devices can reach it.")
+                            .font(.role(.meta)).foregroundStyle(.secondary)
+                    }
+                }
+                .onChange(of: keepAwake) { _, on in KeepAwake.isEnabledForRemote = on }
             }
         } header: {
             Text("Remote Control — all folders")

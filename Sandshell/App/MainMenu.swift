@@ -184,8 +184,6 @@ enum MainMenu {
         let chatActual = viewMenu.addItem(withTitle: "Chat Actual Size", action: #selector(AppDelegate.makeChatTextActualSize(_:)),
                                           keyEquivalent: "0")
         for item in [chatBiggerShown, chatBigger, chatSmaller, chatActual] { item.keyEquivalentModifierMask = [.command, .option] }
-        // The chat as the Remote Control web page (chats opened from now on).
-        viewMenu.addItem(withTitle: "Chat in Web View", action: #selector(AppDelegate.toggleChatWebView(_:)), keyEquivalent: "")
         viewMenu.addItem(.separator())
         // The window's Files sidebar (validation names it Show / Hide Files).
         let showFiles = viewMenu.addItem(withTitle: "Show Files", action: #selector(AppDelegate.toggleFiles(_:)),

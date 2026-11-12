@@ -216,7 +216,38 @@ final class WorkspaceController: ObservableObject {
         guard statusFeedCancellable == nil else { return }
         statusFeedCancellable = Timer.publish(every: 1, on: .main, in: .common)
             .autoconnect()
-            .sink { [weak self] _ in self?.pollStatusFeed() }
+            .sink { [weak self] _ in
+                self?.pollStatusFeed()
+                self?.pollAgentNotes()
+            }
+    }
+
+    // MARK: Agents' notes (`sandshell-notify`)
+
+    /// The sidebar session whose processes say they're `id` (a chat that
+    /// started on a warm spare carries the spare's): set by the window.
+    var sessionForProcess: (UUID) -> UUID? = { _ in nil }
+    private var agentNotesMTime: Date?
+
+    private func pollAgentNotes() {
+        let dir = AgentNotes.directory(root: workspace.rootURL)
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: dir.path),
+              let mtime = attrs[.modificationDate] as? Date, mtime != agentNotesMTime else { return }
+        agentNotesMTime = mtime
+        for note in AgentNotes.take(from: dir) { deliver(note) }
+    }
+
+    /// Show an agent's note: a notification (even with the session in view:
+    /// the agent asked to be heard), and to the Remote Control devices that
+    /// can see the session.
+    func deliver(_ note: AgentNote) {
+        let id = note.processSession.flatMap { session(id: $0) != nil ? $0 : sessionForProcess($0) }
+        let session = id.flatMap { self.session(id: $0) }
+        let name = session.map { displayName(of: $0) }
+        Log.info(.workspace, "agent note from \(name ?? "an unknown session"): \(note.title ?? "") \(note.message.prefix(80))")
+        NotificationManager.shared.sendAgentNote(sessionID: id, agentName: session?.agent.displayName ?? "Agent",
+                                                 sessionName: name, title: note.title, message: note.message)
+        if let id { RemoteHub.shared.alert(session: id, title: note.title ?? name ?? "Agent", message: note.message) }
     }
 
     private func pollStatusFeed() {

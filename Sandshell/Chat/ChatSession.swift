@@ -13,9 +13,6 @@ enum ChatItem: Identifiable, Equatable {
     case notice(id: UUID, text: String, isError: Bool)
     /// An image the agent sent as message content.
     case image(id: UUID, data: Data)
-    /// Display only (the transcript view makes these): a run of consecutive
-    /// tool calls, shown as one "Ran 3 commands ›" line.
-    case toolGroup([ToolCall])
     /// The files a turn changed (Claude's checkpoints), with Undo; `restored`
     /// once they've been put back.
     case fileChanges(turn: String, paths: [String], restored: Bool)
@@ -29,9 +26,28 @@ enum ChatItem: Identifiable, Equatable {
         case .plan(let id, _): "plan-\(id)"
         case .notice(let id, _, _): "notice-\(id)"
         case .image(let id, _): "image-\(id)"
-        case .toolGroup(let calls): "group-\(calls.first?.id ?? "")"
         case .fileChanges(let turn, _, _): "changes-\(turn)"
         }
+    }
+
+    /// The id for a new text (or thought) of message `message`: the message's
+    /// id, or `<id>~2`, `<id>~3`… when an earlier one already has it — Claude's
+    /// text before and after a tool call in one API message carries one id,
+    /// and each item needs its own (a view keyed by id shows only one of them).
+    static func newID(forMessage message: String, thought: Bool, in items: [ChatItem]) -> String {
+        func itemID(_ id: String) -> String { thought ? "thought-\(id)" : "text-\(id)" }
+        let taken = Set(items.lazy.map(\.id).filter { $0.hasPrefix(itemID(message)) })
+        guard taken.contains(itemID(message)) else { return message }
+        var n = 2
+        while taken.contains(itemID("\(message)~\(n)")) { n += 1 }
+        return "\(message)~\(n)"
+    }
+
+    /// Whether `id` is message `message`'s (its own id, or one `newID` made from it).
+    static func id(_ id: String, isOfMessage message: String) -> Bool {
+        guard id.hasPrefix(message) else { return false }
+        let rest = id.dropFirst(message.count)
+        return rest.isEmpty || (rest.first == "~" && rest.count > 1 && rest.dropFirst().allSatisfy { $0.isASCII && $0.isNumber })
     }
 
     struct ToolCall: Equatable {
@@ -82,7 +98,7 @@ struct ChatAttachment: Equatable {
 
 /// A native chat session driving one ACP agent process in a sandbox.
 @MainActor
-final class ChatSession: ObservableObject {
+final class ChatSession: ObservableObject, ChatFeedSource {
     enum Phase: Equatable { case starting, ready, running, closed(String) }
 
     struct Usage: Equatable { var used: Int; var size: Int; var cost: Double? }
@@ -167,6 +183,21 @@ final class ChatSession: ObservableObject {
     /// Restarting the agent so it sees turns another app added (`.starting` meanwhile).
     @Published private(set) var isCatchingUp = false
 
+    /// The items are being replaced wholesale — a resume replaying the
+    /// history, a reload catching up — with `items` (the latest, which a
+    /// `$items` subscriber gets before it's stored). Whatever shows the chat
+    /// keeps what it showed and draws the result once the chat's started,
+    /// instead of the transcript vanishing and filling back up.
+    func isReplaying(_ items: [ChatItem]) -> Bool {
+        if isCatchingUp { return true }
+        if case .starting = phase, !items.isEmpty { return true }
+        return false
+    }
+    var isReplaying: Bool { isReplaying(items) }
+
+    /// This chat for pages (its transcript, Remote Control's devices).
+    private(set) lazy var feed = ChatFeed(self)
+
     /// The agent's conversation id (the Claude session UUID) once known —
     /// persisted as the sidebar session's `transcriptID`.
     var onSessionID: ((String) -> Void)?
@@ -203,6 +234,9 @@ final class ChatSession: ObservableObject {
     private var tag: SbxCommand.ProcessTag
     /// The session's own id (`tag` is a warm spare's once one is claimed).
     let ownSessionID: UUID
+    /// The session its processes say they're for (`SANDSHELL_SESSION`): a
+    /// claimed warm spare's, which isn't `ownSessionID`.
+    var processSessionID: UUID { tag.session }
     /// A message came back unsent (its text is in `ComposerDrafts`).
     var onUnsent: (() -> Void)?
     /// A fresh launch tag for a relaunch, so a reap of the last launch can't reach it.
@@ -224,6 +258,33 @@ final class ChatSession: ObservableObject {
     /// Run this instead of the agent in a sandbox (DEBUG: the fake ACP agent
     /// Remote Control's checks drive). Nothing is warmed or reaped for it.
     var launchOverride: (executable: String, arguments: [String])?
+
+    /// Chats' agents keep running while Sandshell is away (quit, a window
+    /// closed, a crash): a turn in progress finishes, and the next launch
+    /// takes the chat up where it is (`sandshell-hold` in Sandshell's kits).
+    /// Settings ▸ General; on unless turned off.
+    static var keepsRunning: Bool {
+        UserDefaults.standard.object(forKey: keepsRunningKey) as? Bool ?? true
+    }
+    static let keepsRunningKey = "keepChatsRunning"
+
+    /// Where `sandshell-notify` in the sandbox leaves notifications for this
+    /// workspace (as the sandbox sees it); set before `start`.
+    var notifyDir: String?
+
+    /// How this chat's agent runs (held, reattaching to this conversation's).
+    private var hold: SbxCommand.Hold {
+        guard launchOverride == nil, Self.keepsRunning, SbxCommand.kitEntryPoints[agent] != nil else { return .off }
+        return .on(attach: resumeID)
+    }
+    /// The agent runs under the kit's supervisor (it said so): leaving it
+    /// running is up to `detach`.
+    private(set) var isHeld = false
+    /// This launch took up an agent an earlier one left running.
+    private(set) var reattached = false
+    /// That agent was in a turn when this launch took it up, and still is:
+    /// the turn isn't this launch's (`_sandshell/turnEnded` ends it).
+    private var heldTurn = false
 
     /// `close()` ran: nothing may start the agent again (a pending catch-up).
     private var isClosed = false
@@ -288,7 +349,8 @@ final class ChatSession: ObservableObject {
         guard let args = launchOverride?.arguments
                 ?? SbxCommand.acpArguments(agent: agent, containerName: containerName, workdir: workdir,
                                            home: home, sbxProxyAuth: sbxProxyAuth, tag: tag,
-                                           claudeModel: agent == .claude ? launchModel : nil)
+                                           claudeModel: agent == .claude ? launchModel : nil, hold: hold,
+                                           notifyDir: notifyDir)
         else {
             phase = .closed("\(title) can’t run as a chat (no ACP support).")
             return
@@ -312,6 +374,7 @@ final class ChatSession: ObservableObject {
         let auth = agent == .claude ? (sbxProxyAuth ? "sbx proxy" : "~/.claude credentials") : "sbx proxy"
         Log.info(.sbx, "chat: launched \(agent.rawValue) ACP agent in “\(containerName)” at \(workdir) (auth: \(auth))")
         let launchedAt = Date.now
+        isHeld = false; reattached = false; heldTurn = false
         // An agent that never answers (its sandbox restarted under it, say)
         // would leave the chat "Starting…" forever: give up on it, so the
         // pane offers Reconnect.
@@ -353,7 +416,7 @@ final class ChatSession: ObservableObject {
                 applyModes(result["modes"])
                 // New conversations start in Auto where the agent offers it;
                 // a resumed one keeps the mode it was in.
-                if sessionID != resumeID, modes.contains(where: { $0.id == "auto" }),
+                if !reattached, sessionID != resumeID, modes.contains(where: { $0.id == "auto" }),
                    currentMode != "auto", let sid = sessionID {
                     do {
                         _ = try await conn.request("session/set_mode", ["sessionId": .string(sid), "modeId": "auto"])
@@ -364,9 +427,10 @@ final class ChatSession: ObservableObject {
                 }
                 applyModels(result["models"])
                 applyConfig(result["configOptions"])
-                await applyRememberedCodexModel()
+                // An agent taken up as it was keeps its model and effort.
+                if !reattached { await applyRememberedCodexModel() }
                 // The workspace's effort, like a terminal's `--effort` (Claude).
-                if agent == .claude, let effort = launchEffort, let sid = sessionID {
+                if !reattached, agent == .claude, let effort = launchEffort, let sid = sessionID {
                     do {
                         let r = try await conn.request("session/set_config_option", [
                             "sessionId": .string(sid), "configId": "effort", "value": .string(effort)])
@@ -387,10 +451,12 @@ final class ChatSession: ObservableObject {
                 startedWarm = spare != nil
                 Log.info(.sbx, String(format: "chat: %@ ready %.1fs after launch%@", agent.rawValue,
                                       Date.now.timeIntervalSince(launchedAt), spare != nil ? " (warm)" : ""))
-                phase = .ready
+                if reattached { Log.info(.sbx, "chat: took up \(agent.rawValue) agent left running\(heldTurn ? ", mid-turn" : "")") }
+                // Its turn ending sends what's queued (`phase`).
+                phase = heldTurn ? .running : .ready
                 warmSpare()
                 startFollowing()
-                if let (text, attachments) = queue.takeAll() {
+                if !heldTurn, let (text, attachments) = queue.takeAll() {
                     send(text: text, attachments: attachments)
                 }
             } catch {
@@ -553,13 +619,31 @@ final class ChatSession: ObservableObject {
     private func warmSpare() {
         guard launchOverride == nil else { return }
         let spareTag = SbxCommand.ProcessTag(session: UUID())
+        // Held like a new chat's (no conversation to attach to), so it claims it.
+        let spareHold: SbxCommand.Hold = hold == .off ? .off : .on(attach: nil)
         guard !isClosed, let args = SbxCommand.acpArguments(
             agent: agent, containerName: containerName, workdir: workdir, home: home,
-            sbxProxyAuth: sbxProxyAuth, tag: spareTag, claudeModel: agent == .claude ? launchModel : nil) else { return }
+            sbxProxyAuth: sbxProxyAuth, tag: spareTag, claudeModel: agent == .claude ? launchModel : nil,
+            hold: spareHold, notifyDir: notifyDir) else { return }
         ACPSparePool.shared.warm(args, tag: spareTag, container: containerName)
     }
 
-    func close() {
+    /// Let go of the chat but leave its agent running, if it's held (quitting,
+    /// the window closing): a turn in progress finishes in the sandbox, and
+    /// the next launch takes it up. Otherwise the same as `close`. True when
+    /// it left a turn running.
+    @discardableResult
+    func detach() -> Bool {
+        guard isHeld, connection != nil else { close(); return false }
+        let running = phase == .running
+        Log.info(.sbx, "chat: leaving \(agent.rawValue) agent for \(sessionID ?? "?") running\(running ? " mid-turn" : "")")
+        shutDown(reap: false)
+        return running
+    }
+
+    func close() { shutDown(reap: true) }
+
+    private func shutDown(reap: Bool) {
         isClosed = true
         SbxClient.launchSettled(ownSessionID)
         // Nothing it does from here on is news to anyone (a send or a start
@@ -573,7 +657,7 @@ final class ChatSession: ObservableObject {
         connection?.terminate()
         connection = nil
         // The adapter exits on stdin EOF; reap anyway (its claude child, tools).
-        if wasRunning, launchOverride == nil { SbxClient.reapSessionProcesses(container: containerName, match: tag.pairs[1]) }
+        if reap, wasRunning, launchOverride == nil { SbxClient.reapSessionProcesses(container: containerName, match: tag.pairs[1]) }
     }
 
     // MARK: User actions
@@ -1318,11 +1402,11 @@ final class ChatSession: ObservableObject {
                 items.append(.user(id: UUID(), text: text, attachments: []))
                 lastExternalPrompt = text
             case .text(let mid, let text):
-                let id = "ext-" + mid
-                if case .agentText(id, let t)? = items.last {
+                let message = "ext-" + mid
+                if case .agentText(let id, let t)? = items.last, ChatItem.id(id, isOfMessage: message) {
                     items[items.count - 1] = .agentText(id: id, text: t + "\n\n" + text)
                 } else {
-                    items.append(.agentText(id: id, text: text))
+                    items.append(.agentText(id: ChatItem.newID(forMessage: message, thought: false, in: items), text: text))
                 }
             case .thought(let mid, let text):
                 items.append(.thought(id: "ext-\(mid)-\(items.count)", text: text))
@@ -1398,6 +1482,23 @@ final class ChatSession: ObservableObject {
         switch event {
         case .notification("session/update", let params):
             if let update = params["update"] { apply(update) }
+        case .notification("_sandshell/hold", let params):
+            // From the kit's supervisor: reap it by the tag it was launched
+            // with (this launch's when it started it).
+            isHeld = true
+            if let launch = params["launch"]?.string.flatMap(UUID.init(uuidString:)) { tag.launch = launch }
+            reattached = params["reattached"]?.bool == true
+            heldTurn = reattached && params["running"]?.bool == true
+        case .notification("_sandshell/turnEnded", let params):
+            // The turn an earlier launch left running ended.
+            guard heldTurn else { return }
+            heldTurn = false
+            if let error = params["error"]?.string {
+                notice(error, isError: true)
+            } else if let reason = params["stopReason"]?.string, reason != "end_turn" {
+                notice("Stopped: \(reason)", isError: false)
+            }
+            if case .running = phase { phase = .ready }
         case .notification("_claude/sdkMessage", let params):
             guard params["sessionId"]?.string == sessionID, phase == .ready,
                   let suggestion = Self.promptSuggestion(inSDKMessage: params) else { return }
@@ -1548,7 +1649,7 @@ final class ChatSession: ObservableObject {
         guard let text = u["content"]?["text"]?.string else { return }
         let mid = u["messageId"]?.string
         // Without a messageId, chunks continue the trailing id-less item; each new one gets its own id.
-        func continues(_ id: String) -> Bool { mid.map { $0 == id } ?? id.hasPrefix("local-") }
+        func continues(_ id: String) -> Bool { mid.map { ChatItem.id(id, isOfMessage: $0) } ?? id.hasPrefix("local-") }
         if let last = items.last {
             switch (last, thought) {
             case (.agentText(let id, let t), false) where continues(id):
@@ -1558,7 +1659,7 @@ final class ChatSession: ObservableObject {
             default: break
             }
         }
-        let id = mid ?? "local-\(UUID().uuidString)"
+        let id = mid.map { ChatItem.newID(forMessage: $0, thought: thought, in: items) } ?? "local-\(UUID().uuidString)"
         items.append(thought ? .thought(id: id, text: text) : .agentText(id: id, text: text))
     }
 
@@ -1641,7 +1742,6 @@ extension ChatSession {
             case .agentText(_, let text): out += ["## \(agent.displayName)", "", text]
             case .thought: continue
             case .tool(let call): out += ["> 🔧 \(call.title)\(call.status == "failed" ? " (failed)" : "")"]
-            case .toolGroup(let calls): out += calls.map { "> 🔧 \($0.title)" }
             case .plan(_, let entries):
                 out += ["**Plan**", ""] + entries.map { "- [\($0.status == "completed" ? "x" : " ")] \($0.content)" }
             case .notice(_, let text, let isError): out += ["_\(isError ? "⚠️ " : "")\(text)_"]
@@ -1655,3 +1755,10 @@ extension ChatSession {
     }
 }
 
+// MARK: - For pages (`ChatFeed`)
+
+extension ChatSession {
+    var feedID: UUID { ownSessionID }
+    var feedStatus: RemoteWire.Status { RemoteWire.Status(self) }
+    var willChange: ObservableObjectPublisher { objectWillChange }
+}

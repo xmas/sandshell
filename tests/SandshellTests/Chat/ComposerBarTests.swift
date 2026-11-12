@@ -112,10 +112,11 @@ struct ComposerBarTests {
             session.sendWhenReady(text: "A long queued message " + String(repeating: "that goes on ", count: 40), attachments: [])
         }
         let view = ChatSessionView(session: session)
-        view.debugTranscript.debugApplyNow([
-            .user(id: UUID(), text: "A question with a_very_long_unbreakable_identifier_in_it_that_goes_on_and_on", attachments: []),
-            .agentText(id: "a", text: "An answer.\n\n```\nlet code = \"a long line of code that would like to be wide\"\n```"),
-        ])
+        // Long unbreakable text in the transcript doesn't widen it.
+        session.debugApply(["sessionUpdate": "user_message_chunk",
+                            "content": ["type": "text", "text": "A question with a_very_long_unbreakable_identifier_in_it_that_goes_on_and_on"]])
+        session.debugApply(["sessionUpdate": "agent_message_chunk", "messageId": "a",
+                            "content": ["type": "text", "text": "An answer.\n\n```\nlet code = \"a long line of code that would like to be wide\"\n```"]])
         // Held to the width only as firmly as a split view holds its panes.
         let pane = NSView(frame: NSRect(x: 0, y: 0, width: width, height: 600))
         view.translatesAutoresizingMaskIntoConstraints = false
@@ -134,8 +135,8 @@ struct ComposerBarTests {
         #expect(bar.minX >= 0 && bar.maxX <= width, "the controls stay inside (\(bar))")
         #expect(view.debugComposer.frame.maxX <= width)
         let composer = view.debugComposer.frame.width
-        if width > ChatTranscriptView.readableWidth + 32 {
-            #expect(composer == ChatTranscriptView.readableWidth, "the readable width, less its margins (\(composer))")
+        if width > ChatWebTranscript.readableWidth + 32 {
+            #expect(composer == ChatWebTranscript.readableWidth, "the readable width, less its margins (\(composer))")
         }
         if queued {
             #expect(!view.debugQueuedView.isHidden)

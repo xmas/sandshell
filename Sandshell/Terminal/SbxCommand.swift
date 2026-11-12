@@ -42,9 +42,13 @@ enum SbxCommand {
 
     /// In-container PATH setup, run ahead of the target program. Mirrors
     /// `sbx.rs::sandbox_path_setup_body`.
+    /// Last on it: the commands Sandshell's kits give agents (`sandshell-notify`).
     private static var pathSetup: String {
-        #"P="$PATH"; [ -d "\#(cargoBin)" ] && P="\#(cargoBin):$P"; [ -d "$HOME/bin" ] && P="$HOME/bin:$P"; [ -d "$HOME/.local/bin" ] && P="$HOME/.local/bin:$P"; export PATH="$P";"#
+        #"P="$PATH"; [ -d "\#(cargoBin)" ] && P="\#(cargoBin):$P"; [ -d "$HOME/bin" ] && P="$HOME/bin:$P"; [ -d "$HOME/.local/bin" ] && P="$HOME/.local/bin:$P"; [ -d \#(kitTools) ] && P="$P:\#(kitTools)"; export PATH="$P";"#
     }
+
+    /// Where Sandshell's kits put the commands agents run (nothing else there).
+    static let kitTools = "/opt/sandshell/tools"
 
     /// Claude auth via sbx's credential proxy. The sandbox's own
     /// `$HOME/.claude/.credentials.json` holds a placeholder token that sbx's
@@ -75,9 +79,20 @@ enum SbxCommand {
     /// outlive the host-side `sbx exec` (quit, crash, restart).
     struct ProcessTag {
         let session: UUID
-        let launch = UUID()
+        /// A held chat's agent keeps the tag of the launch that started it: a
+        /// launch that reattaches takes that one (`ChatSession`).
+        var launch = UUID()
         var pairs: [String] { ["SANDSHELL_SESSION=\(session.uuidString)", "SANDSHELL_LAUNCH=\(launch.uuidString)"] }
     }
+
+    /// In the environment of a held chat's agent and its supervisor
+    /// (`sandshell-hold` in Sandshell's kits): a reap of a session's leftovers
+    /// before it launches spares them, so the launch can reattach.
+    static let holdMarker = "SANDSHELL_HOLD=1"
+
+    /// Where Sandshell's kits put the supervisor that keeps a chat's agent
+    /// running while Sandshell is away.
+    static let holdEntryPoint = "/opt/sandshell/bin/sandshell-hold"
 
     /// `sh -c` body run via `sbx exec <container>` that TERMs, then KILLs, every
     /// process whose environment carries `match` (e.g. `SANDSHELL_LAUNCH=<uuid>`).
@@ -85,18 +100,24 @@ enum SbxCommand {
     /// out (a chat reloading a conversation another app is writing to).
     /// The graceful reap waits for stragglers only when its TERM reached
     /// something: most launches find nothing, and shouldn't wait a second for it.
-    static func reapScript(match: String, immediate: Bool = false) -> String {
+    /// `sparing`: leave processes whose environment also carries this (`holdMarker`).
+    static func reapScript(match: String, immediate: Bool = false, sparing: String? = nil) -> String {
+        let spare = sparing == nil ? "" : #" && ! { tr '\0' '\n' < "$d/environ"; } 2>/dev/null | grep -qxF "$S""#
         func scan(_ signal: String, then: String = "") -> String {
-            #"for d in /proc/[0-9]*; do { tr '\0' '\n' < "$d/environ"; } 2>/dev/null | grep -qxF "$M" && kill -\#(signal) "${d#/proc/}" 2>/dev/null\#(then); done"#
+            #"for d in /proc/[0-9]*; do { tr '\0' '\n' < "$d/environ"; } 2>/dev/null | grep -qxF "$M"\#(spare) && kill -\#(signal) "${d#/proc/}" 2>/dev/null\#(then); done"#
         }
-        if immediate { return "M=\(shellQuote(match)); " + scan("KILL") + "; true" }
-        return "M=\(shellQuote(match)); f=; " + scan("TERM", then: " && f=1")
+        let vars = "M=\(shellQuote(match)); " + (sparing.map { "S=\(shellQuote($0)); " } ?? "")
+        if immediate { return vars + scan("KILL") + "; true" }
+        return vars + "f=; " + scan("TERM", then: " && f=1")
             + #"; [ -z "$f" ] || { sleep 1; "# + scan("KILL") + "; }; true"
     }
 
     /// Env pairs passed through `sbx exec ... env K=V ...`. Mirrors
     /// `sbx.rs::sandbox_shell_env`.
-    private static func envPairs(home: String, claude: ClaudeOptions?, tag: ProcessTag? = nil) -> [String] {
+    /// `notifyDir`: where `sandshell-notify` leaves notifications (the
+    /// workspace's `.sandshell/notify`, as the sandbox sees it).
+    private static func envPairs(home: String, claude: ClaudeOptions?, tag: ProcessTag? = nil,
+                                 notifyDir: String? = nil) -> [String] {
         // NOTE: we deliberately do NOT override HOME. The container's agents are
         // installed under its own home (/home/agent/.local/bin); forcing HOME to
         // the macOS host home made claude look for its install at
@@ -129,6 +150,7 @@ enum SbxCommand {
             pairs += ["SANDSHELL_STATUS_DIR=\(dir)", "SANDSHELL_SESSION_ID=\(sid)"]
         }
         if let tag { pairs += tag.pairs }
+        if let notifyDir { pairs.append("SANDSHELL_NOTIFY_DIR=\(notifyDir)") }
         return pairs
     }
 
@@ -171,11 +193,12 @@ enum SbxCommand {
                               home: String,
                               resumeID: String? = nil,
                               claude: ClaudeOptions? = nil,
-                              tag: ProcessTag? = nil) -> String {
+                              tag: ProcessTag? = nil,
+                              notifyDir: String? = nil) -> String {
         // `exec` so the sbx process replaces the shell, keeping signal semantics.
         return "#!/bin/sh\nexec " + launchCommand(
             containerName: containerName, workdir: workdir, agent: agent,
-            sbxPath: sbxPath, home: home, resumeID: resumeID, claude: claude, tag: tag) + "\n"
+            sbxPath: sbxPath, home: home, resumeID: resumeID, claude: claude, tag: tag, notifyDir: notifyDir) + "\n"
     }
 
     /// The `sbx exec …` one-liner the session launches with — also shown in the
@@ -187,7 +210,8 @@ enum SbxCommand {
                               home: String,
                               resumeID: String? = nil,
                               claude: ClaudeOptions? = nil,
-                              tag: ProcessTag? = nil) -> String {
+                              tag: ProcessTag? = nil,
+                              notifyDir: String? = nil) -> String {
         // program(...) already returns a properly-quoted command line (incl. any
         // `--resume <id>`), so it's not re-quoted here.
         let auth = agent == .claude && useProxyAuth(claude?.sbxProxyAuth ?? false) ? " \(proxyAuthSetup)" : ""
@@ -196,7 +220,7 @@ enum SbxCommand {
         if !workdir.isEmpty { parts += ["-w", shellQuote(workdir)] }
         parts.append(shellQuote(containerName))
         parts += ["env", "-u", "MCP_GATEWAY_URL"]
-        parts += envPairs(home: home, claude: claude, tag: tag).map(shellQuote)
+        parts += envPairs(home: home, claude: claude, tag: tag, notifyDir: notifyDir).map(shellQuote)
         parts += ["bash", "-c", shellQuote(bashc)]
         return parts.joined(separator: " ")
     }
@@ -221,22 +245,37 @@ enum SbxCommand {
     /// The bundled copy of Sandshell's kits (`kits/` in the repo).
     static var bundledKits: URL? { Bundle.main.url(forResource: "kits", withExtension: nil) }
 
+    /// How a chat's agent runs: under the kit's supervisor, which keeps it
+    /// running while Sandshell is away (and reattaches to the one for
+    /// `attach`, the conversation, if it's still running), or on its own.
+    enum Hold: Equatable {
+        case off
+        case on(attach: String?)
+    }
+
     /// Run a Sandshell kit's entry point, or say the sandbox lacks the kit.
-    private static func kitLaunch(_ agent: AgentKind) -> String {
+    /// Held, through `sandshell-hold` where the sandbox's kit has it (one
+    /// built before it runs the agent as before).
+    private static func kitLaunch(_ agent: AgentKind, hold: Hold = .off) -> String {
         let entry = kitEntryPoints[agent]!
+        var run = "exec \(entry)"
+        if case .on(let attach) = hold {
+            let id = attach.map { "--attach \(shellQuote($0)) " } ?? ""
+            run = "[ -x \(holdEntryPoint) ] && exec \(holdEntryPoint) \(id)-- \(entry); " + run
+        }
         return #"[ -x \#(entry) ] || { echo "sandshell: this sandbox doesn't have Sandshell's \#(agent.rawValue) kit (sandshell-\#(agent.rawValue)); rebuild it" >&2; exit 127; }; "#
-            + (agent == .claude ? #"echo "\#(extrasMarker)" >&2; "# : "") + "exec \(entry)"
+            + (agent == .claude ? #"echo "\#(extrasMarker)" >&2; "# : "") + run
     }
 
     /// In-sandbox program (a `bash -c` body after PATH setup) that speaks ACP on
     /// stdio for `agent`, or nil when it has none.
-    private static func acpProgram(for agent: AgentKind, sbxProxyAuth: Bool) -> String? {
+    private static func acpProgram(for agent: AgentKind, sbxProxyAuth: Bool, hold: Hold) -> String? {
         switch agent {
         case .claude:
             // The kit's entry point runs the adapter through Sandshell's wrapper
             // (rewind, MCP status), driving the sandbox's own claude.
             let auth = useProxyAuth(sbxProxyAuth) ? proxyAuthSetup + " " : ""
-            return auth + kitLaunch(.claude)
+            return auth + kitLaunch(.claude, hold: hold)
         case .codex:
             // `sbx run codex` writes a placeholder auth.json when it starts (sbx's
             // proxy swaps in the real credential); `sbx exec` doesn't, and without
@@ -245,7 +284,7 @@ enum SbxCommand {
             return #"H="$HOME/.codex"; "#
                 + #"if [ "${CODEX_HOME:-$H}" = "$H" ] && [ ! -s "$H/auth.json" ] && [ -n "$SBX_CRED_OPENAI_MODE" ]; then "#
                 + #"mkdir -p "$H" && printf '%s' '{"OPENAI_API_KEY":"proxy-managed"}' > "$H/auth.json"; fi; "#
-                + kitLaunch(.codex)
+                + kitLaunch(.codex, hold: hold)
         case .gemini:
             // Gemini CLI speaks ACP itself (`--acp`; `--experimental-acp` is the
             // deprecated spelling).
@@ -260,14 +299,17 @@ enum SbxCommand {
     /// `claudeModel`: the workspace's model for a Claude chat — the adapter
     /// starts on it (`ANTHROPIC_MODEL`) and lists it even when its own catalog
     /// lacks it (`ANTHROPIC_CUSTOM_MODEL_OPTION`), so chats run what terminals do.
+    /// `hold`: whether the agent keeps running while Sandshell is away (the
+    /// kit agents': Claude, Codex).
     static func acpArguments(agent: AgentKind = .claude, containerName: String, workdir: String,
                              home: String, sbxProxyAuth: Bool = false,
-                             tag: ProcessTag? = nil, claudeModel: String? = nil) -> [String]? {
-        guard let program = acpProgram(for: agent, sbxProxyAuth: sbxProxyAuth) else { return nil }
+                             tag: ProcessTag? = nil, claudeModel: String? = nil, hold: Hold = .off,
+                             notifyDir: String? = nil) -> [String]? {
+        guard let program = acpProgram(for: agent, sbxProxyAuth: sbxProxyAuth, hold: hold) else { return nil }
         var args = ["exec", "-i"]
         if !workdir.isEmpty { args += ["-w", workdir] }
         args += [containerName, "env", "-u", "MCP_GATEWAY_URL"]
-        args += envPairs(home: home, claude: nil, tag: tag)
+        args += envPairs(home: home, claude: nil, tag: tag, notifyDir: notifyDir)
         if agent == .claude, let model = claudeModel, !model.isEmpty {
             args += ["ANTHROPIC_MODEL=\(model)", "ANTHROPIC_CUSTOM_MODEL_OPTION=\(model)"]
         }
