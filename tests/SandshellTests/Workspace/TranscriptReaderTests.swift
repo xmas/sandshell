@@ -633,15 +633,77 @@ extension TranscriptReaderTests {
         }
 
         @Test(arguments: [
-            "<command-name>/clear</command-name>",
             "  <system-reminder>Use the todo list.</system-reminder>",
-            "<local-command-stdout>Done</local-command-stdout>",
+            "<task-notification>done</task-notification>",
         ])
         func injectedContextIsNotThePrompt(injected: String) throws {
             let url = try transcript([TRFixture.claudeUser(), TRFixture.claudeAssistant(), TRFixture.claudeUser(injected)])
             let live = try #require(TranscriptReader.liveState(in: url))
-            #expect(live.working, "Any user line starts a turn")
+            #expect(live.working, "The agent replies to it: a turn")
             #expect(live.latestPrompt == TRFixture.prompt, "Text starting with < (once trimmed) is injected context")
+        }
+
+        /// What a local command leaves (`/model`, `/compact`, `! ls`) gets no
+        /// reply: it doesn't start a turn.
+        @Test(arguments: [
+            "<local-command-caveat>The command below was run directly in Claude Code.</local-command-caveat>",
+            "<command-name>/model</command-name>\n<command-message>model</command-message>\n<command-args></command-args>",
+            "<local-command-stdout>Set model to Opus</local-command-stdout>",
+            "<local-command-stderr>Unknown model</local-command-stderr>",
+            "<bash-input>ls</bash-input>",
+            "<bash-stdout>README.md</bash-stdout><bash-stderr></bash-stderr>",
+        ])
+        func localCommandsDontStartATurn(line: String) throws {
+            let lines = [TRFixture.claudeUser(), TRFixture.claudeAssistant(), TRFixture.claudeUser(line),
+                         TRFixture.claudeUser([TRFixture.textBlock(line)])]
+            let url = try transcript(lines)
+            let live = try #require(TranscriptReader.liveState(in: url))
+            #expect(live.working == false)
+            #expect(live.latestPrompt == TRFixture.prompt)
+            let incremental = try #require(TranscriptReader.incrementalLiveState(in: url, fromOffset: 0))
+            #expect(incremental.liveState.working == false)
+        }
+
+        @Test func aSlashCommandThatPromptsIsWorkingFromItsReply() throws {
+            let url = try transcript([
+                TRFixture.claudeUser(), TRFixture.claudeAssistant(),
+                TRFixture.claudeUser("<command-message>review is running…</command-message>\n<command-name>/review</command-name>"),
+                TRFixture.claudeUser("Review the diff.", extra: ["isMeta": true]),
+                TRFixture.claudeAssistant(stopReason: nil),
+            ])
+            let live = try #require(TranscriptReader.liveState(in: url))
+            #expect(live.working)
+        }
+
+        /// Claude Code compacts an idle conversation on its own ("Compacted
+        /// while idle"): a boundary and a summary in a user line, and no reply.
+        @Test func compactingWhileIdleLeavesItIdle() throws {
+            let summary = "This session is being continued from a previous conversation that ran out of context."
+            let url = try transcript([
+                TRFixture.claudeUser(), TRFixture.claudeAssistant(),
+                TRFixture.claudeSystem(subtype: "compact_boundary"),
+                TRFixture.claudeUser(summary, extra: ["isCompactSummary": true]),
+            ])
+            let live = try #require(TranscriptReader.liveState(in: url))
+            #expect(live.working == false)
+            #expect(live.latestPrompt == TRFixture.prompt, "The summary isn't a prompt (nor a name)")
+            let incremental = try #require(TranscriptReader.incrementalLiveState(in: url, fromOffset: 0))
+            #expect(incremental.liveState.working == false)
+            // Read as it's written: the summary alone says nothing.
+            let tail = try transcript([TRFixture.claudeUser(summary, extra: ["isCompactSummary": true])])
+            #expect(TranscriptReader.incrementalLiveState(in: tail, fromOffset: 0) == nil)
+        }
+
+        @Test func compactingMidTurnKeepsItWorking() throws {
+            let url = try transcript([
+                TRFixture.claudeUser(),
+                TRFixture.claudeAssistant([TRFixture.toolUseBlock], stopReason: "tool_use"),
+                TRFixture.claudeUser(TRFixture.toolResult()),
+                TRFixture.claudeSystem(subtype: "compact_boundary"),
+                TRFixture.claudeUser("Summary.", extra: ["isCompactSummary": true]),
+            ])
+            let live = try #require(TranscriptReader.liveState(in: url))
+            #expect(live.working)
         }
 
         @Test(.tags(.transcriptReaderEdgeCase), arguments: TRFixture.promptBesideInjectedBlocks)

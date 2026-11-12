@@ -2,6 +2,9 @@
 
 A running log of what changed, newest first. Yes, we actually write these.
 
+## v0.2.53 — "Not Busy"
+- **An idle session no longer shows as Working.** When Claude Code compacts a quiet conversation on its own, or you run `/model`, `/compact` or a `!` command in a terminal session, the sidebar went to Working with its timer running until your next message. It now stays as it was, and a compaction's summary no longer names the session or shows up in a chat as something you said.
+
 ## v0.2.52 — "While You Were Out"
 - **Chat text stays put.** The conversation is now drawn by the same web page Remote Control uses, inside the chat. Resizing the window, or a long reply streaming in, could leave text invisible; that drawing code is gone. The chat box, model and effort choosers, permission and question cards stay as they were. File paths that exist still open in Files, replies still have Copy and Fork, code blocks have their own Copy, a turn's changed files still have Undo, and a run of tool calls is one quiet line ("Ran 2 commands and read a file") that opens to the calls.
 - **Chats keep running after you quit.** A Claude or Codex turn in progress finishes in its sandbox when Sandshell quits or its window closes, and the chat picks up where it is when you're back, including a question it asked meanwhile. An idle chat stops as before. A sandbox needs rebuilding once to get this (Settings ▸ Sandboxes ▸ Rebuild); until then chats stop on quit as before. Turn it off in Settings ▸ General ▸ While You're Away.

@@ -168,11 +168,28 @@ extension ClaudeTranscriptTailTests {
 
         @Test(arguments: [
             TailLine.prompt("Go on"),
-            TailLine.prompt("<command-name>/clear</command-name>"),
+            TailLine.prompt("<task-notification>done</task-notification>"),
             TailLine.user(blocks: [TailBlock.toolResult(content: tailJSON("ok"))]),
         ])
-        func anyUserLineMeansWorking(line: String) {
+        func aPromptOrAToolResultMeansWorking(line: String) {
             #expect(ClaudeTranscriptTail.parse(line).working == true)
+        }
+
+        /// A compaction's summary (Claude Code compacts an idle conversation on
+        /// its own) and a local command's lines get no reply: they leave the
+        /// turn state as it was, and show nothing.
+        @Test(arguments: [
+            TailLine.prompt("This session is being continued from a previous conversation.", fields: [TailField.compactSummary]),
+            TailLine.prompt("<command-name>/clear</command-name>"),
+            TailLine.prompt("<local-command-stdout>Set model to Opus</local-command-stdout>"),
+            TailLine.prompt("<bash-input>ls</bash-input>"),
+            TailLine.user(blocks: [TailBlock.text("<bash-stdout>README.md</bash-stdout>")]),
+        ])
+        func linesNoReplyFollowsLeaveTheTurnAlone(line: String) {
+            let batch = ClaudeTranscriptTail.parse(TailLine.file([TailLine.assistant([TailBlock.text("done")], stop: "end_turn"), line]))
+            #expect(batch.working == false)
+            #expect(batch.events == [.text(messageID: "msg_1", "done")])
+            #expect(batch.sawConversation)
         }
 
         @Test(arguments: [
@@ -397,7 +414,6 @@ extension ClaudeTranscriptTailTests {
         }
 
         @Test(arguments: [
-            "<command-name>/clear</command-name>",
             "<task-notification>done</task-notification>",
             "  \n<system-reminder>be brief</system-reminder>",
             "",
@@ -728,6 +744,7 @@ fileprivate enum TailField {
     static let sidechain = #""isSidechain":true,"#
     static let mainChain = #""isSidechain":false,"#
     static let meta = #""isMeta":true,"#
+    static let compactSummary = #""isCompactSummary":true,"#
 
     static func entrypoint(_ name: String) -> String {
         #""entrypoint":\#(tailJSON(name)),"#

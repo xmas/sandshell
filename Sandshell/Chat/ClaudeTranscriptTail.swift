@@ -61,8 +61,9 @@ struct ClaudeTranscriptTail {
                 }
                 continue
             }
-            // user: a prompt (string or text blocks) or tool results.
-            if obj["isMeta"] as? Bool == true { continue }
+            // user: a prompt (string or text blocks) or tool results. Not a
+            // compaction's summary or a local command's lines: no reply follows.
+            if obj["isMeta"] as? Bool == true || TranscriptReader.getsNoReply(obj) { continue }
             batch.working = true
             if let s = message["content"] as? String {
                 if let prompt = prompt(s) { batch.events.append(.user(prompt)) }

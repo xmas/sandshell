@@ -151,6 +151,65 @@ enum TranscriptReader {
         ClaudeTranscriptTail.readLines(url, from: UInt64(max(0, fromOffset))).map { ($0.0, Int($0.1)) }
     }
 
+    /// What one Claude transcript line says about the turn: working or not
+    /// (and the prompt it carries), or nil when it says nothing.
+    ///
+    /// Lines Claude Code writes with no reply to follow decide nothing, or the
+    /// session would read as working until the next turn: the summary a
+    /// compaction leaves (idle compaction writes one while nothing runs), and
+    /// what a local command leaves (`/model`, `/compact`, a `!` shell command).
+    /// A slash command that does prompt the agent is working from its reply's
+    /// first line.
+    private static func claudeLineVerdict(_ obj: [String: Any]) -> (working: Bool, prompt: String?)? {
+        // A subagent's own turn-by-turn lines (Claude Code can inline them,
+        // tagged isSidechain) belong to a nested conversation, not the
+        // top-level one — never let them decide whether *this* session is done.
+        if obj["isSidechain"] as? Bool == true { return nil }
+        switch obj["type"] as? String {
+        case "user":
+            if getsNoReply(obj) { return nil }
+            return (true, typedPrompt((obj["message"] as? [String: Any])?["content"]))
+        case "assistant":
+            let stop = (obj["message"] as? [String: Any])?["stop_reason"] as? String
+            return (!(stop.map(claudeTurnEndingStopReasons.contains) ?? false), nil)
+        case "system":
+            // Claude Code appends one of these after every assistant turn.
+            // pendingBackgroundAgentCount is only present (and only ever
+            // positive) while a dispatched subagent (the Agent/Task tool)
+            // hasn't returned yet — the dispatching turn itself already
+            // ended with stop_reason "end_turn" (it's a non-blocking async
+            // call), so without this the session reads as idle for however
+            // long the subagent is still running. This line is the freshest
+            // signal, and must win even if a scan's only content is this line.
+            if obj["subtype"] as? String == "turn_duration",
+               (obj["pendingBackgroundAgentCount"] as? Int ?? 0) > 0 {
+                return (true, nil)
+            }
+            return nil
+        default:
+            return nil
+        }
+    }
+
+    /// The tags a local command's lines start with: Claude Code ran it itself
+    /// and no reply follows.
+    private static let localCommandTags = [
+        "<command-name>", "<command-message>", "<command-args>",
+        "<local-command-caveat>", "<local-command-stdout>", "<local-command-stderr>",
+        "<bash-input>", "<bash-stdout>", "<bash-stderr>",
+    ]
+
+    /// A Claude `user` line no reply follows: a compaction's summary, or a
+    /// local command's. It doesn't start a turn, and isn't a prompt.
+    static func getsNoReply(_ obj: [String: Any]) -> Bool {
+        if obj["isCompactSummary"] as? Bool == true { return true }
+        let content = (obj["message"] as? [String: Any])?["content"]
+        let text: String? = if let s = content as? String { s } else if let blocks = content as? [[String: Any]],
+            blocks.count == 1, blocks[0]["type"] as? String == "text" { blocks[0]["text"] as? String } else { nil }
+        guard let text = text?.trimmingCharacters(in: .whitespacesAndNewlines) else { return false }
+        return localCommandTags.contains { text.hasPrefix($0) }
+    }
+
     /// Incremental variant of `claudeLiveState`: reads only the lines appended
     /// since `fromOffset`, avoiding a full re-read on every tick.
     private static func claudeIncrementalLiveState(in url: URL,
@@ -159,37 +218,10 @@ enum TranscriptReader {
         var working: Bool?
         var latest: String?
         for line in text.split(separator: "\n", omittingEmptySubsequences: true) {
-            guard let obj = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any]
-            else { continue }
-            // A subagent's own turn-by-turn lines (Claude Code can inline them,
-            // tagged isSidechain) belong to a nested conversation, not the
-            // top-level one — never let them decide whether *this* session is done.
-            if obj["isSidechain"] as? Bool == true { continue }
-            switch obj["type"] as? String {
-            case "user":
-                working = true
-                if let message = obj["message"] as? [String: Any],
-                   let t = typedPrompt(message["content"]) { latest = t }
-            case "assistant":
-                let stop = (obj["message"] as? [String: Any])?["stop_reason"] as? String
-                working = !(stop.map(claudeTurnEndingStopReasons.contains) ?? false)
-            case "system":
-                // Claude Code appends one of these after every assistant turn.
-                // pendingBackgroundAgentCount is only present (and only ever
-                // positive) while a dispatched subagent (the Agent/Task tool)
-                // hasn't returned yet — the dispatching turn itself already
-                // ended with stop_reason "end_turn" (it's a non-blocking async
-                // call), so without this override the session reads as idle
-                // for however long the subagent is still running. Unconditional
-                // assignment: this line is always the freshest signal, and must
-                // win even if this scan's only content is this one line.
-                if obj["subtype"] as? String == "turn_duration",
-                   (obj["pendingBackgroundAgentCount"] as? Int ?? 0) > 0 {
-                    working = true
-                }
-            default:
-                continue
-            }
+            guard let obj = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
+                  let verdict = claudeLineVerdict(obj) else { continue }
+            working = verdict.working
+            if let prompt = verdict.prompt { latest = prompt }
         }
         guard let working else { return nil }
         return IncrementalLiveStateResult(
@@ -232,25 +264,10 @@ enum TranscriptReader {
         var working: Bool?
         var latest: String?
         for line in data.split(separator: "\n", omittingEmptySubsequences: true) {
-            guard let obj = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any] else { continue }
-            // See claudeIncrementalLiveState — same reasoning, same fix.
-            if obj["isSidechain"] as? Bool == true { continue }
-            switch obj["type"] as? String {
-            case "user":
-                working = true
-                if let message = obj["message"] as? [String: Any],
-                   let text = typedPrompt(message["content"]) { latest = text }
-            case "assistant":
-                let stop = (obj["message"] as? [String: Any])?["stop_reason"] as? String
-                working = !(stop.map(claudeTurnEndingStopReasons.contains) ?? false)
-            case "system":
-                if obj["subtype"] as? String == "turn_duration",
-                   (obj["pendingBackgroundAgentCount"] as? Int ?? 0) > 0 {
-                    working = true
-                }
-            default:
-                continue
-            }
+            guard let obj = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
+                  let verdict = claudeLineVerdict(obj) else { continue }
+            working = verdict.working
+            if let prompt = verdict.prompt { latest = prompt }
         }
         guard let working else { return nil }
         return LiveState(working: working, latestPrompt: latest)
