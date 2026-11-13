@@ -28,6 +28,16 @@ xcodebuild -project Sandshell.xcodeproj -scheme Sandshell \
 
 First build resolves the `libghostty-spm` SwiftPM package and downloads the xcframework.
 
+### Debug runs: their own world
+
+A debug run never competes with the Sandshell you work in (the installed app, `com.xmas.sandshell`). Launch it with Xcode's Run — ⌘R, or from a sandbox `scripts/xcode-sandbox.py call RunProject '{"workspaceIdentifier": …}'` (Xcode stops the previous run itself):
+
+- The Debug configuration's bundle id is `com.xmas.sandshell.debug`: its own settings, saved windows, keychain and notifications, so it runs beside the installed app.
+- The scheme passes `-SandshellDebugProfile YES` (`DebugProfile`, `Diagnostics/AutomatedRun.swift`): each workspace keeps its state in `.sandshell/debug/` (its own session list; its config seeded from the real one) and its sandboxes are `<name>-debug` — its own agents, not your sessions'.
+- The scheme passes `-openWindowRoots ("$(SRCROOT)")`: it opens just this checkout, not your windows. Pass other roots the same way for a test that needs them.
+
+Agents: test UI changes in a debug run, never in the user's own app or against their sessions and sandboxes. A change to `project.yml` needs `xcodegen generate` on the Mac before Xcode sees it.
+
 ### Release
 
 ```bash

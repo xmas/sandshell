@@ -1,5 +1,43 @@
 import AppKit
 
+/// A debug run's own world, so it never competes with the work you're doing
+/// in your own Sandshell: Xcode's Run (⌘R, and `RunProject` from a sandbox)
+/// passes `-SandshellDebugProfile YES` (DEBUG builds only). Each workspace
+/// keeps its state in `.sandshell/debug/` — its own session list, its config
+/// seeded from the real one — and its sandboxes are named `<name>-debug`, so
+/// a debug run has its own agents. The Debug build's own bundle id
+/// (`com.xmas.sandshell.debug`) keeps its settings and saved windows apart,
+/// and the scheme's `-openWindowRoots` opens just the checkout.
+enum DebugProfile {
+    static let isActive: Bool = {
+        #if DEBUG
+        // Never while hosting the unit tests (the scheme's arguments can reach them).
+        let env = ProcessInfo.processInfo.environment
+        guard env["XCTestConfigurationFilePath"] == nil, env["XCTestBundlePath"] == nil else { return false }
+        return UserDefaults.standard.bool(forKey: "SandshellDebugProfile")
+        #else
+        return false
+        #endif
+    }()
+
+    /// Added to a debug run's sandbox names.
+    static let sandboxSuffix = "-debug"
+
+    /// The folder under `<root>/.sandshell` a debug run keeps its files in.
+    static let controlSubfolder = "debug"
+
+    /// A debug run's first look at a workspace: its config starts as a copy of
+    /// the real one (mounts, kits, agent), so the debug sandbox matches it.
+    static func seedConfig(root: URL, into url: URL) {
+        let fm = FileManager.default
+        let real = root.appending(path: ".sandshell/config.json")
+        guard isActive, !fm.fileExists(atPath: url.path(percentEncoded: false)),
+              fm.fileExists(atPath: real.path(percentEncoded: false)) else { return }
+        try? fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? fm.copyItem(at: real, to: url)
+    }
+}
+
 /// Launched by a scripted test — the DEBUG self-test (`-SandshellSelfTest`) or
 /// the AppleScript suite (`-SandshellUITestHeadless`) — usually while someone
 /// is working at the Mac. Nothing may wait on a person: no Keychain or

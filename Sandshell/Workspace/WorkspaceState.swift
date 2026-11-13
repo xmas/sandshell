@@ -490,9 +490,11 @@ struct WorkspaceState: Codable {
 
     // MARK: - Persistence
 
-    /// Control directory holding Sandshell's per-workspace files.
+    /// Control directory holding Sandshell's per-workspace files (a debug
+    /// run's: its own folder inside, `DebugProfile`).
     static func controlDir(root: URL) -> URL {
-        root.appending(path: ".sandshell", directoryHint: .isDirectory)
+        let dir = root.appending(path: ".sandshell", directoryHint: .isDirectory)
+        return DebugProfile.isActive ? dir.appending(path: DebugProfile.controlSubfolder, directoryHint: .isDirectory) : dir
     }
 
     static func stateURL(root: URL) -> URL {

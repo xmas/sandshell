@@ -112,6 +112,7 @@ struct WorkspaceConfig: Codable {
     /// Load persisted config, or `nil` if none exists yet.
     static func load(root: URL) throws -> WorkspaceConfig? {
         let url = url(root: root)
+        DebugProfile.seedConfig(root: root, into: url)
         guard FileManager.default.fileExists(atPath: url.path(percentEncoded: false)) else { return nil }
         return try JSONDecoder().decode(WorkspaceConfig.self, from: Data(contentsOf: url))
     }

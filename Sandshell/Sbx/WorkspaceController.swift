@@ -284,7 +284,8 @@ final class WorkspaceController: ObservableObject {
         let store = try WorkspaceStore.shared(root: root)
         let config = store.config
         var workspace = Workspace(
-            rootURL: root, containerName: slug(for: root), policy: config.policy, primaryAgent: config.primaryAgent,
+            rootURL: root, containerName: slug(for: root) + (DebugProfile.isActive ? DebugProfile.sandboxSuffix : ""),
+            policy: config.policy, primaryAgent: config.primaryAgent,
             kits: config.kits.filter { !KitStore.isSandshellKit($0) })
         workspace.imageChannel = config.imageChannel
         workspace.customImage = config.customImage

@@ -106,13 +106,26 @@ targets:
       - package: GhosttyKit
         product: GhosttyTerminal
     # ⌘U / xcodebuild test: the Swift Testing unit tests (scripts/run-unit-tests.sh).
+    # ⌘R (and RunProject from a sandbox): a debug run in its own world, never
+    # competing with the Sandshell you work in — the debug profile (its own
+    # `.sandshell/debug/` state and `<name>-debug` sandboxes, `DebugProfile`)
+    # and only this checkout's window.
     scheme:
       testTargets:
         - SandshellTests
+      commandLineArguments:
+        "-SandshellDebugProfile YES": true
+        "-openWindowRoots (\"$(SRCROOT)\")": true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.xmas.sandshell
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+      configs:
+        # Its own settings, saved windows, keychain and notifications, beside
+        # the installed app (com.xmas.sandshell). Scripts that build their
+        # own copies still pass theirs (.dev, .uitest).
+        Debug:
+          PRODUCT_BUNDLE_IDENTIFIER: com.xmas.sandshell.debug
 
   # Swift Testing unit tests for the app's core logic, hosted in the app (which
   # opens no windows when it sees it's hosting tests — see AppDelegate).
