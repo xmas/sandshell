@@ -1,10 +1,10 @@
 import AppKit
 
-/// The Files sidebar's header, in the title bar above it: the file tree's
-/// toggle, "Files", then the folder's branch and how many files changed
-/// ("main · 6 changed"; click for the changed files). The sidebar's close
-/// button sits at the bar's far end; the diff column toggles from View ▸ Diff
-/// Column (⌥⌘2).
+/// The Files sidebar's header, its top band (as tall as a pane's strip, the
+/// window's title bar): the file tree's toggle, "Files", then the folder's
+/// branch and how many files changed ("main · 6 changed"; click for the
+/// changed files). The panes' Files toggle hides it; the diff column toggles
+/// from View ▸ Diff Column (⌥⌘2).
 @MainActor
 final class FilesHeaderView: NSStackView {
     private let title = NSTextField(labelWithString: "Files")
@@ -40,20 +40,9 @@ final class FilesHeaderView: NSStackView {
         edgeInsets = NSEdgeInsets(top: 0, left: 0, bottom: 0, right: 0)
         setClippingResistancePriority(.init(45), for: .horizontal)
         setAccessibilityIdentifier("files-header")
-        // As wide as the sidebar leaves it (`fit(sidebarWidth:)`): the toolbar
-        // measures items at their compressed size, which would drop the branch.
-        width.isActive = true
     }
 
     @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
-
-    private lazy var width = widthAnchor.constraint(equalToConstant: 200)
-
-    /// Take the sidebar's width, less its close button and margins.
-    func fit(sidebarWidth: CGFloat) {
-        let wanted = max(120, (sidebarWidth - 76).rounded())
-        if width.constant != wanted { width.constant = wanted }
-    }
 
     /// "main · 6 changed", "main · clean", "detached · …"; nothing outside a repo.
     static func branchLine(_ git: GitStatus) -> String {

@@ -535,6 +535,18 @@ final class TerminalStackController: NSViewController {
     }
     /// Close this pane (title-strip ✕, shown when split).
     var onClosePane: (() -> Void)?
+    /// The window's sidebar and Files toggles (on the strips at its top corners).
+    var onToggleSidebar: (() -> Void)?
+    var onToggleFiles: (() -> Void)?
+
+    /// At the window's top-left with the sidebar hidden (room for the traffic
+    /// lights, and the sidebar's toggle); at its top-right (the Files toggle).
+    func setWindowCorners(leading: Bool, trailing: Bool, filesShown: Bool) {
+        titleStrip.isWindowLeading = leading
+        titleStrip.isWindowTrailing = trailing
+        titleStrip.filesShown = filesShown
+    }
+
     /// The title strip's Show Board, for this session.
     var onShowBoard: ((UUID) -> Void)?
     /// The sidebar's "+ New Session" menu (an empty pane's New Session).
@@ -693,8 +705,8 @@ final class TerminalStackController: NSViewController {
     private func updateFocusRing() {
         guard isViewLoaded else { return }
         let c = controller.theme.colors
-        frameView.layer?.borderColor = c.border.cgColor
-        frameView.layer?.borderWidth = 1
+        // Flush panes: the split's hairlines are their edges, not a card's border.
+        frameView.layer?.borderWidth = 0
         view.layer?.borderWidth = 0
         dimOverlay.layer?.backgroundColor = c.termBg.withAlphaComponent(0.2).cgColor
         dimOverlay.isHidden = !(showsFocusRing && !isFocused)
@@ -702,13 +714,12 @@ final class TerminalStackController: NSViewController {
         titleStrip.dimsUnfocused = showsFocusRing
     }
 
-    /// The strip names the session only when the window has more than one pane
-    /// (with one, the title bar already does).
+    /// The strip names what the pane shows: it's the title bar (there's no other).
     private func updateStripName() {
         if let board = shownBoard {
-            return titleStrip.setName(showsFocusRing ? canvas.board?.title ?? board.lastPathComponent : nil)
+            return titleStrip.setName(canvas.board?.title ?? board.lastPathComponent)
         }
-        guard showsFocusRing, let id = activeSessionID, let session = controller.session(id: id) else {
+        guard let id = activeSessionID, let session = controller.session(id: id) else {
             return titleStrip.setName(nil)
         }
         titleStrip.setName(controller.displayName(of: session))
@@ -836,14 +847,15 @@ final class TerminalStackController: NSViewController {
             v.wantsLayer = true
         }
 
-        // Framed terminal: rounded border + title strip + the libghostty surface.
-        frameView.layer?.cornerRadius = 12
-        frameView.layer?.borderWidth = 1
+        // The pane: its title strip (the window's title bar) over the content, flush.
+        frameView.layer?.borderWidth = 0
         titleStrip.onShowFiles = { [weak self] changesOnly in self?.onShowFiles?(changesOnly) }
         titleStrip.onPickView = { [weak self] mode in self?.pickView(mode) }
         titleStrip.onSplitRight = { [weak self] in self?.onSplit?(.trailing) }
         titleStrip.onSplitDown = { [weak self] in self?.onSplit?(.bottom) }
         titleStrip.onClose = { [weak self] in self?.onClosePane?() }
+        titleStrip.onToggleSidebar = { [weak self] in self?.onToggleSidebar?() }
+        titleStrip.onToggleFiles = { [weak self] in self?.onToggleFiles?() }
         titleStrip.onShowBoard = { [weak self] in
             if let id = self?.activeSessionID { self?.onShowBoard?(id) }
         }
@@ -943,19 +955,21 @@ final class TerminalStackController: NSViewController {
         kitBanner.onAdopt = { [weak self] agent in self?.controller.adoptKitDrift(for: agent) }
         kitBanner.onIgnoreDrift = { [weak self] agent in self?.controller.ignoreKitDrift(for: agent) }
         container.addSubview(kitBanner)
-        let frameTopNoBanner = frameView.topAnchor.constraint(equalTo: container.safeAreaLayoutGuide.topAnchor, constant: 14)
-        let frameTopWithBanner = frameView.topAnchor.constraint(equalTo: kitBanner.bottomAnchor, constant: 12)
+        // The kit banner goes under the strip, over the content.
+        let frameTopNoBanner = host.topAnchor.constraint(equalTo: titleStrip.bottomAnchor)
+        let frameTopWithBanner = host.topAnchor.constraint(equalTo: kitBanner.bottomAnchor, constant: 12)
         self.frameTopNoBanner = frameTopNoBanner
         self.frameTopWithBanner = frameTopWithBanner
 
         NSLayoutConstraint.activate([
-            kitBanner.topAnchor.constraint(equalTo: container.safeAreaLayoutGuide.topAnchor, constant: 12),
+            kitBanner.topAnchor.constraint(equalTo: titleStrip.bottomAnchor, constant: 12),
             kitBanner.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 16),
             kitBanner.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -16),
             frameTopNoBanner,
-            frameView.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 16),
-            frameView.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -16),
-            frameView.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -16),
+            frameView.topAnchor.constraint(equalTo: container.topAnchor),
+            frameView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            frameView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            frameView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
             titleStrip.topAnchor.constraint(equalTo: frameView.topAnchor),
             titleStrip.leadingAnchor.constraint(equalTo: frameView.leadingAnchor),
             titleStrip.trailingAnchor.constraint(equalTo: frameView.trailingAnchor),
@@ -964,7 +978,6 @@ final class TerminalStackController: NSViewController {
             titleLine.trailingAnchor.constraint(equalTo: titleStrip.trailingAnchor),
             titleLine.bottomAnchor.constraint(equalTo: titleStrip.bottomAnchor),
             titleLine.heightAnchor.constraint(equalToConstant: 1),
-            host.topAnchor.constraint(equalTo: titleStrip.bottomAnchor),
             host.leadingAnchor.constraint(equalTo: frameView.leadingAnchor),
             host.trailingAnchor.constraint(equalTo: frameView.trailingAnchor),
             host.bottomAnchor.constraint(equalTo: frameView.bottomAnchor),
@@ -1310,8 +1323,9 @@ final class TerminalStackController: NSViewController {
         let container = controller.containerName(for: session.containerAgentKind)
         // The strip shows where the session runs: sandbox › folder › branch (› name).
         let folder = URL(filePath: session.workdir, directoryHint: .checkFileSystem)
-        titleStrip.update(folder: folder,
-                          access: controller.sandboxAccess(for: folder, agent: session.containerAgentKind))
+        let access = controller.sandboxAccess(for: folder, agent: session.containerAgentKind)
+        titleStrip.update(folder: folder, access: access)
+        chats[session.id]?.setSandboxAccess(folder: folder, access: access)
         titleStrip.setViewMode(PaneViewMode.current(for: session))
         updateStripName()
         onChromeChange?(Chrome(agent: session.agent, title: controller.displayName(of: session),

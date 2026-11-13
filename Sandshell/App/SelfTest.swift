@@ -1039,7 +1039,8 @@ enum SelfTest {
             check(inspector.header.branch.stringValue == FilesHeaderView.branchLine(inspector.tree.git)
                     && inspector.header.branch.stringValue.hasPrefix(inspector.tree.git.branch ?? "?"),
                   "it is the Files git model's branch and count")
-            check(window.debugFilesToggle.on && window.debugFilesToggle.headerShown, "the Files button shows pressed")
+            let corners = window.debugWindowCorners
+            check(corners.filesOn && corners.filesHeader, "the top-right strip's Files toggle shows pressed; Files' header shows (\(corners))")
             snapshot(window, "files-inspector")
             snapshotFrame(window, "files-sidebar")
         }
@@ -3508,7 +3509,7 @@ enum SelfTest {
         /// Every control inside the pane, the strip 34 pt high.
         func fits(_ s: PaneStripView.DebugState, _ name: String) {
             let bounds = pane.view.bounds
-            check(s.height == PaneStripView.height, "\(name): the strip is 34 pt high (\(s.height))")
+            check(s.height == PaneStripView.height, "\(name): the strip is \(Int(PaneStripView.height)) pt high (\(s.height))")
             check(!s.controlFrames.isEmpty && s.controlFrames.allSatisfy { bounds.contains($0) },
                   "\(name): every control is inside the pane (right edges \(s.controlFrames.map { Int($0.maxX) }) of \(Int(bounds.width)))")
         }
@@ -3526,37 +3527,30 @@ enum SelfTest {
             log("window \(Int(width)): \(describe(s))")
             check(s.sandboxLabelShown && s.folderLabelShown && s.branchShown && !s.moreShown,
                   "at \(Int(width)) every crumb shows with its label")
-            check(!s.nameShown, "at \(Int(width)), with one pane, there's no name crumb")
+            check(s.nameShown, "at \(Int(width)) the strip names the session (it's the title bar)")
             check(s.viewMode == nil, "a shell session has no Chat | Terminal switch")
             fits(s, "window \(Int(width))")
             snapshot(window, "title-strip-window-\(Int(width))")
         }
-        for width in [1400.0, 1100, 900] {
-            setWindowWidth(width)
-            await wait(0.6)
-            let t = window.debugToolbarWidths
-            log("  toolbar at \(Int(width)): identity \(Int(t.identity)) visible \(t.visible)/\(t.items) missing \(t.missing)")
-            snapshotFrame(window, "title-bar-\(Int(width))")
-            check(t.visible == t.items && t.identity >= 139 && t.identity <= 361,
-                  "at \(Int(width)) the toolbar fits every item; the identity flexes within 140–360")
-        }
-        // A long session name truncates inside the identity item instead of
-        // drawing over the Sandbox group beside it.
-        for width in [1000.0, 1300] {
-            setWindowWidth(width)
-            _ = window.debugToolbarName("New Claude Session with a long name, longer than the toolbar has room for")
-            await wait(0.8)
-            let long = window.debugToolbarName("New Claude Session with a long name, longer than the toolbar has room for")
-            log("long name at \(Int(width)): label ends at \(Int(long.label)) of \(Int(long.identity))")
-            check(long.label <= long.identity + 1 && long.identity <= 361, "at \(Int(width)) a long session name stays inside the identity item")
-            check(long.label >= long.identity - 4 && long.identity >= 139,
-                  "at \(Int(width)) the name uses the identity's whole width (\(Int(long.label)) of \(Int(long.identity)))")
-            // A name that fits shows whole.
-            _ = window.debugToolbarName("New Claude Session")
-            await wait(0.8)
-            _ = window.debugToolbarName("New Claude Session")
-            check(window.debugToolbarNameFits, "at \(Int(width)) “New Claude Session” shows whole")
-        }
+        // No toolbar: the strips are the title bar, the traffic lights center
+        // in their band; with the sidebar hidden the top-left strip makes room
+        // for them and carries the sidebar's toggle.
+        check(!window.debugHasToolbar, "the window has no toolbar: the panes' strips are its title bar")
+        let lights = window.debugTrafficLightsCenterFromTop ?? -1
+        check(abs(lights - PaneStripView.height / 2) <= 1.5, "the traffic lights center in the strip's band (\(lights))")
+        var corners = window.debugWindowCorners
+        check(corners.sidebarToggles == 0 && corners.filesToggles == 1,
+              "the sidebar shows: no strip has its toggle; one (the top-right) has Files' (\(corners))")
+        window.setSidebarCollapsed(true)
+        await wait(0.8)
+        corners = window.debugWindowCorners
+        let room = (pane.debugStripView as? PaneStripView)?.debugWindowToggles.crumbsX ?? 0
+        check(corners.sidebarToggles == 1 && room >= PaneStripView.trafficLightsWidth,
+              "sidebar hidden: the top-left strip has its toggle, its crumbs past the traffic lights (\(corners), \(Int(room)))")
+        snapshotFrame(window, "title-bar-no-sidebar")
+        window.setSidebarCollapsed(false)
+        await wait(0.8)
+        check(window.debugWindowCorners.sidebarToggles == 0, "sidebar back: its toggle goes back to it")
         setWindowWidth(1400)
         pane.reemitChrome()
         await wait(0.6)
@@ -3625,38 +3619,32 @@ enum SelfTest {
         await titleBar(window, session: a)
     }
 
-    /// The title bar: sidebar toggle · the session's name · Sandbox (Stop,
-    /// Restart) · Files, and nothing else; Stop / Restart follow the focused
-    /// pane; the Files button shows pressed while the Files sidebar is up.
-    /// Runs after `titleStrip` split off an empty pane.
+    /// The title bar is the panes' strips: no toolbar. The sandbox's state is
+    /// in the sidebar's header (its menu: Stop, Restart, Rebuild…), following
+    /// the focused pane; Files' toggle is on the top-right strip and shows
+    /// pressed while Files is up. Runs after `titleStrip` split off an empty pane.
     private static func titleBar(_ window: MainWindowController, session a: Session) async {
         guard let tree = window.paneTree, let ws = window.workspaceController else { return }
         if let empty = tree.panes.first(where: { $0.shownSession == nil }) { tree.focus(empty) }
         await wait(0.5)
-        let main = ["sidebarToggle", "identity", NSToolbarItem.Identifier.flexibleSpace.rawValue, "sandbox", "filesToggle"]
-        let defaults = window.debugDefaultToolbarItems
-        log("toolbar defaults: \(defaults); items: \(window.debugToolbarItems)")
-        check(defaults == main, "the title bar's items are exactly sidebar · identity · space · Sandbox · Files")
-        check(window.isFilesShown || window.debugToolbarItems == defaults, "the window shows that set (no autosaved leftovers)")
-        check(!defaults.contains { ["sessionStatus", "revealFolder", "stopSession", "restartSession", "chatToggle", "search"].contains($0) },
-              "no status, reveal, bare stop, chat toggle or search in the title bar")
+        check(!window.debugHasToolbar, "no toolbar")
 
-        // An empty pane focused: Stop and Restart are off, the group stays.
+        // An empty pane focused: no sandbox to show.
         check(tree.focused.shownSession == nil, "the empty split pane has focus")
-        var group = window.debugSandboxGroup
-        check(group.shown && !group.stop && !group.rebuild, "no session focused: Sandbox shows, Stop and Rebuild disabled (\(group))")
-        check(window.debugIdentity.isEmpty, "no session focused: no name in the title bar")
-        check(window.debugSandboxLabel == "Sandbox", "no session focused: the group says Sandbox (\(window.debugSandboxLabel))")
+        var status = window.debugSandboxStatus
+        check(!status.shown, "no session focused: the sidebar shows no sandbox (\(status))")
         let emptyStrip = tree.focused.debugStrip
         check(emptyStrip.stopSession == nil && emptyStrip.restartSession == nil, "an empty pane's strip has no session controls")
-        // Back to the session's pane: Restart works on it (and Stop, its terminal running).
+        // Back to the session's pane: its sandbox, and the menu that acts on it.
         if let sessionPane = tree.panes.first(where: { $0.shownSession == a.id }) { tree.focus(sessionPane) }
         await wait(0.5)
-        group = window.debugSandboxGroup
-        check(group.shown && group.stop && group.rebuild, "a running session focused: Stop and Rebuild enabled (\(group))")
+        status = window.debugSandboxStatus
+        check(status.shown && status.name == ws.containerName(for: a.containerAgentKind),
+              "a session focused: the sidebar shows its sandbox (\(status))")
+        check(status.tip.contains("running"), "and says it's running (\(status.tip))")
         let menu = window.debugSandboxMenuTitles
         check(menu == ["Inspect…", "Folder Access…", "Keep What Was Added as a Kit…", "", "Stop", "Restart", "Rebuild…"],
-              "the sandbox's name opens its menu (\(menu))")
+              "the sandbox status opens its menu (\(menu))")
         // What was added in it: the probe runs in the real sandbox and reads back.
         let box = ws.containerName(for: a.containerAgentKind)
         do {
@@ -3677,16 +3665,12 @@ enum SelfTest {
                   "the Inspect window's least width fits its content (\(Int(fitting)) in \(Int(w.contentLayoutRect.width)))")
         }
         SandboxInspectWindowController.debugWindow(box)?.close()
-        check(window.debugIdentity == ws.displayName(of: a), "the title bar names the session (\(window.debugIdentity))")
-        check(window.debugSandboxLabel == ws.containerName(for: a.containerAgentKind),
-              "the Sandbox group names the session's sandbox (\(window.debugSandboxLabel))")
-        check(window.debugSandboxLabelWhole, "its name shows whole, not cut off")
         let shellStrip = tree.focused.debugStrip
         check(shellStrip.stopSession == true && shellStrip.restartSession == true,
               "a running shell's strip has its own Stop and Restart (\(String(describing: shellStrip.stopSession)), \(String(describing: shellStrip.restartSession)))")
         snapshotFrame(window, "title-bar")
 
-        // View ▸ Show Files flips the Files button and shows the sidebar's header.
+        // View ▸ Show Files flips the strip's Files toggle and shows Files' header.
         // (One pane: two of today's panes leave no room for Files beside them.)
         while tree.panes.count > 1, let extra = tree.panes.first(where: { $0.shownSession == nil }) {
             tree.close(extra)
@@ -3696,9 +3680,9 @@ enum SelfTest {
         let before = window.isFilesShown
         app?.toggleFiles(nil)
         await wait(0.8)
-        check(window.isFilesShown != before && window.debugFilesToggle.on == window.isFilesShown
-                && window.debugFilesToggle.headerShown == window.isFilesShown,
-              "View ▸ Files toggles the sidebar; the Files button and header follow (\(window.debugFilesToggle))")
+        var corners = window.debugWindowCorners
+        check(window.isFilesShown != before && corners.filesOn == window.isFilesShown && corners.filesHeader == window.isFilesShown,
+              "View ▸ Files toggles the sidebar; the strip's toggle and Files' header follow (\(corners))")
         if let w = window.window, let files = window.inspectorFiles {
             let frame = files.view.convert(files.view.bounds, to: nil)
             log("with Files: window \(w.frame.width), panes \(tree.panes.map { Int($0.view.frame.width) }) "
@@ -3708,17 +3692,16 @@ enum SelfTest {
             check(await until(5) { !files.header.branch.stringValue.isEmpty }
                     && files.header.branch.stringValue == FilesHeaderView.branchLine(files.tree.git),
                   "its header names the branch (\(files.header.branch.stringValue))")
+            let header = files.header.convert(files.header.bounds, to: files.view)
+            // Files' view is flipped: its top is y 0.
+            check(files.view.isFlipped && header.minY < PaneStripView.height && header.height <= PaneStripView.height,
+                  "its header is its top band, a strip's height (\(header))")
         }
-        if window.isFilesShown {
-            let files = [NSToolbarItem.Identifier.inspectorTrackingSeparator.rawValue, "filesHeader",
-                         NSToolbarItem.Identifier.flexibleSpace.rawValue, "filesClose"]
-            check(window.debugToolbarItems == main + files, "over the Files sidebar: its header and close button (\(window.debugToolbarItems))")
-            snapshotFrame(window, "title-bar-files")
-        }
+        if window.isFilesShown { snapshotFrame(window, "title-bar-files") }
         app?.toggleFiles(nil)
         await wait(0.8)
-        check(window.isFilesShown == before && window.debugFilesToggle.on == before,
-              "and back (\(window.debugFilesToggle))")
+        corners = window.debugWindowCorners
+        check(window.isFilesShown == before && corners.filesOn == before, "and back (\(corners))")
     }
 
     // MARK: Transcript drawing

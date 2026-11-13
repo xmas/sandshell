@@ -256,6 +256,14 @@ final class SidebarListController: NSViewController {
     private let searchField = SidebarSearchField(shortcutHint: SidebarListController.filterShortcut)
     private let newSessionButton = SidebarIconButton(
         symbolName: "plus", configuration: .role(.meta, weight: .semibold), accessibilityDescription: "New Session")
+    /// Hide the sidebar: in the traffic lights' band (there's no toolbar).
+    private let sidebarToggle = SidebarIconButton(
+        symbolName: "sidebar.left", configuration: .role(.body), accessibilityDescription: "Hide Sidebar")
+    /// The window hides the sidebar (its toggle in the band).
+    var onToggleSidebar: (() -> Void)?
+    /// What sits between the folder's name and +: the sandbox's state (the window's).
+    private var headerAccessory: NSView?
+    private weak var headerRow: NSView?
 
     /// Overlay shown in place of the (empty) list: the container's build
     /// status while one is coming up, else "No sessions yet"/"No matches".
@@ -426,6 +434,12 @@ final class SidebarListController: NSViewController {
         newSessionButton.target = self
         newSessionButton.action = #selector(newSessionButtonClicked)
         newSessionButton.toolTip = "New Session"
+        sidebarToggle.translatesAutoresizingMaskIntoConstraints = false
+        sidebarToggle.target = self
+        sidebarToggle.action = #selector(sidebarToggleClicked)
+        sidebarToggle.toolTip = "Hide Sidebar (⌃⌘S)"
+        sidebarToggle.setAccessibilityIdentifier("sidebar-hide")
+        headerRow = header
 
         // ── Row 2: the search field — the sidebar's one search.
         searchField.translatesAutoresizingMaskIntoConstraints = false
@@ -465,7 +479,8 @@ final class SidebarListController: NSViewController {
         emptyStateStack.addArrangedSubview(emptyStateSpinner)
         emptyStateStack.addArrangedSubview(emptyStateLabel)
 
-        for v in [header, newSessionButton, searchField, scroll, emptyStateStack, footer, footerBorder, rightBorder] as [NSView] {
+        for v in [header, newSessionButton, sidebarToggle, searchField, scroll, emptyStateStack, footer, footerBorder,
+                  rightBorder] as [NSView] {
             container.addSubview(v)
         }
         NSLayoutConstraint.activate([
@@ -476,8 +491,13 @@ final class SidebarListController: NSViewController {
             appMark.widthAnchor.constraint(equalToConstant: 12),
             appMark.heightAnchor.constraint(equalToConstant: 12),
 
-            // Its own line below the window's traffic-light controls.
-            newSessionButton.topAnchor.constraint(equalTo: container.topAnchor, constant: 44),
+            // The traffic lights' band (a strip's height: the title bar), with
+            // the sidebar's toggle at its end; the folder's line below it.
+            sidebarToggle.centerYAnchor.constraint(equalTo: container.topAnchor, constant: PaneStripView.height / 2),
+            sidebarToggle.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -12),
+            sidebarToggle.widthAnchor.constraint(equalToConstant: 26),
+            sidebarToggle.heightAnchor.constraint(equalToConstant: 26),
+            newSessionButton.topAnchor.constraint(equalTo: container.topAnchor, constant: PaneStripView.height + 4),
             newSessionButton.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -16),
             newSessionButton.widthAnchor.constraint(equalToConstant: 26),
             newSessionButton.heightAnchor.constraint(equalToConstant: 26),
@@ -549,7 +569,27 @@ final class SidebarListController: NSViewController {
         newSessionButton.contentTintColor = p.foreground
         newSessionButton.restingBackgroundColor = p.selectedFill
         newSessionButton.hoverBackgroundColor = p.background.mixed(with: p.foreground, 0.16)
+        sidebarToggle.contentTintColor = p.muted
+        sidebarToggle.hoverBackgroundColor = p.background.mixed(with: p.foreground, 0.16)
+        (headerAccessory as? SandboxStatusButton)?.apply(tint: p.muted, hover: p.background.mixed(with: p.foreground, 0.16))
     }
+
+    /// Put `view` (the sandbox's state) between the folder's name and +.
+    func setHeaderAccessory(_ view: NSView) {
+        guard headerAccessory !== view, let header = headerRow, let container = header.superview else { return }
+        headerAccessory?.removeFromSuperview()
+        headerAccessory = view
+        view.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(view)
+        NSLayoutConstraint.activate([
+            view.centerYAnchor.constraint(equalTo: newSessionButton.centerYAnchor),
+            view.trailingAnchor.constraint(equalTo: newSessionButton.leadingAnchor, constant: -4),
+            header.trailingAnchor.constraint(lessThanOrEqualTo: view.leadingAnchor, constant: -6),
+        ])
+        applyTheme(sidebarTheme)
+    }
+
+    @objc private func sidebarToggleClicked() { onToggleSidebar?() }
 
     override func viewDidLoad() {
         super.viewDidLoad()

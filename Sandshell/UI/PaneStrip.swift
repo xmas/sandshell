@@ -73,7 +73,12 @@ extension ThemeColors {
 /// controls: Chat | Terminal, Split Right, Split Down, Close.
 @MainActor
 final class PaneStripView: NSView {
-    static let height: CGFloat = 34
+    /// Also the window's title bar (there's no toolbar): the traffic lights
+    /// center in it.
+    static let height: CGFloat = 38
+    /// Room for the traffic lights, for a strip at the window's top-left
+    /// while the sidebar is hidden.
+    static let trafficLightsWidth: CGFloat = 72
     private static let sidePadding: CGFloat = 10
     private static let controlSize: CGFloat = 24
     private static let controlGap: CGFloat = 2
@@ -101,6 +106,9 @@ final class PaneStripView: NSView {
     var onBoardWindow: (() -> Void)?
     /// A session's Show Board.
     var onShowBoard: (() -> Void)?
+    /// The window's sidebar and Files toggles, on the strips at its corners.
+    var onToggleSidebar: (() -> Void)?
+    var onToggleFiles: (() -> Void)?
 
     private let content = NSView()
     private let crumbs = NSView()
@@ -122,6 +130,10 @@ final class PaneStripView: NSView {
     /// A board's own full-screen window (only a board pane has it).
     private let boardWindowButton = StripIconButton()
     private let showBoardButton = StripIconButton()
+    /// The window's: the sidebar's toggle (top-left strip, sidebar hidden)
+    /// and Files' (top-right strip).
+    private let sidebarButton = StripIconButton()
+    private let filesButton = StripIconButton()
     /// The switch's state (nil: hidden — not a chat).
     private(set) var remoteState: Bool?
 
@@ -142,12 +154,21 @@ final class PaneStripView: NSView {
     var isFocusedPane = true { didSet { updateEmphasis() } }
     /// Split windows dim the strips of the panes without focus.
     var dimsUnfocused = false { didSet { updateEmphasis() } }
+    /// At the window's top-left with the sidebar hidden: room for the
+    /// traffic lights, then the sidebar's toggle.
+    var isWindowLeading = false {
+        didSet { if isWindowLeading != oldValue { sidebarButton.isHidden = !isWindowLeading; needsLayout = true } }
+    }
+    /// At the window's top-right: the Files toggle.
+    var isWindowTrailing = false {
+        didSet { if isWindowTrailing != oldValue { filesButton.isHidden = !isWindowTrailing; needsLayout = true } }
+    }
+    /// Files shows: its toggle is pressed.
+    var filesShown = false { didSet { restyleFiles() } }
 
     override init(frame: NSRect) {
         super.init(frame: frame)
         wantsLayer = true
-        layer?.cornerRadius = 12
-        layer?.maskedCorners = [.layerMinXMaxYCorner, .layerMaxXMaxYCorner]
         clipsToBounds = true
         addSubview(content)
         crumbs.clipsToBounds = true
@@ -178,6 +199,8 @@ final class PaneStripView: NSView {
             (boardWindowButton, "arrow.up.left.and.arrow.down.right", "Open in Full Screen Window",
              #selector(boardWindowClicked), "pane-board-window"),
             (showBoardButton, "paintpalette", "Show Board", #selector(showBoardClicked), "pane-show-board"),
+            (sidebarButton, "sidebar.left", "Show Sidebar (⌃⌘S)", #selector(sidebarClicked), "window-show-sidebar"),
+            (filesButton, "sidebar.right", "Show or Hide Files (⇧⌥⌘0)", #selector(filesClicked), "window-files"),
         ] {
             button.configureSymbol(symbol, label: tip, pointSize: Self.controlSymbol, weight: .regular, tint: nil,
                                    target: self, action: action, id: id)
@@ -187,6 +210,8 @@ final class PaneStripView: NSView {
         restartSessionButton.isHidden = true
         boardWindowButton.isHidden = true
         showBoardButton.isHidden = true
+        sidebarButton.isHidden = true
+        filesButton.isHidden = true
         content.addSubview(remoteButton)
         remoteButton.isHidden = true
         restyleRemote()
@@ -201,6 +226,24 @@ final class PaneStripView: NSView {
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    /// The strip is the window's title bar: its background moves the window,
+    /// and a double-click there does what the title bar's does.
+    override var mouseDownCanMoveWindow: Bool { true }
+    override func mouseDown(with event: NSEvent) {
+        guard let window else { return super.mouseDown(with: event) }
+        if event.clickCount == 2 { return Self.titleBarDoubleClick(window) }
+        window.performDrag(with: event)
+    }
+
+    /// System Settings ▸ Desktop & Dock ▸ "Double-click a window's title bar to".
+    static func titleBarDoubleClick(_ window: NSWindow) {
+        switch UserDefaults.standard.string(forKey: "AppleActionOnDoubleClick") {
+        case "Minimize": window.performMiniaturize(nil)
+        case "None": break
+        default: window.performZoom(nil)
+        }
+    }
 
     func stop() { gitTimer?.invalidate(); gitTimer = nil }
 
@@ -303,11 +346,12 @@ final class PaneStripView: NSView {
         }
         for sep in separators { sep.textColor = c.stripSeparator }
         for b in [splitRightButton, splitDownButton, closeButton, stopSessionButton, restartSessionButton, remoteButton,
-                  boardWindowButton, showBoardButton] {
+                  boardWindowButton, showBoardButton, sidebarButton, filesButton] {
             b.contentTintColor = c.stripCrumb
             b.hoverColor = c.stripHover
         }
         restyleRemote()
+        restyleFiles()
         viewSwitch.applyTheme(c)
         restyleName()
         if hasBranch { restyleBranch() }
@@ -343,6 +387,12 @@ final class PaneStripView: NSView {
         // Controls, right to left: fixed, whatever the crumbs need.
         let y = ((height - Self.controlSize) / 2).rounded()
         var x = width - Self.sidePadding
+        // The window's Files toggle, at its far end.
+        if !filesButton.isHidden {
+            x -= Self.controlSize
+            filesButton.frame = NSRect(x: x, y: y, width: Self.controlSize, height: Self.controlSize)
+            x -= 6
+        }
         for button in [closeButton, splitDownButton, splitRightButton] {
             x -= Self.controlSize
             button.frame = NSRect(x: x, y: y, width: Self.controlSize, height: Self.controlSize)
@@ -365,9 +415,15 @@ final class PaneStripView: NSView {
                                       size: ViewModeSwitch.size)
         }
 
+        // The traffic lights and the sidebar's toggle, at the window's top-left.
+        var leading = Self.sidePadding
+        if isWindowLeading {
+            sidebarButton.frame = NSRect(x: Self.trafficLightsWidth, y: y, width: Self.controlSize, height: Self.controlSize)
+            leading = Self.trafficLightsWidth + Self.controlSize + 6
+        }
         // Crumbs: what fits by the rule, left to right; the name takes what's left.
-        let crumbsWidth = max(x - Self.crumbsGap - Self.sidePadding, 0)
-        crumbs.frame = NSRect(x: Self.sidePadding, y: 0, width: crumbsWidth, height: height)
+        let crumbsWidth = max(x - Self.crumbsGap - leading, 0)
+        crumbs.frame = NSRect(x: leading, y: 0, width: crumbsWidth, height: height)
         sandboxCrumb.showsLabel = condensing.sandboxLabel
         folderCrumb.showsLabel = condensing.folderLabel
         var items: [StripCrumb] = condensing.folded ? [moreCrumb] : [sandboxCrumb, folderCrumb] + (hasBranch ? [branchCrumb] : [])
@@ -445,6 +501,22 @@ final class PaneStripView: NSView {
     @objc private func remoteClicked() { onRemote?(remoteButton) }
     @objc private func boardWindowClicked() { onBoardWindow?() }
     @objc private func showBoardClicked() { onShowBoard?() }
+    @objc private func sidebarClicked() { onToggleSidebar?() }
+    @objc private func filesClicked() { onToggleFiles?() }
+
+    /// The Files toggle: tinted (and its background held) while Files shows.
+    private func restyleFiles() {
+        filesButton.contentTintColor = filesShown ? .controlAccentColor : colors.stripCrumb
+        filesButton.setAccessibilityValue(filesShown ? "on" : "off")
+    }
+
+    #if DEBUG
+    /// Self-test: which of the window's toggles this strip has, and Files' state.
+    var debugWindowToggles: (sidebar: Bool, files: Bool, filesOn: Bool, crumbsX: CGFloat) {
+        layoutSubtreeIfNeeded()
+        return (!sidebarButton.isHidden, !filesButton.isHidden, filesShown, crumbs.frame.minX)
+    }
+    #endif
 
     /// Whether the pane shows a session, so it offers the session's board.
     var showsBoardButton: Bool {

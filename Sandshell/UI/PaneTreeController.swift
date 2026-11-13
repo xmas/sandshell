@@ -36,6 +36,14 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
     var onShowFiles: ((_ changesOnly: Bool) -> Void)?
     /// A file link in a pane's chat: open it in the window's Files sidebar (at a line).
     var onOpenFile: ((URL, Int?) -> Void)?
+    /// The window's sidebar and Files toggles, on the strips at its top corners.
+    var onToggleSidebar: (() -> Void)?
+    var onToggleFiles: (() -> Void)?
+    /// The sidebar is hidden: the top-left strip makes room for the traffic
+    /// lights and carries the sidebar's toggle.
+    var sidebarHidden = false { didSet { if sidebarHidden != oldValue { updateWindowCorners() } } }
+    /// Files shows: the top-right strip's toggle is pressed.
+    var filesShown = false { didSet { if filesShown != oldValue { updateWindowCorners() } } }
 
     private let controller: WorkspaceController
     let surfaces: SessionSurfaces
@@ -136,6 +144,8 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
             if let self, pane === self.toolbarPane { self.onStatusChange?(text, working) }
         }
         pane.onClosePane = { [weak self, weak pane] in if let pane { self?.close(pane) } }
+        pane.onToggleSidebar = { [weak self] in self?.onToggleSidebar?() }
+        pane.onToggleFiles = { [weak self] in self?.onToggleFiles?() }
         pane.onShowBoard = { [weak self] id in self?.openBoard(ofSession: id) }
         pane.newSessionMenu = { [weak self] in self?.newSessionMenu?() }
         pane.onSplit = { [weak self, weak pane] edge in
@@ -408,9 +418,8 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
         view.addSubview(top, positioned: .below, relativeTo: dropOverlay.superview === view ? dropOverlay : nil)
         if dropOverlay.superview !== view { view.addSubview(dropOverlay) }
         NSLayoutConstraint.activate([
-            // Below the toolbar: the header is one strip across the window, and
-            // pane dividers only split the content under it.
-            top.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
+            // To the window's top: the panes' strips are its title bar.
+            top.topAnchor.constraint(equalTo: view.topAnchor),
             top.bottomAnchor.constraint(equalTo: view.bottomAnchor),
             top.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             top.trailingAnchor.constraint(equalTo: view.trailingAnchor),
@@ -420,6 +429,7 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
             p.showsFocusRing = many
             p.isFocused = p === focused
         }
+        updateWindowCorners()
         if restoringKeys { restoreKeys(keys) }
         // Divider positions need the splits' real sizes: apply them after
         // this layout pass (positions computed from zero would clamp to the minimum).
@@ -432,6 +442,26 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
             self.panes.forEach { $0.redrawSurface() }
         }
         return keys
+    }
+
+    /// The panes at the window's top corners: the top-left one's strip makes
+    /// room for the traffic lights (sidebar hidden), the top-right one's has
+    /// the Files toggle.
+    private func updateWindowCorners() {
+        guard let root else { return }
+        func corner(_ node: Node, trailing: Bool) -> TerminalStackController? {
+            switch node.kind {
+            case .leaf(let pane): return pane
+            case .split(let axis, let kids):
+                // Side by side: the first or last; stacked: the top one either way.
+                let kid = axis == .horizontal && trailing ? kids.last : kids.first
+                return kid.flatMap { corner($0, trailing: trailing) }
+            }
+        }
+        let leading = corner(root, trailing: false), trailing = corner(root, trailing: true)
+        for p in panes {
+            p.setWindowCorners(leading: p === leading && sidebarHidden, trailing: p === trailing, filesShown: filesShown)
+        }
     }
 
     /// Set while we position dividers ourselves (don't record those as user moves).

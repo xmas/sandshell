@@ -23,51 +23,18 @@ final class MainWindowController: NSWindowController {
     private var detail: PaneTreeController?
     /// This workspace's Search window (⇧⌘F), created on first use.
     private var searchWindow: SearchWindowController?
-    // The title bar: the focused session's name, the Sandbox group, the Files toggle.
-    private let toolbarName = NSTextField(labelWithString: "")
-    /// The single, persistent identity view (the session's name). Built once
-    /// and handed ONLY to the inserted toolbar item (see the `flag` gate in the
-    /// toolbar delegate) so NSToolbar's palette/measurement passes can't
-    /// re-parent its shared subviews and leave the live item blank.
-    private lazy var identityItemView: NSStackView = {
-        toolbarName.setContentCompressionResistancePriority(.init(40), for: .horizontal)
-        toolbarName.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        let stack = NSStackView(views: [toolbarName])
-        stack.orientation = .horizontal
-        stack.alignment = .centerY
-        // 140–360 pt, as wide as it can be: a long session name truncates
-        // instead of blowing the whole toolbar into the overflow menu.
-        // Priorities sit under fittingSizeCompression (50), so the toolbar
-        // measures the item at its 140 pt minimum, yet once laid out the label
-        // (40) truncates before it spills past the stack's edge (45) over the
-        // buttons beside it. Clipping is the last resort.
-        stack.setHuggingPriority(.init(1), for: .horizontal)
-        stack.distribution = .fill
-        stack.setClippingResistancePriority(.init(45), for: .horizontal)
-        stack.clipsToBounds = true
-        NSLayoutConstraint.activate([
-            stack.widthAnchor.constraint(greaterThanOrEqualToConstant: 140),
-            stack.widthAnchor.constraint(lessThanOrEqualToConstant: 360),
-            stack.heightAnchor.constraint(equalToConstant: 32),
-        ])
-        return stack
-    }()
-    /// Stop / Restart for the focused session's process in its sandbox.
-    private lazy var sandboxActions: SandboxActionsView = {
-        let view = SandboxActionsView(target: self, stop: #selector(stopFromToolbar), rebuild: #selector(rebuildFromToolbar))
+    /// The focused session's sandbox, in the sidebar's header (there's no
+    /// toolbar: the panes' strips are the title bar).
+    private lazy var sandboxStatus: SandboxStatusButton = {
+        let view = SandboxStatusButton()
         view.sandboxMenu = { [weak self] in self?.sandboxMenu() }
         return view
     }()
-    /// The Files sidebar's toggle (pressed while it shows).
-    private lazy var filesToggleButton = ChromeButton(
-        "Files", symbol: "doc.text", symbolConfiguration: .role(.body),
-        toolTip: "Show or hide Files (⇧⌥⌘0)", target: self, action: #selector(toggleFilesFromToolbar), id: "toolbar-files")
-    /// The Files sidebar's own close button (an ×), at the end of its header.
-    private lazy var filesCloseButton = NSButton.symbol(
-        "xmark", label: "Close Files (⇧⌥⌘0)", pointSize: TypeRole.meta.symbolPointSize,
-        size: NSSize(width: 28, height: 24), target: self, action: #selector(toggleFilesFromToolbar), id: "files-close")
     /// Follows the Files sidebar however it collapses (toggle, menu, a drag).
     private var filesCollapseObserver: NSKeyValueObservation?
+    /// Follows the sidebar however it collapses: the top-left strip makes room
+    /// for the traffic lights while it's hidden.
+    private var sidebarCollapseObserver: NSKeyValueObservation?
     /// The workspace root this window is bound to (window-per-folder).
     let root: URL
     /// This window's theme controller (for chrome that opens its own windows,
@@ -114,18 +81,16 @@ final class MainWindowController: NSWindowController {
             backing: .buffered,
             defer: false
         )
-        // With the native toolbar, let AppKit place the traffic lights itself
-        // (the custom inset fought the toolbar and dragged them into the sidebar).
-        window.trafficLightInset = .zero
+        // No toolbar: the panes' strips are the title bar, and the traffic
+        // lights center in their band (the sidebar's top row matches it).
+        window.trafficLightCenterFromTop = PaneStripView.height / 2
         window.title = root.lastPathComponent
         // We restore windows ourselves (AppDelegate + OpenWindows); opt out of
         // macOS's automatic state restoration so it never re-presents a sheet
         // (e.g. the per-root inspector) that was open at quit.
         window.isRestorable = false
-        // Merge the title bar into the content so the sidebar header reads as the
-        // window's title area (window controls float over the sidebar top).
-        // Identity lives in a custom toolbar item (badge + name/subtitle), so the
-        // native window title stays hidden.
+        // Merge the title bar into the content: the panes' strips are the title
+        // bar (each names what it shows), so the native title stays hidden.
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
         // Per-root frame autosave so each folder's window remembers its own size.
@@ -153,6 +118,7 @@ final class MainWindowController: NSWindowController {
         let sidebarVC = SidebarListController(controller: controller)
         self.sidebar = sidebarVC
         sidebarVC.onOpenWorkspace = { [weak self] r in self?.onOpenWorkspace?(r) }
+        sidebarVC.onToggleSidebar = { [weak self] in self?.toggleSidebar() }
         sidebarVC.onStopTask = { [weak self] sid, task in await self?.detail?.surfaces.chats[sid]?.session.stopBackgroundTask(task) ?? false }
         sidebarVC.onDropFiles = { [weak self] id, urls in
             self?.workspace?.selection = .session(id)
@@ -173,27 +139,23 @@ final class MainWindowController: NSWindowController {
         detail.newSessionMenu = { [weak self] in self?.sidebar?.newSessionMenu() }
         detail.onShowFiles = { [weak self] changesOnly in self?.showInFiles(changesOnly: changesOnly) }
         detail.onOpenFile = { [weak self] url, line in self?.showInFiles(url, line: line) }
-        // Drive the toolbar identity (the session's name) from the focused
-        // pane; nothing when it shows no session.
+        detail.onToggleSidebar = { [weak self] in self?.toggleSidebar() }
+        detail.onToggleFiles = { [weak self] in self?.toggleFiles() }
+        // The focused pane's session names the window (its strip shows it).
         detail.onChromeChange = { [weak self] chrome in
             guard let self else { return }
             // The window title feeds the Window menu (and Mission Control), where
             // several folders' windows sit side by side — so it always carries
-            // the folder name. The visible titlebar is hidden; the toolbar shows
-            // only the session (the sidebar header already names the folder).
+            // the folder name. The native title bar is hidden.
             let folder = self.root.lastPathComponent
-            // No status, timer or subtitle up here: the sidebar row carries those.
-            if let chrome {
-                self.toolbarName.stringValue = chrome.title
-                self.window?.title = "\(folder) — \(chrome.title)"
-            } else {
-                self.toolbarName.stringValue = ""
-                self.window?.title = folder
-            }
-            self.window?.toolbar?.validateVisibleItems()
+            self.window?.title = chrome.map { "\(folder) — \($0.title)" } ?? folder
+            self.updateSandboxStatus()
         }
         let detailItem = NSSplitViewItem(viewController: detail)
         detailItem.minimumThickness = 420
+        // To the window's top: the panes' strips are its title bar.
+        detailItem.allowsFullHeightLayout = true
+        detailItem.titlebarSeparatorStyle = .none
         split.addSplitViewItem(detailItem)
 
         // Its tabs are this window's, whichever session's folder it shows
@@ -208,9 +170,9 @@ final class MainWindowController: NSWindowController {
             guard let self, case .session(let id)? = self.workspace?.selection else { return NSSound.beep() }
             self.detail?.askAgent(text, on: id)
         }
-        // Files is the window's right sidebar: full height (its header sits in
-        // the title bar, over its own background), never a pane. As wide as
-        // you like; at least what its shown columns need.
+        // Files is the window's right sidebar: full height (its header is its
+        // top band, beside the strips), never a pane. As wide as you like; at
+        // least what its shown columns need.
         let filesItem = NSSplitViewItem(inspectorWithViewController: files)
         filesItem.minimumThickness = files.minimumWidth
         filesItem.maximumThickness = NSSplitViewItem.unspecifiedDimension
@@ -228,16 +190,23 @@ final class MainWindowController: NSWindowController {
         sandboxObserver = controller.$containerPhases.map { _ in () }
             .merge(with: controller.$sandboxBusy.map { _ in () })
             .sink { [weak self] in
-                Task { @MainActor [weak self] in self?.updateSandboxGroup() }
+                Task { @MainActor [weak self] in self?.updateSandboxStatus() }
             }
 
         window.contentViewController = split
-        // Native window toolbar (identity, Sandbox group, Files); and, in
-        // DEBUG, a construction-tape banner.
-        installMainToolbar()
+        // No toolbar: the panes' strips are the title bar, the sandbox's state
+        // is in the sidebar's header; and, in DEBUG, a construction-tape banner.
+        Self.forgetOldToolbarConfigurations()
+        sidebarVC.setHeaderAccessory(sandboxStatus)
         filesCollapseObserver = filesItem.observe(\.isCollapsed, options: [.new]) { [weak self] _, _ in
             MainActor.assumeIsolated { self?.filesVisibilityChanged() }
         }
+        sidebarCollapseObserver = sidebarItem.observe(\.isCollapsed, options: [.initial, .new]) { [weak self] _, change in
+            let collapsed = change.newValue ?? false
+            MainActor.assumeIsolated { self?.detail?.sidebarHidden = collapsed }
+        }
+        filesVisibilityChanged()
+        updateSandboxStatus()
         installDebugTapeIfNeeded()
         window.setContentSize(NSSize(width: 1000, height: 640))
         // Restore this folder's remembered frame; for a folder opened for the
@@ -290,54 +259,22 @@ final class MainWindowController: NSWindowController {
         // The transparent titlebar shows the window background; use the title-bar
         // color (== panel normally, the selected Main color when matching terminal).
         window?.backgroundColor = colors.titleBar
-        sandboxActions.apply(colors)
-        filesToggleButton.apply(colors)
-        filesCloseButton.contentTintColor = colors.text2
-        toolbarName.textColor = colors.text
         filesPane?.applyChrome(colors)
     }
 
-    // MARK: - Toolbar + debug construction tape
+    // MARK: - Old toolbars + debug construction tape
 
-    /// Attach the window toolbar (its items are built by the `NSToolbarDelegate`
-    /// conformance below).
-    private func installMainToolbar() {
-        toolbarName.font = .role(.title)
-        toolbarName.lineBreakMode = .byTruncatingTail
-        toolbarName.setAccessibilityIdentifier("toolbar-identity")
-        toolbarName.stringValue = ""   // no session yet: the sidebar header names the folder
-
-        // A fixed set, not customizable (one home per action), so nothing is
-        // autosaved. The identifier is versioned all the same, and what older
-        // versions autosaved is dropped, so none of their items (status,
-        // reveal, search…) lingers.
-        Self.forgetOldToolbarConfigurations()
-        let toolbar = NSToolbar(identifier: Self.toolbarIdentifier)
-        toolbar.delegate = self
-        toolbar.allowsUserCustomization = false
-        toolbar.autosavesConfiguration = false
-        toolbar.displayMode = .iconOnly
-        window?.toolbar = toolbar
-        window?.toolbarStyle = .unified
-        // Center the traffic lights on the toolbar's identity item (AppKit's
-        // default on the macOS 27 SDK toolbar sits low, crowding the sidebar header).
-        (window as? TrafficLightInsetWindow)?.trafficLightAlignmentView = identityItemView
-        filesVisibilityChanged()
-    }
-
-    nonisolated static let toolbarIdentifier = "MainWindowToolbar.v6"
-
-    /// The arrangements earlier toolbars autosaved (v1–v5, when it was
-    /// customizable): forgotten, so no stale item set stays in defaults.
+    /// The arrangements the toolbars before autosaved (v1–v6; there's no
+    /// toolbar now): forgotten, so no stale item set stays in defaults.
     nonisolated static func forgetOldToolbarConfigurations(_ defaults: UserDefaults = .standard) {
-        for version in ["", ".v2", ".v3", ".v4", ".v5"] {
+        for version in ["", ".v2", ".v3", ".v4", ".v5", ".v6"] {
             defaults.removeObject(forKey: "NSToolbar Configuration MainWindowToolbar" + version)
         }
     }
 
     /// DEBUG-only: a faint construction-tape watermark inserted **behind** the
-    /// toolbar (into the titlebar view), so a debug build is unmistakable without
-    /// adding a separate band. Shown regardless of session state — it's chrome.
+    /// title bar's controls (into the titlebar view), so a debug build is
+    /// unmistakable without adding a separate band. It's chrome.
     private func installDebugTapeIfNeeded() {
 #if DEBUG
         // The titlebar view is the superview of the standard window buttons; with
@@ -401,45 +338,23 @@ final class MainWindowController: NSWindowController {
     var searchWindowController: SearchWindowController? { searchWindow }
 
     #if DEBUG
-    /// Self-test: the identity item's width, and how many of the toolbar's
-    /// shown items fit (the rest would go to its overflow menu).
-    var debugToolbarWidths: (identity: CGFloat, visible: Int, items: Int, missing: [String]) {
-        // The title bar's own items (the separator and space past it are the
-        // Files sidebar's, laid out only while it shows).
-        let items = window?.toolbar?.items ?? []
-        let main = items.prefix { $0.itemIdentifier != .inspectorTrackingSeparator }
-            .filter { !$0.isHidden && $0.itemIdentifier != .flexibleSpace }
-        let visible = Set((window?.toolbar?.visibleItems ?? []).map(\.itemIdentifier))
-        let missing = main.filter { !visible.contains($0.itemIdentifier) }.map(\.itemIdentifier.rawValue)
-        return (identityItemView.frame.width, main.count - missing.count, main.count, missing)
-    }
-    /// Self-test: the toolbar's items, by identifier, in order.
-    var debugToolbarItems: [String] { window?.toolbar?.items.map(\.itemIdentifier.rawValue) ?? [] }
-    /// Self-test: the toolbar's default items, by identifier, in order.
-    var debugDefaultToolbarItems: [String] {
-        window?.toolbar.map { toolbarDefaultItemIdentifiers($0).map(\.rawValue) } ?? []
-    }
-    /// Self-test: the title bar's session name.
-    var debugIdentity: String { toolbarName.stringValue }
-    /// Self-test: the Sandbox group — shown, and Stop / Restart enabled.
-    var debugSandboxGroup: (shown: Bool, stop: Bool, rebuild: Bool) {
-        window?.toolbar?.validateVisibleItems()
-        let item = window?.toolbar?.items.first { $0.itemIdentifier == .sandbox }
-        return (item.map { !$0.isHidden } ?? false, sandboxActions.stopButton.isEnabled,
-                sandboxActions.rebuildButton.isEnabled)
+    /// Self-test: the sidebar's sandbox status — shown, which sandbox, what it says.
+    var debugSandboxStatus: (shown: Bool, name: String?, tip: String) {
+        updateSandboxStatus()
+        return (!sandboxStatus.isHidden, sandboxStatus.sandboxName, sandboxStatus.toolTip ?? "")
     }
     /// Self-test: the sandbox menu's titles ("" for a separator).
     var debugSandboxMenuTitles: [String] { sandboxMenu()?.items.map { $0.isSeparatorItem ? "" : $0.title } ?? [] }
     /// Self-test: Inspect, as the sandbox menu does it.
     func debugInspectSandbox() { inspectSandboxFromMenu() }
-    /// Self-test: the sandbox pill's tooltip (its state and access).
-    var debugSandboxAccess: String { sandboxActions.toolTip ?? "" }
+    /// Self-test: the sandbox status's tooltip (its state and access).
+    var debugSandboxAccess: String { sandboxStatus.toolTip ?? "" }
     func debugShowSandboxAccess() -> Bool { showSandboxAccessFromMenu(); return accessPopover?.isShown == true }
     func debugCloseSandboxAccess() { accessPopover?.close(); accessPopover = nil }
     /// Self-test: the access popover's content and its anchor, on screen.
     var debugAccessPopoverFrames: (popover: NSRect, anchor: NSRect)? {
         guard let view = accessPopover?.contentViewController?.view, let pop = view.window else { return nil }
-        return (pop.convertToScreen(view.convert(view.bounds, to: nil)), sandboxActions.debugLabelScreenRect)
+        return (pop.convertToScreen(view.convert(view.bounds, to: nil)), sandboxStatus.debugScreenRect)
     }
     /// Self-test: collapse or expand Files as a person's click does (animated).
     func debugSetFilesShownAnimated(_ show: Bool) {
@@ -447,26 +362,22 @@ final class MainWindowController: NSWindowController {
         NSAnimationContext.runAnimationGroup { _ in item.animator().isCollapsed = !show }
         filesVisibilityChanged()
     }
-    /// Self-test: what the Sandbox group's label says.
-    var debugSandboxLabel: String { sandboxActions.debugLabel }
-    var debugSandboxLabelWhole: Bool { sandboxActions.layoutSubtreeIfNeeded(); return sandboxActions.debugLabelWhole }
-    /// Self-test: the Files toggle shows pressed; the sidebar's header shows.
-    var debugFilesToggle: (on: Bool, headerShown: Bool) {
-        let header = window?.toolbar?.items.first { $0.itemIdentifier == .filesHeader }
-        return (filesToggleButton.isOn, header.map { !$0.isHidden } ?? false)
+    /// Self-test: the window has no toolbar.
+    var debugHasToolbar: Bool { window?.toolbar != nil }
+    /// Self-test: the traffic lights' vertical center, from the window's top.
+    var debugTrafficLightsCenterFromTop: CGFloat? {
+        guard let window, let close = window.standardWindowButton(.closeButton), let frameView = window.contentView?.superview
+        else { return nil }
+        let r = close.convert(close.bounds, to: frameView)
+        return frameView.bounds.height - r.midY
     }
-    /// Self-test: set the toolbar's session name, then the name label's width
-    /// against the identity item's.
-    var debugToolbarNameFits: Bool {
-        toolbarName.alignmentRect(forFrame: toolbarName.frame).width >= toolbarName.intrinsicContentSize.width - 6
-    }
-    func debugToolbarName(_ name: String) -> (label: CGFloat, identity: CGFloat) {
-        toolbarName.stringValue = name
-        identityItemView.layoutSubtreeIfNeeded()
-        // The alignment rect: a label's frame runs 2 pt past its text each side.
-        let text = toolbarName.alignmentRect(forFrame: toolbarName.frame)
-        let label = toolbarName.superview?.convert(text, to: identityItemView) ?? text
-        return (label.maxX, identityItemView.bounds.width)
+    /// Self-test: the strips carrying the window's toggles — which pane's has
+    /// the sidebar's (sidebar hidden) and which the Files toggle, and whether
+    /// that's pressed; and whether Files' header shows.
+    var debugWindowCorners: (sidebarToggles: Int, filesToggles: Int, filesOn: Bool, filesHeader: Bool) {
+        let strips = (detail?.panes ?? []).compactMap { $0.debugStripView as? PaneStripView }.map(\.debugWindowToggles)
+        let header = filesPane.map { isFilesShown && $0.header.window != nil && !$0.header.isHiddenOrHasHiddenAncestor } ?? false
+        return (strips.filter(\.sidebar).count, strips.filter(\.files).count, strips.contains { $0.files && $0.filesOn }, header)
     }
     #endif
 
@@ -586,18 +497,8 @@ final class MainWindowController: NSWindowController {
     /// and the folder it shows.
     private func filesVisibilityChanged() {
         let shown = isFilesShown
-        filesToggleButton.isOn = shown
-        // The Files sidebar's part of the title bar (its tracking separator,
-        // header, space and close button) comes and goes with it. Removed,
-        // not hidden: hidden items still take room at the bar's end.
-        if let toolbar = window?.toolbar {
-            let separator = toolbar.items.firstIndex { $0.itemIdentifier == .inspectorTrackingSeparator }
-            if shown, separator == nil {
-                for id in Self.filesToolbarItems { toolbar.insertItem(withItemIdentifier: id, at: toolbar.items.count) }
-            } else if !shown, let separator {
-                while toolbar.items.count > separator { toolbar.removeItem(at: toolbar.items.count - 1) }
-            }
-        }
+        // The top-right strip's Files toggle shows it pressed.
+        detail?.filesShown = shown
         UserDefaults.standard.set(shown, forKey: filesVisibleKey)
         syncFilesRoot()
         // Once it has expanded (and been laid out), make sure it's in the window.
@@ -748,20 +649,14 @@ final class MainWindowController: NSWindowController {
     }
 }
 
-/// A window that insets its traffic-light buttons from the native top-left
-/// corner. AppKit re-lays out the standard buttons on every layout pass, so we
-/// capture their native origins once and re-apply our offset after each pass.
+/// A window whose traffic-light buttons center at a given depth from its top
+/// (the panes' strips' band: there's no toolbar to set it). AppKit re-lays out
+/// the standard buttons on every layout pass, so we re-apply it after each.
 final class TrafficLightInsetWindow: NSWindow {
-    /// Extra padding added to the native button position (points right + down).
-    var trafficLightInset: NSSize = .zero { didSet { layoutTrafficLights() } }
-    /// When set, the traffic lights are re-centered vertically on this view
-    /// (e.g. the toolbar's identity item) instead of AppKit's default, which on
-    /// the macOS 27 SDK toolbar sits noticeably below the toolbar items and
-    /// crowds the sidebar header. `trafficLightInset` still applies on top.
-    weak var trafficLightAlignmentView: NSView? { didSet { layoutTrafficLights() } }
+    /// The buttons' vertical center, in points from the window's top (nil: AppKit's own).
+    var trafficLightCenterFromTop: CGFloat? { didSet { layoutTrafficLights() } }
 
     private static let buttonTypes: [NSWindow.ButtonType] = [.closeButton, .miniaturizeButton, .zoomButton]
-    private var nativeOrigins: [NSWindow.ButtonType: NSPoint] = [:]
     private var positioning = false
 
     override func layoutIfNeeded() {
@@ -770,27 +665,17 @@ final class TrafficLightInsetWindow: NSWindow {
     }
 
     private func layoutTrafficLights() {
-        guard trafficLightInset != .zero || trafficLightAlignmentView != nil, !positioning else { return }
+        guard let depth = trafficLightCenterFromTop, !positioning,
+              let titlebar = standardWindowButton(.closeButton)?.superview else { return }
         positioning = true
         defer { positioning = false }
-        // Target center (in the buttons' superview coordinates) from the
-        // alignment view, if it is laid out and in this window.
-        var targetMidY: CGFloat?
-        if let align = trafficLightAlignmentView, align.window === self, !align.bounds.isEmpty,
-           let titlebar = standardWindowButton(.closeButton)?.superview {
-            let r = align.convert(align.bounds, to: titlebar)
-            if r.height > 0 { targetMidY = r.midY }
-        }
+        // The titlebar view is non-flipped (origin at bottom-left) and runs to
+        // the window's top; a button deeper than it would be clipped.
+        let midY = titlebar.bounds.height - depth
         for type in Self.buttonTypes {
             guard let button = standardWindowButton(type) else { continue }
-            // First sight of each button is its native (AppKit-assigned) origin.
-            let native = nativeOrigins[type] ?? button.frame.origin
-            nativeOrigins[type] = native
-            // Superview is non-flipped (origin at bottom-left), so move down by
-            // subtracting from y.
-            let baseY = targetMidY.map { $0 - button.frame.height / 2 } ?? native.y
-            button.setFrameOrigin(NSPoint(x: native.x + trafficLightInset.width,
-                                          y: baseY - trafficLightInset.height))
+            let y = max(0, (midY - button.frame.height / 2).rounded())
+            if button.frame.origin.y != y { button.setFrameOrigin(NSPoint(x: button.frame.origin.x, y: y)) }
         }
     }
 }
@@ -826,98 +711,13 @@ extension MainWindowController: NSWindowDelegate {
     }
 }
 
-private extension NSToolbarItem.Identifier {
-    static let sidebarToggle = NSToolbarItem.Identifier("sidebarToggle")
-    static let identity      = NSToolbarItem.Identifier("identity")
-    static let sandbox       = NSToolbarItem.Identifier("sandbox")
-    static let filesToggle   = NSToolbarItem.Identifier("filesToggle")
-    /// The Files sidebar's header ("Files · main · 6 changed") and close
-    /// button: over the sidebar, past the inspector's tracking separator.
-    static let filesHeader   = NSToolbarItem.Identifier("filesHeader")
-    static let filesClose    = NSToolbarItem.Identifier("filesClose")
-}
+// MARK: - The sandbox (its state in the sidebar's header, its menu)
 
-extension MainWindowController: NSToolbarDelegate {
-    /// The title bar: sidebar toggle · the session's name · Sandbox (Stop,
-    /// Restart) · Files. Reveal in Finder lives in the pane's folder crumb,
-    /// Chat ⇄ Terminal in the pane strip, Search in the sidebar (and ⇧⌘F).
-    func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        // Our own sidebar toggle, not `.toggleSidebar`: the system item is a
-        // bezeled button that renders as a glass capsule (and can hold a focus
-        // ring) on macOS 26+/SDK 27 builds.
-        [.sidebarToggle, .identity, .flexibleSpace, .sandbox, .filesToggle]
-    }
-
-    /// Over the Files sidebar while it shows (`filesVisibilityChanged`): its
-    /// header, and its close button at the far end.
-    fileprivate static let filesToolbarItems: [NSToolbarItem.Identifier] =
-        [.inspectorTrackingSeparator, .filesHeader, .flexibleSpace, .filesClose]
-
-    func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        toolbarDefaultItemIdentifiers(toolbar) + Self.filesToolbarItems
-    }
-
-    func toolbar(_ toolbar: NSToolbar,
-                 itemForItemIdentifier itemIdentifier: NSToolbarItem.Identifier,
-                 willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? {
-        // Custom-view items. `flag` (willBeInsertedIntoToolbar) is true for the
-        // real item and false for a palette / sizing pass; hand the shared live
-        // views ONLY to the real item so a copy can't steal them (which left
-        // the toolbar identity blank — see the identityItemView note).
-        // No bezels anywhere: on macOS 26+/SDK 27 a bordered item is wrapped
-        // in a Liquid Glass capsule, which is not this app's look (xmas-sandshell-85c).
-        func item(_ view: @autoclosure () -> NSView, label: String,
-                  validate: (() -> Void)? = nil) -> SelfValidatingToolbarItem {
-            let item = SelfValidatingToolbarItem(itemIdentifier: itemIdentifier)
-            item.view = flag ? view() : NSTextField(labelWithString: label)
-            item.label = label
-            item.paletteLabel = label
-            item.isBordered = false
-            item.onValidate = validate
-            return item
-        }
-        switch itemIdentifier {
-        case .sidebarToggle:
-            let item = item(Self.plainToolbarButton(symbol: "sidebar.left", label: "Toggle Sidebar",
-                                                    target: self, action: #selector(toggleSidebarFromToolbar)),
-                            label: "Sidebar")
-            item.toolTip = "Toggle Sidebar"
-            item.visibilityPriority = .high
-            return item
-        case .identity:
-            // Revalidates the Sandbox group too: a hidden item isn't validated.
-            let item = item(identityItemView, label: "Session") { [weak self] in self?.updateSandboxGroup() }
-            item.visibilityPriority = .high
-            return item
-        case .sandbox:
-            let item = item(sandboxActions, label: "Sandbox") { [weak self] in self?.updateSandboxGroup() }
-            item.visibilityPriority = .high
-            return item
-        case .filesToggle:
-            let item = item(filesToggleButton, label: "Files")
-            item.toolTip = "Show or hide Files (⇧⌥⌘0)"
-            item.visibilityPriority = .high
-            return item
-        case .filesHeader:
-            guard let filesPane else { return nil }
-            return item(filesPane.header, label: "Files")
-        case .filesClose:
-            let item = item(filesCloseButton, label: "Hide Files")
-            item.toolTip = "Hide Files (⇧⌥⌘0)"
-            return item
-        default:
-            return nil
-        }
-    }
-
-    /// The Sandbox group: hidden while no pane shows a session; Stop and
-    /// Restart enabled for what the focused pane shows.
-    private func updateSandboxGroup() {
-        guard let detail else { return }
-        let anySession = detail.panes.contains { $0.shownSession != nil }
-        if let item = window?.toolbar?.items.first(where: { $0.itemIdentifier == .sandbox }), item.isHidden == anySession {
-            item.isHidden = !anySession
-        }
+extension MainWindowController {
+    /// The sidebar's sandbox status: hidden while the focused pane shows no
+    /// session; else its sandbox, tinted by its state.
+    func updateSandboxStatus() {
+        guard detail != nil else { return }
         let box = focusedSandbox
         let phase = box.flatMap { workspace?.containerPhases[$0.agent] }
         let access = focusedSandboxAccess
@@ -928,8 +728,7 @@ extension MainWindowController: NSToolbarDelegate {
         case .stopped?: (nil, "stopped")
         case .absent?, nil: (nil, "not created yet")
         }
-        sandboxActions.setSandbox(name: box?.name, access: access?.mode, stateColor: color,
-                                  tip: box.map { box in
+        sandboxStatus.setSandbox(name: box?.name, stateColor: color, tip: box.map { box in
             let folder = access.map { a in
                 switch a.mode {
                 case .readWrite: " · reads and writes the folder"
@@ -939,22 +738,8 @@ extension MainWindowController: NSToolbarDelegate {
             } ?? ""
             return "Sandbox “\(box.name)” (\(state))\(folder)"
         })
-        sandboxActions.setSandboxRunning(phase != .stopped)
-        // Not while it's being made or acted on, or before it exists.
-        let busy = box.map { workspace?.sandboxBusy.contains($0.name) ?? false } ?? true
-        let ready = (phase == .running || phase == .stopped) && !busy
-        sandboxActions.setEnabled(stop: ready, rebuild: ready)
     }
 
-    /// A borderless, non-focusable symbol button for toolbar items — the
-    /// Sequoia-style glyph, with no bezel, glass capsule, or focus ring.
-    private static func plainToolbarButton(symbol: String, label: String,
-                                           target: AnyObject?, action: Selector) -> NSButton {
-        NSButton.symbol(symbol, label: label, pointSize: TypeRole.body.symbolPointSize, size: NSSize(width: 28, height: 24),
-                        target: target, action: action)
-    }
-
-    @objc private func toggleSidebarFromToolbar() { toggleSidebar() }
     /// Sandbox ▸ Stop: the focused session's process in its sandbox.
     @objc private func stopFromToolbar() {
         guard let workspace, let box = focusedSandbox else { return }
@@ -986,10 +771,9 @@ extension MainWindowController: NSToolbarDelegate {
         guard let workspace, let box = focusedSandbox else { return }
         Task { @MainActor [weak self] in
             guard let self else { return }
-            self.sandboxActions.setEnabled(stop: false, rebuild: false)   // while it looks
             let found: Result<SandboxChanges, Error>
             do { found = .success(try await SbxClient.shared.readChanges(inSandbox: box.name)) } catch { found = .failure(error) }
-            self.updateSandboxGroup()
+            self.updateSandboxStatus()
             let live = workspace.liveSessionCount(inSandboxOf: box.agent)
             var info = "It’s made again from its image and the workspace’s kits"
                 + (live == 0 ? "." : "; \(live == 1 ? "the session" : "all \(live) sessions") running in it stop.")
@@ -1054,7 +838,7 @@ extension MainWindowController: NSToolbarDelegate {
     @objc private func showSandboxAccessFromMenu() {
         guard let access = focusedSandboxAccess else { return }
         accessPopover?.close()
-        accessPopover = sandboxActions.showAccess(access)
+        accessPopover = sandboxStatus.showAccess(access)
     }
 
     /// The focused session's sandbox (its container name and agent).

@@ -115,10 +115,10 @@ AppDelegate (@main)
 | File | Role |
 |------|------|
 | `App/AppDelegate.swift` | `@main`; patches PATH, creates/restores `MainWindowController` windows, handles Apple Events (`Shll`/`stat`, `Shll`/`news`) and URL scheme (`sandshell://open`), global keyboard shortcuts |
-| `UI/MainWindowController.swift` | NSWindow + `NSSplitViewController` (sidebar \| detail); native toolbar; theme observation |
+| `UI/MainWindowController.swift` | NSWindow + `NSSplitViewController` (sidebar \| detail \| Files); no toolbar: the panes' strips are the title bar (traffic lights centered in their band, `TrafficLightInsetWindow`), the focused session's sandbox is a status in the sidebar's header (`SandboxStatusButton`: its menu has Stop, Restart, Rebuild…); theme observation |
 | `UI/PaneTreeController.swift` | Detail area as split panes (⌘D / ⇧⌘D / ⌥⌘W, drag a session onto a pane edge); layout saved per window |
 | `UI/TerminalStackController.swift` | One pane: shows a session's terminal or chat, its title strip, launch/failure states. `SessionSurfaces` (same file) holds the window's live sessions |
-| `UI/PaneStrip.swift` | A pane's 34 pt title strip: crumbs (sandbox › folder › branch › name) that condense by its width (`PaneStripCondensing`), and Chat \| Terminal, Split Right/Down, Close |
+| `UI/PaneStrip.swift` | A pane's 38 pt title strip, the window's title bar (drags it; the top-left one makes room for the traffic lights while the sidebar is hidden, the top-right one has the Files toggle): crumbs (sandbox › folder › branch › name) that condense by its width (`PaneStripCondensing`), and Chat \| Terminal, Split Right/Down, Close |
 | `Chat/ComposerBar.swift` | Under the composer: attach, MCP, model/effort (`UI/ClaudeChoosers.swift`), approval mode, readout `$0.47 · 38%` → Session details (`UI/ClaudeStatsDetailView.swift`, with the context gauge); the pill's Send/Stop button |
 | `UI/BackgroundTasksView.swift` | Background tasks popover / window (⌥⌘B) |
 | `App/StatusMenu.swift`, `App/SystemSleep.swift` | The menu bar status (sessions that need you / work / finished, every window); `KeepAwake` (while agents work; for Remote Control on power, opt-in; after quit for a turn left running) |

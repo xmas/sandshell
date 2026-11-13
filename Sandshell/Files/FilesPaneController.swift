@@ -90,13 +90,19 @@ final class FilesPaneController: NSViewController, NSSplitViewDelegate {
         diffColumn.isHidden = !UserDefaults.standard.bool(forKey: diffShownKey)
         editor.diffColumnShown = !diffColumn.isHidden
 
-        // Full height: the background runs up under the title bar (where the
-        // header's toolbar items sit); the content starts below it.
+        // Full height: its header is its top band, as tall as a pane's strip
+        // (the window's title bar); the columns start below it.
         let sidebar = FilesSidebarView()
         columns.translatesAutoresizingMaskIntoConstraints = false
+        header.translatesAutoresizingMaskIntoConstraints = false
+        sidebar.addSubview(header)
         sidebar.addSubview(columns)
         NSLayoutConstraint.activate([
-            columns.topAnchor.constraint(equalTo: sidebar.safeAreaLayoutGuide.topAnchor),
+            header.topAnchor.constraint(equalTo: sidebar.topAnchor),
+            header.heightAnchor.constraint(equalToConstant: PaneStripView.height),
+            header.leadingAnchor.constraint(equalTo: sidebar.leadingAnchor, constant: 10),
+            header.trailingAnchor.constraint(lessThanOrEqualTo: sidebar.trailingAnchor, constant: -10),
+            columns.topAnchor.constraint(equalTo: header.bottomAnchor),
             columns.leadingAnchor.constraint(equalTo: sidebar.leadingAnchor, constant: 1),
             columns.trailingAnchor.constraint(equalTo: sidebar.trailingAnchor),
             columns.bottomAnchor.constraint(equalTo: sidebar.bottomAnchor),
@@ -142,10 +148,6 @@ final class FilesPaneController: NSViewController, NSSplitViewDelegate {
         (view as? FilesSidebarView)?.apply(colors)
     }
 
-    override func viewDidLayout() {
-        super.viewDidLayout()
-        if view.bounds.width > 0 { header.fit(sidebarWidth: view.bounds.width) }
-    }
 
     // MARK: Columns
 
@@ -382,7 +384,7 @@ final class FilesPaneController: NSViewController, NSSplitViewDelegate {
 // MARK: - The sidebar's ground
 
 /// The Files sidebar's background: its own colour, full height, with a
-/// hairline down its leading edge and one under the header (the title bar's
+/// hairline down its leading edge and one under the header (a strip's
 /// height), so it reads as a sidebar and not a pane.
 @MainActor
 private final class FilesSidebarView: NSView {
@@ -402,13 +404,7 @@ private final class FilesSidebarView: NSView {
         bounds.fill()
         line.setFill()
         NSRect(x: 0, y: 0, width: 1, height: bounds.height).fill()
-        let top = safeAreaInsets.top
-        if top > 0 { NSRect(x: 0, y: top - 1, width: bounds.width, height: 1).fill() }
-    }
-
-    override func layout() {
-        super.layout()
-        needsDisplay = true   // the header's rule follows the title bar's height
+        NSRect(x: 0, y: PaneStripView.height - 1, width: bounds.width, height: 1).fill()
     }
 }
 
