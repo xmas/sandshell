@@ -2,6 +2,12 @@
 
 A running log of what changed, newest first. Yes, we actually write these.
 
+## v0.2.58 — "Your Turn"
+- **Run a command yourself from the chat.** Start a line with `!` to run it in the session's sandbox, or with `&` to run it on your Mac, in the session's folder, as you. The output appears in the chat as it runs, and the agent sees it with your next message. `&` asks once before its first use, and works only in Sandshell's window, never from Remote Control.
+- **A log of what you ran.** Help ▸ Show Command Log lists every `!` and `&` command: when, where, in which folder, and how it ended. It's kept on the Mac, out of reach of every sandbox.
+- **Claude chats know about it.** When something has to happen on your Mac (Xcode, `brew`, `git push`, `sbx`), a Claude chat gives you an `&…` line to run instead of sending you to a terminal. New sandboxes get this; rebuild an existing one to add it.
+- **A Claude account just for a workspace's sandboxes.** Settings ▸ Sandboxes ▸ Claude account ▸ New Account… gives the workspace's sandboxes their own Claude sign-in, kept apart from the Mac's. Rebuild, then `/login` in a session. Useful when the Mac's own Claude is managed for you. If sbx holds a Claude credential for every sandbox, it overrides the account's sign-in: the setting and the chat tell you, and how to give that sandbox its own.
+
 ## v0.2.57 — "One Knob"
 - **Three controls under the composer.** + attaches files, mentions a file and opens the chat's MCP servers (MCP shows on the bar on its own only while a server isn't working). One chooser — "Opus 5.5 · High" — holds the model, the effort and the approval mode, each a section of its menu. And a ring for the context window: green, orange past 70 %, red past 90 %; hover it for the percentage and the cost, click it for Session details.
 
