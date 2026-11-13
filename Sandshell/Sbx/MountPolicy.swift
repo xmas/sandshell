@@ -58,6 +58,9 @@ struct MountPolicy: Codable, Hashable {
             /// `mkdir -p` the directory first (rw persistence dirs).
             case directory
         }
+
+        /// The folder it's in: `home`, or for `.claude` a workspace's own Claude account's.
+        func base(home: URL, claudeHome: URL?) -> URL { subpath == ".claude" ? claudeHome ?? home : home }
     }
 
     /// The managed agent state/config dirs, in display/apply order. All mounted
@@ -71,9 +74,11 @@ struct MountPolicy: Codable, Hashable {
     /// The agent mounts that will actually be bound, as `MountSpec`s — pure (no
     /// side effects), suitable for UI count/display. A mount is included when it
     /// is seeded (always created) or already present on the host.
-    static func agentMountSpecs(home: URL) -> [MountSpec] {
+    /// `claudeHome`: a workspace's own Claude account (`ClaudeAccounts`): its
+    /// `.claude` is mounted in place of this Mac's.
+    static func agentMountSpecs(home: URL, claudeHome: URL? = nil) -> [MountSpec] {
         agentMounts.compactMap { m in
-            let url = home.appending(path: m.subpath, directoryHint: .isDirectory)
+            let url = m.base(home: home, claudeHome: claudeHome).appending(path: m.subpath, directoryHint: .isDirectory)
             let willExist = m.seed != .ifPresent || isFolder(url.path)
             return willExist ? MountSpec(path: url, readonly: m.readonly) : nil
         }
@@ -87,10 +92,10 @@ struct MountPolicy: Codable, Hashable {
     }
 
     /// Create the host paths for seeded agent mounts. Call before `sbx create`.
-    static func seedAgentMounts(home: URL) {
+    static func seedAgentMounts(home: URL, claudeHome: URL? = nil) {
         let fm = FileManager.default
         for m in agentMounts {
-            let url = home.appending(path: m.subpath, directoryHint: .isDirectory)
+            let url = m.base(home: home, claudeHome: claudeHome).appending(path: m.subpath, directoryHint: .isDirectory)
             switch m.seed {
             case .ifPresent:
                 break
@@ -117,7 +122,7 @@ struct MountPolicy: Codable, Hashable {
     /// kept (a file or missing path is skipped); de-duped by path, capped at
     /// `mountLimit`. Essentials (root + dot-folders) come first so the cap only
     /// ever drops user selections — `dropped` lists what was cut (never silent).
-    func resolved(home: URL, root: URL) -> (mounts: [MountSpec], dropped: [MountSpec]) {
+    func resolved(home: URL, root: URL, claudeHome: URL? = nil) -> (mounts: [MountSpec], dropped: [MountSpec]) {
         var ordered: [MountSpec] = []
         var seen: Set<String> = []
 
@@ -132,8 +137,8 @@ struct MountPolicy: Codable, Hashable {
         // The managed agent config/state mounts (`.claude` surgically) so
         // Codex/Claude can persist history + MCP state and read config on the
         // host. Seed rw targets first so bind-mounting them never fails.
-        Self.seedAgentMounts(home: home)
-        for spec in Self.agentMountSpecs(home: home) {
+        Self.seedAgentMounts(home: home, claudeHome: claudeHome)
+        for spec in Self.agentMountSpecs(home: home, claudeHome: claudeHome) {
             add(spec)
         }
         let rootPath = root.standardizedFileURL.path

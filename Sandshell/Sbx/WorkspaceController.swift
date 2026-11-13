@@ -595,7 +595,7 @@ final class WorkspaceController: ObservableObject {
     /// The full ordered mount set for the workspace under the current policy,
     /// capped at the sbx mount limit. Logs any folders dropped by the cap.
     func resolvedMounts() -> [MountSpec] {
-        let (mounts, dropped) = workspace.policy.resolved(home: home, root: workspace.rootURL)
+        let (mounts, dropped) = workspace.policy.resolved(home: home, root: workspace.rootURL, claudeHome: claudeHome)
         if !dropped.isEmpty {
             let names = dropped.map { $0.path.lastPathComponent }.joined(separator: ", ")
             Log.info(.workspace, "mount limit (\(MountPolicy.mountLimit)) reached — dropped \(dropped.count): \(names)")
@@ -723,6 +723,31 @@ final class WorkspaceController: ObservableObject {
         config.cloneRepo = on ? true : nil
         saveConfig()
         Log.info(.workspace, "clone mode → \(on)")
+    }
+
+    // MARK: - Claude account
+
+    /// The workspace's own Claude account (nil: this Mac's `~/.claude`).
+    var claudeAccount: String? { config.claudeAccount }
+
+    /// The folder standing for `$HOME` in Claude's paths for this workspace's
+    /// sandboxes: this Mac's home, or its own account's folder.
+    var claudeHome: URL { ClaudeAccounts.claudeHome(config.claudeAccount, home: home) }
+
+    /// What a session of `agent` launches with as home: Claude's sandbox (its
+    /// chats, terminals and shells) gets the workspace's Claude account.
+    func launchHome(for agent: AgentKind) -> URL { agent == .codex || agent == .gemini ? home : claudeHome }
+
+    /// Use `account`'s folder for Claude in this workspace's sandboxes (nil:
+    /// this Mac's). Takes effect at the next rebuild (its mounts change).
+    func setClaudeAccount(_ account: String?) {
+        let account = account.flatMap { ClaudeAccounts.isValid($0) ? $0 : nil }
+        guard account != config.claudeAccount else { return }
+        if let account { ClaudeAccounts.make(account, home: home) }
+        config.claudeAccount = account
+        saveConfig()
+        objectWillChange.send()
+        Log.info(.workspace, "claude account → \(account ?? "this Mac's")")
     }
 
     /// Whether the workspace folder is a git repository (clone mode needs one).
@@ -1232,7 +1257,10 @@ final class WorkspaceController: ObservableObject {
         // Nothing below changes what `sbx ls` says: ask while the rest runs.
         async let listing = SbxClient.shared.status(name: name)
         let proxied = await SbxClient.shared.hasAnthropicSecret(sandbox: name)
+        // A Claude account of the workspace's own keeps to itself: nothing of the Mac's goes in.
+        let ownAccount = config.claudeAccount != nil
         await Task.detached(priority: .utility) {
+            guard !ownAccount else { return }
             ClaudeConfigSync.syncMCPServers(home: homeURL)
             ClaudeConfigSync.syncCredentialsFromKeychain(home: homeURL, includeClaudeLogin: !proxied)
         }.value

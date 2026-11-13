@@ -647,3 +647,58 @@ extension WorkspaceConfigTests {
         }
     }
 }
+
+/// A workspace's own Claude account (`ClaudeAccounts`, `WorkspaceConfig.claudeAccount`):
+/// a folder of its own, mounted as Claude's in place of this Mac's `~/.claude`.
+/// Every path is under a temp "home", never the user's.
+struct ClaudeAccountTests {
+    private let home: URL
+
+    init() throws {
+        home = URL.temporaryDirectory.appending(path: "SandshellClaudeAccounts-\(UUID().uuidString)", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+    }
+
+    @Test(arguments: ["personal", "gmail.me", "work-2", "a_b"])
+    func plainNamesAreAccounts(name: String) { #expect(ClaudeAccounts.isValid(name)) }
+
+    @Test(arguments: ["", ".hidden", "has space", "../escape", "a/b", "émoji", String(repeating: "x", count: 41)])
+    func otherNamesArent(name: String) { #expect(!ClaudeAccounts.isValid(name)) }
+
+    @Test func anAccountIsAFolderOfItsOwnStandingInForHome() {
+        defer { try? FileManager.default.removeItem(at: home) }
+        #expect(ClaudeAccounts.claudeHome(nil, home: home) == home, "none: this Mac's")
+        let personal = ClaudeAccounts.claudeHome("personal", home: home)
+        #expect(personal.path(percentEncoded: false).hasSuffix("/.sandshell/claude-accounts/personal/"))
+        ClaudeAccounts.make("personal", home: home)
+        ClaudeAccounts.make("another", home: home)
+        #expect(FileManager.default.fileExists(atPath: personal.appending(path: ".claude").path(percentEncoded: false)))
+        #expect(ClaudeAccounts.names(home: home) == ["another", "personal"])
+    }
+
+    @Test func itsClaudeFolderIsMountedInsteadOfTheMacs() throws {
+        defer { try? FileManager.default.removeItem(at: home) }
+        let account = ClaudeAccounts.claudeHome("personal", home: home)
+        let mounts = MountPolicy.agentMountSpecs(home: home, claudeHome: account).map { $0.path.standardizedFileURL.path }
+        #expect(mounts.contains(account.appending(path: ".claude").standardizedFileURL.path))
+        #expect(!mounts.contains(home.appending(path: ".claude").standardizedFileURL.path), "not the Mac's")
+        #expect(mounts.contains(home.appending(path: ".agents").standardizedFileURL.path), "the other agents' as before")
+    }
+
+    @Test func theConfigKeepsItAndDropsANameThatIsntOne() throws {
+        defer { try? FileManager.default.removeItem(at: home) }
+        var config = WorkspaceConfig(policy: MountPolicy(selections: []))
+        config.claudeAccount = "personal"
+        let data = try JSONEncoder().encode(config)
+        #expect(try JSONDecoder().decode(WorkspaceConfig.self, from: data).claudeAccount == "personal")
+        let bad = #"{"policy":{"selections":[]},"claudeAccount":"../../etc"}"#
+        #expect(try JSONDecoder().decode(WorkspaceConfig.self, from: Data(bad.utf8)).claudeAccount == nil)
+    }
+
+    @Test func aLaunchPointsClaudeAtTheAccount() throws {
+        defer { try? FileManager.default.removeItem(at: home) }
+        let account = ClaudeAccounts.claudeHome("personal", home: home).path(percentEncoded: false)
+        let args = try #require(SbxCommand.acpArguments(containerName: "sb", workdir: "/w", home: account))
+        #expect(args.contains { $0.hasPrefix("CLAUDE_CONFIG_DIR=") && $0.contains("/claude-accounts/personal") })
+    }
+}

@@ -567,6 +567,21 @@ actor SbxClient {
         await hasServiceSecret("anthropic", sandbox: sandbox)
     }
 
+    /// Where sbx's Anthropic credentials apply to `sandbox`: a global one (its
+    /// proxy puts it on every sandbox's requests to Anthropic, over any sign-in
+    /// inside), and one scoped to this sandbox (which wins over the global).
+    func anthropicSecretScopes(sandbox: String) async -> (global: Bool, own: Bool) {
+        struct Listing: Decodable {
+            struct Secret: Decodable { let scope: String; let name: String }
+            let secrets: [Secret]
+        }
+        guard let out = try? await sharedRun(["secret", "ls", "--json", "--service", "anthropic"]), out.ok,
+              let json = Self.firstJSONObject(in: out.stdout), let data = json.data(using: .utf8),
+              let listing = try? JSONDecoder().decode(Listing.self, from: data) else { return (false, false) }
+        let anthropic = listing.secrets.filter { $0.name == "anthropic" }
+        return (anthropic.contains { $0.scope == "global" }, anthropic.contains { $0.scope == sandbox })
+    }
+
     /// Whether sbx holds a credential for `service` (`anthropic`, `openai`,
     /// `google`, …) that applies to this sandbox — global or scoped to it.
     func hasServiceSecret(_ service: String, sandbox: String) async -> Bool {

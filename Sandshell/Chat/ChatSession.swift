@@ -1700,6 +1700,9 @@ final class ChatSession: ObservableObject, ChatFeedSource {
         if let idx = items.firstIndex(where: { $0.id == item.id }) { items[idx] = item } else { items.append(item) }
     }
 
+    /// A warning in the transcript, from outside (a Claude account the sandbox can't use).
+    func warn(_ text: String) { notice(text, isError: true) }
+
     private func notice(_ text: String, isError: Bool) {
         items.append(.notice(id: UUID(), text: text, isError: isError))
     }

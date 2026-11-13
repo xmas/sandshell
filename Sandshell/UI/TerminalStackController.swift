@@ -90,7 +90,7 @@ private final class TerminalRuntimeController {
         if let rid = resumeID, activityWatches[id]?.transcriptURL == nil,
            let url = TranscriptReader.transcriptURL(
                 agent: session.agent, workdir: session.workdir,
-                home: controller.home, id: rid) {
+                home: controller.launchHome(for: session.agent), id: rid) {
             updateActivityWatch(id) { $0.transcriptURL = url }
             claimedTranscripts.insert(url)
         }
@@ -117,7 +117,8 @@ private final class TerminalRuntimeController {
                 try? await Task.sleep(for: .seconds(1))
                 guard !Task.isCancelled, let self, self.isTerminalAlive(id),
                       let s = self.controller.session(id: id) else { return }
-                let home = self.controller.home
+                // A Claude account of the workspace's own: its transcripts are in its folder.
+                let home = self.controller.launchHome(for: s.agent)
                 await self.pollExecLifecycle(id)
                 guard !Task.isCancelled else { return }
                 if self.exited.contains(id) { continue }
@@ -393,7 +394,7 @@ final class SessionSurfaces {
     /// A terminal Claude stops at the folder-trust question until it's answered:
     /// the session needs you, until Claude records the answer or the terminal goes.
     func watchFolderTrust(_ id: UUID, workdir: String, terminal: TerminalSession) {
-        let home = controller.home
+        let home = controller.claudeHome   // its own Claude account's, if the workspace has one
         guard ClaudeFolderTrust.isTrusted(workdir: workdir, home: home) == false else { return }
         Log.info(.workspace, "claude hasn't been told to trust \(workdir): the terminal will ask")
         controller.setWaiting(id, true, for: "you to trust this folder", ask: "Trust this folder? Answer in the terminal.")
@@ -1463,7 +1464,7 @@ final class TerminalStackController: NSViewController {
         controller.settleConversation(id)
         if let tid = session.transcriptID {
             if TranscriptReader.transcriptExists(agent: session.agent, workdir: session.workdir,
-                                                 home: controller.home, id: tid) {
+                                                 home: controller.launchHome(for: session.agent), id: tid) {
                 resumeID = tid
             } else if !surfaces.declinedRestores.contains(id), confirmStartFresh(session) {
                 controller.clearTranscriptID(id)
@@ -1519,7 +1520,7 @@ final class TerminalStackController: NSViewController {
                     statusScriptPath: script?.path(percentEncoded: false),
                     statusDir: script == nil ? nil : ClaudeStatusFeed.statusDir(root: root).path,
                     sessionID: id.uuidString,
-                    sbxProxyAuth: await SbxClient.shared.hasAnthropicSecret(sandbox: containerName))
+                    sbxProxyAuth: controller.claudeAccount == nil ? await SbxClient.shared.hasAnthropicSecret(sandbox: containerName) : false)
             }
             // Right before the terminal starts, so fewer other execs can show up beside its own.
             await runtime.prepareLaunch(id, containerName: containerName)
@@ -1532,7 +1533,8 @@ final class TerminalStackController: NSViewController {
                 resumeID: resumeID,
                 claude: claudeOptions,
                 notifyDir: controller.sandboxWorkdir(AgentNotes.directory(root: controller.rootURL).path(percentEncoded: false),
-                                                     agent: session.containerAgentKind))
+                                                     agent: session.containerAgentKind),
+                home: controller.launchHome(for: session.containerAgentKind).path(percentEncoded: false))
             // Not this pane's: the terminal moves to whichever pane shows it.
             if session.agent == .claude {
                 surfaces.watchFolderTrust(id, workdir: controller.sandboxWorkdir(session.workdir, agent: session.containerAgentKind),
@@ -1665,9 +1667,9 @@ final class TerminalStackController: NSViewController {
             controller.settleConversation(id)
             var resumeID: String?
             if let tid = current.transcriptID,
-               !Self.transcriptsOnHost(current.agent, home: controller.home)
+               !Self.transcriptsOnHost(current.agent, home: controller.launchHome(for: current.agent))
                 || TranscriptReader.transcriptExists(agent: current.agent, workdir: current.workdir,
-                                                     home: controller.home, id: tid) {
+                                                     home: controller.launchHome(for: current.agent), id: tid) {
                 // An agent whose history stays in the sandbox (Gemini; Codex without
                 // a host ~/.codex) can't be checked from here: try, and session/load
                 // falls back to a fresh conversation if it's gone.
@@ -1675,7 +1677,9 @@ final class TerminalStackController: NSViewController {
             }
             Log.info(.workspace, "launching \(current.agent.rawValue) chat in “\(containerName)” at \(current.workdir)\(resumeID.map { " (resume \($0))" } ?? "")")
             await reapLeftovers(id, in: containerName, forChat: true)
-            let proxyAuth = await SbxClient.shared.hasAnthropicSecret(sandbox: containerName)
+            // Its own Claude account signs in itself: the Mac's sign-in isn't handed in.
+            let ownAccount = controller.claudeAccount != nil
+            let proxyAuth = ownAccount ? false : await SbxClient.shared.hasAnthropicSecret(sandbox: containerName)
             let unavailable = await Self.missingCredential(for: current.agent, container: containerName,
                                                            home: controller.home)
             // The window closed (or the session went) while the sandbox came up.
@@ -1683,7 +1687,7 @@ final class TerminalStackController: NSViewController {
             let chat = ChatSession(title: current.agent.displayName, agent: current.agent,
                                    containerName: containerName,
                                    workdir: controller.sandboxWorkdir(current.workdir, agent: current.containerAgentKind),
-                                   home: controller.home.path,
+                                   home: controller.launchHome(for: current.containerAgentKind).path,
                                    resumeID: resumeID, sbxProxyAuth: proxyAuth,
                                    sessionID: id, unavailable: unavailable,
                                    model: current.agent == .claude ? controller.claudeModel : nil,
@@ -1693,6 +1697,15 @@ final class TerminalStackController: NSViewController {
                                    })
             // `&` runs in the session's folder on the Mac.
             chat.macFolder = current.workdir
+            // Its own Claude account: sbx's proxy would put a global Anthropic
+            // credential on its requests, over the sign-in inside. Say so.
+            if let account = controller.claudeAccount, current.containerAgentKind == .claude {
+                Task { [weak chat] in
+                    let scopes = await SbxClient.shared.anthropicSecretScopes(sandbox: containerName)
+                    guard scopes.global, !scopes.own, let chat else { return }
+                    chat.warn(ClaudeAccounts.overriddenWarning(account: account, sandbox: containerName))
+                }
+            }
             chat.notifyDir = controller.sandboxWorkdir(AgentNotes.directory(root: controller.rootURL).path(percentEncoded: false),
                                                        agent: current.containerAgentKind)
             chat.onSessionID = { [controller] sid in controller.setTranscriptID(id, sid) }

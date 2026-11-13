@@ -168,14 +168,14 @@ final class TerminalSession {
          theme: ThemeController,
          resumeID: String? = nil,
          claude: SbxCommand.ClaudeOptions? = nil,
-         notifyDir: String? = nil) {
+         notifyDir: String? = nil,
+         home: String = NSHomeDirectory()) {
         self.sessionID = sessionID
         self.theme = theme
         self.containerName = containerName
         let tag = SbxCommand.ProcessTag(session: sessionID)
         self.tag = tag
 
-        let home = NSHomeDirectory()
         let sbxPath = PathFixer.sbxPath()
         let body = SbxCommand.sessionScript(
             containerName: containerName, workdir: workdir, agent: agent,

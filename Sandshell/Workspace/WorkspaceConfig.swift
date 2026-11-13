@@ -37,6 +37,10 @@ struct WorkspaceConfig: Codable {
     /// (`sbx create --clone`) instead of the folder itself; their commits come
     /// back through the `sandbox-<name>` git remote. nil = off.
     var cloneRepo: Bool?
+    /// A Claude account of this workspace's own (`ClaudeAccounts`): its
+    /// sandboxes' Claude uses that folder instead of this Mac's `~/.claude`.
+    /// nil = this Mac's.
+    var claudeAccount: String?
 
     static let defaultArchiveInterval: TimeInterval = 1800   // 30 min
 
@@ -66,7 +70,7 @@ struct WorkspaceConfig: Codable {
 
     enum CodingKeys: String, CodingKey {
         case schemaVersion, policy, primaryAgent, configured, archiveInterval, theme, kits
-        case imageChannel, customImage, claudeModel, claudeEffort, customAgents, sandshellKits, cloneRepo
+        case imageChannel, customImage, claudeModel, claudeEffort, customAgents, sandshellKits, cloneRepo, claudeAccount
     }
 
     init(from decoder: Decoder) throws {
@@ -93,6 +97,7 @@ struct WorkspaceConfig: Codable {
         customAgents = try c.decodeIfPresent([AgentKind].self, forKey: .customAgents) ?? []
         sandshellKits = try c.decodeIfPresent([String].self, forKey: .sandshellKits)
         cloneRepo = try c.decodeIfPresent(Bool.self, forKey: .cloneRepo)
+        claudeAccount = try c.decodeIfPresent(String.self, forKey: .claudeAccount).flatMap { ClaudeAccounts.isValid($0) ? $0 : nil }
         // Builds before this field kept them in `kits`: move them over.
         let own = kits.filter(KitStore.isSandshellKit)
         if !own.isEmpty {
@@ -146,5 +151,52 @@ struct WorkspaceConfig: Codable {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         try encoder.encode(self).write(to: Self.url(root: root), options: .atomic)
+    }
+}
+
+/// Claude accounts a workspace's sandboxes can use instead of this Mac's
+/// `~/.claude` — say a personal one on a work Mac whose own Claude is managed:
+/// each a folder of its own (`~/.sandshell/claude-accounts/<name>/.claude`)
+/// mounted into those sandboxes as Claude's config (`CLAUDE_CONFIG_DIR`), so
+/// its sign-in, settings and transcripts stay there. The Mac's own Claude
+/// never uses it. Sign in once inside the sandbox (`/login`).
+enum ClaudeAccounts {
+    /// Where the accounts' folders are.
+    static func root(home: URL) -> URL {
+        home.appending(path: ".sandshell/claude-accounts", directoryHint: .isDirectory)
+    }
+
+    /// The folder standing for `$HOME` in Claude's paths (its `.claude` inside):
+    /// `home` itself for this Mac's account.
+    static func claudeHome(_ account: String?, home: URL) -> URL {
+        account.map { root(home: home).appending(path: $0, directoryHint: .isDirectory) } ?? home
+    }
+
+    /// The accounts made so far, by name.
+    static func names(home: URL) -> [String] {
+        let dirs = (try? FileManager.default.contentsOfDirectory(atPath: root(home: home).path(percentEncoded: false))) ?? []
+        return dirs.filter(isValid).sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+    }
+
+    /// A name that's a plain folder name: letters, digits, `.`, `_`, `-`; not hidden.
+    static func isValid(_ name: String) -> Bool {
+        !name.isEmpty && name.count <= 40 && !name.hasPrefix(".")
+            && name.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || "._-".contains($0)) }
+    }
+
+    /// What to say when sbx's global Anthropic credential would stand in for
+    /// the account's own sign-in (its proxy overwrites the sign-in on every
+    /// request to Anthropic; a credential scoped to the sandbox wins over it).
+    static func overriddenWarning(account: String, sandbox: String) -> String {
+        "This workspace uses its own Claude account (“\(account)”), but sbx holds an Anthropic credential for every "
+            + "sandbox, and its proxy puts that on this sandbox's requests — so Claude here runs as that account, not "
+            + "its own. Give this sandbox its own credential on the Mac: sbx secret set anthropic --sandbox \(sandbox)"
+    }
+
+    /// Make `name`'s folder (and its `.claude`), ready to mount.
+    static func make(_ name: String, home: URL) {
+        try? FileManager.default.createDirectory(
+            at: claudeHome(name, home: home).appending(path: ".claude", directoryHint: .isDirectory),
+            withIntermediateDirectories: true)
     }
 }

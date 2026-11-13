@@ -24,6 +24,7 @@ struct SandboxesPaneView: View {
                 }
                 .disabled(controller.isGitRepository == false && controller.workspace.cloneRepo == false)
                 .accessibilityIdentifier("sandboxes-clone-repo")
+                ClaudeAccountRow(controller: controller)
             } header: {
                 Text("This folder")
             } footer: {
@@ -100,5 +101,76 @@ private extension Set {
     subscript(contains member: Element) -> Bool {
         get { contains(member) }
         set { if newValue { insert(member) } else { remove(member) } }
+    }
+}
+
+/// Settings ▸ Sandboxes ▸ This folder: which Claude account its sandboxes use
+/// — this Mac's `~/.claude`, or one of its own (`ClaudeAccounts`), say a
+/// personal one on a work Mac whose Claude is managed.
+struct ClaudeAccountRow: View {
+    @ObservedObject var controller: WorkspaceController
+    @State private var naming = false
+    @State private var newName = ""
+    /// sbx's global Anthropic credential would stand in for the account's own sign-in.
+    @State private var overridden = false
+
+    private static let thisMac = "\u{0}mac"
+    private static let newAccount = "\u{0}new"
+
+    private var names: [String] {
+        var names = ClaudeAccounts.names(home: controller.home)
+        if let current = controller.claudeAccount, !names.contains(current) { names.append(current) }
+        return names
+    }
+
+    private var sandbox: String { controller.containerName(for: .claude) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Picker(selection: Binding(get: { controller.claudeAccount ?? Self.thisMac }, set: { pick in
+                if pick == Self.newAccount {
+                    newName = ""
+                    naming = true
+                } else {
+                    controller.setClaudeAccount(pick == Self.thisMac ? nil : pick)
+                }
+            })) {
+                Text("This Mac’s (~/.claude)").tag(Self.thisMac)
+                ForEach(names, id: \.self) { Text($0).tag($0) }
+                Divider()
+                Text("New Account…").tag(Self.newAccount)
+            } label: {
+                Text("Claude account")
+                Text("Its own account: a folder just for this folder’s sandboxes (~/.sandshell/claude-accounts/<name>), "
+                     + "so Claude in them signs in on its own — run /login in a session there. The Mac’s own Claude "
+                     + "never uses it. Takes effect when the sandbox is next rebuilt.")
+            }
+            .accessibilityIdentifier("sandboxes-claude-account")
+            if overridden, let account = controller.claudeAccount {
+                Label(ClaudeAccounts.overriddenWarning(account: account, sandbox: sandbox), systemImage: "exclamationmark.triangle.fill")
+                    .font(.role(.meta))
+                    .foregroundStyle(.orange)
+                    .textSelection(.enabled)
+            }
+            if controller.claudeAccount != nil {
+                Button("Rebuild Now") { controller.rebuildAll() }
+                    .help("Make this folder’s sandboxes again with the account’s folder mounted (running sessions stop)")
+            }
+        }
+        .alert("New Claude Account", isPresented: $naming) {
+            TextField("personal", text: $newName)
+            Button("Create") {
+                let name = newName.trimmingCharacters(in: .whitespaces)
+                if ClaudeAccounts.isValid(name) { controller.setClaudeAccount(name) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("A name for its folder: letters, digits, “.”, “_” and “-”.")
+        }
+        .task(id: controller.claudeAccount) {
+            guard controller.claudeAccount != nil else { overridden = false; return }
+            let scopes = await SbxClient.shared.anthropicSecretScopes(sandbox: sandbox)
+            overridden = scopes.global && !scopes.own
+        }
     }
 }
