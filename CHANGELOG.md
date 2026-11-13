@@ -2,6 +2,9 @@
 
 A running log of what changed, newest first. Yes, we actually write these.
 
+## v0.2.57 — "One Knob"
+- **Three controls under the composer.** + attaches files, mentions a file and opens the chat's MCP servers (MCP shows on the bar on its own only while a server isn't working). One chooser — "Opus 5.5 · High" — holds the model, the effort and the approval mode, each a section of its menu. And a ring for the context window: green, orange past 70 %, red past 90 %; hover it for the percentage and the cost, click it for Session details.
+
 ## v0.2.56 — "At a Glance"
 - **Sidebar cards say more.** Each session shows what you sent it lately, in quotes, newest first. While it works, the steps of its plan around where it is: the last one done, the one it's on, the next. While it needs you, what it's asking ("Allow `swift test`?", or the question itself). Cards grow and shrink with what they have to say; sessions remember their last three prompts across relaunches.
 - **Groups in the sidebar.** Needs you, Working and Earlier, each with its count, whenever sessions fall into more than one.
