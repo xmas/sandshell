@@ -237,41 +237,45 @@ extension NSColor {
 
 // MARK: - Type scale
 
-/// The app's type roles. Every font in the chrome comes from one of these;
-/// this file is the only place that names a point size. Weight means state
-/// (unread, emphasized) and colour means status, so there are two weights.
+/// The app's type roles. Every font in the chrome and the chat comes from
+/// one of these; this file is the only place that names a point size (the
+/// chat page gets its three from `ChatWebTranscript`'s config). Three sizes:
+/// small 11.5, UI 13, reading 14 (chat prose only). A title is UI semibold,
+/// never a bigger size; weight means state (unread, emphasized) and colour
+/// means status, so there are two weights.
 enum TypeRole: CaseIterable, Sendable {
-    /// 15 pt semibold: sidebar and window titles, section heads.
+    /// 13 pt semibold: sidebar and window titles, section heads.
     case title
-    /// 13 pt: names, menu items, buttons, the composer, chat prose.
+    /// 13 pt: names, menu items, buttons, the composer.
     case body
     /// 13 pt semibold: an unread name, selected emphasis.
     case bodyEmphasis
     /// 11.5 pt: sublines, crumbs, timestamps, captions, toolbar labels.
     case meta
-    /// 11 pt SF Mono: paths, branches, diff counts, timers, token and cost readouts.
+    /// 11.5 pt SF Mono: paths, branches, diff counts, timers, token and cost readouts.
     case code
+    /// 14 pt: the chat's prose — replies and your messages. Nothing else.
+    case reading
 
     var pointSize: CGFloat {
         switch self {
-        case .title: 15
-        case .body, .bodyEmphasis: 13
-        case .meta: 11.5
-        case .code: 11
+        case .title, .body, .bodyEmphasis: 13
+        case .meta, .code: 11.5
+        case .reading: 14
         }
     }
 
     var weight: NSFont.Weight {
         switch self {
         case .title, .bodyEmphasis: .semibold
-        case .body, .meta, .code: .regular
+        case .body, .meta, .code, .reading: .regular
         }
     }
 
     /// An SF Symbol beside text of this role: 16 pt in body contexts, 12 pt in meta ones.
     var symbolPointSize: CGFloat {
         switch self {
-        case .title, .body, .bodyEmphasis: 16
+        case .title, .body, .bodyEmphasis, .reading: 16
         case .meta, .code: 12
         }
     }

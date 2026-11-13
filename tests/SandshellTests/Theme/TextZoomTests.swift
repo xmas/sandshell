@@ -105,11 +105,12 @@ struct TextZoomTests {
         return try #require(text.attribute(.font, at: at, effectiveRange: nil) as? NSFont)
     }
 
-    /// The transcript page's fonts (`ChatWebTranscript.cssFamily`): replies in
-    /// New York, your messages in the system font, unless Settings says otherwise.
-    @Test @MainActor func repliesAreSerifAndYourMessagesAreNotByDefault() throws {
+    /// The transcript page's fonts (`ChatWebTranscript.cssFamily`): replies and
+    /// your messages in the system font, like the window, unless Settings says
+    /// otherwise (New York is a choice there).
+    @Test @MainActor func repliesAndYourMessagesAreInTheSystemFontByDefault() throws {
         try withZoom {
-            #expect(ChatWebTranscript.cssFamily(ChatFonts.reply).hasPrefix("ui-serif"))
+            #expect(ChatWebTranscript.cssFamily(ChatFonts.reply).hasPrefix("-apple-system"))
             #expect(ChatWebTranscript.cssFamily(ChatFonts.message).hasPrefix("-apple-system"))
         }
     }

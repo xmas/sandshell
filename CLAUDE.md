@@ -164,6 +164,7 @@ AppDelegate (@main)
 
 | Need | Use |
 |------|-----|
+| A font | `.role(.meta / .code / .body / .bodyEmphasis / .title / .reading)` (`Theme/Theme.swift`): three sizes (11.5, 13, 14 for chat prose only), a title is semibold not bigger; `.mark(size)` only for glyphs drawn as graphics. The chat page uses `--t-small / --t-ui / --t-read`, sent from `ChatWebTranscript.Sizes.app`. Never a size literal |
 | Token counts, "3m ago", work times, `~/…` paths | `Format` (`Util/Format.swift`): `Format.tokens`, `.ago`, `.relative`, `.workTime`; `String.tildeAbbreviated`; `URL.realPath` (resolves /tmp → /private/tmp like git does — use it to compare with git's paths) |
 | A popover under a control (second click closes) | `NSPopover.toggle(&slot, below: anchor) { .hosting(view) }` (`UI/Popovers.swift`) |
 | Confirm / save-changes / notice alerts | `Alerts.confirm`, `Alerts.saveChanges`, `Alerts.inform` (`UI/Alerts.swift`) |

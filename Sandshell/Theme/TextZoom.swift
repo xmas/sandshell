@@ -124,7 +124,8 @@ enum ChatFonts {
     static let messageKey = "chatMessageFont"
 
     static var reply: String {
-        get { TextZoom.defaults.string(forKey: replyKey) ?? newYork }
+        // The UI's face, like everything else (New York is a choice in Settings).
+        get { TextZoom.defaults.string(forKey: replyKey) ?? system }
         set { set(newValue, forKey: replyKey) }
     }
 

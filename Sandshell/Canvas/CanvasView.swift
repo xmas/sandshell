@@ -59,7 +59,7 @@ final class CanvasView: NSView {
         send.setAccessibilityIdentifier("canvas-send-notes")
         let clear = NSButton(title: "Clear", target: self, action: #selector(clearNotesClicked))
         clear.setAccessibilityIdentifier("canvas-clear-notes")
-        notesLabel.font = .systemFont(ofSize: 13, weight: .medium)
+        notesLabel.font = .role(.bodyEmphasis)
         notesBar.setViews([notesLabel, clear, send], in: .leading)
         notesBar.orientation = .horizontal
         notesBar.spacing = 10
@@ -566,7 +566,7 @@ private final class ArtboardView: NSView, WKNavigationDelegate {
         config.websiteDataStore = .nonPersistent()
         webView = ArtboardWebView(frame: .zero, configuration: config)
         super.init(frame: .zero)
-        titleLabel.font = .systemFont(ofSize: 13, weight: .medium)
+        titleLabel.font = .role(.body)
         titleLabel.textColor = .secondaryLabelColor
         titleLabel.lineBreakMode = .byTruncatingTail
         addSubview(titleLabel)
@@ -650,7 +650,7 @@ private final class ArtboardView: NSView, WKNavigationDelegate {
             }
             let center = mark.area.map { CGPoint(x: $0.minX, y: $0.minY) } ?? mark.point
             let label = NSTextField(labelWithString: "\(mark.number)")
-            label.font = .systemFont(ofSize: 12, weight: .bold)
+            label.font = .mark(12, weight: .bold)
             label.textColor = .white
             label.alignment = .center
             label.frame = NSRect(x: 0, y: 3, width: 22, height: 16)

@@ -98,7 +98,7 @@ struct MCPStatusView: View {
             } label: {
                 HStack(spacing: 6) {
                     Image(systemName: "chevron.right")
-                        .font(.system(size: 9, weight: .semibold))
+                        .font(.mark(9, weight: .semibold))
                         .rotationEffect(.degrees(shut ? 0 : 90))
                         .foregroundStyle(.secondary)
                     Text(group.title).font(.role(.bodyEmphasis))

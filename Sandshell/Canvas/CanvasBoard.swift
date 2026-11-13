@@ -251,7 +251,7 @@ struct CanvasNote: Equatable, Sendable {
                 NSColor.systemRed.setFill()
                 NSBezierPath(ovalIn: circle).fill()
                 let label = NSAttributedString(string: "\(mark.number)", attributes: [
-                    .font: NSFont.systemFont(ofSize: 13, weight: .bold), .foregroundColor: NSColor.white])
+                    .font: NSFont.mark(13, weight: .bold), .foregroundColor: NSColor.white])
                 let size = label.size()
                 label.draw(at: NSPoint(x: circle.midX - size.width / 2, y: circle.midY - size.height / 2))
             }

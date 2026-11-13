@@ -18,7 +18,7 @@ final class BuildLogView: NSView {
         textView.isEditable = false
         textView.isSelectable = true
         textView.drawsBackground = false
-        textView.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
+        textView.font = .role(.code)
         textView.textContainerInset = NSSize(width: 8, height: 8)
         textView.isVerticallyResizable = true
         textView.isHorizontallyResizable = false
@@ -69,7 +69,7 @@ final class BuildLogView: NSView {
     /// A step that's done in green, one that failed in red, the image's
     /// layers (one line each) dimmed.
     private func styled(_ lines: [String], leadingBreak: Bool) -> NSAttributedString {
-        let font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
+        let font = NSFont.role(.code)
         let out = NSMutableAttributedString()
         for (i, line) in lines.enumerated() {
             let trimmed = line.trimmingCharacters(in: .whitespaces)

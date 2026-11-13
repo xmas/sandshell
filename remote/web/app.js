@@ -1224,6 +1224,11 @@ function configure(c) {
   root.classList.toggle("can-undo", !!c.canUndo);
   if (c.replyFont) root.style.setProperty("--reply-font", c.replyFont);
   if (c.messageFont) root.style.setProperty("--message-font", c.messageFont);
+  // The app's type scale (Theme.swift's TypeRole), so the page and the
+  // window never drift apart.
+  for (const [name, size] of Object.entries({ small: c.sizes?.small, ui: c.sizes?.ui, read: c.sizes?.reading })) {
+    if (size) root.style.setProperty("--t-" + name, size + "px");
+  }
 }
 
 function post(name, fields) {

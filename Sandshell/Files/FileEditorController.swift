@@ -1027,7 +1027,7 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
         return out
     }
 
-    private static let diffFont = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+    private static let diffFont = NSFont.role(.code)
 
     private static func diffLine(_ s: String, trailing: NSAttributedString? = nil, number: LineNumber? = nil) -> NSAttributedString {
         let kind: BlockStyle.Kind? = s.hasPrefix("@@") ? .hunk : s.hasPrefix("+") ? .added : s.hasPrefix("-") ? .removed : nil
@@ -1179,7 +1179,7 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
             let removed = url.host() == "old"
             if let c = here.first(where: { $0.line == line && $0.removed == removed }) {
                 storage.addAttributes([.foregroundColor: NSColor.controlAccentColor,
-                                       .font: NSFont.monospacedSystemFont(ofSize: 12, weight: .bold),
+                                       .font: NSFont.role(.code, weight: .semibold),
                                        .toolTip: "Your comment: \(c.text)"], range: range)
             } else {
                 storage.addAttributes([.foregroundColor: NSColor.tertiaryLabelColor, .font: Self.diffFont,

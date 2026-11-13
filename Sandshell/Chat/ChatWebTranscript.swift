@@ -107,12 +107,25 @@ final class ChatWebTranscript: NSView {
         let canUndo: Bool
         let replyFont: String
         let messageFont: String
+        /// The type scale's three sizes, in points (the page's px; zoom is the view's).
+        let sizes: Sizes
     }
 
-    /// What this transcript offers, and its fonts.
+    struct Sizes: Encodable, Equatable {
+        let small: CGFloat
+        let ui: CGFloat
+        let reading: CGFloat
+
+        /// The app's scale (`TypeRole`), which the page's CSS is written in.
+        static let app = Sizes(small: TypeRole.meta.pointSize, ui: TypeRole.body.pointSize,
+                               reading: TypeRole.reading.pointSize)
+    }
+
+    /// What this transcript offers, its fonts and sizes.
     private func sendConfig() {
         send("config", Config(canFork: onFork != nil, canUndo: onUndo != nil,
-                              replyFont: Self.cssFamily(ChatFonts.reply), messageFont: Self.cssFamily(ChatFonts.message)))
+                              replyFont: Self.cssFamily(ChatFonts.reply), messageFont: Self.cssFamily(ChatFonts.message),
+                              sizes: .app))
     }
 
     /// A Settings font family as CSS.

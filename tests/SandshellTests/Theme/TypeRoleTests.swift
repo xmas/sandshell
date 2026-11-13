@@ -10,7 +10,7 @@ import Testing
 @MainActor
 struct TypeRoleTests {
     @Test(arguments: [
-        (TypeRole.title, 15), (.body, 13), (.bodyEmphasis, 13), (.meta, 11.5), (.code, 11),
+        (TypeRole.title, 13), (.body, 13), (.bodyEmphasis, 13), (.meta, 11.5), (.code, 11.5), (.reading, 14),
     ] as [(TypeRole, CGFloat)])
     func eachRoleHasItsPointSize(role: TypeRole, size: CGFloat) {
         #expect(role.pointSize == size)
@@ -19,13 +19,20 @@ struct TypeRoleTests {
 
     @Test(arguments: [
         (TypeRole.title, NSFont.Weight.semibold), (.body, .regular), (.bodyEmphasis, .semibold),
-        (.meta, .regular), (.code, .regular),
+        (.meta, .regular), (.code, .regular), (.reading, .regular),
     ])
     func eachRoleHasItsWeight(role: TypeRole, weight: NSFont.Weight) {
         #expect(role.weight == weight)
         let expected = role == .code ? NSFont.monospacedSystemFont(ofSize: role.pointSize, weight: weight)
             : NSFont.systemFont(ofSize: role.pointSize, weight: weight)
         #expect(NSFont.role(role).fontName == expected.fontName)
+    }
+
+    /// Small, UI, reading: a title is weight, never a bigger size.
+    @Test func thereAreThreeSizes() {
+        #expect(Set(TypeRole.allCases.map(\.pointSize)) == [11.5, 13, 14])
+        #expect(Set(TypeRole.allCases.map(\.weight)) == [.regular, .semibold])
+        #expect(TypeRole.title.pointSize == TypeRole.body.pointSize)
     }
 
     @Test func onlyCodeIsMonospaced() {
@@ -58,7 +65,7 @@ struct TypeRoleTests {
     }
 
     @Test(arguments: [
-        (TypeRole.title, 16), (.body, 16), (.bodyEmphasis, 16), (.meta, 12), (.code, 12),
+        (TypeRole.title, 16), (.body, 16), (.bodyEmphasis, 16), (.meta, 12), (.code, 12), (.reading, 16),
     ] as [(TypeRole, CGFloat)])
     func symbolsAreSixteenBesideBodyAndTwelveBesideMeta(role: TypeRole, size: CGFloat) {
         #expect(role.symbolPointSize == size)

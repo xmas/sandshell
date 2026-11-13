@@ -138,7 +138,7 @@ struct RemoteDevicesView: View {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("CODE").font(.role(.meta, weight: .semibold)).foregroundStyle(.secondary)
                     Text(offer.code.prefix(3) + " " + offer.code.suffix(3))
-                        .font(.system(size: 30, weight: .semibold, design: .monospaced))
+                        .font(.mark(30, weight: .semibold, monospaced: true))
                         .textSelection(.enabled)
                         .accessibilityIdentifier("remote-pair-code")
                     Text(String(format: "Expires in %d:%02d", left / 60, left % 60))

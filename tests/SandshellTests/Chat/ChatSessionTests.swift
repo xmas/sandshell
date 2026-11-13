@@ -454,6 +454,33 @@ struct ChatWebTranscriptTests {
         #expect(await until { opened?.0 == URL(filePath: "/tmp/x.swift") && opened?.1 == 7 })
     }
 
+    /// The page's type is the app's: its three sizes come from `TypeRole`, and
+    /// no rule names another (bar a glyph or two and the pairing code).
+    @Test func thePageUsesTheAppsThreeSizes() async throws {
+        let (web, window) = try await showing()
+        defer { window.orderOut(nil); window.close() }
+        let sizes = ChatWebTranscript.Sizes.app
+        func px(_ v: CGFloat) -> String { String(format: "%gpx", Double(v)) }
+        let tokens = "const s = getComputedStyle(document.documentElement); return ['--t-small', '--t-ui', '--t-read'].map(n => s.getPropertyValue(n).trim())"
+        #expect(await until { await web.debugValue(tokens) as? [String] == [px(sizes.small), px(sizes.ui), px(sizes.reading)] })
+        let literals = """
+            const out = new Set();
+            for (const sheet of document.styleSheets) for (const rule of sheet.cssRules) {
+              const walk = r => { if (r.cssRules) [...r.cssRules].forEach(walk);
+                const v = r.style?.getPropertyValue('font-size'); if (v && !v.includes('var(') && v !== 'inherit') out.add(v); };
+              walk(rule);
+            }
+            return [...out].sort();
+            """
+        let found = await web.debugValue(literals) as? [String]
+        #expect(found == ["15px", "1em", "26px"],
+                "Only the glyphs (26, 15), the pairing code (26) and headings at the text's own size: \(String(describing: found))")
+        session.debugApply(chunk("A reply.", messageID: "m1"))
+        #expect(try await transcript(web, contains: "A reply."))
+        let reply = await web.debugValue("return getComputedStyle(document.querySelector('.item.text')).fontSize") as? String
+        #expect(reply == px(sizes.reading))
+    }
+
     /// A long message of yours shows its first lines, More for the rest; a
     /// short one is shown whole.
     @Test func aLongMessageOfYoursStartsFolded() async throws {
