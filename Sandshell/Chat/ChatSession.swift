@@ -573,6 +573,13 @@ final class ChatSession: ObservableObject, ChatFeedSource {
     /// Told to the agent with the next message, once (not shown in the transcript).
     private var pendingBoardNotice: String?
 
+    /// `&`'s folder: the session's, on the Mac (nil: `&` isn't offered here).
+    var macFolder: String?
+    /// What your `!` and `&` commands printed, for the agent with your next message.
+    private var commandContext: [String] = []
+    /// Where `!` and `&` commands are recorded (tests: a temp file).
+    var commandLog = CommandLog.shared
+
     /// A board was added while this chat runs: its launch instructions can't change.
     func noteBoard(_ board: String) { pendingBoardNotice = Self.boardNotice(board: board) }
 
@@ -684,7 +691,11 @@ final class ChatSession: ObservableObject, ChatFeedSource {
         if !trimmed.isEmpty, !retryingTurn { onPrompt?(trimmed) }
         stopped = false
 
-        let blocks = Self.promptBlocks(trimmed, attachments, notice: pendingBoardNotice)
+        // What your own commands printed since the last message goes with this one.
+        let context = commandContext.isEmpty ? nil : commandContext.joined(separator: "\n\n")
+        commandContext = []
+        let preface = [pendingBoardNotice, context].compactMap { $0 }.joined(separator: "\n\n")
+        let blocks = Self.promptBlocks(trimmed, attachments, notice: preface.isEmpty ? nil : preface)
         pendingBoardNotice = nil
         phase = .running
         var params: JSONValue = ["sessionId": .string(sid), "prompt": .array(blocks)]
@@ -838,6 +849,8 @@ final class ChatSession: ObservableObject, ChatFeedSource {
     /// From the composer: send now, or queue it behind the running turn (or a
     /// start); false when the chat can't take it (closed), so the draft stays.
     func submit(text: String, attachments: [ChatAttachment]) -> Bool {
+        // `!ls` runs in the sandbox, `&git push` on the Mac: yours, not the agent's.
+        if attachments.isEmpty, let command = Self.localCommand(text) { return run(command) }
         switch phase {
         case .ready:
             // A message still waiting to go (its drain is a tick behind) goes
@@ -1766,4 +1779,127 @@ extension ChatSession {
     var feedID: UUID { ownSessionID }
     var feedStatus: RemoteWire.Status { RemoteWire.Status(self) }
     var willChange: ObservableObjectPublisher { objectWillChange }
+}
+
+// MARK: - ! and &: commands you run yourself
+
+extension ChatSession {
+    /// A line you typed that's a command, not a message: `!` runs it in the
+    /// session's sandbox, `&` on this Mac (in the session's folder, as you).
+    enum LocalCommand: Equatable, Sendable {
+        case sandbox(String), mac(String)
+
+        var command: String {
+            switch self {
+            case .sandbox(let c), .mac(let c): c
+            }
+        }
+        var sigil: String {
+            switch self {
+            case .sandbox: "!"
+            case .mac: "&"
+            }
+        }
+        /// Where it runs, in the card's and the agent's words.
+        var place: String {
+            switch self {
+            case .sandbox: "in the sandbox"
+            case .mac: "on the Mac"
+            }
+        }
+    }
+
+    /// `text` as a command (`!…`, `&…`, with something after the sigil); nil: a message.
+    static func localCommand(_ text: String) -> LocalCommand? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let sigil = trimmed.first, sigil == "!" || sigil == "&" else { return nil }
+        let command = trimmed.dropFirst().trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !command.isEmpty else { return nil }
+        return sigil == "!" ? .sandbox(command) : .mac(command)
+    }
+
+    /// The most of a command's output a card keeps, and the agent gets.
+    static let commandOutputLimit = 200_000
+    static let commandContextLimit = 8_000
+
+    /// What the agent is told about a command you ran.
+    static func commandContext(_ command: LocalCommand, status: Int32, output: String) -> String {
+        let tail = output.count > commandContextLimit ? "…" + output.suffix(commandContextLimit) : output
+        return "[I ran `\(command.command)` \(command.place) (exit \(status)). Its output:]\n```\n\(tail)\n```"
+    }
+
+    /// Run `command`: a card in the transcript, its output streaming in; the
+    /// agent sees it with your next message.
+    @discardableResult
+    func run(_ command: LocalCommand) -> Bool {
+        let id = "local-" + UUID().uuidString
+        var call = ChatItem.ToolCall(id: id, title: "\(command.sigil) \(command.command)", kind: "execute",
+                                     status: "in_progress", output: "", diffs: [], input: command.command)
+        items.append(.tool(call))
+        let itemID = ChatItem.tool(call).id
+        let process = Process()
+        switch command {
+        case .sandbox(let c):
+            process.executableURL = URL(filePath: PathFixer.sbxPath())
+            process.arguments = ["exec", containerName, "bash", "-lc", "cd \(SbxCommand.shellQuote(workdir)) && \(c)"]
+        case .mac(let c):
+            guard let folder = macFolder else {
+                call.status = "failed"
+                call.output = "& runs commands on the Mac, so only from Sandshell's window there."
+                upsert(.tool(call))
+                return true
+            }
+            process.executableURL = URL(filePath: "/bin/zsh")
+            process.arguments = ["-lc", c]
+            process.currentDirectoryURL = URL(filePath: folder, directoryHint: .isDirectory)
+        }
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = pipe
+        process.standardInput = FileHandle.nullDevice
+        let started = Date.now
+        let logged: [String: JSONValue] = ["id": .string(id), "session": .string(ownSessionID.uuidString),
+                                           "conversation": sessionID.map { .string($0) } ?? .null]
+        // Output as it comes; the card keeps the first 200 KB.
+        pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
+            let data = handle.availableData
+            guard !data.isEmpty else { handle.readabilityHandler = nil; return }
+            let text = String(decoding: data, as: UTF8.self)
+            Task { @MainActor [weak self] in
+                guard let self, case .tool(var c)? = self.items.first(where: { $0.id == itemID }) else { return }
+                guard c.output.count < Self.commandOutputLimit else { return }
+                c.output += text
+                self.upsert(.tool(c))
+            }
+        }
+        process.terminationHandler = { [weak self] p in
+            let status = p.terminationStatus
+            Task { @MainActor [weak self] in
+                // Let the last of the output land first.
+                try? await Task.sleep(for: .milliseconds(150))
+                guard let self, case .tool(var c)? = self.items.first(where: { $0.id == itemID }) else { return }
+                c.status = status == 0 ? "completed" : "failed"
+                if status != 0 { c.output += (c.output.isEmpty || c.output.hasSuffix("\n") ? "" : "\n") + "exit \(status)" }
+                self.upsert(.tool(c))
+                self.commandContext.append(Self.commandContext(command, status: status, output: c.output))
+                self.commandLog.record(logged.merging(["event": "exited", "status": .number(Double(status)),
+                    "seconds": .number((Date.now.timeIntervalSince(started) * 10).rounded() / 10)]) { $1 })
+            }
+        }
+        let place: [String: JSONValue] = switch command {
+        case .sandbox: ["where": "sandbox", "sandbox": .string(containerName), "folder": .string(workdir)]
+        case .mac: ["where": "mac", "folder": .string(macFolder ?? "")]
+        }
+        commandLog.record(logged.merging(place) { $1 }.merging(
+            ["event": "ran", "sigil": .string(command.sigil), "command": .string(command.command)]) { $1 })
+        do {
+            try process.run()
+        } catch {
+            call.status = "failed"
+            call.output = "Couldn’t run it: \(error.localizedDescription)"
+            upsert(.tool(call))
+            commandLog.record(logged.merging(["event": "failed", "error": .string(error.localizedDescription)]) { $1 })
+        }
+        return true
+    }
 }

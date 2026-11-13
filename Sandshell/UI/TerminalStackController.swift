@@ -1691,6 +1691,8 @@ final class TerminalStackController: NSViewController {
                                    designBoard: controller.boardFolder(of: current).map {
                                        controller.sandboxWorkdir($0.path(percentEncoded: false), agent: current.containerAgentKind)
                                    })
+            // `&` runs in the session's folder on the Mac.
+            chat.macFolder = current.workdir
             chat.notifyDir = controller.sandboxWorkdir(AgentNotes.directory(root: controller.rootURL).path(percentEncoded: false),
                                                        agent: current.containerAgentKind)
             chat.onSessionID = { [controller] sid in controller.setTranscriptID(id, sid) }

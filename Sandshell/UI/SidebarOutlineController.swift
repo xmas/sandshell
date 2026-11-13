@@ -1130,9 +1130,14 @@ final class SidebarListController: NSViewController {
         host.focus()
     }
 
-    // Help ▸ Show Sandshell Log / Show sbx Daemon Log / Status Debug Window.
+    // Help ▸ Show Sandshell Log / Show sbx Daemon Log / Show Command Log / Status Debug Window.
 
     func openSandshellLog() { openInConsole(Log.fileURL) }
+
+    func openCommandLog() {
+        guard let url = CommandLog.shared.created() else { return NSSound.beep() }
+        openInConsole(url)
+    }
 
     func openDaemonLog() {
         let logURL = URL.homeDirectory.appending(

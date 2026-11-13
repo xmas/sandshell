@@ -299,6 +299,10 @@ final class RemoteHub: ObservableObject {
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !images.isEmpty else {
             throw .invalid("Nothing to send")
         }
+        // `&` runs a command on the Mac itself: only from the Mac, never a paired device.
+        if case .mac? = ChatSession.localCommand(text) {
+            throw .invalid("& runs commands on the Mac, so only from Sandshell on the Mac. ! runs them in the sandbox.")
+        }
         guard chat.submit(text: text, attachments: images) else { throw .closed }
     }
 

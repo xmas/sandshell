@@ -14,6 +14,8 @@ import UniformTypeIdentifiers
 final class ChatComposerView: NSView, NSTextViewDelegate {
     /// Send (or queue) a message; false keeps the draft (nothing took it).
     var onSubmit: ((String, [ChatAttachment]) -> Bool)?
+    /// The text changed (the bar says where a `!` or `&` line runs).
+    var onTextChange: ((String) -> Void)?
     /// Asked before sending; false keeps the draft (e.g. while it asks the user).
     var shouldSubmit: (() -> Bool)?
     /// ⎋ in the composer; return true if handled (e.g. stopped a running turn).
@@ -282,6 +284,7 @@ final class ChatComposerView: NSView, NSTextViewDelegate {
     }
 
     func textDidChange(_ notification: Notification) {
+        onTextChange?(textView.string)
         resize()
         updateCompletion()
         updateGhost()

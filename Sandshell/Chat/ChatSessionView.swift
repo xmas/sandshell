@@ -46,6 +46,10 @@ final class ChatSessionView: NSView {
     private var sendButton: ComposerSendButton { composer.sendButton }
     private var mcpPopover: NSPopover?
     private var detailsPopover: NSPopover?
+    /// Where a `!` / `&` line runs, shown in the status line while you type it
+    /// (and what the line said before).
+    private var commandHint: String?
+    private var statusBeforeHint = ""
     private var detailsHost: NSHostingController<ClaudeStatsDetailView>?
     /// A Claude model picked here, until the chat relaunches on it.
     private var pendingModel: String??
@@ -205,6 +209,8 @@ final class ChatSessionView: NSView {
         session.onUnsent = { [weak self] in self?.composer.setDraft(ComposerDrafts.typed(for: draftID)) }
         composer.onSubmit = { [weak self] text, attachments in
             guard let self else { return false }
+            // `&` runs on this Mac: the first time, say so and ask.
+            if case .mac? = ChatSession.localCommand(text), !Self.confirmMacCommands(in: self.window) { return false }
             self.sendingWhenOtherAppIdles = false   // sent (or queued) by hand
             self.idleTimeout?.cancel()
             let first = self.session.items.isEmpty && !self.countedForTips
@@ -219,8 +225,16 @@ final class ChatSessionView: NSView {
         composer.shouldSubmit = { [weak self] in self?.confirmSendWhileOtherAppWorks() ?? true }
         composer.commands = { [weak session] in session?.commands ?? [] }
         composer.sentHistory = { [weak session] in
-            session?.items.compactMap { if case .user(_, let text, _) = $0 { text } else { nil } } ?? []
+            // Messages, and the `!` / `&` commands you ran (↑ brings them back too).
+            session?.items.compactMap {
+                switch $0 {
+                case .user(_, let text, _): text
+                case .tool(let t) where t.id.hasPrefix("local-"): t.title
+                default: nil
+                }
+            } ?? []
         }
+        composer.onTextChange = { [weak self] text in self?.showCommandHint(text) }
         queuedView.onEdit = { [weak self] prompt in
             guard let self, self.session.unqueue(prompt.id) != nil else { return }
             self.composer.edit(prompt)
@@ -812,6 +826,40 @@ final class ChatSessionView: NSView {
     /// ⎋ stops a running turn (standard Cocoa cancel).
     override func cancelOperation(_ sender: Any?) {
         if case .running = session.phase { session.cancel() } else { super.cancelOperation(sender) }
+    }
+
+    /// Where a `!` or `&` line runs, under the composer while you type it.
+    private func showCommandHint(_ text: String) {
+        let hint: String? = switch ChatSession.localCommand(text.isEmpty ? text : text + "x") {
+        case .sandbox?: "! runs in the sandbox “\(session.containerName)”, in \(session.workdir.tildeAbbreviated)"
+        case .mac?: session.macFolder.map { "& runs on this Mac, in \($0.tildeAbbreviated), as you" }
+            ?? "& runs on the Mac only from its window"
+        case nil: nil
+        }
+        if let hint {
+            if commandHint == nil { statusBeforeHint = statusLabel.stringValue }
+            commandHint = hint
+            statusLabel.stringValue = hint
+            statusLabel.textColor = .controlAccentColor
+        } else if commandHint != nil {
+            commandHint = nil
+            statusLabel.stringValue = statusBeforeHint
+            statusLabel.textColor = .secondaryLabelColor
+        }
+    }
+
+    /// The first `&` command: what it does, and whether to go on (remembered).
+    static let macCommandsKey = "macCommandsConfirmed"
+    static func confirmMacCommands(in window: NSWindow?) -> Bool {
+        if UserDefaults.standard.bool(forKey: macCommandsKey) || AutomatedRun.isActive { return true }
+        guard Alerts.confirm("Run commands on this Mac?",
+                             "A line starting with & runs in a shell on this Mac — not in the sandbox — in the "
+                             + "session's folder, as you. The agent can't run these; only you can, from this window. "
+                             + "(! runs a command in the sandbox.) Help ▸ Show Command Log lists every one you've run.",
+                             confirm: "Run on This Mac") else { return false }
+        UserDefaults.standard.set(true, forKey: macCommandsKey)
+        CommandLog.shared.record(["event": "allowed", "sigil": "&"])
+        return true
     }
 
     @objc private func sendOrStop() {

@@ -294,6 +294,7 @@ enum MainMenu {
         daemon.keyEquivalentModifierMask = [.control]
         daemon.isAlternate = true
         helpMenu.addItem(daemon)
+        helpMenu.addItem(NSMenuItem("Show Command Log", action: #selector(AppDelegate.showCommandLog(_:))))
         helpMenu.addItem(NSMenuItem("Show Status Debug Window", action: #selector(AppDelegate.showStatusDebug(_:))))
         helpMenu.addItem(NSMenuItem("Open Remote Control in Browser", action: #selector(AppDelegate.openRemoteControl(_:))))
         helpMenu.addItem(NSMenuItem("Remote Control Devices…", action: #selector(AppDelegate.showRemoteDevices(_:))))

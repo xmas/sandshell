@@ -21,5 +21,5 @@ COPY --chmod=0755 scripts/sandshell-hold /opt/sandshell/bin/sandshell-hold
 # sandshell-notify, on every session's PATH (/opt/sandshell/tools holds only what agents run).
 COPY scripts/sandshell-notify.mjs /opt/sandshell/sandshell-notify.mjs
 COPY --chmod=0755 scripts/sandshell-notify /opt/sandshell/tools/sandshell-notify
-# A Claude Code plugin Sandshell's chats load (its skills: Canvas).
+# A Claude Code plugin Sandshell's chats load (its skills: canvas, notify, commands).
 COPY plugin /opt/sandshell/plugin

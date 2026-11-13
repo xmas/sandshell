@@ -936,6 +936,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @MainActor @objc func showSandshellLog(_ sender: Any?) { activeController?.sidebarController?.openSandshellLog() }
     @MainActor @objc func showDaemonLog(_ sender: Any?) { activeController?.sidebarController?.openDaemonLog() }
+    /// Every ! and & command run from a chat (`CommandLog`).
+    @MainActor @objc func showCommandLog(_ sender: Any?) { activeController?.sidebarController?.openCommandLog() }
     @MainActor @objc func showStatusDebug(_ sender: Any?) { activeController?.sidebarController?.openStatusDebugWindow() }
     /// Remote Control's web client, in this Mac's browser (while it's serving).
     @MainActor @objc func openRemoteControl(_ sender: Any?) {
@@ -1142,7 +1144,7 @@ extension AppDelegate: NSMenuItemValidation {
              #selector(closePane(_:)), #selector(focusNextPane(_:)), #selector(focusPreviousPane(_:)),
              #selector(equalizePanes(_:)), #selector(selectNextSession(_:)), #selector(selectPreviousSession(_:)),
              #selector(showBackgroundTasks(_:)), #selector(openHostTerminal(_:)), #selector(showSandshellLog(_:)),
-             #selector(showDaemonLog(_:)), #selector(showStatusDebug(_:)), #selector(closeWindow(_:)),
+             #selector(showDaemonLog(_:)), #selector(showCommandLog(_:)), #selector(showStatusDebug(_:)), #selector(closeWindow(_:)),
              #selector(focusSessionFilter(_:)):
             return controller != nil || (item.action == #selector(showSearch(_:)) && NSApp.keyWindow?.windowController is SearchWindowController)
         default:

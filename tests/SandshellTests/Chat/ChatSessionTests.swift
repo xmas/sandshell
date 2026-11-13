@@ -732,3 +732,73 @@ struct SeaFieldTests {
         }
     }
 }
+
+/// `!` and `&` in the composer: a line that's a command you run yourself —
+/// `!` in the session's sandbox, `&` on the Mac — not a message to the agent.
+@MainActor
+struct LocalCommandTests {
+    typealias Command = ChatSession.LocalCommand
+
+    @Test(arguments: [
+        ("!ls -la", Command.sandbox("ls -la")),
+        ("  ! swift test  ", .sandbox("swift test")),
+        ("&xcodegen generate", .mac("xcodegen generate")),
+        ("& git push", .mac("git push")),
+    ])
+    func aLineStartingWithASigilIsACommand(text: String, command: Command) {
+        #expect(ChatSession.localCommand(text) == command)
+    }
+
+    @Test(arguments: ["hello", "!", "&", "  &  ", "what about !this", "a & b"])
+    func anythingElseIsAMessage(text: String) {
+        #expect(ChatSession.localCommand(text) == nil)
+    }
+
+    @Test func theAgentIsToldWhatRanWhereAndItsOutput() {
+        let said = ChatSession.commandContext(.sandbox("swift test"), status: 1, output: "1 test failed")
+        #expect(said.contains("`swift test` in the sandbox (exit 1)") && said.contains("1 test failed"))
+        let long = ChatSession.commandContext(.mac("yes"), status: 0, output: String(repeating: "y\n", count: 20_000))
+        #expect(long.count < ChatSession.commandContextLimit + 200, "only the end of a long output")
+    }
+
+    @Test func aMacCommandWithNoMacFolderSaysWhyAndRunsNothing() throws {
+        let dir = URL.temporaryDirectory.appending(path: "sandshell-commands-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let session = ChatSession(title: "Claude", containerName: "test-sandbox", workdir: "/nonexistent/work",
+                                  home: "/nonexistent/home")
+        session.commandLog = CommandLog(url: dir.appending(path: "commands.log"))
+        #expect(session.submit(text: "&echo hi", attachments: []))
+        guard case .tool(let card)? = session.items.last else { Issue.record("a card for it"); return }
+        #expect(card.title == "& echo hi" && card.status == "failed")
+        #expect(card.output.contains("only from Sandshell's window"))
+        #expect(session.commandLog.entries().isEmpty, "nothing ran, nothing to audit")
+    }
+
+    @Test func theCommandLogKeepsOneLineAnEntryForYouAlone() throws {
+        let dir = URL.temporaryDirectory.appending(path: "sandshell-commands-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let log = CommandLog(url: dir.appending(path: "Logs/commands.log"))
+        log.record(["event": "ran", "sigil": "&", "command": "git push\nrm -rf x", "folder": "/Users/me/a b"])
+        log.record(["event": "exited", "status": 0])
+        let entries = log.entries()
+        try #require(entries.count == 2)
+        #expect(entries[0]["command"]?.string == "git push\nrm -rf x", "a multi-line command stays one entry")
+        #expect(entries[0]["time"]?.string != nil && entries[0]["app"]?.string != nil)
+        #expect(entries[1]["event"]?.string == "exited")
+        let mode = try FileManager.default.attributesOfItem(atPath: log.url!.path(percentEncoded: false))[.posixPermissions] as? Int
+        #expect(mode == 0o600)
+    }
+
+    @Test func noCommandLogWritesNothing() {
+        let log = CommandLog(url: nil)
+        log.record(["event": "ran"])
+        #expect(log.entries().isEmpty && log.created() == nil)
+    }
+
+    @Test func aPairedDeviceCantRunCommandsOnTheMac() {
+        let session = ChatSession(title: "Claude", containerName: "test-sandbox", workdir: "/nonexistent/work",
+                                  home: "/nonexistent/home")
+        #expect(throws: RemoteHub.CommandError.self) { try RemoteHub.send(session, text: "&rm -rf ~", images: []) }
+        #expect(session.items.isEmpty, "nothing ran, nothing shown")
+    }
+}

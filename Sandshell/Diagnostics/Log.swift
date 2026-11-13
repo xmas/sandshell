@@ -81,3 +81,49 @@ enum Log {
         pending.yield("\(stamp.string(from: Date())) [\(tag)] \(level): \(message)\n")
     }
 }
+
+/// Every `!` and `&` command you ran from a chat, for auditing what ran where:
+/// `~/Library/Logs/Sandshell/commands.log` (Help ▸ Show Command Log), one JSON
+/// object a line — `ran` (when, which app, where, the folder, the command, the
+/// session) then `exited` (status, seconds) or `failed` (why). On the Mac,
+/// outside every sandbox's mounts, so no agent can edit it; only you can read
+/// it (0600). Nothing is written while the app hosts unit tests.
+struct CommandLog: Sendable {
+    let url: URL?
+
+    static let shared = CommandLog(url: AppDelegate.isHostingTests ? nil
+        : URL.libraryDirectory.appending(path: "Logs/Sandshell/commands.log"))
+
+    /// One line's fields; `time` and `app` are added.
+    func record(_ fields: [String: JSONValue]) {
+        guard let url else { return }
+        var line = fields
+        line["time"] = .string(Date.now.ISO8601Format())
+        line["app"] = .string(Bundle.main.bundleIdentifier ?? "?")
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        guard let data = try? encoder.encode(JSONValue.object(line)), let url = created() else { return }
+        guard let handle = try? FileHandle(forWritingTo: url) else { return }
+        defer { try? handle.close() }
+        _ = try? handle.seekToEnd()
+        try? handle.write(contentsOf: data + Data("\n".utf8))
+    }
+
+    /// The file, made (empty, yours only) if it isn't there yet — to append
+    /// to, or for Console to open.
+    func created() -> URL? {
+        guard let url else { return nil }
+        let fm = FileManager.default
+        if !fm.fileExists(atPath: url.path(percentEncoded: false)) {
+            try? fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            fm.createFile(atPath: url.path(percentEncoded: false), contents: nil, attributes: [.posixPermissions: 0o600])
+        }
+        return url
+    }
+
+    /// The lines so far, oldest first (tests, and anything that audits).
+    func entries() -> [JSONValue] {
+        guard let url, let text = try? String(contentsOf: url, encoding: .utf8) else { return [] }
+        return text.split(separator: "\n").compactMap { try? JSONDecoder().decode(JSONValue.self, from: Data($0.utf8)) }
+    }
+}
