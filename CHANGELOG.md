@@ -2,6 +2,12 @@
 
 A running log of what changed, newest first. Yes, we actually write these.
 
+## v0.2.56 — "At a Glance"
+- **Sidebar cards say more.** Each session shows what you sent it lately, in quotes, newest first. While it works, the steps of its plan around where it is: the last one done, the one it's on, the next. While it needs you, what it's asking ("Allow `swift test`?", or the question itself). Cards grow and shrink with what they have to say; sessions remember their last three prompts across relaunches.
+- **Groups in the sidebar.** Needs you, Working and Earlier, each with its count, whenever sessions fall into more than one.
+- **Open Designer.** What was Show Board is now Open Designer, in the pane's ⋯, on a session's row and in its menu. A designer pane always has its Open in Full Screen Window button on its bar.
+- **The Markdown preview's font is yours to pick.** It stays New York; Settings ▸ Editor ▸ Markdown Preview offers the system font or any other.
+
 ## v0.2.55 — "Low Tide"
 - **One set of type sizes.** Everything in the window and the chat now uses three sizes: small for status and code, one for controls and names, and a slightly larger one for chat text. Titles are bold, not bigger. Replies are in the system font; New York is still a choice in Settings ▸ Editor ▸ Chat.
 - **More room: no toolbar.** Each pane's bar is now the window's title bar: drag it to move the window, double-click it to zoom. Panes sit edge to edge with a thin line between them, and every bar names what its pane shows.
