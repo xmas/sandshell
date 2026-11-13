@@ -1454,7 +1454,7 @@ final class SidebarListController: NSViewController {
             return menu
         }
         let boardSession = session.id
-        let board = NSMenuItem("Show Board") { [weak self] in self?.showBoard(of: boardSession) }
+        let board = NSMenuItem("Open Designer") { [weak self] in self?.showBoard(of: boardSession) }
         board.image = NSImage(systemSymbolName: "paintpalette", accessibilityDescription: nil)
         menu.addItem(board)
         menu.addItem(menuItem("Rename…", #selector(contextRename), object: session.id))

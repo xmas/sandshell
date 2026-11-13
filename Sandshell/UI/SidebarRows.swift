@@ -204,7 +204,7 @@ final class SessionCellView: NSTableCellView {
     private let timeLabel = NSTextField.sidebarLabel(.role(.code))
     private let closeButton = NSButton()
     /// The session's board: shows it, made the first time.
-    private let boardButton = NSButton.symbol("paintpalette", label: "Show Board", target: nil, action: nil, id: "session-show-board")
+    private let boardButton = NSButton.symbol("paintpalette", label: "Open Designer", target: nil, action: nil, id: "session-show-board")
     private let glyphSlot = NSView()
     private var glyphWidth: NSLayoutConstraint!
     private let dot = StatusDotView()
@@ -238,7 +238,7 @@ final class SessionCellView: NSTableCellView {
         nameLabel.setContentHuggingPriority(.init(1), for: .horizontal)
         boardButton.target = self
         boardButton.action = #selector(boardClicked)
-        boardButton.toolTip = "Show Board"
+        boardButton.toolTip = "Open Designer"
         boardButton.setContentHuggingPriority(.required, for: .horizontal)
         boardButton.setContentCompressionResistancePriority(.required, for: .horizontal)
         let titleRow = NSStackView(views: [forkGlyph, nameLabel, boardButton, timeLabel])

@@ -92,7 +92,7 @@ final class PaneStripView: NSView {
     var onRemote: ((NSView) -> Void)?
     /// A board pane's "Open in Full Screen Window".
     var onBoardWindow: (() -> Void)?
-    /// A session's Show Board.
+    /// A session's Open Designer (its board).
     var onShowBoard: (() -> Void)?
     /// The window's sidebar and Files toggles, on the strips at its corners.
     var onToggleSidebar: (() -> Void)?
@@ -492,7 +492,7 @@ final class PaneStripView: NSView {
         }
         func separate() { if let last = menu.items.last, !last.isSeparatorItem { menu.addItem(.separator()) } }
         // The session's.
-        if showsBoardButton { add("Show Board", symbol: "paintpalette") { [weak self] in self?.onShowBoard?() } }
+        if showsBoardButton { add("Open Designer", symbol: "paintpalette") { [weak self] in self?.onShowBoard?() } }
         if showsBoardWindowButton {
             add("Open in Full Screen Window", symbol: "arrow.up.left.and.arrow.down.right") { [weak self] in self?.onBoardWindow?() }
         }
