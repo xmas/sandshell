@@ -108,6 +108,8 @@ final class PaneStripView: NSView {
     private let closeButton = StripIconButton()
     /// A chat's Remote Control, on the bar only while it's on.
     private let remoteButton = StripIconButton()
+    /// A designer pane's own full-screen window: always on its bar.
+    private let boardWindowButton = StripIconButton()
     /// The window's: the sidebar's toggle (top-left strip, sidebar hidden)
     /// and Files' (top-right strip).
     private let sidebarButton = StripIconButton()
@@ -153,8 +155,11 @@ final class PaneStripView: NSView {
     }
     /// Whether the pane shows a session, so ⋯ offers the session's board.
     var showsBoardButton = false
-    /// Whether the pane shows a board, so ⋯ offers the board's own window.
-    var showsBoardWindowButton = false
+    /// Whether the pane shows a board (the designer): its full-screen
+    /// window's button is on the bar, and in ⋯.
+    var showsBoardWindowButton = false {
+        didSet { if showsBoardWindowButton != oldValue { boardWindowButton.isHidden = !showsBoardWindowButton; needsLayout = true } }
+    }
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -175,6 +180,8 @@ final class PaneStripView: NSView {
             (moreButton, "ellipsis", "More: the board, Remote Control, the sandbox and folder, splits",
              #selector(moreClicked), "pane-more"),
             (closeButton, "xmark", "Close Pane (⌥⌘W)", #selector(closeClicked), "pane-close"),
+            (boardWindowButton, "arrow.up.left.and.arrow.down.right", "Open in Full Screen Window",
+             #selector(boardWindowClicked), "pane-board-window"),
             (sidebarButton, "sidebar.left", "Show Sidebar (⌃⌘S)", #selector(sidebarClicked), "window-show-sidebar"),
             (filesButton, "sidebar.right", "Show or Hide Files (⇧⌥⌘0)", #selector(filesClicked), "window-files"),
         ] {
@@ -183,6 +190,7 @@ final class PaneStripView: NSView {
             content.addSubview(button)
         }
         closeButton.isHidden = true
+        boardWindowButton.isHidden = true
         sidebarButton.isHidden = true
         filesButton.isHidden = true
         content.addSubview(remoteButton)
@@ -309,7 +317,7 @@ final class PaneStripView: NSView {
             crumb.hoverColor = c.stripHover
         }
         branchCrumb.restingColor = c.stripTrack
-        for b in [moreButton, closeButton, remoteButton, sidebarButton, filesButton] {
+        for b in [moreButton, closeButton, remoteButton, boardWindowButton, sidebarButton, filesButton] {
             b.contentTintColor = c.stripCrumb
             b.hoverColor = c.stripHover
         }
@@ -360,6 +368,7 @@ final class PaneStripView: NSView {
         if !closeButton.isHidden { place(closeButton) }
         place(moreButton)
         if !remoteButton.isHidden { place(remoteButton) }
+        if !boardWindowButton.isHidden { place(boardWindowButton) }
         x += Self.controlGap
         if !viewSwitch.isHidden {
             x -= 6 + ViewModeSwitch.size.width
@@ -413,6 +422,7 @@ final class PaneStripView: NSView {
     @objc private func moreClicked() { moreMenu().popUp(below: moreButton) }
     @objc private func closeClicked() { onClose?() }
     @objc private func remoteClicked() { onRemote?(remoteButton) }
+    @objc private func boardWindowClicked() { onBoardWindow?() }
     @objc private func sidebarClicked() { onToggleSidebar?() }
     @objc private func filesClicked() { onToggleFiles?() }
 
@@ -826,7 +836,8 @@ extension PaneStripView {
 
     func debugState(in view: NSView) -> DebugState {
         layoutSubtreeIfNeeded()
-        let controls = [viewSwitch, remoteButton, moreButton, closeButton, filesButton].filter { !$0.isHidden } as [NSView]
+        let controls = [viewSwitch, boardWindowButton, remoteButton, moreButton, closeButton, filesButton]
+            .filter { !$0.isHidden } as [NSView]
         return DebugState(
             height: bounds.height, condensing: condensing,
             branchShown: !branchCrumb.isHiddenOrHasHiddenAncestor && branchCrumb.frame.maxX <= crumbs.bounds.maxX + 0.5,
