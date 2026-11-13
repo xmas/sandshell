@@ -243,8 +243,16 @@ enum ChatRenderer {
         }
         /// Chat transcript: the system font.
         static let chat = Prose(serif: false)
-        /// A Markdown document (Files preview): New York.
-        static let document = Prose(serif: true)
+        /// A Markdown document (Files preview): New York unless Settings ▸
+        /// Editor ▸ Markdown Preview says otherwise.
+        @MainActor static var document: Prose {
+            let family = ChatFonts.document
+            switch family {
+            case ChatFonts.newYork: return Prose(serif: true)
+            case ChatFonts.system: return Prose(serif: false)
+            default: return Prose(serif: true, family: family)
+            }
+        }
 
         /// A type role in the prose face.
         @MainActor func font(_ role: TypeRole = .body) -> NSFont {

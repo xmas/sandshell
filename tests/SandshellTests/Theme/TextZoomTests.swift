@@ -128,6 +128,20 @@ struct TextZoomTests {
         }
     }
 
+    /// Files' Markdown preview: New York by default; Settings ▸ Editor ▸
+    /// Markdown Preview picks the system font or any other.
+    @Test @MainActor func theMarkdownPreviewIsNewYorkUnlessChanged() throws {
+        try withZoom {
+            #expect(ChatFonts.document == ChatFonts.newYork)
+            #expect(ChatRenderer.Prose.document.serif && ChatRenderer.Prose.document.family == nil)
+            ChatFonts.document = ChatFonts.system
+            #expect(!ChatRenderer.Prose.document.serif)
+            #expect(ChatRenderer.Prose.document.font().fontName == NSFont.content(.body).fontName)
+            ChatFonts.document = "Menlo"
+            #expect(ChatRenderer.Prose.document.family == "Menlo")
+        }
+    }
+
     @Test func aMissingFontFallsBackToTheSystemOne() throws {
         try withZoom {
             #expect(ChatFonts.font("No Such Font").pointSize == TypeRole.body.pointSize)

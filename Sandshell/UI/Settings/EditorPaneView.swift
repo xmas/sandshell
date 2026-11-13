@@ -8,6 +8,7 @@ struct EditorPaneView: View {
     private var prefs: Binding<EditorPreferences> { $settings.prefs }
     @State private var replyFont = ChatFonts.reply
     @State private var messageFont = ChatFonts.message
+    @State private var documentFont = ChatFonts.document
 
     var body: some View {
         Form {
@@ -20,6 +21,13 @@ struct EditorPaneView: View {
                     ForEach(ChatFonts.families, id: \.self) { Text($0).tag($0) }
                 }
                 .onChange(of: messageFont) { _, family in ChatFonts.message = family }
+            }
+
+            Section("Markdown Preview") {
+                Picker("Font", selection: $documentFont) {
+                    ForEach(ChatFonts.families, id: \.self) { Text($0).tag($0) }
+                }
+                .onChange(of: documentFont) { _, family in ChatFonts.document = family }
             }
 
             Section("Text") {

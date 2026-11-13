@@ -122,6 +122,7 @@ enum ChatFonts {
     static let newYork = "New York"
     static let replyKey = "chatReplyFont"
     static let messageKey = "chatMessageFont"
+    static let documentKey = "markdownPreviewFont"
 
     static var reply: String {
         // The UI's face, like everything else (New York is a choice in Settings).
@@ -132,6 +133,16 @@ enum ChatFonts {
     static var message: String {
         get { TextZoom.defaults.string(forKey: messageKey) ?? system }
         set { set(newValue, forKey: messageKey) }
+    }
+
+    /// Files' Markdown preview: New York unless Settings ▸ Editor says otherwise.
+    static var document: String {
+        get { TextZoom.defaults.string(forKey: documentKey) ?? newYork }
+        set {
+            TextZoom.defaults.set(newValue, forKey: documentKey)
+            // The editor re-renders its preview on a text change.
+            NotificationCenter.default.post(name: TextZoom.didChange, object: nil)
+        }
     }
 
     private static func set(_ family: String, forKey key: String) {
