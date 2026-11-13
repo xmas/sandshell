@@ -2,6 +2,14 @@
 
 A running log of what changed, newest first. Yes, we actually write these.
 
+## v0.2.55 — "Low Tide"
+- **One set of type sizes.** Everything in the window and the chat now uses three sizes: small for status and code, one for controls and names, and a slightly larger one for chat text. Titles are bold, not bigger. Replies are in the system font; New York is still a choice in Settings ▸ Editor ▸ Chat.
+- **More room: no toolbar.** Each pane's bar is now the window's title bar: drag it to move the window, double-click it to zoom. Panes sit edge to edge with a thin line between them, and every bar names what its pane shows.
+- **A quieter pane bar.** The session's name and its branch, Chat | Terminal, and ⋯ for the rest: Show Board, Remote Control, Stop and Restart, the sandbox, Open in Finder, Split Right and Down, Close. The Remote Control antenna shows while it's on, Close while the window has several panes.
+- **The sandbox in the sidebar.** A small cube beside + shows the focused session's sandbox: blue running, orange building, red failed, grey stopped. Click it for Inspect, Folder Access, Start/Stop, Restart and Rebuild.
+- **Files' button is at the window's top-right corner**, on the pane bar there. Hide Sidebar is in the sidebar's top row; with the sidebar hidden, Show Sidebar sits next to the window's buttons.
+- **A new empty chat.** A tide line instead of the sea of creatures, stirred where the pointer moves. Under it: where the agent works (the folder and how it's shared, the branch, the sandbox) and, for your first few chats, tips.
+
 ## v0.2.54 — "Fold Here"
 - **Long messages of yours start folded.** Paste a log or a crash report and the chat shows its first few lines, with **More** to see it all and **Less** to fold it again. Copy, find and print still get the whole message.
 - **Question cards work on your phone again.** Since 0.2.52 their buttons (Submit, Skip, Done, Cancel) had no label and did nothing under Remote Control.
