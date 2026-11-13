@@ -11,9 +11,11 @@ final class ChatSessionView: NSView {
     let session: ChatSession
 
     private let transcript: ChatWebTranscript
-    /// Until the first message: a sea of creatures, and where this runs.
-    private lazy var emptyState = NSHostingView(rootView: ChatEmptyState(
-        agent: session.title.capitalized, folder: (session.workdir as NSString).lastPathComponent))
+    /// Until the first message: the tide line, where this runs, how to start.
+    let emptyModel: ChatEmptyModel
+    /// This chat already counted toward the tips' first few chats.
+    private var countedForTips = false
+    private lazy var emptyState = NSHostingView(rootView: ChatEmptyState(model: emptyModel))
     private let composer = ChatComposerView()
 
     /// The window's theme: Send takes its accent.
@@ -68,6 +70,8 @@ final class ChatSessionView: NSView {
     init(session: ChatSession) {
         self.session = session
         transcript = ChatWebTranscript(source: session)
+        emptyModel = ChatEmptyModel(agent: session.title.capitalized, sandbox: session.containerName,
+                                    folder: session.workdir, showsTips: ChatTips().showing)
         super.init(frame: .zero)
         composer.agentName = session.title
         buildLayout()
@@ -201,7 +205,14 @@ final class ChatSessionView: NSView {
             guard let self else { return false }
             self.sendingWhenOtherAppIdles = false   // sent (or queued) by hand
             self.idleTimeout?.cancel()
-            return self.session.submit(text: text, attachments: attachments)
+            let first = self.session.items.isEmpty && !self.countedForTips
+            let sent = self.session.submit(text: text, attachments: attachments)
+            // A chat you started: one fewer to show the getting-started tips in.
+            if sent, first {
+                self.countedForTips = true
+                if !AutomatedRun.isActive, !AppDelegate.isHostingTests { ChatTips().chatStarted() }
+            }
+            return sent
         }
         composer.shouldSubmit = { [weak self] in self?.confirmSendWhileOtherAppWorks() ?? true }
         composer.commands = { [weak session] in session?.commands ?? [] }
@@ -330,6 +341,7 @@ final class ChatSessionView: NSView {
         }.store(in: &bag)
         session.$phase.sink { [weak self] phase in
             guard let self else { return }
+            if self.emptyModel.phase != phase { self.emptyModel.phase = phase }
             if case .starting = phase {} else { self.showEmptyState(self.session.items.isEmpty) }
             self.showPhase(phase)
         }.store(in: &bag)
@@ -339,6 +351,8 @@ final class ChatSessionView: NSView {
         }.store(in: &bag)
         session.$modes.combineLatest(session.$currentMode).sink { [weak self] modes, current in
             guard let self else { return }
+            let mode = modes.first { $0.id == current }?.name
+            if self.emptyModel.mode != mode { self.emptyModel.mode = mode }
             self.fill(self.modePopup, modes, current)
             self.updatePieces()
         }.store(in: &bag)
@@ -381,7 +395,16 @@ final class ChatSessionView: NSView {
     }
 
     private func showEmptyState(_ show: Bool) {
+        if show, emptyState.isHidden || emptyModel.git == nil { emptyModel.refreshGit() }
         emptyState.isHidden = !show
+    }
+
+    /// The chat's folder on this Mac and how its sandbox sees it, for the empty chat.
+    func setSandboxAccess(folder: URL, access: SandboxAccess) {
+        let path = folder.path(percentEncoded: false)
+        if emptyModel.folder != path { emptyModel.folder = path; emptyModel.git = nil }
+        if emptyModel.access != access { emptyModel.access = access }
+        if !emptyState.isHidden, emptyModel.git == nil { emptyModel.refreshGit() }
     }
 
     private func showPhase(_ phase: ChatSession.Phase) {

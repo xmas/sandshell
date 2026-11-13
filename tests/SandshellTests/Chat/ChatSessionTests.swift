@@ -619,3 +619,116 @@ struct FileLinksTests {
     }
 }
 
+
+/// `ChatEmptyFact.facts`: what the empty chat says about where the agent works.
+struct ChatEmptyFactTests {
+    private static let system = SandboxSystem(probeOutput: "kernel=7.0.14\narch=aarch64\ndistro=Ubuntu 26.04.1 LTS\nmemkb=9332260")
+    private static func git(branch: String?, changed: Int) -> GitStatus {
+        GitStatus(repoRoot: "/r", branch: branch,
+                  changes: Dictionary(uniqueKeysWithValues: (0..<changed).map { ("/r/f\($0)", .modified) }))
+    }
+
+    @Test func aRunningChatInARepoSaysAllFour() throws {
+        let facts = ChatEmptyFact.facts(folder: "/r", access: .readWrite, git: Self.git(branch: "main", changed: 1),
+                                        sandbox: "claude-r", system: Self.system, phase: .ready, mode: "Ask before edits")
+        #expect(facts.map(\.id) == ["folder", "branch", "sandbox", "mode"])
+        #expect(facts[0].detail == "Shared read-write")
+        #expect(facts[1].title == "main")
+        #expect(facts[1].detail == "1 file changed")
+        #expect(facts[2].status == .running)
+        let memory = try #require(Self.system?.memory)
+        #expect(facts[2].detail == "Running · Ubuntu 26.04 · \(memory)")
+        #expect(facts[3].title == "Ask before edits")
+    }
+
+    @Test func untilGitAnswersOrOutsideARepoThereIsNoBranch() {
+        for git in [nil, GitStatus.empty] {
+            let facts = ChatEmptyFact.facts(folder: "/r", access: nil, git: git, sandbox: "s", system: nil,
+                                            phase: .starting, mode: nil)
+            #expect(facts.map(\.id) == ["folder", "sandbox"])
+        }
+    }
+
+    @Test(arguments: [(0, "No changes"), (1, "1 file changed"), (5, "5 files changed")])
+    func theBranchCountsChangedFiles(changed: Int, detail: String) {
+        let facts = ChatEmptyFact.facts(folder: "/r", access: .readOnly, git: Self.git(branch: "dev", changed: changed),
+                                        sandbox: "s", system: nil, phase: .ready, mode: nil)
+        #expect(facts.first { $0.id == "branch" }?.detail == detail)
+    }
+
+    @Test func aDetachedHeadSaysSo() {
+        let facts = ChatEmptyFact.facts(folder: "/r", access: nil, git: Self.git(branch: nil, changed: 0),
+                                        sandbox: "s", system: nil, phase: .ready, mode: nil)
+        let branch = facts.first { $0.id == "branch" }
+        #expect(branch?.title == "Detached HEAD")
+        #expect(branch?.code == false)
+    }
+
+    @Test(arguments: [(ChatSession.Phase.starting, ChatEmptyFact.Status.starting, "Starting…"),
+                      (.running, .running, "Running"),
+                      (.closed("gone"), .stopped, "Stopped")])
+    func theSandboxSaysWhereTheChatIs(phase: ChatSession.Phase, status: ChatEmptyFact.Status, detail: String) {
+        let sandbox = ChatEmptyFact.facts(folder: "/r", access: nil, git: nil, sandbox: "s", system: nil,
+                                          phase: phase, mode: nil).first { $0.id == "sandbox" }
+        #expect(sandbox?.status == status)
+        #expect(sandbox?.detail == detail)
+    }
+
+    @Test func aStartingSandboxDoesNotClaimItsSystemYet() {
+        let sandbox = ChatEmptyFact.facts(folder: "/r", access: nil, git: nil, sandbox: "s", system: Self.system,
+                                          phase: .starting, mode: nil).first { $0.id == "sandbox" }
+        #expect(sandbox?.detail == "Starting…")
+    }
+
+    @Test func theFolderIsAbbreviatedAndSaysHowItIsShared() {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let facts = ChatEmptyFact.facts(folder: home + "/Code/x", access: .notShared, git: nil, sandbox: "s",
+                                        system: nil, phase: .ready, mode: nil)
+        #expect(facts[0].title == "~/Code/x")
+        #expect(facts[0].detail == "Not shared with the sandbox")
+    }
+}
+
+/// `ChatTips`: the empty chat's tips, for the first few chats only.
+struct ChatTipsTests {
+    @Test func theTipsShowForTheFirstFewChatsThenStop() throws {
+        let suite = "ChatTipsTests-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let tips = ChatTips(defaults: defaults)
+        for _ in 0..<ChatTips.chats {
+            #expect(tips.showing)
+            tips.chatStarted()
+        }
+        #expect(!tips.showing)
+        tips.chatStarted()
+        #expect(defaults.integer(forKey: ChatTips.key) == ChatTips.chats, "the count stops at the limit")
+    }
+}
+
+/// `SeaField`: the stir under the pointer, and the colors it refracts into.
+struct SeaFieldTests {
+    @Test func theStirIsMostUnderThePointerAndSettles() {
+        #expect(SeaField.stirred(100, by: nil) == 0)
+        #expect(SeaField.stirred(100, by: (x: 100, age: 0)) == 1)
+        #expect(SeaField.stirred(150, by: (x: 100, age: 0)) < SeaField.stirred(110, by: (x: 100, age: 0)))
+        #expect(SeaField.stirred(100, by: (x: 100, age: 3)) < 0.01)
+    }
+
+    @Test func farFromThePointerTheSpectrumLiesOnTheWater() {
+        let stir = (x: 100.0, age: 0.0)
+        let water = SeaField.level(500, time: 3, speed: 0.9, phase: 0, stir: stir)
+        for split in [-1.0, 1] {
+            #expect(abs(SeaField.level(500, time: 3, speed: 0.9, phase: 0, stir: stir, split: split) - water) < 0.01)
+            #expect(SeaField.level(100, time: 3, speed: 0.9, phase: 0, stir: stir, split: split)
+                    != SeaField.level(100, time: 3, speed: 0.9, phase: 0, stir: stir))
+        }
+    }
+
+    @Test(arguments: [0.0, 10, 20, 30, 40])
+    func theColorsStayInTheSea(time: Double) {
+        for u in stride(from: 0.0, through: 1, by: 0.25) {
+            #expect((0.4...0.7).contains(SeaField.hue(at: u, time: time, lift: 0)))
+        }
+    }
+}

@@ -3003,8 +3003,8 @@ enum SelfTest {
 
     // MARK: Sea
 
-    /// The empty chat's sea at rest and stirred by a click, light and dark;
-    /// with a window, the real empty chat too.
+    /// The empty chat's tide line at rest and stirred, and the empty chat wide,
+    /// narrow and short, light and dark; with a window, the real empty chat too.
     private static func sea(_ window: MainWindowController) async {
         if let ws = window.workspaceController, let tree = window.paneTree, let s = ws.newChatInCurrentContext() {
             _ = await until(180) { tree.surfaces.chats[s.id] != nil }
@@ -3029,42 +3029,47 @@ enum SelfTest {
             }
             ws.closeSession(s.id)   // leave the fixture as it was
         }
+        // The empty chat as a pane shows it, at rest and stirred, light and dark.
+        let model = ChatEmptyModel(agent: "Claude", sandbox: "claude-msdgc", folder: "/Users/someone/Code/msdgc")
+        model.phase = .ready
+        model.mode = "Ask before edits"
+        model.git = GitStatus(repoRoot: "/Users/someone/Code/msdgc", branch: "main",
+                              changes: ["/Users/someone/Code/msdgc/a.swift": .modified])
         for (name, look) in [("light", NSAppearance.Name.aqua), ("dark", .darkAqua)] {
-            for splash in [nil, CGPoint(x: 200, y: 84)] as [CGPoint?] {
-                let host = NSHostingView(rootView: SeaBackdrop(initialSplash: splash) {
-                        Text("What should Claude work on?").font(.role(.title)).foregroundStyle(.secondary)
-                    }
+            for stir in [nil, 260.0] as [Double?] {
+                let host = NSHostingView(rootView: SeaBackdrop(initialStir: stir) {}
                     .background(Color(nsColor: .textBackgroundColor)))
                 host.appearance = NSAppearance(named: look)
-                host.frame = NSRect(x: 0, y: 0, width: 520, height: 300)
+                host.frame = NSRect(x: 0, y: 0, width: 520, height: 120)
                 let w = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
                 w.isReleasedWhenClosed = false
                 w.alphaValue = 0
                 w.contentView = host
                 w.orderBack(nil)
-                for (i, delay) in (splash == nil ? [0.3] : [0.12, 0.2, 0.4, 1.4]).enumerated() {
+                for (i, delay) in (stir == nil ? [0.3] : [0.12, 0.4, 1.4]).enumerated() {
                     await wait(delay)
-                    snapshot(host, "sea-\(name)-\(splash == nil ? "rest" : "splash\(i)")")
+                    snapshot(host, "sea-\(name)-\(stir == nil ? "rest" : "stir\(i)")")
                 }
                 w.close()
             }
-        }
-        // A narrow pane: the hint wraps inside it instead of being cut off.
-        let narrow = NSHostingView(rootView: SeaBackdrop {
-                Text("It works in msdgc, inside its sandbox. Type / for commands, @ to mention a file, or drop files here.")
-                    .font(.role(.body)).multilineTextAlignment(.center).frame(maxWidth: 360)
-                    .fixedSize(horizontal: false, vertical: true).padding(.horizontal, 24)
+            // Wide, narrow (one column) and short (the tips go, then the facts).
+            for (size, label) in [(NSSize(width: 580, height: 620), "wide"), (NSSize(width: 300, height: 620), "narrow"),
+                                  (NSSize(width: 580, height: 330), "short")] {
+                let host = NSHostingView(rootView: ChatEmptyState(model: model)
+                    .background(Color(nsColor: .textBackgroundColor)))
+                host.sizingOptions = []
+                host.appearance = NSAppearance(named: look)
+                host.frame = NSRect(origin: .zero, size: size)
+                let w = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+                w.isReleasedWhenClosed = false
+                w.alphaValue = 0
+                w.contentView = host
+                w.orderBack(nil)
+                await wait(0.4)
+                snapshot(host, "empty-chat-\(name)-\(label)")
+                w.close()
             }
-            .background(Color(nsColor: .textBackgroundColor)))
-        narrow.sizingOptions = []
-        narrow.frame = NSRect(x: 0, y: 0, width: 260, height: 360)
-        let nw = NSWindow(contentRect: narrow.frame, styleMask: [.borderless], backing: .buffered, defer: false)
-        nw.isReleasedWhenClosed = false
-        nw.alphaValue = 0
-        nw.contentView = narrow
-        await wait(0.3)
-        snapshot(narrow, "sea-narrow")
-        nw.close()
+        }
         check(true, "rendered")
     }
 
@@ -3503,8 +3508,8 @@ enum SelfTest {
         guard let pane = tree.panes.first else { return check(false, "a pane") }
         check(await until(15) { pane.debugStrip.branchShown }, "the branch crumb arrives")
         func describe(_ s: PaneStripView.DebugState) -> String {
-            "pane \(Int(pane.view.frame.width)) strip: sandbox \(s.sandboxShown)/\(s.sandboxLabelShown) folder \(s.folderShown)/\(s.folderLabelShown) "
-                + "branch \(s.branchShown) ⋯ \(s.moreShown) name \(s.nameShown) (\(Int(s.nameWidth))) view \(String(describing: s.viewMode)) dimmed \(s.dimmed)"
+            "pane \(Int(pane.view.frame.width)) strip: name \(s.nameShown) (\(Int(s.nameWidth))) branch \(s.branchShown) "
+                + "view \(String(describing: s.viewMode)) remote \(s.remoteShown) close \(s.closeShown) dimmed \(s.dimmed)"
         }
         /// Every control inside the pane, the strip 34 pt high.
         func fits(_ s: PaneStripView.DebugState, _ name: String) {
@@ -3525,8 +3530,8 @@ enum SelfTest {
             await wait(0.6)
             let s = pane.debugStrip
             log("window \(Int(width)): \(describe(s))")
-            check(s.sandboxLabelShown && s.folderLabelShown && s.branchShown && !s.moreShown,
-                  "at \(Int(width)) every crumb shows with its label")
+            check(s.branchShown && !s.closeShown && !s.remoteShown,
+                  "at \(Int(width)) the name and the branch chip; no Close (one pane), no antenna (Remote Control off)")
             check(s.nameShown, "at \(Int(width)) the strip names the session (it's the title bar)")
             check(s.viewMode == nil, "a shell session has no Chat | Terminal switch")
             fits(s, "window \(Int(width))")
@@ -3589,8 +3594,7 @@ enum SelfTest {
 
         // Narrower and narrower: the crumbs give way by the rule; the controls don't.
         guard let split = pane.view.superview as? NSSplitView else { return check(false, "the pane is in a split") }
-        for (width, expect) in [(600.0, "all labels"), (540, "sandbox icon only"), (470, "sandbox and folder icons only"),
-                                (380, "folded into ⋯")] {
+        for (width, expect) in [(600.0, "the name and the branch chip"), (340, "the name alone (the branch is in ⋯)")] {
             split.setPosition(width, ofDividerAt: 0)
             split.layoutSubtreeIfNeeded()
             await wait(0.5)
@@ -3598,23 +3602,20 @@ enum SelfTest {
             s = pane.debugStrip
             log("\(Int(width)): \(describe(s))")
             check(abs(pane.view.frame.width - width) <= 2, "the pane is \(Int(width)) pt wide (\(Int(pane.view.frame.width)))")
-            let rule = PaneStripCondensing(width: pane.view.frame.width - 32)
-            switch width {
-            case 600: check(s.sandboxLabelShown && s.folderLabelShown && s.branchShown && !s.moreShown, "\(Int(width)): \(expect)")
-            case 540: check(s.sandboxShown && !s.sandboxLabelShown && s.folderLabelShown && s.branchShown && !s.moreShown, "\(Int(width)): \(expect)")
-            case 470: check(s.sandboxShown && !s.sandboxLabelShown && s.folderShown && !s.folderLabelShown && s.branchShown && !s.moreShown,
-                            "\(Int(width)): \(expect)")
-            default: check(s.moreShown && !s.sandboxShown && !s.folderShown && !s.branchShown, "\(Int(width)): \(expect)")
-            }
+            let rule = PaneStripCondensing(width: pane.view.frame.width)
+            check(s.branchShown == (width >= PaneStripCondensing.branchBelow), "\(Int(width)): \(expect)")
             check(s.condensing == rule, "\(Int(width)): the strip follows the rule for its own width")
+            check(s.closeShown, "\(Int(width)): two panes, so Close is on the bar")
             check(s.nameShown && s.nameWidth >= PaneStripView.nameMinWidth, "\(Int(width)): the name keeps at least 72 pt (\(Int(s.nameWidth)))")
             fits(s, "\(Int(width)) pt pane")
             snapshot(pane.debugStripView, "title-strip-\(Int(width))")
         }
         let menu = pane.debugStripMoreMenu
         log("⋯ menu: \(menu)")
-        check(menu.count == 3 && menu[0].contains("Sandbox") && menu[1].contains("Finder"), "⋯ lists the sandbox, the folder and the branch")
-        snapshot(window, "title-strip-380-window")
+        check(menu.contains { $0.hasPrefix("Sandbox") } && menu.contains { $0.contains("in Finder") }
+                && menu.contains("Split Right") && menu.contains("Split Down") && menu.contains("Close Pane"),
+              "⋯ has the sandbox, the folder, the splits and Close (\(menu))")
+        snapshot(window, "title-strip-340-window")
         pane.reemitChrome()
         await titleBar(window, session: a)
     }
