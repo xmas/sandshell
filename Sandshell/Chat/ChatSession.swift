@@ -146,11 +146,16 @@ final class ChatSession: ObservableObject, ChatFeedSource {
     var waitingFor: String? {
         permission.map { WaitingFor.permission($0.title) } ?? question.map(WaitingFor.question)
     }
-    private var wasWaitingFor: String?
+    /// What it asks, whole: the permission's request, the question's text (the sidebar card's box).
+    var waitingAsk: String? {
+        permission.map { WaitingFor.ask(permission: $0.title) } ?? question.map(\.message)
+    }
+    private var wasWaitingFor: String?, wasWaitingAsk: String?
     private func reportWaiting() {
-        let now = waitingFor
-        guard now != wasWaitingFor else { return }
+        let now = waitingFor, ask = waitingAsk
+        guard now != wasWaitingFor || ask != wasWaitingAsk else { return }
         wasWaitingFor = now
+        wasWaitingAsk = ask
         onWaitingChange?(now != nil)
     }
     private var waitingQuestions: [AgentQuestion] = []

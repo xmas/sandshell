@@ -92,6 +92,9 @@ struct Session: Identifiable, Codable, Hashable {
     /// The first thing asked here (a fork's: the first after the fork), set
     /// once: what it's called until the agent titles it.
     var firstPrompt: String?
+    /// The last few things asked here, newest first, on one line each (the
+    /// sidebar card quotes them).
+    var recentPrompts: [String] = []
     /// The agent's own title for the conversation (Claude's `ai-title`), set
     /// once, after its first turn.
     var generatedName: String?
@@ -166,10 +169,23 @@ struct Session: Identifiable, Codable, Hashable {
     /// which then never changes. Whether it changed anything.
     mutating func recordPrompt(_ prompt: String) -> Bool {
         let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard firstPrompt == nil, !trimmed.isEmpty else { return false }
-        firstPrompt = trimmed
-        return true
+        guard !trimmed.isEmpty else { return false }
+        var changed = false
+        if firstPrompt == nil { firstPrompt = trimmed; changed = true }
+        // The card's quotes: one line each, and not a whole pasted log.
+        let line = String(trimmed.oneLine.prefix(Self.recentPromptLength))
+        if recentPrompts.first != line {
+            recentPrompts.removeAll { $0 == line }
+            recentPrompts.insert(line, at: 0)
+            recentPrompts = Array(recentPrompts.prefix(Self.recentPromptLimit))
+            changed = true
+        }
+        return changed
     }
+
+    /// How many recent prompts a session keeps, and how much of each.
+    static let recentPromptLimit = 3
+    static let recentPromptLength = 240
 
     /// The agent titled the conversation: the first title sticks. Whether it
     /// changed anything.
@@ -225,7 +241,7 @@ struct Session: Identifiable, Codable, Hashable {
 
     enum CodingKeys: String, CodingKey {
         case id, folderID, agent, name, order, workdir, transcriptID, createdAt, lastActiveAt, containerAgent
-        case transcriptWorkdir, forkedFrom, forkedAt, firstPrompt, generatedName, board
+        case transcriptWorkdir, forkedFrom, forkedAt, firstPrompt, recentPrompts, generatedName, board
         case isChat = "chat"
         case isNamedByUser = "namedByUser"
         case isRemote = "remote"
@@ -253,6 +269,7 @@ struct Session: Identifiable, Codable, Hashable {
         forkedFrom = try c.decodeIfPresent(UUID.self, forKey: .forkedFrom)
         forkedAt = try c.decodeIfPresent(Date.self, forKey: .forkedAt)
         firstPrompt = try c.decodeIfPresent(String.self, forKey: .firstPrompt)
+        recentPrompts = try c.decodeIfPresent([String].self, forKey: .recentPrompts) ?? []
         generatedName = try c.decodeIfPresent(String.self, forKey: .generatedName)
         board = try c.decodeIfPresent(String.self, forKey: .board)
     }
@@ -276,6 +293,7 @@ struct Session: Identifiable, Codable, Hashable {
         try c.encodeIfPresent(forkedFrom, forKey: .forkedFrom)
         try c.encodeIfPresent(forkedAt, forKey: .forkedAt)
         try c.encodeIfPresent(firstPrompt, forKey: .firstPrompt)
+        if !recentPrompts.isEmpty { try c.encode(recentPrompts, forKey: .recentPrompts) }
         try c.encodeIfPresent(generatedName, forKey: .generatedName)
         try c.encodeIfPresent(board, forKey: .board)
     }

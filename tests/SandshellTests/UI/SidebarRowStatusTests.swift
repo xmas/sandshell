@@ -283,40 +283,88 @@ extension SidebarRowStatusTests {
     }
 }
 
-// MARK: - Instruction line
+// MARK: - The card's third line
 
 extension SidebarRowStatusTests {
-    struct Instruction {
-        struct Case: Sendable {
-            let name: String
-            let prompt: String?
-            let density: SidebarDensity
-            let shows: Bool
+    struct CardDetail {
+        private func runtime(working: Bool = false, waiting: Bool = false, plan: [String] = [], ask: String? = nil) -> SessionRuntime {
+            var rt = SessionRuntime()
+            rt.isLive = true
+            if working { rt.status = .working }
+            rt.isWaiting = waiting
+            rt.waitingFor = waiting ? "a question" : nil
+            rt.waitingAsk = ask
+            rt.planProgress = PlanProgress(plan.enumerated().map { ChatItem.PlanEntry(content: "step \($0)", status: $1) })
+            return rt
+        }
+        private let prompts = ["the newest", "the one before", "an older one", "the oldest"]
+
+        @Test func aWorkingCardListsTheStepsAroundWhereItIsAndTwoPrompts() throws {
+            let rt = runtime(working: true, plan: ["completed", "completed", "in_progress", "pending", "pending"])
+            let card = try #require(SessionRowStatus.card(rt, prompts: prompts, density: .comfortable))
+            #expect(card.steps.map(\.title) == ["step 1", "step 2", "step 3"])
+            #expect(card.steps.map(\.state) == [.completed, .inProgress, .pending])
+            #expect(card.prompts == ["the newest", "the one before"])
+            #expect(SessionRowStatus.of(rt, agent: .claude, planOnOwnLine: true).detail == "2 of 5")
+            #expect(SessionRowStatus.of(rt, agent: .claude).detail == "2/5", "compact: the count")
         }
 
         @Test(arguments: [
-            Case(name: "Fix trailing-slash links", prompt: "What's not checked in?", density: .comfortable, shows: true),
-            Case(name: "Fix trailing-slash links", prompt: "What's not checked in?", density: .compact, shows: false),
-            Case(name: "is hatch accessible?", prompt: "is hatch accessible?", density: .comfortable, shows: false),
-            Case(name: "is hatch accessible?", prompt: "  is hatch accessible?\n", density: .comfortable, shows: false),
-            Case(name: "first second", prompt: "first\n\nsecond", density: .comfortable, shows: false),
-            Case(name: "Fork of x", prompt: nil, density: .comfortable, shows: false),
-            Case(name: "Renamed", prompt: "", density: .comfortable, shows: false),
+            (["in_progress", "pending"], ["step 0", "step 1"]),                // at the start
+            (["completed", "completed"], ["step 0", "step 1"]),               // all done: the last two
+            (["completed", "pending", "pending"], ["step 0", "step 1", "step 2"]), // nothing in progress: the next
+        ] as [([String], [String])])
+        func theStepsAroundStayInsideThePlan(plan: [String], around: [String]) throws {
+            let rt = runtime(working: true, plan: plan)
+            #expect(try #require(SessionRowStatus.card(rt, prompts: [], density: .comfortable)).steps.map(\.title) == around)
+        }
+
+        @Test func aCardThatNeedsYouSaysWhatItAsksAndTwoPrompts() throws {
+            let rt = runtime(waiting: true, ask: "Which branch?\nmain or dev")
+            let card = try #require(SessionRowStatus.card(rt, prompts: prompts, density: .comfortable))
+            #expect(card.ask == "Which branch? main or dev")
+            #expect(card.prompts.count == 2)
+        }
+
+        @Test func otherwiseItQuotesThreePrompts() throws {
+            let card = try #require(SessionRowStatus.card(runtime(), prompts: prompts, density: .comfortable))
+            #expect(card.prompts == ["the newest", "the one before", "an older one"])
+            #expect(card.ask == nil && card.steps.isEmpty)
+        }
+
+        @Test func nothingToSayIsNoDetail() {
+            #expect(SessionRowStatus.card(runtime(), prompts: [], density: .comfortable) == nil)
+            #expect(SessionRowStatus.card(runtime(working: true, plan: ["in_progress"]), prompts: prompts, density: .compact) == nil,
+                    "compact cards never have one")
+        }
+
+        @Test func theDetailSetsTheHeight() {
+            let comfortable = SidebarDensity.comfortable
+            #expect(comfortable.sessionRowHeight() == 50)
+            let quotes = SessionRowStatus.Card(prompts: ["a", "b", "c"])
+            let plan = SessionRowStatus.Card(steps: [.init(title: "x", state: .inProgress)], prompts: ["a"])
+            let ask = SessionRowStatus.Card(ask: "Allow it?")
+            #expect(comfortable.sessionRowHeight(card: quotes) > comfortable.sessionRowHeight())
+            #expect(comfortable.sessionRowHeight(card: plan) < comfortable.sessionRowHeight(card: quotes))
+            #expect(comfortable.sessionRowHeight(card: ask) > comfortable.sessionRowHeight(card: .init(prompts: ["a"])))
+            #expect(SidebarDensity.compact.sessionRowHeight(card: quotes) == 40)
+        }
+
+        @Test func theFirstInstructionIsTheTooltipOnlyWhenTheTitleIsntIt() {
+            #expect(SessionRowStatus.instruction(displayName: "Fix links", firstPrompt: "What's not checked in?") == "What's not checked in?")
+            #expect(SessionRowStatus.instruction(displayName: "is hatch accessible?", firstPrompt: "  is hatch accessible?\n") == nil)
+            #expect(SessionRowStatus.instruction(displayName: "Title", firstPrompt: "first\nsecond\n\nthird") == "first second third")
+            #expect(SessionRowStatus.instruction(displayName: "Fork", firstPrompt: nil) == nil)
+        }
+
+        @Test(arguments: [
+            ("`swift test`", "Allow `swift test`?"),
+            ("Edit Sources/App.swift", "Allow Edit Sources/App.swift?"),
+            ("Allow this action?", "Allow this action?"),
+            ("", "Allow this action?"),
         ])
-        func showsOnlyWhenTheTitleIsntItAndRowsAreComfortable(_ c: Case) {
-            #expect(SessionRowStatus.showsInstruction(displayName: c.name, firstPrompt: c.prompt, density: c.density) == c.shows)
-        }
-
-        @Test func aMultilinePromptReadsOnOneLine() {
-            #expect(SessionRowStatus.instruction(displayName: "Title", firstPrompt: "first\nsecond\n\nthird")
-                    == "first second third")
-        }
-
-        @Test func compactRowsAreShorter() {
-            #expect(SidebarDensity.comfortable.sessionRowHeight(showsInstruction: false) == 54)
-            #expect(SidebarDensity.compact.sessionRowHeight(showsInstruction: false) == 40)
-            #expect(SidebarDensity.comfortable.sessionRowHeight(showsInstruction: true)
-                    > SidebarDensity.comfortable.sessionRowHeight(showsInstruction: false))
+        func aPermissionIsAskedAsAQuestion(title: String, ask: String) {
+            #expect(WaitingFor.ask(permission: title) == ask)
         }
     }
 }

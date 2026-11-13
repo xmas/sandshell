@@ -18,6 +18,8 @@ enum SidebarMetrics {
     static let badgeSide: CGFloat = 20
     static let badgeGap: CGFloat = 9
     static let summaryRowHeight: CGFloat = 24
+    /// A group's heading (Needs you, Working, Earlier).
+    static let groupRowHeight: CGFloat = 26
     static let childRowHeight: CGFloat = 34
 }
 
@@ -166,6 +168,48 @@ final class StatusSpinnerView: NSView {
 
 // MARK: - Labels
 
+/// A plan step's mark on the sidebar card, in the sidebar's colours: a
+/// filled dot when done, a ring with a dot in it for the step it's on, an
+/// empty ring still to do.
+final class StepMarkView: NSView {
+    private let state: ChatItem.PlanEntry.State
+    private let palette: SidebarPalette
+    static let side: CGFloat = 9
+
+    init(_ state: ChatItem.PlanEntry.State, palette: SidebarPalette) {
+        self.state = state
+        self.palette = palette
+        super.init(frame: NSRect(x: 0, y: 0, width: Self.side, height: Self.side))
+        translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([widthAnchor.constraint(equalToConstant: Self.side),
+                                     heightAnchor.constraint(equalToConstant: Self.side)])
+        setAccessibilityElement(false)
+    }
+
+    @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let ring = bounds.insetBy(dx: 0.75, dy: 0.75)
+        switch state {
+        case .completed:
+            palette.muted.withAlphaComponent(0.7).setFill()
+            NSBezierPath(ovalIn: bounds).fill()
+        case .inProgress:
+            palette.foreground.setStroke()
+            let path = NSBezierPath(ovalIn: ring)
+            path.lineWidth = 1.5
+            path.stroke()
+            palette.foreground.setFill()
+            NSBezierPath(ovalIn: bounds.insetBy(dx: 3, dy: 3)).fill()
+        case .pending:
+            palette.muted.setStroke()
+            let path = NSBezierPath(ovalIn: ring)
+            path.lineWidth = 1.2
+            path.stroke()
+        }
+    }
+}
+
 extension NSTextField {
     /// A one-line label that ellipsizes instead of wrapping — every row text is one.
     static func sidebarLabel(_ font: NSFont) -> NSTextField {
@@ -192,6 +236,35 @@ extension NSFont {
 
 // MARK: - Session row
 
+/// A group's heading: "Needs you  1", in the sidebar's quiet colour.
+final class SidebarGroupCellView: NSTableCellView {
+    private let label = NSTextField.sidebarLabel(.role(.meta, weight: .semibold))
+    private let countLabel = NSTextField.sidebarLabel(.role(.meta))
+
+    init(title: String, count: Int, palette: SidebarPalette) {
+        super.init(frame: .zero)
+        label.stringValue = title
+        label.textColor = palette.muted
+        countLabel.stringValue = "\(count)"
+        countLabel.textColor = palette.muted.withAlphaComponent(0.7)
+        let row = NSStackView(views: [label, countLabel])
+        row.orientation = .horizontal
+        row.alignment = .firstBaseline
+        row.spacing = 5
+        row.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(row)
+        NSLayoutConstraint.activate([
+            row.leadingAnchor.constraint(equalTo: leadingAnchor, constant: SidebarMetrics.rowInset + SidebarMetrics.rowPadding),
+            row.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -4),
+        ])
+        setAccessibilityElement(true)
+        setAccessibilityRole(.staticText)
+        setAccessibilityLabel("\(title), \(count)")
+    }
+
+    @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
+}
+
 final class SessionCellView: NSTableCellView {
     var sessionID: UUID?
     private weak var owner: SidebarListController?
@@ -211,7 +284,14 @@ final class SessionCellView: NSTableCellView {
     private let spinner = StatusSpinnerView()
     private let wordLabel = NSTextField.sidebarLabel(.role(.meta, weight: .semibold))
     private let detailLabel = NSTextField.sidebarLabel(.role(.meta))
-    private let instructionLabel = NSTextField.sidebarLabel(.italic(.meta))
+    /// The card's detail (`SessionRowStatus.Card`): what it asks, the plan's
+    /// steps around where it is, what you sent it lately.
+    private let askBox = NSView()
+    private let askLabel = NSTextField(wrappingLabelWithString: "")
+    private let stepsStack = NSStackView()
+    private let promptsStack = NSStackView()
+    private(set) var card: SessionRowStatus.Card?
+    private var cardApplied = false
     private var leading: NSLayoutConstraint!
     private var tracking: NSTrackingArea?
     private var palette: SidebarPalette
@@ -267,10 +347,35 @@ final class SessionCellView: NSTableCellView {
         statusRow.alignment = .centerY
         statusRow.spacing = 6
 
-        let text = NSStackView(views: [titleRow, statusRow, instructionLabel])
+        for stack in [stepsStack, promptsStack] {
+            stack.orientation = .vertical
+            stack.alignment = .leading
+            stack.spacing = 2
+            stack.isHidden = true
+        }
+        askLabel.font = .role(.meta)
+        askLabel.maximumNumberOfLines = 2
+        askLabel.lineBreakMode = .byTruncatingTail
+        askLabel.cell?.truncatesLastVisibleLine = true
+        askLabel.translatesAutoresizingMaskIntoConstraints = false
+        askBox.wantsLayer = true
+        askBox.layer?.cornerRadius = 6
+        askBox.addSubview(askLabel)
+        askBox.isHidden = true
+        NSLayoutConstraint.activate([
+            askLabel.leadingAnchor.constraint(equalTo: askBox.leadingAnchor, constant: 7),
+            askLabel.trailingAnchor.constraint(equalTo: askBox.trailingAnchor, constant: -7),
+            askLabel.topAnchor.constraint(equalTo: askBox.topAnchor, constant: 4),
+            askLabel.bottomAnchor.constraint(equalTo: askBox.bottomAnchor, constant: -5),
+        ])
+
+        let text = NSStackView(views: [titleRow, statusRow, askBox, stepsStack, promptsStack])
         text.orientation = .vertical
         text.alignment = .leading
         text.spacing = 2
+        text.setCustomSpacing(4, after: statusRow)
+        text.setCustomSpacing(4, after: askBox)
+        text.setCustomSpacing(4, after: stepsStack)
         text.detachesHiddenViews = true
         text.translatesAutoresizingMaskIntoConstraints = false
 
@@ -296,7 +401,9 @@ final class SessionCellView: NSTableCellView {
             text.centerYAnchor.constraint(equalTo: centerYAnchor),
             titleRow.widthAnchor.constraint(equalTo: text.widthAnchor),
             statusRow.widthAnchor.constraint(equalTo: text.widthAnchor),
-            instructionLabel.widthAnchor.constraint(equalTo: text.widthAnchor),
+            askBox.widthAnchor.constraint(equalTo: text.widthAnchor),
+            stepsStack.widthAnchor.constraint(equalTo: text.widthAnchor),
+            promptsStack.widthAnchor.constraint(equalTo: text.widthAnchor),
             glyphWidth,
             glyphSlot.heightAnchor.constraint(equalToConstant: 10),
             dot.centerXAnchor.constraint(equalTo: glyphSlot.centerXAnchor),
@@ -319,7 +426,8 @@ final class SessionCellView: NSTableCellView {
 
     /// Full configure: identity, layout, then the state-driven bits.
     func configure(_ session: Session, name: String, instruction: String?, density: SidebarDensity, nested: Bool,
-                   status: SessionRowStatus, time: String?, selected: Bool, live: Bool) {
+                   status: SessionRowStatus, time: String?, selected: Bool, live: Bool,
+                   card: SessionRowStatus.Card? = nil) {
         boardButton.contentTintColor = palette.muted
         badge.configure(session.agent)
         agentName = session.agent.displayName
@@ -327,19 +435,18 @@ final class SessionCellView: NSTableCellView {
         forkGlyph.isHidden = !nested
         forkGlyph.contentTintColor = palette.muted
         nameLabel.stringValue = name
-        instructionLabel.stringValue = instruction.map { "“\($0)”" } ?? ""
-        instructionLabel.isHidden = density == .compact || instruction == nil
-        instructionLabel.textColor = palette.instruction
-        // Compact: the instruction is the row's tooltip.
-        toolTip = density == .compact ? instruction : nil
+        // The first instruction is the row's tooltip (the card has no line for it).
+        toolTip = instruction.map { "“\($0)”" }
         closeButton.contentTintColor = palette.muted
-        update(status: status, time: time, selected: selected, live: live)
+        update(status: status, time: time, selected: selected, live: live, card: card)
     }
 
     /// The state-driven bits, in place (no rebuild): glyph, word, detail,
     /// time, the title's weight and colour.
-    func update(status: SessionRowStatus, time: String?, selected: Bool, live: Bool) {
+    func update(status: SessionRowStatus, time: String?, selected: Bool, live: Bool,
+                card: SessionRowStatus.Card? = nil) {
         self.status = status
+        setCard(card)
         self.selected = selected
         self.live = live
         let tone = palette.color(for: status.tone)
@@ -359,6 +466,52 @@ final class SessionCellView: NSTableCellView {
         applyTitleStyle()
         setAccessibilityLabel([nameLabel.stringValue, agentName, status.word, status.detail, time]
             .compactMap { $0 }.joined(separator: ", "))
+    }
+
+    /// The card's detail, in place: the ask's box, the steps, the quotes.
+    private func setCard(_ card: SessionRowStatus.Card?) {
+        guard card != self.card || !cardApplied else { return }   // the time ticks every second
+        cardApplied = true
+        self.card = card
+        if let ask = card?.ask {
+            askLabel.stringValue = ask
+            askLabel.textColor = palette.foreground
+            askLabel.toolTip = ask
+            askBox.layer?.backgroundColor = palette.background.mixed(with: .black, 0.2).cgColor
+            askBox.isHidden = false
+        } else {
+            askBox.isHidden = true
+        }
+        let steps = card?.steps ?? []
+        stepsStack.setViews(steps.map { step in
+            let label = NSTextField.sidebarLabel(.role(.meta, weight: step.state == .inProgress ? .semibold : .regular))
+            label.stringValue = step.title
+            label.toolTip = step.title
+            label.textColor = step.state == .inProgress ? palette.foreground : palette.muted
+            if step.state == .completed {
+                label.attributedStringValue = NSAttributedString(string: step.title, attributes: [
+                    .font: NSFont.role(.meta), .foregroundColor: palette.muted.withAlphaComponent(0.7),
+                    .strikethroughStyle: NSUnderlineStyle.single.rawValue])
+            }
+            label.setContentCompressionResistancePriority(.init(250), for: .horizontal)
+            let row = NSStackView(views: [StepMarkView(step.state, palette: palette), label])
+            row.orientation = .horizontal
+            row.alignment = .centerY
+            row.spacing = 6
+            return row
+        }, in: .top)
+        stepsStack.isHidden = steps.isEmpty
+        let prompts = card?.prompts ?? []
+        promptsStack.setViews(prompts.enumerated().map { i, prompt in
+            let label = NSTextField.sidebarLabel(.italic(.meta))
+            label.stringValue = "“\(prompt)”"
+            label.toolTip = prompt
+            // The newest is brightest.
+            label.textColor = i == 0 ? palette.foreground.withAlphaComponent(0.85) : palette.instruction
+            label.setContentCompressionResistancePriority(.init(250), for: .horizontal)
+            return label
+        }, in: .top)
+        promptsStack.isHidden = prompts.isEmpty
     }
 
     func setTime(_ time: String?) {
@@ -477,7 +630,11 @@ final class SessionCellView: NSTableCellView {
     var debugWord: String { wordLabel.stringValue }
     var debugDetail: String { detailLabel.isHidden ? "" : detailLabel.stringValue }
     var debugTime: String { timeLabel.stringValue }
-    var debugInstructionShown: Bool { !instructionLabel.isHidden && !instructionLabel.stringValue.isEmpty }
+    /// The first instruction, as the row's tooltip.
+    var debugInstruction: String? { toolTip }
+    var debugSteps: [String] { card?.steps.map(\.title) ?? [] }
+    var debugPrompts: [String] { card?.prompts ?? [] }
+    var debugAsk: String? { askBox.isHidden ? nil : askLabel.stringValue }
     var debugTitleFont: NSFont? { nameLabel.font }
     var debugForkGlyphShown: Bool { !forkGlyph.isHidden }
     var debugSpinning: Bool { !spinner.isHidden && spinner.isAnimating }
@@ -485,7 +642,7 @@ final class SessionCellView: NSTableCellView {
     var debugBadgeAlpha: CGFloat { badge.alphaValue }
     /// Every label showing, for the no-wrap checks.
     var debugLabels: [NSTextField] {
-        [nameLabel, timeLabel, wordLabel, detailLabel, instructionLabel].filter { !$0.isHidden && !$0.stringValue.isEmpty }
+        [nameLabel, timeLabel, wordLabel, detailLabel].filter { !$0.isHiddenOrHasHiddenAncestor && !$0.stringValue.isEmpty }
     }
     #endif
 }

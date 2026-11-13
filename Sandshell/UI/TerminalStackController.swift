@@ -396,7 +396,7 @@ final class SessionSurfaces {
         let home = controller.home
         guard ClaudeFolderTrust.isTrusted(workdir: workdir, home: home) == false else { return }
         Log.info(.workspace, "claude hasn't been told to trust \(workdir): the terminal will ask")
-        controller.setWaiting(id, true, for: "you to trust this folder")
+        controller.setWaiting(id, true, for: "you to trust this folder", ask: "Trust this folder? Answer in the terminal.")
         Task { [weak self, weak terminal] in
             while let self, let terminal, self.terminals[id] === terminal,
                   ClaudeFolderTrust.isTrusted(workdir: workdir, home: home) == false {
@@ -1697,7 +1697,7 @@ final class TerminalStackController: NSViewController {
             chat.onClosed = { [controller] why in controller.setStopped(id, why) }
             chat.onUnexpectedExit = { [surfaces] in surfaces.onChatAgentExit(id) }
             chat.onWaitingChange = { [controller, weak chat] waiting in
-                controller.setWaiting(id, waiting, for: chat?.waitingFor)
+                controller.setWaiting(id, waiting, for: chat?.waitingFor, ask: chat?.waitingAsk)
                 // Answered (or cancelled): "needs you" is old news.
                 if !waiting { NotificationManager.shared.withdrawNeedsInput(sessionID: id) }
             }

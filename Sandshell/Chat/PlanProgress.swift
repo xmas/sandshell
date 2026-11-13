@@ -27,9 +27,17 @@ struct PlanProgress: Equatable, Sendable {
     let current: String?
     /// The first entry still to do, for when nothing is in progress.
     let next: String?
+    /// Every entry, in order.
+    let steps: [Step]
+
+    struct Step: Equatable, Sendable {
+        let title: String
+        let state: ChatItem.PlanEntry.State
+    }
 
     init?(_ entries: [ChatItem.PlanEntry]) {
         guard !entries.isEmpty else { return nil }
+        steps = entries.map { Step(title: $0.content.oneLine, state: $0.state) }
         done = entries.count { $0.state == .completed }
         total = entries.count
         current = entries.first { $0.state == .inProgress }?.content
@@ -37,6 +45,13 @@ struct PlanProgress: Equatable, Sendable {
     }
 
     var isComplete: Bool { done == total }
+
+    /// The steps around where it is (the sidebar card's list): the last one
+    /// done, the one it's on (or next), and the one after.
+    var around: [Step] {
+        let at = steps.firstIndex { $0.state == .inProgress } ?? steps.firstIndex { $0.state == .pending } ?? steps.count - 1
+        return Array(steps[max(0, at - 1)...min(steps.count - 1, at + 1)])
+    }
 
     /// "3 of 6": the pinned plan's count.
     var count: String { "\(done) of \(total)" }

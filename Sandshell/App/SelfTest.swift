@@ -2439,11 +2439,36 @@ enum SelfTest {
         check(semibold(fresh.id) == true && semibold(seen.id) == false, "only the unread row's title is semibold")
         check(sidebar.debugRowView(anchor.id)?.currentFill != nil, "the shown session's row is filled")
 
-        // The instruction line: the titled one shows its first prompt; the others are it.
-        check(sidebar.debugCell(working.id)?.debugInstructionShown == true, "a row titled apart shows its first instruction")
-        check(sidebar.debugCell(needs.id)?.debugInstructionShown == false, "a row named by its prompt doesn't repeat it")
-        check(sidebar.debugRowHeight(needs.id) == 54, "a comfortable row is 54 pt (\(sidebar.debugRowHeight(needs.id) ?? 0))")
+        // The card: two lines, a third only while it matters. The first
+        // instruction is the row's tooltip, not a line.
+        check(sidebar.debugCell(working.id)?.debugInstruction == "“What's not checked in?”",
+              "a row titled apart has its first instruction as its tooltip (\(sidebar.debugCell(working.id)?.debugInstruction ?? "none"))")
+        check(sidebar.debugCell(needs.id)?.debugInstruction == nil, "a row named by its prompt doesn't repeat it")
+        check(sidebar.debugRowHeight(seen.id) == 50, "a card with nothing more to say is 50 pt (\(sidebar.debugRowHeight(seen.id) ?? 0))")
         snapshot(window, "sidebar-comfortable")
+        // Working with a plan: the steps around where it is, then your prompts
+        // in quotes; needing you: what it asks. Each card as tall as its lines.
+        if var w = ws.runtime(working.id), var n = ws.runtime(needs.id) {
+            w.planProgress = PlanProgress(["Read the diff", "Fold long messages", "Run the tests", "Commit", "Release"].enumerated().map {
+                ChatItem.PlanEntry(content: $1, status: $0 < 3 ? "completed" : $0 == 3 ? "in_progress" : "pending")
+            })
+            ws.debugSetRuntime(working.id, w)
+            n.waitingAsk = WaitingFor.ask(permission: "`swift test --filter SidebarTests`")
+            ws.debugSetRuntime(needs.id, n)
+        }
+        await wait(1)
+        let workingCell = sidebar.debugCell(working.id), needsCell = sidebar.debugCell(needs.id)
+        check(workingCell?.debugSteps == ["Run the tests", "Commit", "Release"],
+              "a working card lists the steps around where it is (\(workingCell?.debugSteps ?? []))")
+        check(workingCell?.debugPrompts == ["What's not checked in?"], "and quotes what you sent it (\(workingCell?.debugPrompts ?? []))")
+        check(workingCell?.debugDetail == "· 3 of 5", "its status says how far it's got (\(workingCell?.debugDetail ?? ""))")
+        check(needsCell?.debugAsk == "Allow `swift test --filter SidebarTests`?",
+              "a card that needs you says what it asks (\(needsCell?.debugAsk ?? "none"))")
+        for (s, cell) in [(working, workingCell), (needs, needsCell)] {
+            let expected = SidebarDensity.comfortable.sessionRowHeight(card: cell?.card)
+            check(sidebar.debugRowHeight(s.id) == expected, "\(ws.displayName(of: s).prefix(20)): \(Int(expected)) pt for its lines")
+        }
+        snapshot(window, "sidebar-cards")
 
         // Header and footer.
         check(sidebar.debugSearchHint == SidebarListController.filterShortcut, "the search field shows ⌥⌘F")
@@ -2515,8 +2540,8 @@ enum SelfTest {
         SidebarDensity.current = .compact
         await wait(0.5)
         check(sidebar.debugRowHeight(working.id) == 40, "a compact row is 40 pt (\(sidebar.debugRowHeight(working.id) ?? 0))")
-        check(sidebar.debugCell(working.id)?.debugInstructionShown == false, "compact drops the instruction line")
-        check(sidebar.debugCell(working.id)?.toolTip == "What's not checked in?", "and makes it the row's tooltip")
+        check(sidebar.debugCell(working.id)?.card == nil, "compact has no detail (the count is in the status)")
+        check(sidebar.debugCell(working.id)?.debugDetail == "· 3/5", "compact: the plan's count in the status line")
         snapshot(window, "sidebar-compact")
         SidebarDensity.current = .comfortable
         defaults.removeObject(forKey: SidebarDensity.defaultsKey)

@@ -167,8 +167,8 @@ extension SessionNamingTests {
             #expect(first)
             #expect(s.firstPrompt == "fix the login bug", "Trimmed")
             let later = s.recordPrompt("and now the tests")
-            #expect(!later, "A later prompt changes nothing")
-            #expect(s.firstPrompt == "fix the login bug")
+            #expect(later, "A later prompt joins the recent ones")
+            #expect(s.firstPrompt == "fix the login bug", "The first stays")
             #expect(s.name == "New Claude Session", "The stored name isn't touched")
             #expect(s.displayName == "fix the login bug")
         }
@@ -181,6 +181,29 @@ extension SessionNamingTests {
             #expect(s.firstPrompt == nil)
             let real = s.recordPrompt("fix it")
             #expect(real, "The first real one is")
+        }
+
+        @Test func theLastThreePromptsAreKeptNewestFirstOnOneLine() {
+            var s = SessionNamingTests.session()
+            for p in ["one", "two\nlines", "three", "four"] { _ = s.recordPrompt(p) }
+            #expect(s.recentPrompts == ["four", "three", "two lines"])
+            let again = s.recordPrompt("four")
+            #expect(!again, "The same prompt again changes nothing")
+            _ = s.recordPrompt("two lines")
+            #expect(s.recentPrompts == ["two lines", "four", "three"], "Sent again, it moves up")
+        }
+
+        @Test func aLongPromptIsCut() {
+            var s = SessionNamingTests.session()
+            _ = s.recordPrompt(String(repeating: "x", count: 1000))
+            #expect(s.recentPrompts.first?.count == Session.recentPromptLength)
+        }
+
+        @Test func recentPromptsSurviveSaving() throws {
+            var s = SessionNamingTests.session()
+            _ = s.recordPrompt("fix it")
+            let data = try JSONEncoder().encode(s)
+            #expect(try JSONDecoder().decode(Session.self, from: data).recentPrompts == ["fix it"])
         }
 
         @Test func theFirstTitleSticks() {

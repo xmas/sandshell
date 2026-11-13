@@ -88,7 +88,9 @@ struct SessionRowStatus: Equatable {
     }
 
     /// The row's status for `runtime` (nil: not run since launch).
-    static func of(_ runtime: SessionRuntime?, agent: AgentKind) -> SessionRowStatus {
+    /// `planOnOwnLine`: the card lists the plan's steps, so a working row's
+    /// detail is how far it's got ("3 of 5") rather than "3/5".
+    static func of(_ runtime: SessionRuntime?, agent: AgentKind, planOnOwnLine: Bool = false) -> SessionRowStatus {
         let state = state(of: runtime)
         let model = runtime?.claudeStatus?.model?.displayName.nonEmpty
         switch state {
@@ -97,7 +99,8 @@ struct SessionRowStatus: Equatable {
         case .working:
             // How far through its plan, when the turn has one ("3/6"): what
             // changes as it works, where the model doesn't.
-            return .init(state: state, word: "Working", detail: runtime?.planProgress?.compact ?? model)
+            let plan = runtime?.planProgress
+            return .init(state: state, word: "Working", detail: (planOnOwnLine ? plan?.count : plan?.compact) ?? model)
         case .finishedUnread, .finishedSeen:
             let worked = (runtime?.workSecondsCompleted ?? 0) >= 1
                 ? "worked \(Format.workTime(runtime?.workSecondsCompleted ?? 0))" : nil
@@ -151,15 +154,35 @@ struct SessionRowStatus: Equatable {
         return text.hasSuffix(" ago") ? String(text.dropLast(4)) : text
     }
 
-    // MARK: Instruction line
+    // MARK: The card's detail
 
-    /// The third line, “the first instruction”: only in comfortable density
-    /// and only when the title isn't already it.
-    static func showsInstruction(displayName: String, firstPrompt: String?, density: SidebarDensity) -> Bool {
-        density == .comfortable && instruction(displayName: displayName, firstPrompt: firstPrompt) != nil
+    /// What a card shows under its status line: what it asks while it needs
+    /// you; the plan's steps around where it is while it works; and what you
+    /// sent it lately, in quotes (two beside a plan or a question, else three).
+    struct Card: Equatable, Sendable {
+        var ask: String?
+        var steps: [PlanProgress.Step] = []
+        var prompts: [String] = []
+
+        var isEmpty: Bool { ask == nil && steps.isEmpty && prompts.isEmpty }
+        /// Its lines below the status: the row is measured by them.
+        var shape: [Int] { [ask == nil ? 0 : 1, steps.count, prompts.count] }
     }
 
-    /// The first instruction on one line, when the title isn't it; nil otherwise.
+    /// `runtime`'s card detail, with `prompts` (the session's recent ones,
+    /// newest first). Comfortable density only.
+    static func card(_ runtime: SessionRuntime?, prompts: [String], density: SidebarDensity) -> Card? {
+        guard density == .comfortable else { return nil }
+        let state = state(of: runtime)
+        var card = Card()
+        if state == .needsYou { card.ask = runtime?.waitingAsk?.oneLine.nonEmpty }
+        if state == .working, let plan = runtime?.planProgress { card.steps = plan.around }
+        card.prompts = Array(prompts.prefix(card.ask != nil || !card.steps.isEmpty ? 2 : 3))
+        return card.isEmpty ? nil : card
+    }
+
+    /// The first instruction on one line, when the title isn't it (the row's
+    /// tooltip); nil otherwise.
     static func instruction(displayName: String, firstPrompt: String?) -> String? {
         guard let prompt = firstPrompt?.oneLine, !prompt.isEmpty, prompt != displayName.oneLine else { return nil }
         return prompt
@@ -182,6 +205,15 @@ enum WaitingFor {
             return "permission to \(first.lowercased())\(plain.dropFirst(first.count))"
         }
         return "permission for \(plain)"
+    }
+
+    /// A permission request as the sidebar card asks it: "Allow `swift test`?"
+    /// ("Allow this action?" when it doesn't say).
+    static func ask(permission title: String) -> String {
+        let line = title.split(whereSeparator: \.isNewline).first.map(String.init)?
+            .trimmingCharacters(in: .whitespaces) ?? ""
+        guard !line.isEmpty, line != "Allow this action?" else { return "Allow this action?" }
+        return "Allow \(line)?"
     }
 
     /// From an agent's question: a sign-in link, one question, or several.
@@ -213,10 +245,16 @@ enum SidebarDensity: String, CaseIterable, Sendable {
 
     /// A session row's height: two lines (54 / 40), plus the instruction line
     /// when it shows (comfortable only).
-    func sessionRowHeight(showsInstruction: Bool) -> CGFloat {
+    /// A card's height: its two lines, then its detail's — a box for what
+    /// it asks, a line for each step and each quote.
+    func sessionRowHeight(card: SessionRowStatus.Card? = nil) -> CGFloat {
         switch self {
-        case .comfortable: showsInstruction ? 68 : 54
-        case .compact: 40
+        case .comfortable:
+            guard let card else { return 50 }
+            let lines = CGFloat(card.steps.count + card.prompts.count)
+            return 54 + (card.ask == nil ? 0 : 44) + lines * 16
+        case .compact:
+            return 40
         }
     }
 }

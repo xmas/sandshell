@@ -1474,6 +1474,9 @@ struct SessionRuntime: Equatable {
     /// What it's waiting for, in the sidebar row's words ("permission to run
     /// swift test", "a question"; `WaitingFor`). Nil when not waiting.
     var waitingFor: String?
+    /// What it asks, whole (the question, the permission's command): the
+    /// sidebar card's box. Nil when not waiting, or when there's no more to it.
+    var waitingAsk: String?
     /// The session's agent stopped and can't go on (a chat that isn't signed
     /// in, or whose agent exited): why, shown instead of "Ready".
     var stoppedReason: String?
@@ -1625,12 +1628,13 @@ extension WorkspaceController {
 
     /// Whether a session has a live terminal (set by the detail pane).
     func isLive(_ id: UUID) -> Bool { runtimes[id]?.isLive ?? false }
-    func setWaiting(_ id: UUID, _ waiting: Bool, for what: String? = nil) {
+    func setWaiting(_ id: UUID, _ waiting: Bool, for what: String? = nil, ask: String? = nil) {
         var rt = runtimes[id] ?? SessionRuntime()
-        let what = waiting ? what : nil
-        guard rt.isWaiting != waiting || rt.waitingFor != what else { return }
+        let what = waiting ? what : nil, ask = waiting ? ask : nil
+        guard rt.isWaiting != waiting || rt.waitingFor != what || rt.waitingAsk != ask else { return }
         rt.isWaiting = waiting
         rt.waitingFor = what
+        rt.waitingAsk = ask
         runtimes[id] = rt
     }
 

@@ -106,24 +106,63 @@ final class SidebarListController: NSViewController {
     /// row — one of its subagents or workflows.
     enum Row: Equatable, Identifiable {
         case session(UUID), summary(UUID), subagent(SubagentInfo), workflow(UUID, WorkflowRun)
+        /// A group's heading: Needs you, Working, Earlier (and how many).
+        case group(SessionGroup, count: Int)
 
         /// Which row it is, whatever it shows now (a subagent's state, a run's progress).
-        enum ID: Hashable { case session(UUID), summary(UUID), subagent(UUID, String), workflow(UUID, String) }
+        enum ID: Hashable {
+            case session(UUID), summary(UUID), subagent(UUID, String), workflow(UUID, String), group(SessionGroup)
+        }
         var id: ID {
             switch self {
             case .session(let id): .session(id)
             case .summary(let id): .summary(id)
             case .subagent(let info): .subagent(info.sessionID, info.id)
             case .workflow(let session, let run): .workflow(session, run.id)
+            case .group(let group, _): .group(group)
             }
         }
-        /// The session it is, or sits under.
-        var sessionID: UUID {
+        /// The session it is, or sits under (a heading: none).
+        var sessionID: UUID? {
             switch self {
             case .session(let id), .summary(let id): id
             case .subagent(let info): info.sessionID
             case .workflow(let session, _): session
+            case .group: nil
             }
+        }
+    }
+
+    /// The sidebar's groups, in its order (`SessionRowStatus.rank`): what
+    /// needs you, what's working, everything else.
+    enum SessionGroup: Int, Hashable, Sendable {
+        case needsYou, working, earlier
+
+        init(rank: Int) { self = rank == 0 ? .needsYou : rank == 1 ? .working : .earlier }
+
+        var title: String {
+            switch self {
+            case .needsYou: "Needs you"
+            case .working: "Working"
+            case .earlier: "Earlier"
+            }
+        }
+    }
+
+    /// The rows for `sessions` in the sidebar's order: each session (and the
+    /// rows under it), headed by its group when there's more than one group.
+    /// A fork listed under its group's top session stays in that one's group.
+    nonisolated static func groupedRows(_ sessions: [UUID], nested: Set<UUID>, group: (UUID) -> SessionGroup,
+                                        rowsOf: (UUID) -> [Row]) -> [Row] {
+        var groups: [(SessionGroup, [UUID])] = []
+        for id in sessions {
+            if nested.contains(id), !groups.isEmpty { groups[groups.count - 1].1.append(id); continue }
+            let g = group(id)
+            if let last = groups.last, last.0 == g { groups[groups.count - 1].1.append(id) } else { groups.append((g, [id])) }
+        }
+        let headed = Set(groups.map(\.0)).count > 1
+        return groups.flatMap { g, ids in
+            (headed ? [Row.group(g, count: ids.count)] : []) + ids.flatMap(rowsOf)
         }
     }
     private(set) var rows: [Row] = []
@@ -751,10 +790,30 @@ final class SidebarListController: NSViewController {
         cell.setSelected(isSelected(id))
     }
 
-    /// A session row's status line, as its runtime says now.
+    /// A session row's status line, as its runtime says now (a working card
+    /// whose plan has its own line says its model instead of the count).
     private func status(_ id: UUID) -> SessionRowStatus {
-        SessionRowStatus.of(controller.runtime(id), agent: controller.session(id: id)?.agent ?? .claude)
+        let runtime = controller.runtime(id)
+        let planOnOwnLine = !(card(id)?.steps.isEmpty ?? true)
+        return SessionRowStatus.of(runtime, agent: controller.session(id: id)?.agent ?? .claude, planOnOwnLine: planOnOwnLine)
     }
+
+    /// A card's detail (what it asks, its plan's steps, your recent prompts), as it is now.
+    private func card(_ id: UUID) -> SessionRowStatus.Card? {
+        SessionRowStatus.card(controller.runtime(id), prompts: recentPrompts(id), density: density)
+    }
+
+    /// What you sent a session lately, newest first: its own list (a session
+    /// saved before it kept one: its first prompt), less a prompt that's its name.
+    private func recentPrompts(_ id: UUID) -> [String] {
+        guard let s = controller.session(id: id) else { return [] }
+        let name = controller.displayName(of: s).oneLine
+        let prompts = s.recentPrompts.isEmpty ? s.firstPrompt.map { [$0.oneLine] } ?? [] : s.recentPrompts
+        return prompts.filter { $0 != name }
+    }
+
+    /// Each card's detail's shape as last laid out: a change re-measures the row.
+    private var rowCardShapes: [UUID: [Int]] = [:]
 
     private func timeText(_ id: UUID) -> String? {
         SessionRowStatus.time(controller.runtime(id), lastActivity: controller.lastActivity(id))
@@ -766,8 +825,18 @@ final class SidebarListController: NSViewController {
         guard !reloading, let row = row(of: id),
               let cell = outline.view(atColumn: 0, row: row, makeIfNecessary: false) as? SessionCellView
         else { return }   // off-screen rows reconfigure fresh when they reappear
+        let card = card(id)
         cell.update(status: status(id), time: timeText(id), selected: isSelected(id),
-                    live: controller.runtime(id)?.isLive == true)
+                    live: controller.runtime(id)?.isLive == true, card: card)
+        // Lines came or went (a step, a quote, the ask): the row takes its new height.
+        let shape = card?.shape ?? []
+        if rowCardShapes[id] != shape {
+            rowCardShapes[id] = shape
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.15
+                outline.noteHeightOfRows(withIndexesChanged: IndexSet(integer: row))
+            }
+        }
     }
 
     /// The sessions shown in panes other than the focused one, when the window has more than one.
@@ -864,7 +933,8 @@ final class SidebarListController: NSViewController {
         displayedSessionIDs = order.compactMap { controller.session(id: $0.id) }.filter(matchesSearch).map(\.id)
         let displayed = Set(displayedSessionIDs)
         nestedForkIDs = Set(order.filter { $0.nestedUnder.map(displayed.contains) == true && displayed.contains($0.id) }.map(\.id))
-        rows = displayedSessionIDs.flatMap { id -> [Row] in
+        rows = Self.groupedRows(displayedSessionIDs, nested: nestedForkIDs,
+                                group: { [controller] in SessionGroup(rank: SessionRowStatus.rank(controller.runtime($0))) }) { id in
             [.session(id)] + (summary(of: id).isEmpty ? [] : [.summary(id)])
                 + (showsSubagents(of: id) ? childRows(of: id) : [])
         }
@@ -1579,9 +1649,11 @@ extension SidebarListController: NSTableViewDataSource {
     /// pointer (else the one above the gap). A subagent or workflow row's drop
     /// goes to its session.
     nonisolated static func dropRow(proposed row: Int, between: Bool, pointer: Int, in rows: [Row]) -> Int {
-        let target = min(max(between ? (pointer >= 0 ? pointer : row - 1) : row, 0), rows.count - 1)
+        var target = min(max(between ? (pointer >= 0 ? pointer : row - 1) : row, 0), rows.count - 1)
+        // A heading: the first session under it.
+        if rows.indices.contains(target), case .group = rows[target], rows.indices.contains(target + 1) { target += 1 }
         guard rows.indices.contains(target) else { return target }
-        return rows.firstIndex(of: .session(rows[target].sessionID)) ?? target
+        return rows[target].sessionID.flatMap { rows.firstIndex(of: .session($0)) } ?? target
     }
 
     func tableView(_ tableView: NSTableView, acceptDrop info: NSDraggingInfo, row: Int,
@@ -1599,6 +1671,8 @@ extension SidebarListController: NSTableViewDataSource {
 
 extension SidebarListController: NSTableViewDelegate {
     func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
+        // A heading has no fill of its own.
+        if groupHeading(atRow: row) != nil { return NSTableRowView() }
         let view = SidebarRowView(palette: palette)
         let id = rows.indices.contains(row) ? rows[row].sessionID : nil
         if sessionID(atRow: row) != nil {
@@ -1618,23 +1692,37 @@ extension SidebarListController: NSTableViewDelegate {
     /// The density, read once per reload's worth of rows.
     private var density: SidebarDensity { SidebarDensity.current }
 
-    func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
-        if summarySession(atRow: row) != nil { return SidebarMetrics.summaryRowHeight }
-        guard let id = sessionID(atRow: row) else { return SidebarMetrics.childRowHeight }
-        return density.sessionRowHeight(showsInstruction: instruction(id) != nil && density == .comfortable)
+    /// The group a heading row heads, and how many sessions are in it.
+    private func groupHeading(atRow row: Int) -> (group: SessionGroup, count: Int)? {
+        guard rows.indices.contains(row), case .group(let group, let count) = rows[row] else { return nil }
+        return (group, count)
     }
 
-    /// A row's first instruction, when its title isn't it.
+    func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
+        if groupHeading(atRow: row) != nil { return SidebarMetrics.groupRowHeight }
+        if summarySession(atRow: row) != nil { return SidebarMetrics.summaryRowHeight }
+        guard let id = sessionID(atRow: row) else { return SidebarMetrics.childRowHeight }
+        let card = card(id)
+        rowCardShapes[id] = card?.shape ?? []
+        return density.sessionRowHeight(card: card)
+    }
+
+    /// A row's first instruction, when its title isn't it (its tooltip).
     private func instruction(_ id: UUID) -> String? {
         guard let s = controller.session(id: id) else { return nil }
         return SessionRowStatus.instruction(displayName: controller.displayName(of: s), firstPrompt: s.firstPrompt)
     }
 
     /// The subagents row isn't picked (a click toggles what it sums up).
-    func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool { summarySession(atRow: row) == nil }
+    func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool {
+        summarySession(atRow: row) == nil && groupHeading(atRow: row) == nil
+    }
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         let palette = self.palette
+        if let heading = groupHeading(atRow: row) {
+            return SidebarGroupCellView(title: heading.group.title, count: heading.count, palette: palette)
+        }
         if let id = summarySession(atRow: row) {
             return SubagentSummaryCellView(summary(of: id), expanded: childRowsShown(of: id), palette: palette)
         }
@@ -1648,7 +1736,7 @@ extension SidebarListController: NSTableViewDelegate {
         cell.sessionID = id
         cell.configure(session, name: controller.displayName(of: session), instruction: instruction(id),
                        density: density, nested: nestedForkIDs.contains(id), status: status(id), time: timeText(id),
-                       selected: isSelected(id), live: controller.runtime(id)?.isLive == true)
+                       selected: isSelected(id), live: controller.runtime(id)?.isLive == true, card: card(id))
         return cell
     }
 

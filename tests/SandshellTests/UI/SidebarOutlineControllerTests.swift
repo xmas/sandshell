@@ -368,3 +368,43 @@ extension SidebarOutlineControllerTests {
         }
     }
 }
+
+/// The sidebar's groups (`SidebarListController.groupedRows`): a heading for
+/// Needs you, Working and Earlier when there's more than one group; a fork
+/// stays with the session it's listed under; a file dropped on a heading goes
+/// to the first session under it.
+struct SidebarGroupTests {
+    typealias Row = SidebarListController.Row
+    typealias Group = SidebarListController.SessionGroup
+    private let a = UUID(), b = UUID(), c = UUID(), fork = UUID()
+
+    private func rows(_ sessions: [UUID], groups: [UUID: Group], nested: Set<UUID> = []) -> [Row] {
+        SidebarListController.groupedRows(sessions, nested: nested, group: { groups[$0] ?? .earlier }) { [.session($0)] }
+    }
+
+    @Test func eachGroupHasItsHeadingAndCount() {
+        let r = rows([a, b, c], groups: [a: .needsYou, b: .working, c: .earlier])
+        #expect(r == [.group(.needsYou, count: 1), .session(a), .group(.working, count: 1), .session(b),
+                      .group(.earlier, count: 1), .session(c)])
+    }
+
+    @Test func oneGroupHasNoHeading() {
+        #expect(rows([a, b], groups: [:]) == [.session(a), .session(b)])
+    }
+
+    @Test func aForkStaysWithItsSessionsGroup() {
+        let r = rows([a, fork, b], groups: [a: .working, fork: .earlier, b: .earlier], nested: [fork])
+        #expect(r == [.group(.working, count: 2), .session(a), .session(fork), .group(.earlier, count: 1), .session(b)])
+    }
+
+    @Test func headingsHaveNoSession() {
+        #expect(Row.group(.working, count: 2).sessionID == nil)
+        #expect(Row.group(.working, count: 2).id == Row.group(.working, count: 5).id, "its count changes, it's the same row")
+    }
+
+    @Test func aDropOnAHeadingGoesToTheFirstSessionUnderIt() {
+        let r = rows([a, b], groups: [a: .needsYou, b: .working])
+        #expect(SidebarListController.dropRow(proposed: 2, between: false, pointer: 2, in: r) == 3)
+        #expect(SidebarListController.dropRow(proposed: 0, between: false, pointer: 0, in: r) == 1)
+    }
+}
