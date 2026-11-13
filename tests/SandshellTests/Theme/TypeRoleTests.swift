@@ -4,6 +4,10 @@ import Testing
 @testable import Sandshell
 
 /// The type scale (Theme/Theme.swift): every chrome font is one of these roles.
+/// On the main actor, and fonts compared by name and size: comparing NSFont
+/// objects on the test pool once trapped (a 0.2.51 run in Xcode, while
+/// CoreText freed a font on its own queue).
+@MainActor
 struct TypeRoleTests {
     @Test(arguments: [
         (TypeRole.title, 15), (.body, 13), (.bodyEmphasis, 13), (.meta, 11.5), (.code, 11),
@@ -41,7 +45,9 @@ struct TypeRoleTests {
         let font = NSFont.role(role, weight: .semibold)
         #expect(font.pointSize == role.pointSize)
         #expect(font.isFixedPitch == (role == .code))
-        #expect(NSFont.role(role, weight: role.weight) == NSFont.role(role))
+        let same = NSFont.role(role, weight: role.weight), plain = NSFont.role(role)
+        #expect(same.fontName == plain.fontName)
+        #expect(same.pointSize == plain.pointSize)
     }
 
     @Test(arguments: TypeRole.allCases)

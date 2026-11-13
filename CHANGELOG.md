@@ -2,6 +2,10 @@
 
 A running log of what changed, newest first. Yes, we actually write these.
 
+## v0.2.54 — "Fold Here"
+- **Long messages of yours start folded.** Paste a log or a crash report and the chat shows its first few lines, with **More** to see it all and **Less** to fold it again. Copy, find and print still get the whole message.
+- **Question cards work on your phone again.** Since 0.2.52 their buttons (Submit, Skip, Done, Cancel) had no label and did nothing under Remote Control.
+
 ## v0.2.53 — "Not Busy"
 - **An idle session no longer shows as Working.** When Claude Code compacts a quiet conversation on its own, or you run `/model`, `/compact` or a `!` command in a terminal session, the sidebar went to Working with its timer running until your next message. It now stays as it was, and a compaction's summary no longer names the session or shows up in a chat as something you said.
 

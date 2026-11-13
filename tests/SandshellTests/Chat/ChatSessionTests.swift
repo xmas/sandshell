@@ -454,6 +454,44 @@ struct ChatWebTranscriptTests {
         #expect(await until { opened?.0 == URL(filePath: "/tmp/x.swift") && opened?.1 == 7 })
     }
 
+    /// A long message of yours shows its first lines, More for the rest; a
+    /// short one is shown whole.
+    @Test func aLongMessageOfYoursStartsFolded() async throws {
+        let (web, window) = try await showing()
+        defer { window.orderOut(nil); window.close() }
+        let long = (1...30).map { "Line \($0) of what I pasted" }.joined(separator: "\n")
+        session.debugApply(["sessionUpdate": "user_message_chunk", "content": ["type": "text", "text": .string(long)]])
+        session.debugApply(chunk("Got it.", messageID: "m1"))
+        session.debugApply(["sessionUpdate": "user_message_chunk", "content": ["type": "text", "text": "Thanks"]])
+        #expect(try await transcript(web, contains: "Thanks"))
+        let shape = """
+            return [...document.querySelectorAll('.item.user .bubble')].map(b => {
+              const said = b.querySelector('.said');
+              return [b.classList.contains('folded'), said.scrollHeight > said.clientHeight + 1,
+                      b.querySelector('.more')?.textContent ?? ''].join('|');
+            })
+            """
+        #expect(await until { await web.debugValue(shape) as? [String] == ["true|true|More", "false|false|"] },
+                "The long one folded with More, the short one whole")
+        _ = await web.debugRun("document.querySelector('.bubble .more').click(); return true")
+        #expect(await web.debugValue(shape) as? [String] == ["false|false|Less", "false|false|"], "More shows all of it")
+        // It stays open as the chat goes on.
+        session.debugApply(chunk("Anything else?", messageID: "m2"))
+        #expect(try await transcript(web, contains: "Anything else?"))
+        #expect(await web.debugValue(shape) as? [String] == ["false|false|Less", "false|false|"])
+        _ = await web.debugRun("document.querySelector('.bubble .more').click(); return true")
+        #expect(await web.debugValue(shape) as? [String] == ["true|true|More", "false|false|"], "Less folds it again")
+        #expect(await web.debugTranscriptText().contains("Line 30 of what I pasted"), "Folded, the text is all there (Copy, find)")
+    }
+
+    /// A question card's buttons (a phone's): labelled, and they answer.
+    @Test func aQuestionCardsButtonsWork() async throws {
+        let (web, window) = try await showing()
+        defer { window.orderOut(nil); window.close() }
+        let label = await web.debugValue("let hit = false; const b = button('Skip', '', () => { hit = true }); b.click(); return b.textContent + '|' + hit")
+        #expect(label as? String == "Skip|true")
+    }
+
     /// Paths the Mac finds on disk become links; others don't.
     @Test func fileLinksComeFromTheMac() async throws {
         let dir = URL.temporaryDirectory.appending(path: "sandshell-links-\(UUID().uuidString)")

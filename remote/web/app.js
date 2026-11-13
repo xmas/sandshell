@@ -34,6 +34,7 @@ const state = {
   stream: null,
   rev: null,              // the revision shown (state and patches carry one)
   openGroups: new Set(),  // runs of tool calls opened (by their first call's id)
+  openMessages: new Set(), // long messages of yours opened (More)
   resyncing: false,
   listeners: new Set(),   // (event, data) => void, for /check
 };
@@ -315,7 +316,30 @@ function scrollToBottom() {
 function renderItem(item) {
   const div = buildItem(item);
   if (transcriptOnly) decorate(item, div);
+  if (div.querySelector(".bubble.folded")) requestAnimationFrame(() => unfoldIfShort(div));
   return div;
+}
+
+// Folded past this many lines (`.folded .said` in style.css).
+const foldLines = 6;
+
+// Whether a message of yours may run past `foldLines`: generously (a narrow
+// phone wraps sooner); one that turns out to fit is unfolded once drawn.
+function mayFold(text) {
+  if (!text) return false;
+  let lines = 0;
+  for (const line of text.split("\n")) lines += Math.max(1, Math.ceil(line.length / 40));
+  return lines > foldLines;
+}
+
+function unfoldIfShort(div) {
+  const bubble = div.querySelector(".bubble.folded");
+  const said = bubble?.querySelector(".said");
+  if (!said || !div.isConnected) return;
+  if (said.scrollHeight <= said.clientHeight + 1) {
+    bubble.classList.remove("folded");
+    bubble.querySelector(".more")?.remove();
+  }
 }
 
 function buildItem(item) {
@@ -326,7 +350,16 @@ function buildItem(item) {
     case "user": {
       const bubble = document.createElement("div");
       bubble.className = "bubble";
-      bubble.textContent = item.text || "";
+      const said = document.createElement("div");
+      said.className = "said";
+      said.textContent = item.text || "";
+      bubble.append(said);
+      // A long message shows its first lines, More for the rest.
+      if (mayFold(item.text)) {
+        const open = state.openMessages.has(item.id);
+        bubble.classList.toggle("folded", !open);
+        bubble.append(actionButton("more", open ? "Less" : "More", open ? "Show Less" : "Show All of It"));
+      }
       if (item.attachments?.length) {
         const chips = document.createElement("div");
         chips.className = "chips";
@@ -1162,6 +1195,16 @@ function groupTools() {
 }
 
 el.transcript.addEventListener("click", (e) => {
+  const more = e.target.closest(".bubble > .more");
+  if (more) {
+    const id = more.closest(".item").dataset.id;
+    const open = !state.openMessages.has(id);
+    if (open) state.openMessages.add(id); else state.openMessages.delete(id);
+    more.closest(".bubble").classList.toggle("folded", !open);
+    more.textContent = open ? "Less" : "More";
+    more.title = open ? "Show Less" : "Show All of It";
+    return;
+  }
   const line = e.target.closest(".tool-group");
   if (!line) return;
   const id = line.dataset.group;
@@ -1187,7 +1230,7 @@ function post(name, fields) {
   return native.postMessage({ name, body: JSON.stringify(fields ?? {}) });
 }
 
-function button(cls, label, title) {
+function actionButton(cls, label, title) {
   const b = document.createElement("button");
   b.type = "button";
   b.className = cls;
@@ -1202,18 +1245,18 @@ function decorate(item, div) {
   if (item.kind === "text" || (item.kind === "user" && item.text)) {
     const bar = document.createElement("div");
     bar.className = "actions";
-    bar.append(button("act-copy", "Copy", item.kind === "text" ? "Copy Reply" : "Copy Message"));
-    if (item.kind === "text") bar.append(button("act-fork", "Fork", "Fork to New Chat"));
+    bar.append(actionButton("act-copy", "Copy", item.kind === "text" ? "Copy Reply" : "Copy Message"));
+    if (item.kind === "text") bar.append(actionButton("act-fork", "Fork", "Fork to New Chat"));
     div.append(bar);
   }
   for (const pre of div.querySelectorAll(".text pre, .item.text > pre")) {
     const wrap = document.createElement("div");
     wrap.className = "code";
     pre.replaceWith(wrap);
-    wrap.append(pre, button("copy-code", "Copy", "Copy Code"));
+    wrap.append(pre, actionButton("copy-code", "Copy", "Copy Code"));
   }
   if (item.kind === "changes" && item.turn && !item.restored) {
-    const undo = button("act-undo", "Undo", "Put these files back as they were before this turn");
+    const undo = actionButton("act-undo", "Undo", "Put these files back as they were before this turn");
     undo.dataset.turn = item.turn;
     div.append(" ", undo);
   }
@@ -1328,9 +1371,9 @@ function find(action) {
     input.setAttribute("aria-label", "Find in the conversation");
     const count = document.createElement("span");
     count.className = "count";
-    const prev = button("prev", "‹", "Previous (⇧⌘G)");
-    const next = button("next", "›", "Next (⌘G)");
-    const done = button("done", "Done");
+    const prev = actionButton("prev", "‹", "Previous (⇧⌘G)");
+    const next = actionButton("next", "›", "Next (⌘G)");
+    const done = actionButton("done", "Done");
     bar.append(input, count, prev, next, done);
     document.body.append(bar);
     ui.find = { bar, input, count };
@@ -1361,7 +1404,7 @@ function find(action) {
 function setUpTranscript() {
   el.transcript.addEventListener("click", onTranscriptClick);
   window.sandshellFind = find;
-  ui.jump = button("jump", "↓", "Jump to the Newest");
+  ui.jump = actionButton("jump", "↓", "Jump to the Newest");
   ui.jump.hidden = true;
   ui.jump.addEventListener("click", () => scrollToBottom());
   document.body.append(ui.jump);

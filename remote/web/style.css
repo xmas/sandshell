@@ -141,6 +141,17 @@ select#mode {
   background: var(--user); padding: 8px 12px; border-radius: 16px 16px 4px 16px;
   max-width: 85%; white-space: pre-wrap;
 }
+.user .bubble.folded .said {
+  max-height: 9em; max-height: 6lh; overflow: hidden;
+  -webkit-mask-image: linear-gradient(to bottom, #000 55%, transparent);
+  mask-image: linear-gradient(to bottom, #000 55%, transparent);
+}
+.user .more {
+  display: block; margin: 2px 0 0 auto; padding: 0; border: 0; background: none;
+  font: inherit; font-size: 12.5px; color: var(--accent); cursor: pointer;
+}
+.user .more:hover { text-decoration: underline; }
+@media print { .user .bubble.folded .said { max-height: none; -webkit-mask-image: none; mask-image: none; } .user .more { display: none; } }
 .chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; justify-content: flex-end; }
 .chip { font-size: 12px; background: var(--code-bg); border-radius: 6px; padding: 1px 6px; color: var(--muted); }
 .text p { margin: 0 0 8px; }
