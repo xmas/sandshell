@@ -71,6 +71,18 @@ final class ChoicePopUp: NSPopUpButton {
         isHidden = choices.isEmpty
     }
 
+    /// Its choices as menu items for another menu (the composer's one
+    /// chooser): each picks as this one would, the current one checked.
+    func menuItems() -> [NSMenuItem] {
+        itemArray.dropFirst().map { source in
+            let id = source.representedObject as? String
+            let item = NSMenuItem(source.title) { [weak self] in self?.onPick?(id) }
+            item.state = source.state
+            item.toolTip = source.toolTip
+            return item
+        }
+    }
+
     @objc private func picked() {
         guard indexOfSelectedItem > 0, let item = selectedItem else { return }
         onPick?(item.representedObject as? String)

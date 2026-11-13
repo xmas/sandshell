@@ -144,23 +144,63 @@ struct ComposerBarTests {
         }
     }
 
-    /// Every control, at a width: what still shows fits, in the shedding order.
-    @Test(arguments: [
-        (700, ["chat-attach", "chat-mcp", "chat-model", "chat-effort", "chat-mode", "chat-details"]),
-        (260, ["chat-attach", "chat-mcp", "chat-model", "chat-details"]),
-        (120, ["chat-attach", "chat-details"]),
-    ] as [(CGFloat, [String])])
-    func theControlsGiveWayInTurn(width: CGFloat, shown: [String]) {
+    /// A Claude chat's bar: `+`, the one chooser, the ring.
+    private func claudeBar(width: CGFloat, failing: [String] = []) -> ComposerBar {
         let bar = ComposerBar(frame: NSRect(x: 0, y: 0, width: width, height: 24))
         bar.modePopup.set([.init(id: "default", title: "Ask"), .init(id: "auto", title: "Auto")], current: "auto")
-        bar.showMCP(count: 3, failing: [])
+        bar.showMCP(count: 3, failing: failing)
         bar.claude.showModel(title: "Opus 5.5", id: "claude-opus-5-5", color: .labelColor)
         bar.claude.showEffort(title: "Extra High", id: "xhigh", color: .secondaryLabelColor)
         bar.pieces = ComposerPieces(claudeChoosers: true, mode: true, mcp: true, readout: true, readoutOpensDetails: true)
-        bar.readoutText = "$12.47 · 38%"
+        bar.readoutText = "38% context · $12.47"
+        bar.contextFraction = 0.38
+        bar.choicesChanged()
         bar.layoutSubtreeIfNeeded()
-        #expect(bar.debugShown == shown)
+        return bar
+    }
+
+    /// Three controls, whatever the width: `+`, the chooser, the ring. A
+    /// narrow pane shortens the chooser to the model; nothing leaves the bar.
+    @Test(arguments: [(CGFloat(700), "Opus 5.5 · Extra High"), (180, "Opus 5.5")])
+    func threeControlsAndTheChooserShortens(width: CGFloat, title: String) {
+        let bar = claudeBar(width: width)
+        #expect(bar.debugShown == ["chat-attach", "chat-model", "chat-details"])
+        #expect(bar.chooserTitle == title)
         #expect(bar.debugShownFrames.allSatisfy { $0.maxX <= width + 0.5 }, "\(bar.debugShownFrames)")
+    }
+
+    @Test func aFailingMCPServerShowsOnTheBar() {
+        #expect(claudeBar(width: 700, failing: ["github"]).debugShown == ["chat-attach", "chat-mcp", "chat-model", "chat-details"])
+    }
+
+    /// Model, effort and approvals in one menu, each its own section, the current ones checked.
+    @Test func theChooserHasModelEffortAndApprovals() throws {
+        let bar = claudeBar(width: 700)
+        let menu = bar.chooserMenu()
+        let headers = menu.items.filter(\.isSectionHeader).map(\.title)
+        #expect(headers == ["Model", "Effort", "Approvals"])
+        let checked = menu.items.filter { $0.state == .on }.map(\.title)
+        #expect(checked.contains("Auto"), "the current approval mode (\(checked))")
+        #expect(checked.contains("Extra High"), "the current effort (\(checked))")
+    }
+
+    @Test func pickingAnApprovalModeInTheChooserSetsIt() throws {
+        let bar = claudeBar(width: 700)
+        var picked: String?
+        bar.modePopup.onPick = { picked = $0 }
+        let ask = try #require(bar.chooserMenu().items.first { $0.title == "Ask" })
+        _ = ask.target?.perform(ask.action, with: ask)
+        #expect(picked == "default")
+    }
+
+    @Test func anotherAgentsChooserIsModelAndMode() {
+        let bar = ComposerBar(frame: NSRect(x: 0, y: 0, width: 700, height: 24))
+        bar.modelPopup.set([.init(id: "gpt-5", title: "GPT-5")], current: "gpt-5")
+        bar.modePopup.set([.init(id: "read-only", title: "Read Only")], current: "read-only")
+        bar.pieces = ComposerPieces(agentModel: true, mode: true)
+        bar.choicesChanged()
+        #expect(bar.chooserTitle == "GPT-5 · Read Only")
+        #expect(bar.chooserMenu().items.filter(\.isSectionHeader).map(\.title) == ["Model", "Approvals"])
     }
 
     #if DEBUG

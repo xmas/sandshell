@@ -109,7 +109,9 @@ final class ChatSessionView: NSView {
     var debugBarShown: [String] { bar.debugShown }
     var debugBarFrame: NSRect { bar.convert(bar.bounds, to: self) }
     var debugReadoutText: String { bar.readoutText }
-    var debugContextGaugeShown: Bool { !bar.gauge.isHidden && bar.contextFraction != nil }
+    var debugContextGaugeShown: Bool { bar.contextFraction != nil && bar.debugShown.contains("chat-details") }
+    var debugChooserTitle: String { bar.chooserTitle }
+    var debugChooserMenu: [String] { bar.debugChooserMenu }
     var debugMCPTitle: String { mcpButton.attributedTitle.string }
     var debugModelTitle: String { bar.claude.modelButton.item(at: 0)?.attributedTitle?.string ?? "" }
     var debugEffortTitle: String { bar.claude.effortButton.item(at: 0)?.attributedTitle?.string ?? "" }
@@ -391,7 +393,7 @@ final class ChatSessionView: NSView {
     private func updatePieces() {
         bar.pieces = .for(agent: session.agent, hasModels: !session.models.isEmpty, hasModes: !session.modes.isEmpty,
                           hasExtras: session.hasExtras, hasUsage: session.usage != nil)
-        bar.needsLayout = true
+        bar.choicesChanged()
     }
 
     private func showEmptyState(_ show: Bool) {
@@ -511,7 +513,9 @@ final class ChatSessionView: NSView {
     func showMCPDetails() { showMCP() }
 
     @objc private func showMCP() {
-        NSPopover.toggle(&mcpPopover, below: mcpButton) { .hosting(MCPStatusView(session: session)) }
+        // Below its chip when that's on the bar (a server failing), else below `+`.
+        let anchor: NSView = mcpButton.isHiddenOrHasHiddenAncestor ? bar.attachButton : mcpButton
+        NSPopover.toggle(&mcpPopover, below: anchor) { .hosting(MCPStatusView(session: session)) }
     }
 
     /// Check MCP once the agent's up (and after each turn: servers come and go).
@@ -572,13 +576,14 @@ final class ChatSessionView: NSView {
             bar.claude.showModel(title: ClaudeReadout.modelTitle(displayedModel), id: displayedModel, color: .labelColor)
             bar.claude.showEffort(title: ClaudeReadout.effortTitle(session.launchEffort), id: session.launchEffort,
                                   color: .secondaryLabelColor)
-            tip = [tip, cost.map { "Estimated cost: \(ClaudeStatsFormat.usd($0, fractionDigits: 4))" }, "Session details"]
+            tip = [tip, cost.map { "Estimated cost: \(ClaudeStatsFormat.usd($0, fractionDigits: 4))" }, "Click for session details"]
                 .compactMap { $0 }.joined(separator: "\n")
             detailsHost?.rootView = detailView()
         } else {
             bar.readoutText = ClaudeReadout.text(cost: usage?.cost, percent: percent)
         }
-        bar.readoutButton.toolTip = tip
+        bar.readoutDetail = tip ?? ""
+        bar.choicesChanged()
     }
 
     /// `phase`: the one just reported, when `session.phase` may not have it yet.
@@ -636,6 +641,14 @@ final class ChatSessionView: NSView {
         let mention = NSMenuItem("Mention a Workspace File") { [weak self] in self?.composer.startMention() }
         mention.isEnabled = composer.isEnabled
         menu.addItem(mention)
+        // The chat's MCP servers (on the bar too while one isn't working).
+        if bar.pieces.mcp {
+            menu.addItem(.separator())
+            let count = bar.mcpCount.map { " (\($0))" } ?? ""
+            let mcp = NSMenuItem("MCP Servers\(count)…") { [weak self] in self?.showMCP() }
+            mcp.image = NSImage(systemSymbolName: "point.3.connected.trianglepath.dotted", accessibilityDescription: nil)
+            menu.addItem(mcp)
+        }
         menu.autoenablesItems = false
         menu.popUp(positioning: nil, at: NSPoint(x: 0, y: sender.bounds.height + 4), in: sender)
     }

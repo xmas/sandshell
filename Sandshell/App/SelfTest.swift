@@ -407,9 +407,14 @@ enum SelfTest {
         guard let view = tree.surfaces.chats[s.id] else { return check(false, "the chat's view") }
         log("composer controls: \(view.debugBarShown); model “\(view.debugModelTitle)”, effort “\(view.debugEffortTitle)”, "
             + "mode “\(view.debugModeTitle)”, readout “\(view.debugReadoutText)”")
-        check(["chat-attach", "chat-model", "chat-effort", "chat-details"].allSatisfy(view.debugBarShown.contains),
-              "under the composer: attach, model, effort and the readout")
-        check(chat.modes.isEmpty || view.debugBarShown.contains("chat-mode"), "and the approval mode")
+        check(view.debugBarShown == ["chat-attach", "chat-model", "chat-details"]
+                || view.debugBarShown == ["chat-attach", "chat-mcp", "chat-model", "chat-details"],
+              "under the composer: +, the one chooser, the ring (\(view.debugBarShown))")
+        check(view.debugChooserTitle == view.debugModelTitle + " · " + view.debugEffortTitle,
+              "one chooser says the model and effort (“\(view.debugChooserTitle)”)")
+        check(view.debugChooserMenu.contains("Model") && view.debugChooserMenu.contains("Effort")
+                && (chat.modes.isEmpty || view.debugChooserMenu.contains("Approvals")),
+              "its menu has the model, the effort and the approval mode (\(view.debugChooserMenu.filter { !$0.isEmpty }.prefix(6)))")
         check(view.debugSendMode == .send && view.debugSendEnabled, "idle: the round button is Send")
         check(view.debugSendAccent == window.workspaceController.map {
                   ComposerSendButton.accent(sidebarHex: $0.rootProfile.sidebarHex, dark: $0.theme.colors.isDark).fill },
@@ -3180,7 +3185,9 @@ enum SelfTest {
             check(c.mcpServers != nil, "MCP status comes back")
         } catch { check(false, "MCP status: \(error.localizedDescription)") }
         if let v = tree.surfaces.chats[s.id] {
-            check(!c.hasExtras || v.debugBarShown.contains("chat-mcp"), "the composer shows MCP with the wrapper (\(v.debugBarShown))")
+            let failing = MCPServerList.failing(c.mcpServers ?? []).isEmpty == false
+            check(v.debugBarShown.contains("chat-mcp") == (c.hasExtras && failing),
+                  "MCP is in + (on the bar only while a server fails) (\(v.debugBarShown))")
             check(v.debugMCPTitle == "\(c.mcpServers?.count ?? 0)", "with the server count (“\(v.debugMCPTitle)”)")
         }
 

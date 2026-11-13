@@ -80,6 +80,38 @@ final class ClaudeChoosers: NSObject {
         ChoicePopUp.show(effortButton, title: title, current: id, color: color, font: font)
     }
 
+    /// The models as menu items for another menu (the composer's one
+    /// chooser): each picks as the pull-down would, the current one checked,
+    /// "Older" and "Other model id…" included.
+    func modelMenuItems() -> [NSMenuItem] {
+        modelButton.itemArray.dropFirst().compactMap { source in
+            if source.isSeparatorItem { return .separator() }
+            if source.submenu != nil { return source.copy() as? NSMenuItem }   // Older: its items carry their own action
+            if source.tag == Self.otherModelTag {
+                return NSMenuItem(source.title) { [weak self] in self?.promptForModelID() }
+            }
+            let id = source.representedObject as? String
+            let item = NSMenuItem(source.title) { [weak self] in self?.onModelPicked?(id) }
+            item.state = source.state
+            item.toolTip = source.toolTip
+            return item
+        }
+    }
+
+    /// The effort levels as menu items, likewise.
+    func effortMenuItems() -> [NSMenuItem] {
+        effortButton.itemArray.dropFirst().map { source in
+            let id = source.representedObject as? String
+            let item = NSMenuItem(source.title) { [weak self] in self?.onEffortPicked?(id) }
+            item.state = source.state
+            return item
+        }
+    }
+
+    /// The visible titles (the composer's chooser reads them).
+    var modelTitle: String { modelButton.item(at: 0)?.attributedTitle?.string ?? modelButton.item(at: 0)?.title ?? "" }
+    var effortTitle: String { effortButton.item(at: 0)?.attributedTitle?.string ?? effortButton.item(at: 0)?.title ?? "" }
+
     @objc private func modelChanged(_ sender: NSPopUpButton) {
         guard let item = sender.selectedItem, sender.indexOfSelectedItem > 0 else { return }
         if item.tag == Self.otherModelTag { promptForModelID(); return }
@@ -97,7 +129,7 @@ final class ClaudeChoosers: NSObject {
 
     /// Free-form id for a model the catalog doesn't list yet (or a gateway
     /// alias); remembered so it stays in the chooser.
-    private func promptForModelID() {
+    func promptForModelID() {
         let alert = NSAlert()
         alert.messageText = "Use another Claude model"
         alert.informativeText = "Enter a model id as `claude --model` accepts it, e.g. claude-sonnet-5-5. "

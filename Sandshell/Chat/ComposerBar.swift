@@ -348,34 +348,37 @@ final class HoverChip: NSView {
 /// details. In a narrow pane the least needed give way first.
 @MainActor
 final class ComposerBar: NSView {
+    /// `+`: attach, mention a file, and the chat's MCP servers.
     let attachButton = NSButton()
+    /// MCP, on the bar only while a server isn't working (else it's in `+`).
     let mcpButton = NSButton()
     let statusLabel = NSTextField(labelWithString: "")
+    /// The one chooser: "Opus 5.5 · High" — model, effort and approvals in one menu.
+    let chooserButton = NSButton()
+    /// Where the choices live (and their titles): the chooser's menu is built from them.
     let claude = ClaudeChoosers(font: .role(.body))
     let modelPopup = ChoicePopUp(tip: "Model", font: .role(.body))
     let modePopup = ChoicePopUp(tip: "Approval mode", font: .role(.body))
+    /// How full the context window is, as a ring; hover for it and the cost,
+    /// click for Session details (Claude).
     let readoutButton = NSButton()
-    /// How full the context window is, as a small bar beside the readout.
-    let gauge = ContextGauge()
 
     private let stack = NSStackView()
     private lazy var attachChip = HoverChip(attachButton)
     private lazy var mcpChip = HoverChip(mcpButton)
-    private lazy var claudeModelChip = HoverChip(claude.modelButton, inset: 2)
-    private lazy var effortChip = HoverChip(claude.effortButton, inset: 2)
-    private lazy var modelChip = HoverChip(modelPopup, inset: 2)
-    private lazy var modeChip = HoverChip(modePopup, inset: 2)
+    private lazy var chooserChip = HoverChip(chooserButton, inset: 2)
     private lazy var readoutChip = HoverChip(readoutButton)
+    private var mcpFailing = false
 
-    var pieces = ComposerPieces() { didSet { if pieces != oldValue { drawReadout(); needsLayout = true; fit() } } }
-    /// The readout's text (`38% context · $0.47`); in a narrow pane only its ⓘ shows.
-    var readoutText = "" { didSet { if readoutText != oldValue { drawReadout(); needsLayout = true } } }
+    var pieces = ComposerPieces() { didSet { if pieces != oldValue { choicesChanged() } } }
+    /// The readout's text (`38% context · $0.47`): the ring's tooltip and what VoiceOver says.
+    var readoutText = "" { didSet { if readoutText != oldValue { drawReadout() } } }
+    /// More for the ring's tooltip (the token counts; "Session details").
+    var readoutDetail = "" { didSet { if readoutDetail != oldValue { drawReadout() } } }
     /// The context window's fill (0…1; nil: not known yet).
-    var contextFraction: Double? {
-        didSet { if contextFraction != oldValue { gauge.fraction = contextFraction ?? 0; needsLayout = true; fit() } }
-    }
-    /// How many of the controls a narrow pane has shed (see `fit`).
-    private var shed = 0
+    var contextFraction: Double? { didSet { if contextFraction != oldValue { drawReadout() } } }
+    /// A narrow pane: the chooser says just the model.
+    private var compact = false
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -390,7 +393,7 @@ final class ComposerBar: NSView {
         attachButton.image = NSImage(systemSymbolName: "plus", accessibilityDescription: "Attach")?.withSymbolConfiguration(symbol)
         attachButton.imagePosition = .imageOnly
         attachButton.contentTintColor = .secondaryLabelColor
-        attachButton.toolTip = "Attach files, or mention a workspace file (@)"
+        attachButton.toolTip = "Attach files, mention a workspace file (@), MCP servers"
         attachButton.setAccessibilityIdentifier("chat-attach")
 
         mcpButton.isBordered = false
@@ -410,18 +413,23 @@ final class ComposerBar: NSView {
         statusLabel.setContentCompressionResistancePriority(.init(1), for: .horizontal)
         statusLabel.setAccessibilityIdentifier("chat-status")
 
-        claude.modelButton.setAccessibilityIdentifier("chat-model")
+        chooserButton.isBordered = false
+        chooserButton.imagePosition = .imageTrailing
+        chooserButton.imageHugsTitle = true
+        chooserButton.image = NSImage(systemSymbolName: "chevron.down", accessibilityDescription: nil)?
+            .withSymbolConfiguration(.role(.meta, weight: .semibold))
+        chooserButton.contentTintColor = .secondaryLabelColor
+        chooserButton.target = self
+        chooserButton.action = #selector(chooserClicked)
+        chooserButton.setAccessibilityIdentifier("chat-model")
+        chooserButton.setContentCompressionResistancePriority(.required, for: .horizontal)
+        claude.modelButton.setAccessibilityIdentifier("chat-model-choices")
         claude.effortButton.setAccessibilityIdentifier("chat-effort")
-        modelPopup.setAccessibilityIdentifier("chat-model")
+        modelPopup.setAccessibilityIdentifier("chat-model-choices")
         modePopup.setAccessibilityIdentifier("chat-mode")
-        modePopup.toolTip = "Approval mode: what the agent may do without asking"
 
         readoutButton.isBordered = false
-        readoutButton.image = NSImage(systemSymbolName: "info.circle", accessibilityDescription: "Session details")?
-            .withSymbolConfiguration(.role(.code))
-        readoutButton.imagePosition = .imageLeading
-        readoutButton.imageHugsTitle = true
-        readoutButton.contentTintColor = .secondaryLabelColor
+        readoutButton.imagePosition = .imageOnly
         readoutButton.setAccessibilityIdentifier("chat-details")
         drawReadout()
 
@@ -430,15 +438,13 @@ final class ComposerBar: NSView {
         stack.spacing = 2
         stack.detachesHiddenViews = true
         stack.translatesAutoresizingMaskIntoConstraints = false
-        gauge.setAccessibilityElement(false)   // the readout says it
-        stack.setViews([attachChip, mcpChip, statusLabel, claudeModelChip, modelChip, effortChip, modeChip, gauge, readoutChip],
-                       in: .leading)
-        stack.setCustomSpacing(4, after: gauge)
+        stack.setViews([attachChip, mcpChip, statusLabel, chooserChip, readoutChip], in: .leading)
         stack.setCustomSpacing(8, after: mcpChip)
         stack.setCustomSpacing(8, after: statusLabel)
+        stack.setCustomSpacing(6, after: chooserChip)
         addSubview(stack)
-        // Controls that don't fit clip (and `fit` sheds them) rather than
-        // widen the pane.
+        // Controls that don't fit clip (and `fit` shortens the chooser) rather
+        // than widen the pane.
         let trailing = stack.trailingAnchor.constraint(equalTo: trailingAnchor)
         trailing.priority = .init(249)
         NSLayoutConstraint.activate([
@@ -449,11 +455,15 @@ final class ComposerBar: NSView {
             heightAnchor.constraint(equalToConstant: 24),
         ])
         clipsToBounds = true
-        fit()
+        choicesChanged()
     }
 
-    /// MCP's server count (nil: not known yet), red with the ones failing named.
+    /// MCP's server count (nil: not known yet), red with the ones failing
+    /// named. On the bar only while one fails; else it's in `+`.
+    private(set) var mcpCount: Int?
     func showMCP(count: Int?, failing: [String]) {
+        mcpCount = count
+        mcpFailing = !failing.isEmpty
         let color: NSColor = failing.isEmpty ? .secondaryLabelColor : .systemRed
         mcpButton.attributedTitle = NSAttributedString(
             string: count.map { "\($0)" } ?? "",
@@ -462,60 +472,124 @@ final class ComposerBar: NSView {
         mcpButton.toolTip = failing.isEmpty ? "MCP servers in this session"
             : "\(failing.formatted()) \(failing.count == 1 ? "isn’t" : "aren’t") working"
         mcpButton.setAccessibilityLabel(count.map { "MCP servers: \($0)" } ?? "MCP servers")
+        apply()
     }
 
+    // MARK: The chooser
+
+    /// The chooser's title: the model, and the effort (Claude) or the
+    /// approval mode (other agents) — just the model in a narrow pane.
+    var chooserTitle: String {
+        var parts: [String] = []
+        if pieces.claudeChoosers {
+            parts = [claude.modelTitle, claude.effortTitle]
+        } else {
+            if pieces.agentModel, !modelPopup.choices.isEmpty { parts.append(modelTitle(of: modelPopup)) }
+            if pieces.mode, !modePopup.choices.isEmpty { parts.append(modelTitle(of: modePopup)) }
+        }
+        parts = parts.filter { !$0.isEmpty }
+        return (compact ? Array(parts.prefix(1)) : parts).joined(separator: " · ")
+    }
+
+    private func modelTitle(of popup: ChoicePopUp) -> String {
+        popup.item(at: 0)?.attributedTitle?.string ?? popup.item(at: 0)?.title ?? ""
+    }
+
+    /// A model, effort or mode was shown (or the pieces changed): the chooser's title follows.
+    func choicesChanged() {
+        let title = chooserTitle
+        chooserButton.attributedTitle = NSAttributedString(string: title + " ", attributes: [
+            .font: NSFont.role(.body), .foregroundColor: NSColor.labelColor])
+        let mode = pieces.mode && !modePopup.choices.isEmpty ? modelTitle(of: modePopup) : nil
+        chooserButton.toolTip = [pieces.claudeChoosers ? "Model: \(claude.modelTitle)" : nil,
+                                 pieces.claudeChoosers ? "Effort: \(claude.effortTitle)" : nil,
+                                 mode.map { "Approvals: \($0)" }].compactMap { $0 }.joined(separator: "\n")
+        chooserButton.setAccessibilityLabel("Model and options: \(title)")
+        apply()
+        needsLayout = true
+    }
+
+    /// Model, effort and approvals in one menu, each its own section.
+    func chooserMenu() -> NSMenu {
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        func section(_ title: String, _ items: [NSMenuItem]) {
+            guard !items.isEmpty else { return }
+            if !menu.items.isEmpty { menu.addItem(.separator()) }
+            menu.addItem(.sectionHeader(title: title))
+            items.forEach(menu.addItem)
+        }
+        if pieces.claudeChoosers {
+            section("Model", claude.modelMenuItems())
+            section("Effort", claude.effortMenuItems())
+        } else if pieces.agentModel {
+            section("Model", modelPopup.menuItems())
+        }
+        if pieces.mode { section("Approvals", modePopup.menuItems()) }
+        return menu
+    }
+
+    @objc private func chooserClicked() {
+        chooserMenu().popUp(positioning: nil, at: NSPoint(x: 0, y: chooserButton.bounds.height + 4), in: chooserButton)
+    }
+
+    // MARK: The ring
+
     private func drawReadout() {
-        let text = shed >= Self.compactReadoutLevel ? "" : readoutText
-        readoutButton.attributedTitle = NSAttributedString(
-            string: text, attributes: [.font: NSFont.role(.code), .foregroundColor: NSColor.secondaryLabelColor])
-        readoutButton.imagePosition = pieces.readoutOpensDetails ? (text.isEmpty ? .imageOnly : .imageLeading) : .noImage
+        let fraction = contextFraction
+        if let fraction {
+            readoutButton.image = ContextRing.image(fraction: fraction)
+            readoutButton.imagePosition = .imageOnly
+            readoutButton.attributedTitle = NSAttributedString(string: "")
+        } else if pieces.readoutOpensDetails {
+            readoutButton.image = NSImage(systemSymbolName: "info.circle", accessibilityDescription: "Session details")?
+                .withSymbolConfiguration(.role(.code))
+            readoutButton.imagePosition = .imageOnly
+            readoutButton.attributedTitle = NSAttributedString(string: "")
+        } else {
+            // Another agent's cost with no window to fill: the text itself.
+            readoutButton.image = nil
+            readoutButton.imagePosition = .noImage
+            readoutButton.attributedTitle = NSAttributedString(
+                string: readoutText, attributes: [.font: NSFont.role(.code), .foregroundColor: NSColor.secondaryLabelColor])
+        }
+        readoutButton.contentTintColor = .secondaryLabelColor
+        let tip = [readoutText, readoutDetail].filter { !$0.isEmpty }.joined(separator: "\n")
+        readoutButton.toolTip = tip.isEmpty ? nil : tip
         readoutButton.setAccessibilityLabel(pieces.readoutOpensDetails
                                             ? "Session details" + (readoutText.isEmpty ? "" : ": \(readoutText)") : readoutText)
+        apply()
     }
 
     // MARK: Fitting
-
-    /// What gives way, in order, when the controls don't fit: the effort, the
-    /// readout's text (its ⓘ stays), the approval mode, the model, MCP.
-    private static let compactReadoutLevel = 2
-    private static let maxShed = 5
 
     override func layout() {
         super.layout()
         fit()
     }
 
+    /// Too narrow for the whole title: the chooser says just the model.
     private func fit() {
-        var level = 0
-        apply(level)
-        while level < Self.maxShed, requiredWidth > bounds.width {
-            level += 1
-            apply(level)
-        }
+        let wasCompact = compact
+        compact = false
+        if requiredWidth(compact: false) > bounds.width { compact = true }
+        if compact != wasCompact { choicesChanged() }
     }
 
-    private func apply(_ level: Int) {
-        let readoutWasCompact = shed >= Self.compactReadoutLevel
-        shed = level
-        if readoutWasCompact != (shed >= Self.compactReadoutLevel) { drawReadout() }
+    private func apply() {
         func show(_ chip: NSView, _ on: Bool) { if chip.isHidden == on { chip.isHidden = !on } }
-        show(effortChip, pieces.claudeChoosers && level < 1)
-        show(modeChip, pieces.mode && !modePopup.choices.isEmpty && level < 3)
-        show(claudeModelChip, pieces.claudeChoosers && level < 4)
-        show(modelChip, pieces.agentModel && !modelPopup.choices.isEmpty && level < 4)
-        show(mcpChip, pieces.mcp && level < 5)
-        show(readoutChip, pieces.readout && (pieces.readoutOpensDetails || !readoutText.isEmpty))
-        show(gauge, pieces.readout && contextFraction != nil && level < Self.compactReadoutLevel)
+        show(mcpChip, pieces.mcp && mcpFailing)
+        show(chooserChip, !chooserTitle.isEmpty)
+        show(readoutChip, pieces.readout && (pieces.readoutOpensDetails || contextFraction != nil || !readoutText.isEmpty))
         readoutChip.isInteractive = pieces.readoutOpensDetails
-        // The approval mode stands a little apart from the model and effort.
-        let beforeMode = [effortChip, claudeModelChip, modelChip].first { !$0.isHidden }
-        for chip in [effortChip, claudeModelChip, modelChip] { stack.setCustomSpacing(chip === beforeMode ? 10 : 2, after: chip) }
     }
 
     /// The controls' width (the status text gives way to them).
-    private var requiredWidth: CGFloat {
-        let shown = stack.arrangedSubviews.filter { !$0.isHidden && $0 !== statusLabel }
-        return shown.reduce(0) { $0 + $1.fittingSize.width } + CGFloat(max(shown.count, 1)) * 10
+    private func requiredWidth(compact: Bool) -> CGFloat {
+        let shown = stack.arrangedSubviews.filter { !$0.isHidden && $0 !== statusLabel && $0 !== chooserChip }
+        let title = NSAttributedString(string: chooserTitle + " ", attributes: [.font: NSFont.role(.body)])
+        let chooser = chooserChip.isHidden ? 0 : ceil(title.size().width) + 24
+        return shown.reduce(chooser) { $0 + $1.fittingSize.width } + CGFloat(max(shown.count + 1, 1)) * 10
     }
 
     #if DEBUG
@@ -530,26 +604,41 @@ final class ComposerBar: NSView {
     var debugShownFrames: [NSRect] {
         stack.arrangedSubviews.filter { !$0.isHidden && $0 is HoverChip }.map { $0.convert($0.bounds, to: self) }
     }
+    /// The chooser's menu: its section headers and items ("" for a separator).
+    var debugChooserMenu: [String] { chooserMenu().items.map { $0.isSeparatorItem ? "" : $0.title } }
     #endif
 }
 
-/// A context window's fill: a short rounded bar, green, then orange past
-/// 70 %, red past 90 % (where auto-compact comes).
-@MainActor
-final class ContextGauge: NSView {
-    var fraction: Double = 0 { didSet { needsDisplay = true } }
+/// The context window's fill as a ring: green, then orange past 70 %, red
+/// past 90 % (where auto-compact comes).
+enum ContextRing {
+    static let side: CGFloat = 14
 
-    override var intrinsicContentSize: NSSize { NSSize(width: 28, height: 6) }
+    static func color(_ fraction: Double) -> NSColor {
+        fraction >= 0.9 ? .systemRed : fraction >= 0.7 ? .systemOrange : .systemGreen
+    }
 
-    override func draw(_ dirtyRect: NSRect) {
-        let rect = NSRect(x: 0, y: (bounds.height - 6) / 2, width: bounds.width, height: 6)
-        NSColor.secondaryLabelColor.withAlphaComponent(0.2).setFill()
-        NSBezierPath(roundedRect: rect, xRadius: 3, yRadius: 3).fill()
+    static func image(fraction: Double) -> NSImage {
         let f = min(max(fraction, 0), 1)
-        guard f > 0 else { return }
-        var fill = rect
-        fill.size.width = max(rect.height, rect.width * f)
-        (f >= 0.9 ? NSColor.systemRed : f >= 0.7 ? NSColor.systemOrange : NSColor.systemGreen).setFill()
-        NSBezierPath(roundedRect: fill, xRadius: 3, yRadius: 3).fill()
+        let image = NSImage(size: NSSize(width: side, height: side), flipped: false) { rect in
+            let lw: CGFloat = 2.2
+            let ring = rect.insetBy(dx: lw / 2 + 0.5, dy: lw / 2 + 0.5)
+            let track = NSBezierPath(ovalIn: ring)
+            track.lineWidth = lw
+            NSColor.secondaryLabelColor.withAlphaComponent(0.25).setStroke()
+            track.stroke()
+            guard f > 0 else { return true }
+            let arc = NSBezierPath()
+            arc.appendArc(withCenter: NSPoint(x: rect.midX, y: rect.midY), radius: ring.width / 2,
+                          startAngle: 90, endAngle: 90 - 360 * f, clockwise: true)
+            arc.lineWidth = lw
+            arc.lineCapStyle = .round
+            color(f).setStroke()
+            arc.stroke()
+            return true
+        }
+        image.isTemplate = false
+        image.accessibilityDescription = "\(Int(f * 100))% of the context window"
+        return image
     }
 }
