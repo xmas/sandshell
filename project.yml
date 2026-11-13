@@ -115,7 +115,7 @@ targets:
         - SandshellTests
       commandLineArguments:
         "-SandshellDebugProfile YES": true
-        "-openWindowRoots (\"$(SRCROOT)\")": true
+        "-SandshellDebugOpen $(SRCROOT)": true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.xmas.sandshell

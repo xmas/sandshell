@@ -7,7 +7,7 @@ import AppKit
 /// seeded from the real one — and its sandboxes are named `<name>-debug`, so
 /// a debug run has its own agents. The Debug build's own bundle id
 /// (`com.xmas.sandshell.debug`) keeps its settings and saved windows apart,
-/// and the scheme's `-openWindowRoots` opens just the checkout.
+/// and the scheme's `-SandshellDebugOpen` opens just the checkout.
 enum DebugProfile {
     static let isActive: Bool = {
         #if DEBUG
@@ -19,6 +19,20 @@ enum DebugProfile {
         return false
         #endif
     }()
+
+    /// What a debug run opens instead of the windows it had (the scheme's
+    /// `-SandshellDebugOpen $(SRCROOT)`: a path, or a list of them); nil
+    /// outside a debug run or with none given. Its own key, not
+    /// `openWindowRoots`: launch arguments reach every defaults suite, the
+    /// unit tests' too.
+    static var windowsToOpen: [OpenWindows.Window]? {
+        guard isActive else { return nil }
+        let d = UserDefaults.standard
+        let paths = d.stringArray(forKey: "SandshellDebugOpen") ?? d.string(forKey: "SandshellDebugOpen").map { [$0] } ?? []
+        let roots = paths.map { URL(filePath: $0, directoryHint: .isDirectory) }
+            .filter { FileManager.default.fileExists(atPath: $0.path(percentEncoded: false)) }
+        return roots.isEmpty ? nil : roots.map { OpenWindows.Window(root: $0, instanceIndex: nil) }
+    }
 
     /// Added to a debug run's sandbox names.
     static let sandboxSuffix = "-debug"

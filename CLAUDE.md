@@ -34,7 +34,7 @@ A debug run never competes with the Sandshell you work in (the installed app, `c
 
 - The Debug configuration's bundle id is `com.xmas.sandshell.debug`: its own settings, saved windows, keychain and notifications, so it runs beside the installed app.
 - The scheme passes `-SandshellDebugProfile YES` (`DebugProfile`, `Diagnostics/AutomatedRun.swift`): each workspace keeps its state in `.sandshell/debug/` (its own session list; its config seeded from the real one) and its sandboxes are `<name>-debug` — its own agents, not your sessions'.
-- The scheme passes `-openWindowRoots ("$(SRCROOT)")`: it opens just this checkout, not your windows. Pass other roots the same way for a test that needs them.
+- The scheme passes `-SandshellDebugOpen $(SRCROOT)`: it opens just this checkout, not your windows (a list, `-SandshellDebugOpen '("<a>", "<b>")'`, opens several). Its own key, not `-openWindowRoots`: launch arguments reach every defaults suite, so that one broke `OpenWindowsTests` when the scheme's test action got it.
 
 Agents: test UI changes in a debug run, never in the user's own app or against their sessions and sandboxes. A change to `project.yml` needs `xcodegen generate` on the Mac before Xcode sees it.
 

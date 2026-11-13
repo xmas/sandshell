@@ -176,7 +176,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         #endif
         // Restore every window that was open at last quit; otherwise open the
         // chosen default root folder (falling back to ~/Sandshell).
-        let restore = OpenWindows.windows
+        // A debug run opens what it's given (the checkout), not the windows it had.
+        let restore = DebugProfile.windowsToOpen ?? OpenWindows.windows
         Log.info(.app, "launch: \(restore.count) window(s) to restore, \(RootFolderStore.all.count) known root(s)")
         let fallback = RootFolderStore.launchFolder()
         primaryRoot = restore.first?.root ?? fallback
