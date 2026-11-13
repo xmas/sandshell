@@ -1,33 +1,18 @@
 import AppKit
 import SwiftUI
 
-/// What a pane strip of a given width spells out. The crumbs give way from the
-/// least specific inward — the sandbox's name, then the folder's, then all
-/// three (sandbox, folder, branch) fold into one ⋯ menu — while the controls
-/// never shrink or move. Widths are the strip's own, not the window's.
+/// What a pane strip of a given width spells out: its name always, the
+/// branch chip beside it while there's room (under 360 pt it's in ⋯ only).
+/// The controls never shrink or move. Widths are the strip's own.
 struct PaneStripCondensing: Equatable, Sendable {
-    /// The sandbox crumb shows its name (else just its icon; the name is its tooltip).
-    var sandboxLabel = true
-    /// The folder crumb shows its name (else just its icon).
-    var folderLabel = true
-    /// Sandbox, folder and branch are folded into the ⋯ menu.
-    var folded = false
+    /// The branch chip shows.
+    var branch = true
 
-    static let sandboxLabelBelow: CGFloat = 560
-    static let folderLabelBelow: CGFloat = 480
-    static let foldBelow: CGFloat = 410
+    static let branchBelow: CGFloat = 360
 
-    init(sandboxLabel: Bool = true, folderLabel: Bool = true, folded: Bool = false) {
-        self.sandboxLabel = sandboxLabel
-        self.folderLabel = folderLabel
-        self.folded = folded
-    }
+    init(branch: Bool = true) { self.branch = branch }
 
-    init(width: CGFloat) {
-        self.init(sandboxLabel: width >= Self.sandboxLabelBelow,
-                  folderLabel: width >= Self.folderLabelBelow,
-                  folded: width < Self.foldBelow)
-    }
+    init(width: CGFloat) { self.init(branch: width >= Self.branchBelow) }
 }
 
 /// How a pane shows its session, for the strip's two-segment switch.
@@ -67,10 +52,13 @@ extension ThemeColors {
     var stripSegmentShadow: NSColor { NSColor.black.withAlphaComponent(termIsDark ? 0.35 : 0.1) }
 }
 
-/// A pane's title strip: one line, 34 pt, that never wraps. On the left the
-/// session's crumbs — sandbox › folder › branch › name — which condense by
-/// the strip's width (`PaneStripCondensing`); on the right the fixed
-/// controls: Chat | Terminal, Split Right, Split Down, Close.
+/// A pane's title strip, the window's title bar: one 38 pt line that never
+/// wraps. On the left what the pane shows — its name, then the branch as a
+/// chip (it gives way first); on the right Chat | Terminal, Remote Control's
+/// antenna while it's on, ⋯ (everything else: the board, Remote Control,
+/// Stop / Restart, the sandbox, the folder, the branch, the splits, Close),
+/// Close itself while the window has several panes, and at the window's
+/// top-right corner the Files toggle.
 @MainActor
 final class PaneStripView: NSView {
     /// Also the window's title bar (there's no toolbar): the traffic lights
@@ -84,9 +72,9 @@ final class PaneStripView: NSView {
     private static let controlGap: CGFloat = 2
     /// Between the crumbs and the controls.
     private static let crumbsGap: CGFloat = 8
-    /// Between crumbs and separators.
-    private static let crumbGap: CGFloat = 2
-    /// The name crumb never gets narrower.
+    /// Between the name and the branch chip.
+    private static let chipGap: CGFloat = 6
+    /// The name never gets narrower.
     static let nameMinWidth: CGFloat = 72
     /// The controls' symbols (larger than meta's: they're the strip's targets).
     private static let controlSymbol: CGFloat = 14
@@ -100,7 +88,7 @@ final class PaneStripView: NSView {
     /// The session's own controls: stop its process, start it again.
     var onStopSession: (() -> Void)?
     var onRestartSession: (() -> Void)?
-    /// A chat's Remote Control button was clicked (its popover goes below it).
+    /// Remote Control (its popover goes below the view passed).
     var onRemote: ((NSView) -> Void)?
     /// A board pane's "Open in Full Screen Window".
     var onBoardWindow: (() -> Void)?
@@ -112,30 +100,24 @@ final class PaneStripView: NSView {
 
     private let content = NSView()
     private let crumbs = NSView()
-    private let sandboxCrumb = StripCrumb(symbol: "cube")
-    private let folderCrumb = StripCrumb(symbol: "folder")
-    private let branchCrumb = StripCrumb(symbol: nil, role: .code)
-    private let moreCrumb = StripCrumb(symbol: "ellipsis", iconSize: 14, padding: 5)
-    private let nameCrumb = StripCrumb(symbol: nil)
-    private var separators: [NSTextField] = []
+    private let nameCrumb = StripCrumb(symbol: nil, role: .title)
+    private let branchCrumb = StripCrumb(symbol: "arrow.triangle.branch", role: .code, padding: 6)
     private let viewSwitch = ViewModeSwitch()
-    private let splitRightButton = StripIconButton()
-    private let splitDownButton = StripIconButton()
+    /// Everything that isn't on the bar.
+    private let moreButton = StripIconButton()
     private let closeButton = StripIconButton()
-    /// The session's process (a chat's turn stops in its composer).
-    private let stopSessionButton = StripIconButton()
-    private let restartSessionButton = StripIconButton()
-    /// A chat's Remote Control: on, devices can see and drive it.
+    /// A chat's Remote Control, on the bar only while it's on.
     private let remoteButton = StripIconButton()
-    /// A board's own full-screen window (only a board pane has it).
-    private let boardWindowButton = StripIconButton()
-    private let showBoardButton = StripIconButton()
     /// The window's: the sidebar's toggle (top-left strip, sidebar hidden)
     /// and Files' (top-right strip).
     private let sidebarButton = StripIconButton()
     private let filesButton = StripIconButton()
-    /// The switch's state (nil: hidden — not a chat).
+    /// Remote Control's state (nil: not a chat).
     private(set) var remoteState: Bool?
+    /// The session's Stop / Restart (nil: none — no session, or a chat's,
+    /// whose turn stops in its composer), enabled or not.
+    private var stopSession: Bool?
+    private var restartSession: Bool?
 
     private var colors = ThemeColors.lightBase
     private var access: SandboxAccess?
@@ -163,8 +145,16 @@ final class PaneStripView: NSView {
     var isWindowTrailing = false {
         didSet { if isWindowTrailing != oldValue { filesButton.isHidden = !isWindowTrailing; needsLayout = true } }
     }
-    /// Files shows: its toggle is pressed.
+    /// Files shows: its toggle is tinted.
     var filesShown = false { didSet { restyleFiles() } }
+    /// Close only with more than one pane (and only then on the bar).
+    var canClose = false {
+        didSet { if canClose != oldValue { closeButton.isHidden = !canClose; needsLayout = true } }
+    }
+    /// Whether the pane shows a session, so ⋯ offers the session's board.
+    var showsBoardButton = false
+    /// Whether the pane shows a board, so ⋯ offers the board's own window.
+    var showsBoardWindowButton = false
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -173,32 +163,18 @@ final class PaneStripView: NSView {
         addSubview(content)
         crumbs.clipsToBounds = true
         content.addSubview(crumbs)
-        for crumb in [sandboxCrumb, folderCrumb, branchCrumb, moreCrumb, nameCrumb] { crumbs.addSubview(crumb) }
-        sandboxCrumb.onPress = { [weak self] crumb in self?.showSandbox(below: crumb) }
-        sandboxCrumb.setAccessibilityIdentifier("context-sandbox")
-        folderCrumb.onPress = { [weak self] _ in self?.revealFolder() }
-        folderCrumb.setAccessibilityIdentifier("context-folder")
+        for crumb in [nameCrumb, branchCrumb] { crumbs.addSubview(crumb) }
+        nameCrumb.setAccessibilityIdentifier("pane-name")
         branchCrumb.onPress = { [weak self] crumb in self?.branchMenu().popUp(below: crumb) }
         branchCrumb.setAccessibilityIdentifier("context-branch")
-        moreCrumb.onPress = { [weak self] crumb in self?.moreMenu().popUp(below: crumb) }
-        moreCrumb.setAccessibilityIdentifier("pane-more")
-        moreCrumb.setAccessibilityLabel("Sandbox, folder and branch")
-        moreCrumb.toolTip = "Sandbox, folder and branch"
-        nameCrumb.setAccessibilityIdentifier("pane-name")
-        nameCrumb.label.font = .role(.meta, weight: .semibold)
+        branchCrumb.isHidden = true
         content.addSubview(viewSwitch)
         viewSwitch.onPick = { [weak self] mode in self?.onPickView?(mode) }
         viewSwitch.isHidden = true
         for (button, symbol, tip, action, id) in [
-            (splitRightButton, "rectangle.split.2x1", "Split Right (⌘D)", #selector(splitRightClicked), "pane-split-right"),
-            (splitDownButton, "rectangle.split.1x2", "Split Down (⇧⌘D)", #selector(splitDownClicked), "pane-split-down"),
+            (moreButton, "ellipsis", "More: the board, Remote Control, the sandbox and folder, splits",
+             #selector(moreClicked), "pane-more"),
             (closeButton, "xmark", "Close Pane (⌥⌘W)", #selector(closeClicked), "pane-close"),
-            (stopSessionButton, "stop.fill", "Stop the Session (⌘.)", #selector(stopSessionClicked), "pane-stop-session"),
-            (restartSessionButton, "arrow.clockwise", "Restart the Session (⌘R)", #selector(restartSessionClicked),
-             "pane-restart-session"),
-            (boardWindowButton, "arrow.up.left.and.arrow.down.right", "Open in Full Screen Window",
-             #selector(boardWindowClicked), "pane-board-window"),
-            (showBoardButton, "paintpalette", "Show Board", #selector(showBoardClicked), "pane-show-board"),
             (sidebarButton, "sidebar.left", "Show Sidebar (⌃⌘S)", #selector(sidebarClicked), "window-show-sidebar"),
             (filesButton, "sidebar.right", "Show or Hide Files (⇧⌥⌘0)", #selector(filesClicked), "window-files"),
         ] {
@@ -206,10 +182,7 @@ final class PaneStripView: NSView {
                                    target: self, action: action, id: id)
             content.addSubview(button)
         }
-        stopSessionButton.isHidden = true
-        restartSessionButton.isHidden = true
-        boardWindowButton.isHidden = true
-        showBoardButton.isHidden = true
+        closeButton.isHidden = true
         sidebarButton.isHidden = true
         filesButton.isHidden = true
         content.addSubview(remoteButton)
@@ -252,12 +225,6 @@ final class PaneStripView: NSView {
     /// Show `folder` as seen by its sandbox; the branch follows on its own.
     func update(folder: URL, access: SandboxAccess) {
         self.access = access
-        let system = access.system.map { "\($0.shortDistribution ?? "Linux") VM" }
-        sandboxCrumb.set(title: access.sandbox,
-                         tip: "Runs in sandbox “\(access.sandbox)”" + (system.map { ", a \($0)" } ?? "")
-                            + " — click for what it can access")
-        folderCrumb.set(title: folder.lastPathComponent,
-                        tip: "\(folder.path.tildeAbbreviated) — \(access.summary). Click to open in Finder")
         guard folder != self.folder else { return needsLayout = true }
         self.folder = folder
         hasBranch = false
@@ -265,7 +232,7 @@ final class PaneStripView: NSView {
         refreshGit()
     }
 
-    /// The session's name, shown only when the window has more than one pane (nil: hidden).
+    /// What the pane shows, by name (nil: nothing).
     func setName(_ name: String?) {
         guard name != self.name else { return }
         self.name = name
@@ -280,9 +247,6 @@ final class PaneStripView: NSView {
         if let mode { viewSwitch.mode = mode }
         needsLayout = true
     }
-
-    /// Close only does something with more than one pane.
-    var canClose = false { didSet { closeButton.isEnabled = canClose } }
 
     /// Re-read the branch and its line counts (cheap; also on a slow tick).
     func refreshGit() {
@@ -340,13 +304,12 @@ final class PaneStripView: NSView {
 
     func applyTheme(_ c: ThemeColors) {
         colors = c
-        for crumb in [sandboxCrumb, folderCrumb, branchCrumb, moreCrumb, nameCrumb] {
+        for crumb in [nameCrumb, branchCrumb] {
             crumb.tint = c.stripCrumb
             crumb.hoverColor = c.stripHover
         }
-        for sep in separators { sep.textColor = c.stripSeparator }
-        for b in [splitRightButton, splitDownButton, closeButton, stopSessionButton, restartSessionButton, remoteButton,
-                  boardWindowButton, showBoardButton, sidebarButton, filesButton] {
+        branchCrumb.restingColor = c.stripTrack
+        for b in [moreButton, closeButton, remoteButton, sidebarButton, filesButton] {
             b.contentTintColor = c.stripCrumb
             b.hoverColor = c.stripHover
         }
@@ -387,28 +350,17 @@ final class PaneStripView: NSView {
         // Controls, right to left: fixed, whatever the crumbs need.
         let y = ((height - Self.controlSize) / 2).rounded()
         var x = width - Self.sidePadding
+        func place(_ button: NSView) {
+            x -= Self.controlSize
+            button.frame = NSRect(x: x, y: y, width: Self.controlSize, height: Self.controlSize)
+            x -= Self.controlGap
+        }
         // The window's Files toggle, at its far end.
-        if !filesButton.isHidden {
-            x -= Self.controlSize
-            filesButton.frame = NSRect(x: x, y: y, width: Self.controlSize, height: Self.controlSize)
-            x -= 6
-        }
-        for button in [closeButton, splitDownButton, splitRightButton] {
-            x -= Self.controlSize
-            button.frame = NSRect(x: x, y: y, width: Self.controlSize, height: Self.controlSize)
-            x -= Self.controlGap
-        }
+        if !filesButton.isHidden { place(filesButton); x -= 4 }
+        if !closeButton.isHidden { place(closeButton) }
+        place(moreButton)
+        if !remoteButton.isHidden { place(remoteButton) }
         x += Self.controlGap
-        // The session's Remote Control, Stop and Restart, set off from the pane's own buttons.
-        let session = [restartSessionButton, stopSessionButton, remoteButton, boardWindowButton, showBoardButton]
-            .filter { !$0.isHidden }
-        if !session.isEmpty { x -= 6 }
-        for button in session {
-            x -= Self.controlSize
-            button.frame = NSRect(x: x, y: y, width: Self.controlSize, height: Self.controlSize)
-            x -= Self.controlGap
-        }
-        if !session.isEmpty { x += Self.controlGap }
         if !viewSwitch.isHidden {
             x -= 6 + ViewModeSwitch.size.width
             viewSwitch.frame = NSRect(origin: NSPoint(x: x, y: ((height - ViewModeSwitch.size.height) / 2).rounded()),
@@ -421,49 +373,23 @@ final class PaneStripView: NSView {
             sidebarButton.frame = NSRect(x: Self.trafficLightsWidth, y: y, width: Self.controlSize, height: Self.controlSize)
             leading = Self.trafficLightsWidth + Self.controlSize + 6
         }
-        // Crumbs: what fits by the rule, left to right; the name takes what's left.
+        // The name, then the branch chip while there's room; the chip gives way first.
         let crumbsWidth = max(x - Self.crumbsGap - leading, 0)
         crumbs.frame = NSRect(x: leading, y: 0, width: crumbsWidth, height: height)
-        sandboxCrumb.showsLabel = condensing.sandboxLabel
-        folderCrumb.showsLabel = condensing.folderLabel
-        var items: [StripCrumb] = condensing.folded ? [moreCrumb] : [sandboxCrumb, folderCrumb] + (hasBranch ? [branchCrumb] : [])
-        if name != nil { items.append(nameCrumb) }
-        if condensing.folded, access == nil { items.removeAll { $0 === moreCrumb } }
-        for crumb in [sandboxCrumb, folderCrumb, branchCrumb, moreCrumb, nameCrumb] {
-            crumb.isHidden = !items.contains { $0 === crumb }
-        }
-        while separators.count < items.count - 1 { separators.append(makeSeparator()) }
-        let separatorWidth = separators.first.map { ceil($0.intrinsicContentSize.width) } ?? 0
+        let showsBranch = hasBranch && condensing.branch
+        branchCrumb.isHidden = !showsBranch
+        nameCrumb.isHidden = name == nil
+        let items = [showsBranch ? branchCrumb : nil, name == nil ? nil : nameCrumb].compactMap { $0 }
         let natural = items.map { $0 === nameCrumb ? max($0.naturalWidth, Self.nameMinWidth) : $0.naturalWidth }
-        let widths = Self.crumbWidths(natural: natural,
-                                      minimum: items.map { minimumWidth(of: $0) },
-                                      room: crumbsWidth - CGFloat(max(items.count - 1, 0)) * (separatorWidth + 2 * Self.crumbGap))
+        let minimum = items.map { $0 === nameCrumb ? Self.nameMinWidth : min($0.naturalWidth, 48) }
+        let gaps = items.count > 1 ? Self.chipGap : 0
+        let widths = Self.crumbWidths(natural: natural, minimum: minimum, room: crumbsWidth - gaps)
         let crumbY = ((height - StripCrumb.height) / 2).rounded()
+        // Laid out left to right: the name first.
         var cx: CGFloat = 0
-        for (i, crumb) in items.enumerated() {
-            if i > 0 {
-                let sep = separators[i - 1]
-                cx += Self.crumbGap
-                sep.frame = NSRect(x: cx, y: ((height - sep.intrinsicContentSize.height) / 2).rounded(),
-                                   width: separatorWidth, height: sep.intrinsicContentSize.height)
-                sep.isHidden = false
-                cx += separatorWidth + Self.crumbGap
-            }
-            crumb.frame = NSRect(x: cx, y: crumbY, width: widths[i], height: StripCrumb.height)
-            cx += widths[i]
-        }
-        for sep in separators.dropFirst(max(items.count - 1, 0)) { sep.isHidden = true }
-    }
-
-    /// How narrow a crumb may get when the rule's crumbs still don't fit:
-    /// sandbox and folder down to their icons, the branch to a few letters,
-    /// the name never below 72 pt (a short one is that wide anyway).
-    private func minimumWidth(of crumb: StripCrumb) -> CGFloat {
-        switch crumb {
-        case sandboxCrumb, folderCrumb: crumb.iconOnlyWidth
-        case branchCrumb: min(crumb.naturalWidth, 48)
-        case nameCrumb: Self.nameMinWidth
-        default: crumb.naturalWidth
+        for (crumb, w) in zip(items, widths).reversed() {
+            crumb.frame = NSRect(x: cx, y: crumbY, width: w, height: StripCrumb.height)
+            cx += w + Self.chipGap
         }
     }
 
@@ -482,92 +408,43 @@ final class PaneStripView: NSView {
         return widths
     }
 
-    private func makeSeparator() -> NSTextField {
-        let sep = NSTextField(labelWithString: "›")
-        sep.font = .role(.meta)
-        sep.textColor = colors.stripSeparator
-        sep.setAccessibilityElement(false)
-        crumbs.addSubview(sep)
-        return sep
-    }
-
     // MARK: Actions
 
-    @objc private func splitRightClicked() { onSplitRight?() }
-    @objc private func splitDownClicked() { onSplitDown?() }
+    @objc private func moreClicked() { moreMenu().popUp(below: moreButton) }
     @objc private func closeClicked() { onClose?() }
-    @objc private func stopSessionClicked() { onStopSession?() }
-    @objc private func restartSessionClicked() { onRestartSession?() }
     @objc private func remoteClicked() { onRemote?(remoteButton) }
-    @objc private func boardWindowClicked() { onBoardWindow?() }
-    @objc private func showBoardClicked() { onShowBoard?() }
     @objc private func sidebarClicked() { onToggleSidebar?() }
     @objc private func filesClicked() { onToggleFiles?() }
 
-    /// The Files toggle: tinted (and its background held) while Files shows.
+    /// The Files toggle: tinted while Files shows.
     private func restyleFiles() {
         filesButton.contentTintColor = filesShown ? .controlAccentColor : colors.stripCrumb
         filesButton.setAccessibilityValue(filesShown ? "on" : "off")
     }
 
-    #if DEBUG
-    /// Self-test: which of the window's toggles this strip has, and Files' state.
-    var debugWindowToggles: (sidebar: Bool, files: Bool, filesOn: Bool, crumbsX: CGFloat) {
-        layoutSubtreeIfNeeded()
-        return (!sidebarButton.isHidden, !filesButton.isHidden, filesShown, crumbs.frame.minX)
-    }
-    #endif
-
-    /// Whether the pane shows a session, so it offers the session's board.
-    var showsBoardButton: Bool {
-        get { !showBoardButton.isHidden }
-        set {
-            guard newValue != showsBoardButton else { return }
-            showBoardButton.isHidden = !newValue
-            needsLayout = true
-        }
-    }
-
-    /// Whether the pane shows a board, so it offers the board's own window.
-    var showsBoardWindowButton: Bool {
-        get { !boardWindowButton.isHidden }
-        set {
-            guard newValue != showsBoardWindowButton else { return }
-            boardWindowButton.isHidden = !newValue
-            needsLayout = true
-        }
-    }
-
-    /// A chat's Remote Control switch: on or off (nil hides it — not a chat).
+    /// A chat's Remote Control: on or off (nil: not a chat). The bar shows its
+    /// antenna only while it's on; ⋯ has it either way.
     func setRemote(_ on: Bool?) {
         guard on != remoteState else { return }
-        let wasHidden = remoteState == nil
         remoteState = on
-        remoteButton.isHidden = on == nil
+        let shown = on == true
+        if remoteButton.isHidden == shown { remoteButton.isHidden = !shown; needsLayout = true }
         restyleRemote()
-        if wasHidden != (on == nil) { needsLayout = true }
     }
 
     private func restyleRemote() {
-        let on = remoteState == true
-        let tip = on ? "Remote Control is on — click for this chat's address"
-                     : "Remote Control — drive this chat from a browser"
-        remoteButton.configureSymbol(on ? "antenna.radiowaves.left.and.right" : "antenna.radiowaves.left.and.right.slash",
-                                     label: tip, pointSize: Self.controlSymbol, weight: .regular,
-                                     tint: on ? .controlAccentColor : colors.stripCrumb,
+        remoteButton.configureSymbol("antenna.radiowaves.left.and.right",
+                                     label: "Remote Control is on — click for this chat's address",
+                                     pointSize: Self.controlSymbol, weight: .regular, tint: .controlAccentColor,
                                      target: self, action: #selector(remoteClicked), id: "pane-remote")
-        remoteButton.setAccessibilityValue(on ? "on" : "off")
+        remoteButton.setAccessibilityValue(remoteState == true ? "on" : "off")
     }
 
-    /// The session's controls: nil hides one (no session; a chat's Stop is its
-    /// composer's), else enabled or not.
+    /// The session's controls (in ⋯): nil leaves one out (no session; a
+    /// chat's Stop is its composer's), else enabled or not.
     func setSessionControls(stop: Bool?, restart: Bool?) {
-        var changed = false
-        for (button, state) in [(stopSessionButton, stop), (restartSessionButton, restart)] {
-            if button.isHidden != (state == nil) { button.isHidden = state == nil; changed = true }
-            if let state, button.isEnabled != state { button.isEnabled = state }
-        }
-        if changed { needsLayout = true }
+        stopSession = stop
+        restartSession = restart
     }
 
     private func showSandbox(below anchor: NSView) {
@@ -601,26 +478,72 @@ final class PaneStripView: NSView {
         return menu
     }
 
-    /// The folded crumbs, as menu items with their actions.
+    /// ⋯: the session's things, then where it runs, then the pane's.
     private func moreMenu() -> NSMenu {
         let menu = NSMenu()
-        if let access {
-            menu.addItem(NSMenuItem("Sandbox “\(access.sandbox)”…") { [weak self] in
+        menu.autoenablesItems = false
+        func add(_ title: String, symbol: String, key: String = "", modifiers: NSEvent.ModifierFlags = .command,
+                 enabled: Bool = true, _ handler: @escaping () -> Void) {
+            let item = NSMenuItem(title, handler: handler)
+            item.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
+            if !key.isEmpty { item.keyEquivalent = key; item.keyEquivalentModifierMask = modifiers }
+            item.isEnabled = enabled
+            menu.addItem(item)
+        }
+        func separate() { if let last = menu.items.last, !last.isSeparatorItem { menu.addItem(.separator()) } }
+        // The session's.
+        if showsBoardButton { add("Show Board", symbol: "paintpalette") { [weak self] in self?.onShowBoard?() } }
+        if showsBoardWindowButton {
+            add("Open in Full Screen Window", symbol: "arrow.up.left.and.arrow.down.right") { [weak self] in self?.onBoardWindow?() }
+        }
+        if let on = remoteState {
+            add(on ? "Remote Control…" : "Turn On Remote Control…", symbol: "antenna.radiowaves.left.and.right") { [weak self] in
                 guard let self else { return }
-                self.showSandbox(below: self.moreCrumb)
-            })
-            menu.items.last?.image = NSImage(systemSymbolName: "cube", accessibilityDescription: nil)
+                self.onRemote?(self.remoteButton.isHidden ? self.moreButton : self.remoteButton)
+            }
+        }
+        if let stop = stopSession {
+            add("Stop the Session", symbol: "stop.fill", key: ".", enabled: stop) { [weak self] in self?.onStopSession?() }
+        }
+        if let restart = restartSession {
+            add("Restart the Session", symbol: "arrow.clockwise", key: "r", enabled: restart) { [weak self] in
+                self?.onRestartSession?()
+            }
+        }
+        // Where it runs.
+        separate()
+        if let access {
+            add("Sandbox “\(access.sandbox)”…", symbol: "cube") { [weak self] in
+                guard let self else { return }
+                self.showSandbox(below: self.moreButton)
+            }
         }
         if let folder {
-            menu.addItem(NSMenuItem("Open “\(folder.lastPathComponent)” in Finder") { [weak self] in self?.revealFolder() })
-            menu.items.last?.image = NSImage(systemSymbolName: "folder", accessibilityDescription: nil)
+            add("Open “\(folder.lastPathComponent)” in Finder", symbol: "folder") { [weak self] in self?.revealFolder() }
         }
         if hasBranch {
             let counts = diff.added + diff.removed > 0 ? "  +\(diff.added) −\(diff.removed)" : ""
             menu.addItem(NSMenuItem(branchName + counts, symbol: "arrow.triangle.branch", submenu: branchMenuItems()))
         }
+        // The pane's.
+        separate()
+        add("Split Right", symbol: "rectangle.split.2x1", key: "d") { [weak self] in self?.onSplitRight?() }
+        add("Split Down", symbol: "rectangle.split.1x2", key: "d", modifiers: [.command, .shift]) { [weak self] in
+            self?.onSplitDown?()
+        }
+        add("Close Pane", symbol: "xmark", key: "w", modifiers: [.command, .option], enabled: canClose) { [weak self] in
+            self?.onClose?()
+        }
         return menu
     }
+
+    #if DEBUG
+    /// Self-test: which of the window's toggles this strip has, and Files' state.
+    var debugWindowToggles: (sidebar: Bool, files: Bool, filesOn: Bool, crumbsX: CGFloat) {
+        layoutSubtreeIfNeeded()
+        return (!sidebarButton.isHidden, !filesButton.isHidden, filesShown, crumbs.frame.minX)
+    }
+    #endif
 }
 
 private extension NSMenu {
@@ -654,6 +577,8 @@ final class StripCrumb: NSView {
         didSet { icon?.contentTintColor = tint; if !hasAttributedTitle { label.textColor = tint } }
     }
     var hoverColor: NSColor = .clear { didSet { updateHover() } }
+    /// Its fill when the pointer isn't over it (a chip's).
+    var restingColor: NSColor = .clear { didSet { updateHover() } }
     var showsLabel = true {
         didSet { if showsLabel != oldValue { label.isHidden = !showsLabel; needsLayout = true } }
     }
@@ -775,7 +700,7 @@ final class StripCrumb: NSView {
         return self
     }
 
-    private func updateHover() { layer?.backgroundColor = hovering ? hoverColor.cgColor : nil }
+    private func updateHover() { layer?.backgroundColor = (hovering ? hoverColor : restingColor).cgColor }
 }
 
 /// A 24 pt symbol control with a hover wash (the strip's right-hand controls).
@@ -886,38 +811,33 @@ extension PaneStripView {
     struct DebugState {
         var height: CGFloat
         var condensing: PaneStripCondensing
-        var sandboxShown, sandboxLabelShown, folderShown, folderLabelShown, branchShown, moreShown, nameShown: Bool
+        var branchShown, nameShown: Bool
         var nameWidth: CGFloat
         var viewMode: PaneViewMode?
+        /// Remote Control's antenna and Close are on the bar.
+        var remoteShown, closeShown: Bool
         /// Drawn at 40 % (an unfocused pane's strip, the pointer elsewhere).
         var dimmed: Bool
         /// The controls' frames in `view`'s coordinates.
         var controlFrames: [NSRect]
-        /// The session's Stop / Restart: shown (and enabled), or nil.
+        /// The session's Stop / Restart (in ⋯): offered (and enabled), or nil.
         var stopSession: Bool?, restartSession: Bool?
     }
 
     func debugState(in view: NSView) -> DebugState {
         layoutSubtreeIfNeeded()
-        func shown(_ v: NSView) -> Bool { !v.isHiddenOrHasHiddenAncestor && v.frame.maxX <= crumbs.bounds.maxX + 0.5 }
-        let controls = [viewSwitch.isHidden ? nil : viewSwitch as NSView,
-                        stopSessionButton.isHidden ? nil : stopSessionButton,
-                        restartSessionButton.isHidden ? nil : restartSessionButton,
-                        splitRightButton, splitDownButton, closeButton]
-            .compactMap { $0 }
+        let controls = [viewSwitch, remoteButton, moreButton, closeButton, filesButton].filter { !$0.isHidden } as [NSView]
         return DebugState(
             height: bounds.height, condensing: condensing,
-            sandboxShown: shown(sandboxCrumb), sandboxLabelShown: shown(sandboxCrumb) && !sandboxCrumb.label.isHidden,
-            folderShown: shown(folderCrumb), folderLabelShown: shown(folderCrumb) && !folderCrumb.label.isHidden,
-            branchShown: shown(branchCrumb), moreShown: !moreCrumb.isHiddenOrHasHiddenAncestor,
+            branchShown: !branchCrumb.isHiddenOrHasHiddenAncestor && branchCrumb.frame.maxX <= crumbs.bounds.maxX + 0.5,
             nameShown: !nameCrumb.isHiddenOrHasHiddenAncestor, nameWidth: nameCrumb.isHidden ? 0 : nameCrumb.frame.width,
-            viewMode: viewSwitch.isHidden ? nil : viewSwitch.mode, dimmed: content.alphaValue < 1,
+            viewMode: viewSwitch.isHidden ? nil : viewSwitch.mode,
+            remoteShown: !remoteButton.isHidden, closeShown: !closeButton.isHidden, dimmed: content.alphaValue < 1,
             controlFrames: controls.map { $0.convert($0.bounds, to: view) },
-            stopSession: stopSessionButton.isHidden ? nil : stopSessionButton.isEnabled,
-            restartSession: restartSessionButton.isHidden ? nil : restartSessionButton.isEnabled)
+            stopSession: stopSession, restartSession: restartSession)
     }
 
-    /// Self-test: the folded crumbs' menu, as ⋯ would open it.
-    var debugMoreMenuTitles: [String] { moreMenu().items.map(\.title) }
+    /// Self-test: ⋯'s items ("" for a separator).
+    var debugMoreMenuTitles: [String] { moreMenu().items.map { $0.isSeparatorItem ? "" : $0.title } }
 }
 #endif

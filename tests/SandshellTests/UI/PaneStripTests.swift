@@ -3,39 +3,26 @@ import Testing
 @testable import Sandshell
 
 /// The pane strip's condensing rule (`PaneStripCondensing`), by the strip's
-/// own width: under 560 the sandbox's label goes, under 480 the folder's,
-/// under 410 sandbox, folder and branch fold into ⋯.
+/// own width: the name always; the branch chip beside it from 360 pt (under
+/// that it's in ⋯ only).
 struct PaneStripCondensingTests {
     typealias Rule = PaneStripCondensing
 
     @Test("Each width spells out what the rule says", arguments: [
-        (1100, Rule(sandboxLabel: true, folderLabel: true, folded: false)),
-        (600, Rule(sandboxLabel: true, folderLabel: true, folded: false)),
-        (560, Rule(sandboxLabel: true, folderLabel: true, folded: false)),
-        (559, Rule(sandboxLabel: false, folderLabel: true, folded: false)),
-        (481, Rule(sandboxLabel: false, folderLabel: true, folded: false)),
-        (480, Rule(sandboxLabel: false, folderLabel: true, folded: false)),
-        (479, Rule(sandboxLabel: false, folderLabel: false, folded: false)),
-        (411, Rule(sandboxLabel: false, folderLabel: false, folded: false)),
-        (410, Rule(sandboxLabel: false, folderLabel: false, folded: false)),
-        (409, Rule(sandboxLabel: false, folderLabel: false, folded: true)),
-        (380, Rule(sandboxLabel: false, folderLabel: false, folded: true)),
-    ] as [(CGFloat, Rule)])
-    func condensing(width: CGFloat, expected: Rule) {
-        #expect(Rule(width: width) == expected)
+        (1100, true), (600, true), (361, true), (360, true), (359, false), (200, false),
+    ] as [(CGFloat, Bool)])
+    func condensing(width: CGFloat, branch: Bool) {
+        #expect(Rule(width: width) == Rule(branch: branch))
     }
 
     @Test(.tags(.edgeCase), arguments: [0, -20] as [CGFloat])
-    func noWidthFoldsEverything(width: CGFloat) {
-        #expect(Rule(width: width) == Rule(sandboxLabel: false, folderLabel: false, folded: true))
+    func noWidthHasNoChip(width: CGFloat) {
+        #expect(Rule(width: width) == Rule(branch: false))
     }
 
-    @Test("Narrowing only ever takes away", arguments: [700, 559, 479, 409] as [CGFloat])
+    @Test("Narrowing only ever takes away", arguments: [700, 360, 300] as [CGFloat])
     func narrowerNeverShowsMore(width: CGFloat) {
-        let wider = Rule(width: width), narrower = Rule(width: width - 1)
-        #expect(!narrower.sandboxLabel || wider.sandboxLabel)
-        #expect(!narrower.folderLabel || wider.folderLabel)
-        #expect(!wider.folded || narrower.folded)
+        #expect(!Rule(width: width - 1).branch || Rule(width: width).branch)
     }
 }
 
