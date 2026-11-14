@@ -701,4 +701,12 @@ struct ClaudeAccountTests {
         let args = try #require(SbxCommand.acpArguments(containerName: "sb", workdir: "/w", home: account))
         #expect(args.contains { $0.hasPrefix("CLAUDE_CONFIG_DIR=") && $0.contains("/claude-accounts/personal") })
     }
+
+    @Test func theOverrideWarningSaysWhatToGiveSbx() {
+        let warning = ClaudeAccounts.overriddenWarning(account: "personal", sandbox: "proj-claude")
+        #expect(warning.contains("sbx secret set anthropic --sandbox proj-claude"), "the scoped command, with the sandbox")
+        #expect(warning.contains("API key"), "says the value is an API key")
+        #expect(warning.contains("sbx secret rm anthropic"), "and the subscription way: drop the global one")
+        #expect(!warning.contains("--oauth"), "sbx has no Anthropic OAuth secret")
+    }
 }

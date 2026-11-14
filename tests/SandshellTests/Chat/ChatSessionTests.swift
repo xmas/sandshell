@@ -211,6 +211,7 @@ struct ChatSessionTests {
         if let service {
             #expect(help?.contains("sbx secret set \(service)") == true, "Says how to give sbx the credential")
             #expect(help?.hasSuffix("restart the chat.") == true, "Ends with the rebuild advice")
+            if service == "anthropic" { #expect(help?.contains("--oauth") == false, "sbx's OAuth secret is OpenAI's only") }
         } else {
             #expect(help == nil)
         }

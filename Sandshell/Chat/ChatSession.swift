@@ -509,8 +509,9 @@ final class ChatSession: ObservableObject, ChatFeedSource {
             + "(Settings ▸ Sandboxes ▸ Rebuild) and restart the chat."
         return switch agent {
         case .claude:
-            "Claude isn’t signed in for this sandbox. Run `sbx secret set anthropic --oauth` in Terminal "
-                + "(or sign in to Claude Code on this Mac)." + rebuild
+            "Claude isn’t signed in for this sandbox. Sign in to Claude Code on this Mac, or run "
+                + "`sbx secret set anthropic` in Terminal and paste an Anthropic API key (from the Claude Console)."
+                + rebuild
         case .codex:
             "Codex has no OpenAI credential for this sandbox. Run `sbx secret set openai --oauth` in Terminal "
                 + "to sign in with ChatGPT, or `sbx secret set openai` to store an API key." + rebuild

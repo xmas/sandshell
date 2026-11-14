@@ -187,10 +187,17 @@ enum ClaudeAccounts {
     /// What to say when sbx's global Anthropic credential would stand in for
     /// the account's own sign-in (its proxy overwrites the sign-in on every
     /// request to Anthropic; a credential scoped to the sandbox wins over it).
+    /// The `anthropic` service holds an API key (`ANTHROPIC_API_KEY`): sbx has
+    /// no sign-in with a Claude subscription scoped to one sandbox, so the
+    /// subscription way is removing the global credential.
     static func overriddenWarning(account: String, sandbox: String) -> String {
         "This workspace uses its own Claude account (“\(account)”), but sbx holds an Anthropic credential for every "
-            + "sandbox, and its proxy puts that on this sandbox's requests — so Claude here runs as that account, not "
-            + "its own. Give this sandbox its own credential on the Mac: sbx secret set anthropic --sandbox \(sandbox)"
+            + "sandbox, and its proxy puts it on this sandbox's requests over the sign-in inside — so Claude here runs "
+            + "as that credential's account, not “\(account)”. Either give this sandbox an API key of its own: on the "
+            + "Mac run sbx secret set anthropic --sandbox \(sandbox) and paste an API key from “\(account)”'s Claude "
+            + "Console (billed as API use, not its subscription). Or, to use its Claude subscription with /login, "
+            + "remove the global credential: sbx secret rm anthropic — sandboxes that relied on it then need "
+            + "another sign-in."
     }
 
     /// Make `name`'s folder (and its `.claude`), ready to mount.
