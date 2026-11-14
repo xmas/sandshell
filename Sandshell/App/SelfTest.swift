@@ -3894,7 +3894,83 @@ enum SelfTest {
         check(ChatSession.designInstructions(board: "/w/.sandshell/canvas/design").contains("/w/.sandshell/canvas/design"),
               "its agent is told where the board is")
         snapshot(window, "canvas-design")
+        await designPair(window, design: design.id)
+        await artboardStrip()
         ws.closeSession(design.id)
+    }
+
+    /// A design session's color, its pair (chat + board side by side, one
+    /// ✕, a seam that pulses while the agent writes to the board), and the
+    /// Design chip's put-away / show.
+    private static func designPair(_ window: MainWindowController, design id: UUID) async {
+        guard let ws = window.workspaceController, let tree = window.paneTree,
+              let folder = ws.session(id: id).flatMap(ws.boardFolder(of:)) else { return check(false, "the design's board") }
+        check(ws.session(id: id)?.designColor != nil, "a design session gets a color (\(ws.session(id: id)?.designColor?.rawValue ?? "-"))")
+        check(await until(5) { tree.designPairs().contains { $0.session == id } }, "its chat and board, side by side, are a pair")
+        if let pair = tree.designPairs().first(where: { $0.session == id }) {
+            let chatSide = pair.chat.debugStripDesign.map { if case .chat = $0 { true } else { false } } ?? false
+            let boardSide = pair.board.debugStripDesign.map { if case .board = $0 { true } else { false } } ?? false
+            check(chatSide && boardSide, "both strips take its color")
+            check(!pair.chat.debugCanClose && pair.board.debugCanClose, "the pair's ✕ is the board's")
+        }
+        // The agent writes a page: drawing; the seam pulses, then stops.
+        try? "<p>Drawn</p>".write(to: folder.appending(path: "drawn.html"), atomically: true, encoding: .utf8)
+        check(await until(6) { ws.drawingSessions.contains(id) && tree.debugSeams[id] == true },
+              "a write to its board: drawing, and the seam pulses")
+        snapshot(window, "canvas-design-drawing")
+        check(await until(10) { !ws.drawingSessions.contains(id) }, "it stops with no turn running")
+        // The Design chip: put the board away, show it again.
+        tree.toggleBoard(ofSession: id)
+        check(await until(5) { ws.session(id: id)?.boardHidden == true
+                  && !tree.panes.contains { $0.shownBoard?.standardizedFileURL == folder.standardizedFileURL } },
+              "Design puts the board away")
+        ws.selection = nil
+        ws.selection = .session(id)
+        await wait(0.5)
+        check(!tree.panes.contains { $0.shownBoard?.standardizedFileURL == folder.standardizedFileURL },
+              "selecting the chat doesn't bring it back")
+        tree.toggleBoard(ofSession: id)
+        check(await until(5) { ws.session(id: id)?.boardHidden == false
+                  && tree.panes.contains { $0.shownBoard?.standardizedFileURL == folder.standardizedFileURL } },
+              "and shows it again, beside the chat")
+        // The pair's ✕: both close (or, with no other pane, the board is put away).
+        _ = await until(5) { tree.designPairs().contains { $0.session == id } }
+        guard let pair = tree.designPairs().first(where: { $0.session == id }) else { return check(false, "the pair again") }
+        let before = tree.panes.count
+        tree.closeFromUser(pair.board)
+        if before > 2 {
+            check(await until(5) { tree.panes.count == before - 2 }, "the pair's ✕ closes both panes (\(before) → \(tree.panes.count))")
+        } else {
+            check(await until(5) { ws.session(id: id)?.boardHidden == true }, "the pair's ✕, alone in the window, puts the board away")
+        }
+    }
+
+    /// With a design's board put away, a turn that wrote one of its pages
+    /// shows a strip of it in the transcript; a click shows that artboard.
+    private static func artboardStrip() async {
+        let root = URL(filePath: "/tmp/sandshell-strip-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let folder = CanvasBoard.boardsFolder(root: root).appending(path: "strip", directoryHint: .isDirectory)
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try? #"{"title": "Strip", "artboards": [{"id": "welcome", "file": "welcome.html", "width": 390, "height": 844}]}"#
+            .write(to: folder.appending(path: CanvasBoard.fileName), atomically: true, encoding: .utf8)
+        try? "<h1>Welcome</h1>".write(to: folder.appending(path: "welcome.html"), atomically: true, encoding: .utf8)
+        let page = folder.appending(path: "welcome.html").path(percentEncoded: false)
+        let write = ChatItem.ToolCall(id: "w", title: "Write welcome.html", kind: "edit", status: "completed", output: "",
+                                      diffs: [.init(path: page, oldText: nil, newText: "<h1>Welcome</h1>")])
+        let (view, _, host) = await webTranscript([.user(id: UUID(), text: "Draw the welcome screen", attachments: []),
+                                                   .tool(write), .agentText(id: "done", text: "Drawn.")])
+        defer { host.close() }
+        var shown: (URL, String?)?
+        view.onShowArtboard = { board, artboard in shown = (board, artboard) }
+        let frames = "return document.querySelectorAll('.artboard-strip:not([hidden]) .frame').length"
+        check(await view.debugValue(frames) as? Int ?? 0 == 0, "no strip while the board shows")
+        view.artboardStrip = .init(color: DesignColor.violet.color, board: folder)
+        check(await untilAsync(5) { await view.debugValue(frames) as? Int == 1 }, "the board put away: the turn's artboard, in a strip")
+        _ = await view.debugRun("document.querySelector('.artboard-strip .frame').click(); return true")
+        check(await until(3) { shown?.1 == "welcome" && shown?.0 == folder }, "a click shows that artboard (\((shown?.1).flatMap { $0 } ?? "-"))")
+        view.artboardStrip = nil
+        check(await untilAsync(5) { await view.debugValue(frames) as? Int == 0 }, "the board back: no strip")
     }
 
     // MARK: Links

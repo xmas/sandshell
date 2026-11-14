@@ -276,8 +276,10 @@ final class SessionCellView: NSTableCellView {
     private let renameBackdrop = NSView()
     private let timeLabel = NSTextField.sidebarLabel(.role(.code))
     private let closeButton = NSButton()
-    /// The session's board: shows it, made the first time.
-    private let boardButton = NSButton.symbol("paintpalette", label: "Open Designer", target: nil, action: nil, id: "session-show-board")
+    /// A design session's board, on hover (beside the close button): shows it.
+    private let boardButton = NSButton(title: "Board", target: nil, action: nil)
+    /// It has a board (its mark is a palette in its color).
+    private var isDesign = false
     private let glyphSlot = NSView()
     private var glyphWidth: NSLayoutConstraint!
     private let dot = StatusDotView()
@@ -318,7 +320,16 @@ final class SessionCellView: NSTableCellView {
         nameLabel.setContentHuggingPriority(.init(1), for: .horizontal)
         boardButton.target = self
         boardButton.action = #selector(boardClicked)
-        boardButton.toolTip = "Open Designer"
+        boardButton.toolTip = "Show Board"
+        boardButton.isBordered = false
+        boardButton.imagePosition = .imageTrailing
+        boardButton.imageHugsTitle = true
+        boardButton.wantsLayer = true
+        boardButton.layer?.cornerRadius = 9
+        boardButton.setAccessibilityIdentifier("session-show-board")
+        boardButton.setAccessibilityLabel("Show Board")
+        boardButton.isHidden = true
+        boardButton.heightAnchor.constraint(equalToConstant: 18).isActive = true
         boardButton.setContentHuggingPriority(.required, for: .horizontal)
         boardButton.setContentCompressionResistancePriority(.required, for: .horizontal)
         let titleRow = NSStackView(views: [forkGlyph, nameLabel, boardButton, timeLabel])
@@ -428,8 +439,13 @@ final class SessionCellView: NSTableCellView {
     func configure(_ session: Session, name: String, instruction: String?, density: SidebarDensity, nested: Bool,
                    status: SessionRowStatus, time: String?, selected: Bool, live: Bool,
                    card: SessionRowStatus.Card? = nil) {
-        boardButton.contentTintColor = palette.muted
-        badge.configure(session.agent)
+        isDesign = session.isDesign
+        styleBoardButton()
+        if let tint = session.designTint {
+            badge.configureDesign(tint.color, agent: session.agent)
+        } else {
+            badge.configure(session.agent)
+        }
         agentName = session.agent.displayName
         leading.constant = SidebarMetrics.rowInset + SidebarMetrics.rowPadding + (nested ? SidebarMetrics.childIndent : 0)
         forkGlyph.isHidden = !nested
@@ -514,6 +530,26 @@ final class SessionCellView: NSTableCellView {
         promptsStack.isHidden = prompts.isEmpty
     }
 
+    /// The Board pill: the sidebar's ink on a darker wash of it.
+    private func styleBoardButton() {
+        let font = NSFont.role(.meta, weight: .semibold)
+        boardButton.attributedTitle = NSAttributedString(string: " Board", attributes: [
+            .font: font, .foregroundColor: palette.foreground])
+        boardButton.image = NSImage(systemSymbolName: "arrow.up.right", accessibilityDescription: nil)?
+            .withSymbolConfiguration(.init(pointSize: font.pointSize - 2, weight: .bold))
+        boardButton.contentTintColor = palette.foreground
+        boardButton.layer?.backgroundColor = palette.background.mixed(with: .black, 0.22).cgColor
+        if boardWidth == nil {
+            boardWidth = boardButton.widthAnchor.constraint(equalToConstant: 0)
+            boardWidth?.isActive = true
+        }
+        boardWidth?.constant = ceil(boardButton.intrinsicContentSize.width) + 12
+    }
+    private var boardWidth: NSLayoutConstraint?
+
+    /// Its agent is drawing on its board: the mark pulses.
+    func setDrawing(_ drawing: Bool) { badge.isPulsing = drawing && isDesign }
+
     func setTime(_ time: String?) {
         timeLabel.stringValue = time ?? ""
         timeLabel.textColor = palette.color(for: status.timeTone)
@@ -539,6 +575,7 @@ final class SessionCellView: NSTableCellView {
     private func syncHover() {
         let hovered = window.map { $0.isKeyWindow && bounds.contains(convert($0.mouseLocationOutsideOfEventStream, from: nil)) } ?? false
         closeButton.isHidden = !hovered || isRenaming
+        boardButton.isHidden = !hovered || isRenaming || !isDesign
         timeLabel.alphaValue = closeButton.isHidden ? 1 : 0
     }
 

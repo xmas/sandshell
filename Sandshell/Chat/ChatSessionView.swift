@@ -141,11 +141,40 @@ final class ChatSessionView: NSView {
     /// The session's name, as the sidebar shows it (the pane wires it).
     var sessionName: (() -> String?)?
 
+    /// The composer's Design chip (the pane wires it): turn design on, then
+    /// show or put away the board.
+    var onDesign: (() -> Void)?
+
+    /// A frame in the transcript's artboard strip: show its board (on that artboard).
+    var onShowArtboard: ((URL, String?) -> Void)? {
+        get { transcript.onShowArtboard }
+        set { transcript.onShowArtboard = newValue }
+    }
+
+    /// The workspace's root: the artboard strip's boards are under it.
+    var boardRoot: URL? {
+        get { transcript.boardRoot }
+        set { transcript.boardRoot = newValue }
+    }
+
+    /// The Design chip's state; with the board put away (`board`), the
+    /// transcript shows what each turn drew on it.
+    func setDesign(_ chip: ComposerBar.DesignChip, board: URL?) {
+        bar.design = chip
+        if case .on(let color, _) = chip, let board {
+            transcript.artboardStrip = .init(color: color, board: board)
+        } else {
+            transcript.artboardStrip = nil
+        }
+    }
+
     /// A reply's "Fork to New Chat" (the window wires it to the controller).
     var onFork: ((String) -> Void)? {
         get { transcript.onFork }
         set { transcript.onFork = newValue }
     }
+
+    @objc private func designClicked() { onDesign?() }
 
     func addAttachments(urls: [URL]) {
         composer.addAttachments(urls: urls)
@@ -261,6 +290,8 @@ final class ChatSessionView: NSView {
         mcpButton.action = #selector(showMCP)
         bar.readoutButton.target = self
         bar.readoutButton.action = #selector(showDetails)
+        bar.designButton.target = self
+        bar.designButton.action = #selector(designClicked)
         transcript.onUndo = { [weak self] turn in self?.undo(turn) }
         let footer = bar
         updatePieces()

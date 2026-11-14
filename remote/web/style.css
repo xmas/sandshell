@@ -382,3 +382,21 @@ details[open] > summary::after { transform: rotate(90deg); }
 .tool-group:hover { color: var(--text); }
 .tool-group .failed { color: var(--danger); }
 .item.tool.collapsed { display: none; }
+
+/* A design session's board put away: what each turn drew on it. */
+.artboard-strip { --strip: var(--accent); margin: 10px 0 16px; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--panel); }
+.artboard-strip .head { display: flex; align-items: center; gap: 8px; padding: 7px 8px 7px 12px; border-bottom: 1px solid var(--line); font-size: var(--t-ui); }
+.artboard-strip .mark { display: inline-flex; color: var(--strip); }
+.artboard-strip .title { font-weight: 600; }
+.artboard-strip .count { color: var(--muted); font-size: var(--t-small); }
+.artboard-strip .show { margin-left: auto; border: 0; background: var(--hover); color: var(--text); border-radius: 7px; padding: 4px 10px; font: inherit; font-size: var(--t-small); cursor: pointer; }
+.artboard-strip .show:hover { background: var(--line); }
+.artboard-strip .frames { display: flex; gap: 12px; padding: 12px; overflow-x: auto;
+  background-image: radial-gradient(var(--line) 1px, transparent 1.2px); background-size: 12px 12px; }
+.artboard-strip .frame { flex: none; border: 0; padding: 0; background: none; color: var(--muted); font: inherit; font-size: var(--t-small); text-align: left; cursor: pointer; }
+.artboard-strip .view { position: relative; overflow: hidden; border-radius: 6px; margin-bottom: 5px; background: var(--bg);
+  box-shadow: 0 0 0 1px var(--line), 0 4px 14px rgba(0, 0, 0, 0.18); }
+.artboard-strip .frame:hover .view, .artboard-strip .frame:focus-visible .view { box-shadow: 0 0 0 2px var(--strip), 0 4px 14px rgba(0, 0, 0, 0.18); }
+.artboard-strip .frame:hover .name { color: var(--text); }
+.artboard-strip iframe { position: absolute; left: 0; top: 0; border: 0; transform-origin: 0 0; pointer-events: none; background: #fff; }
+.artboard-strip .name { display: block; max-width: 168px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

@@ -296,6 +296,10 @@ final class HoverChip: NSView {
     var isInteractive = true { didSet { if !isInteractive { hovering = false } } }
     private var hovering = false { didSet { if hovering != oldValue { needsDisplay = true } } }
     private var tracking: NSTrackingArea?
+    /// Held on (the Design chip while its board shows): a wash of this color.
+    var fill: NSColor? { didSet { if fill != oldValue { needsDisplay = true } } }
+    /// A hairline round it in this color.
+    var border: NSColor? { didSet { if border != oldValue { needsDisplay = true } } }
 
     init(_ content: NSView, inset: CGFloat = 6) {
         self.content = content
@@ -319,7 +323,13 @@ final class HoverChip: NSView {
     override func updateLayer() {
         layer?.cornerRadius = 6
         effectiveAppearance.performAsCurrentDrawingAppearance {
-            layer?.backgroundColor = hovering ? NSColor.labelColor.withAlphaComponent(0.06).cgColor : nil
+            if let fill {
+                layer?.backgroundColor = fill.withAlphaComponent(hovering ? 0.24 : 0.16).cgColor
+            } else {
+                layer?.backgroundColor = hovering ? NSColor.labelColor.withAlphaComponent(0.06).cgColor : nil
+            }
+            layer?.borderWidth = border == nil ? 0 : 1
+            layer?.borderColor = border?.cgColor
         }
     }
 
@@ -350,6 +360,17 @@ final class HoverChip: NSView {
 final class ComposerBar: NSView {
     /// `+`: attach, mention a file, and the chat's MCP servers.
     let attachButton = NSButton()
+    /// Design: draw on a board beside the chat; once on, it shows or puts
+    /// the board away.
+    let designButton = NSButton()
+
+    /// The Design chip: off (no board yet), or on in the session's color,
+    /// its board showing or put away.
+    enum DesignChip: Equatable {
+        case off
+        case on(NSColor, shown: Bool)
+    }
+    var design = DesignChip.off { didSet { if design != oldValue { drawDesign() } } }
     /// MCP, on the bar only while a server isn't working (else it's in `+`).
     let mcpButton = NSButton()
     let statusLabel = NSTextField(labelWithString: "")
@@ -365,6 +386,7 @@ final class ComposerBar: NSView {
 
     private let stack = NSStackView()
     private lazy var attachChip = HoverChip(attachButton)
+    private lazy var designChip = HoverChip(designButton)
     private lazy var mcpChip = HoverChip(mcpButton)
     private lazy var chooserChip = HoverChip(chooserButton, inset: 2)
     private lazy var readoutChip = HoverChip(readoutButton)
@@ -395,6 +417,13 @@ final class ComposerBar: NSView {
         attachButton.contentTintColor = .secondaryLabelColor
         attachButton.toolTip = "Attach files, mention a workspace file (@), MCP servers"
         attachButton.setAccessibilityIdentifier("chat-attach")
+
+        designButton.isBordered = false
+        designButton.image = NSImage(systemSymbolName: "paintpalette", accessibilityDescription: nil)?.withSymbolConfiguration(symbol)
+        designButton.imagePosition = .imageLeading
+        designButton.imageHugsTitle = true
+        designButton.setAccessibilityIdentifier("chat-design")
+        drawDesign()
 
         mcpButton.isBordered = false
         mcpButton.image = NSImage(systemSymbolName: "point.3.connected.trianglepath.dotted",
@@ -438,7 +467,7 @@ final class ComposerBar: NSView {
         stack.spacing = 2
         stack.detachesHiddenViews = true
         stack.translatesAutoresizingMaskIntoConstraints = false
-        stack.setViews([attachChip, mcpChip, statusLabel, chooserChip, readoutChip], in: .leading)
+        stack.setViews([attachChip, designChip, mcpChip, statusLabel, chooserChip, readoutChip], in: .leading)
         stack.setCustomSpacing(8, after: mcpChip)
         stack.setCustomSpacing(8, after: statusLabel)
         stack.setCustomSpacing(6, after: chooserChip)
@@ -473,6 +502,44 @@ final class ComposerBar: NSView {
             : "\(failing.formatted()) \(failing.count == 1 ? "isn’t" : "aren’t") working"
         mcpButton.setAccessibilityLabel(count.map { "MCP servers: \($0)" } ?? "MCP servers")
         apply()
+    }
+
+    // MARK: Design
+
+    private static let designTitle = " Design"
+
+    /// The Design chip's width, whatever it shows now: with its title, or just the palette.
+    private func designWidth(compact: Bool) -> CGFloat {
+        let icon = designButton.image?.size.width ?? 16
+        let title = compact ? 0 : ceil(NSAttributedString(string: Self.designTitle, attributes: [.font: NSFont.role(.body)]).size().width)
+        return icon + title + 12
+    }
+
+    private func drawDesign() {
+        let color: NSColor, tip: String, value: String
+        switch design {
+        case .off:
+            color = .secondaryLabelColor
+            tip = "Design: Claude draws on a board beside this chat"
+            value = "off"
+            designChip.fill = nil
+            designChip.border = nil
+        case .on(let tint, let shown):
+            color = tint
+            tip = shown ? "Put the board away (the chat stays a design)" : "Show the board beside this chat"
+            value = shown ? "board shown" : "board put away"
+            designChip.fill = shown ? tint : nil
+            designChip.border = tint.withAlphaComponent(shown ? 0.65 : 0.45)
+        }
+        // A narrow pane: just the palette.
+        designButton.attributedTitle = NSAttributedString(string: compact ? "" : Self.designTitle, attributes: [
+            .font: NSFont.role(.body), .foregroundColor: color])
+        designButton.imagePosition = compact ? .imageOnly : .imageLeading
+        designButton.contentTintColor = color
+        designButton.toolTip = tip
+        designButton.setAccessibilityLabel("Design")
+        designButton.setAccessibilityValue(value)
+        needsLayout = true
     }
 
     // MARK: The chooser
@@ -573,7 +640,7 @@ final class ComposerBar: NSView {
         let wasCompact = compact
         compact = false
         if requiredWidth(compact: false) > bounds.width { compact = true }
-        if compact != wasCompact { choicesChanged() }
+        if compact != wasCompact { choicesChanged(); drawDesign() }
     }
 
     private func apply() {
@@ -586,10 +653,15 @@ final class ComposerBar: NSView {
 
     /// The controls' width (the status text gives way to them).
     private func requiredWidth(compact: Bool) -> CGFloat {
-        let shown = stack.arrangedSubviews.filter { !$0.isHidden && $0 !== statusLabel && $0 !== chooserChip }
+        let shown = stack.arrangedSubviews.filter {
+            !$0.isHidden && $0 !== statusLabel && $0 !== chooserChip && $0 !== designChip
+        }
         let title = NSAttributedString(string: chooserTitle + " ", attributes: [.font: NSFont.role(.body)])
         let chooser = chooserChip.isHidden ? 0 : ceil(title.size().width) + 24
-        return shown.reduce(chooser) { $0 + $1.fittingSize.width } + CGFloat(max(shown.count + 1, 1)) * 10
+        // The Design chip's own width at this setting (not as it's drawn now).
+        let design = designChip.isHidden ? 0 : designWidth(compact: compact)
+        let count = shown.count + (designChip.isHidden ? 0 : 1)
+        return shown.reduce(chooser + design) { $0 + $1.fittingSize.width } + CGFloat(max(count + 1, 1)) * 10
     }
 
     #if DEBUG

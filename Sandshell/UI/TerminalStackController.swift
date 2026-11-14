@@ -529,7 +529,7 @@ final class TerminalStackController: NSViewController {
     var showsFocusRing = false {
         didSet {
             updateFocusRing()
-            titleStrip.canClose = showsFocusRing
+            updateDesign()
             emptyCloseButton.isHidden = !showsFocusRing
             updateStripName()
         }
@@ -550,6 +550,37 @@ final class TerminalStackController: NSViewController {
 
     /// The title strip's Show Board, for this session.
     var onShowBoard: ((UUID) -> Void)?
+    /// The composer's Design chip: turn design on, then show or put away the board.
+    var onToggleBoard: ((UUID) -> Void)?
+    /// A board in the transcript's artboard strip was clicked: show it, on that artboard.
+    var onShowArtboard: ((URL, String?) -> Void)?
+    /// Beside its partner — a design session's chat and its board, side by
+    /// side (`PaneTreeController.designPairs`): one band; the board's Close is the pair's.
+    var isInDesignPair = false { didSet { if isInDesignPair != oldValue { updateDesign() } } }
+    /// Which edge of this pane the pair's seam is on (nil: not in a pair).
+    var seamSide: PaneStripView.SeamSide? {
+        get { titleStrip.seamSide }
+        set { titleStrip.seamSide = newValue }
+    }
+
+    /// A design session's color on the strip (its chat's pane, or its
+    /// board's), Close on the board's side of a pair, and the chat's Design
+    /// chip and artboard strip.
+    func updateDesign() {
+        guard isViewLoaded else { return }
+        var design: PaneStripView.Design?
+        if let board = shownBoard {
+            if let id = controller.designSession(forBoard: board), let tint = controller.session(id: id)?.designTint {
+                design = .board(tint.color)
+            }
+        } else if let id = shownSession, let session = controller.session(id: id) {
+            if let tint = session.designTint { design = .chat(tint.color, session.agent) }
+            chats[id]?.setDesign(session.designTint.map { .on($0.color, shown: !session.boardHidden) } ?? .off,
+                                 board: session.boardHidden ? controller.boardFolder(of: session) : nil)
+        }
+        titleStrip.design = design
+        titleStrip.canClose = showsFocusRing && !(isInDesignPair && shownBoard == nil)
+    }
     /// The sidebar's "+ New Session" menu (an empty pane's New Session).
     var newSessionMenu: (() -> NSMenu?)?
     /// Split this pane (title-strip buttons): a new empty pane on that side.
@@ -673,6 +704,12 @@ final class TerminalStackController: NSViewController {
         onChromeChange?(Chrome(agent: nil, title: title, subtitle: "Canvas · \(folder.path(percentEncoded: false).tildeAbbreviated)"))
         onStatusChange?("", false)
         updateFocusRing()
+    }
+
+    /// Bring one of the shown board's artboards into view.
+    func revealArtboard(_ id: String) {
+        guard shownBoard != nil else { return }
+        canvas.reveal(id)
     }
 
     #if DEBUG
@@ -1102,6 +1139,7 @@ final class TerminalStackController: NSViewController {
 
     /// Single source of truth for what the detail pane shows.
     func refresh() {
+        defer { updateDesign() }
         titleStrip.showsBoardWindowButton = shownBoard != nil
         if let board = shownBoard { return showCanvas(board) }
         // Another sandbox building doesn't hide a session that's already up —
@@ -1749,6 +1787,11 @@ final class TerminalStackController: NSViewController {
             view.onOpenFile = { [weak surfaces = self.surfaces] url, line in
                 surfaces?.paneShowing(id)?.onOpenFileInFiles?(url, line)
             }
+            view.onDesign = { [weak surfaces = self.surfaces] in surfaces?.paneShowing(id)?.onToggleBoard?(id) }
+            view.onShowArtboard = { [weak surfaces = self.surfaces] board, artboard in
+                surfaces?.paneShowing(id)?.onShowArtboard?(board, artboard)
+            }
+            view.boardRoot = controller.rootURL
             view.onFork = { [controller] reply in
                 if controller.forkChat(id, upTo: reply) == nil { NSSound.beep() }
             }
@@ -2352,6 +2395,10 @@ private final class PassThroughView: NSView {
 
 #if DEBUG
 extension TerminalStackController {
+    /// Self-test: the strip's design (a design's chat or board), and its Close.
+    var debugStripDesign: PaneStripView.Design? { titleStrip.design }
+    var debugCanClose: Bool { titleStrip.canClose }
+
     /// Self-test: whether the runtime saw `id`'s terminal exit.
     func debugIsExited(_ id: UUID) -> Bool { runtime.isExited(id) }
 

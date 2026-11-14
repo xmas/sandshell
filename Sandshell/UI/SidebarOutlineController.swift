@@ -693,6 +693,15 @@ final class SidebarListController: NSViewController {
         controller.$runtimes.dropFirst().sink { [weak self] runtimes in
             self?.runtimesChanged(runtimes)
         }.store(in: &cancellables)
+        // A design session's agent started or stopped drawing: its mark pulses, in place.
+        controller.$drawingSessions.dropFirst().removeDuplicates().sink { [weak self] drawing in
+            guard let self, !self.reloading else { return }
+            for row in 0..<self.outline.numberOfRows {
+                guard let cell = self.outline.view(atColumn: 0, row: row, makeIfNecessary: false) as? SessionCellView,
+                      let id = cell.sessionID else { continue }
+                cell.setDrawing(drawing.contains(id))
+            }
+        }.store(in: &cancellables)
         // Tick the work timer label on working rows via the workspace clock.
         controller.clockTick.dropFirst()
             .sink { [weak self] _ in self?.tickWorkingTimers() }
@@ -1504,6 +1513,29 @@ final class SidebarListController: NSViewController {
         (view.window?.windowController as? MainWindowController)?.paneTree?.openBoard(ofSession: id)
     }
 
+    /// Board Color ▸ the design colors, the session's checked.
+    private func designColorItem(_ id: UUID, current: DesignColor) -> NSMenuItem {
+        let submenu = NSMenu()
+        for color in DesignColor.allCases {
+            let item = NSMenuItem(color.title) { [weak self] in self?.controller.setDesignColor(id, color) }
+            item.image = Self.swatch(color.color)
+            item.state = color == current ? .on : .off
+            submenu.addItem(item)
+        }
+        let item = NSMenuItem(title: "Board Color", action: nil, keyEquivalent: "")
+        item.submenu = submenu
+        return item
+    }
+
+    /// A menu's color swatch: a filled circle.
+    static func swatch(_ color: NSColor) -> NSImage {
+        NSImage(size: NSSize(width: 12, height: 12), flipped: false) { rect in
+            color.setFill()
+            NSBezierPath(ovalIn: rect.insetBy(dx: 0.5, dy: 0.5)).fill()
+            return true
+        }
+    }
+
     private func contextMenu(forRow row: Int) -> NSMenu? {
         let menu = NSMenu()
         if let info = subagent(atRow: row) { return subagentMenu(info) }
@@ -1529,9 +1561,12 @@ final class SidebarListController: NSViewController {
             return menu
         }
         let boardSession = session.id
-        let board = NSMenuItem("Open Designer") { [weak self] in self?.showBoard(of: boardSession) }
+        let board = NSMenuItem(session.isDesign ? "Show Board" : "Open Designer") { [weak self] in
+            self?.showBoard(of: boardSession)
+        }
         board.image = NSImage(systemSymbolName: "paintpalette", accessibilityDescription: nil)
         menu.addItem(board)
+        if let tint = session.designTint { menu.addItem(designColorItem(boardSession, current: tint)) }
         menu.addItem(menuItem("Rename…", #selector(contextRename), object: session.id))
         menu.addItem(menuItem("Close Session", #selector(contextCloseSession), object: session.id))
         menu.addItem(.separator())
@@ -1742,6 +1777,7 @@ extension SidebarListController: NSTableViewDelegate {
         cell.configure(session, name: controller.displayName(of: session), instruction: instruction(id),
                        density: density, nested: nestedForkIDs.contains(id), status: status(id), time: timeText(id),
                        selected: isSelected(id), live: controller.runtime(id)?.isLive == true, card: card(id))
+        cell.setDrawing(controller.drawingSessions.contains(id))
         return cell
     }
 

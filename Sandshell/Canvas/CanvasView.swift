@@ -106,6 +106,7 @@ final class CanvasView: NSView {
         self.folder = folder
         watcher = nil
         zoomedToFit = false
+        pendingReveal = nil
         clearNotes()
         for view in artboardViews.values { view.removeFromSuperview() }
         artboardViews = [:]
@@ -180,8 +181,28 @@ final class CanvasView: NSView {
                                      height: size.height + 2 * Self.margin + ArtboardView.titleHeight))
         if !zoomedToFit, !board.artboards.isEmpty {
             zoomedToFit = true
-            DispatchQueue.main.async { [weak self] in self?.zoomToFit() }
+            DispatchQueue.main.async { [weak self] in
+                self?.zoomToFit()
+                if let id = self?.pendingReveal { self?.reveal(id) }
+            }
+        } else if let id = pendingReveal {
+            DispatchQueue.main.async { [weak self] in self?.reveal(id) }
         }
+    }
+
+    /// An artboard to bring into view once the board is laid out.
+    private var pendingReveal: String?
+
+    /// Bring one artboard into view, centered, as large as fits (never past 100 %).
+    func reveal(_ id: String) {
+        guard let view = artboardViews[id], scrollView.contentSize.width > 0 else { pendingReveal = id; return }
+        pendingReveal = nil
+        let frame = view.frame.insetBy(dx: -24, dy: -24)
+        let fit = min(scrollView.contentSize.width / frame.width, scrollView.contentSize.height / frame.height, 1)
+        scrollView.magnification = max(fit, scrollView.minMagnification)
+        let visible = scrollView.contentView.bounds.size
+        scrollView.contentView.scroll(to: NSPoint(x: frame.midX - visible.width / 2, y: frame.midY - visible.height / 2))
+        scrollView.reflectScrolledClipView(scrollView.contentView)
     }
 
     /// Everything on screen at once (never larger than 100 %), centered.

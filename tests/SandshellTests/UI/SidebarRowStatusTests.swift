@@ -452,3 +452,27 @@ extension SidebarRowStatusTests {
         }
     }
 }
+
+/// A design session's mark pulses while its agent draws: a write to its board
+/// moments ago, or during the turn still running.
+struct DrawingTests {
+    let now = Date(timeIntervalSince1970: 1_700_000_000)
+
+    @Test func aWriteJustNow() {
+        #expect(WorkspaceController.isDrawing(written: now.addingTimeInterval(-1), workingSince: nil, working: false, now: now))
+    }
+
+    @Test func aWriteThisTurn() {
+        let since = now.addingTimeInterval(-90)
+        #expect(WorkspaceController.isDrawing(written: now.addingTimeInterval(-60), workingSince: since, working: true, now: now))
+        #expect(!WorkspaceController.isDrawing(written: now.addingTimeInterval(-60), workingSince: since, working: false, now: now),
+                "the turn ended")
+    }
+
+    @Test func aWriteBeforeTheTurnOrLongAgo() {
+        let since = now.addingTimeInterval(-30)
+        #expect(!WorkspaceController.isDrawing(written: now.addingTimeInterval(-40), workingSince: since, working: true, now: now))
+        #expect(!WorkspaceController.isDrawing(written: now.addingTimeInterval(-(WorkspaceController.drawingWindow + 1)),
+                                               workingSince: now.addingTimeInterval(-600), working: true, now: now))
+    }
+}

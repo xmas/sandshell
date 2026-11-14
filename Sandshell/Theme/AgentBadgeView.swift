@@ -5,8 +5,12 @@ import AppKit
 final class AgentBadgeView: NSView {
     private let label = NSTextField(labelWithString: "")
     private let icon = NSImageView()
+    private let radius: CGFloat
+    /// A design session's: the ring that pulses while its agent draws.
+    private var pulse: CAShapeLayer?
 
     init(side: CGFloat, fontSize: CGFloat, radius: CGFloat) {
+        self.radius = radius
         super.init(frame: NSRect(x: 0, y: 0, width: side, height: side))
         translatesAutoresizingMaskIntoConstraints = false
         wantsLayer = true
@@ -41,6 +45,7 @@ final class AgentBadgeView: NSView {
     @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
 
     func configure(_ agent: AgentKind) {
+        isPulsing = false
         layer?.backgroundColor = agent.badgeColor.cgColor
         setAccessibilityLabel(agent.displayName)
         let image: NSImage? = switch agent.badgeContent {
@@ -60,4 +65,58 @@ final class AgentBadgeView: NSView {
             label.stringValue = agent.badgeGlyph
         }
     }
+
+    /// A design session's mark: a palette in its color (in place of its agent's).
+    func configureDesign(_ color: NSColor, agent: AgentKind) {
+        layer?.backgroundColor = color.cgColor
+        pulse?.strokeColor = color.cgColor
+        setAccessibilityLabel("Design session, \(agent.displayName)")
+        icon.image = NSImage(systemSymbolName: "paintpalette", accessibilityDescription: nil)?
+            .withSymbolConfiguration(.init(pointSize: bounds.height * 0.5, weight: .semibold))
+        icon.image?.isTemplate = true
+        icon.isHidden = false
+        label.isHidden = true
+    }
+
+    /// Its agent is drawing: a ring in the badge's color swells and fades,
+    /// over and over (held still with Reduce Motion).
+    var isPulsing = false {
+        didSet { if isPulsing != oldValue { updatePulse() } }
+    }
+
+    private func updatePulse() {
+        pulse?.removeFromSuperlayer()
+        pulse = nil
+        guard isPulsing, let layer else { return }
+        let ring = CAShapeLayer()
+        ring.frame = bounds
+        ring.path = CGPath(roundedRect: bounds.insetBy(dx: -1.5, dy: -1.5), cornerWidth: radius + 1.5,
+                           cornerHeight: radius + 1.5, transform: nil)
+        ring.fillColor = nil
+        ring.strokeColor = layer.backgroundColor
+        ring.lineWidth = 2
+        layer.addSublayer(ring)
+        pulse = ring
+        if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            ring.opacity = 0.7
+            return
+        }
+        ring.opacity = 0
+        let scale = CABasicAnimation(keyPath: "transform.scale")
+        scale.fromValue = 0.92
+        scale.toValue = 1.45
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.fromValue = 0.9
+        fade.toValue = 0
+        let group = CAAnimationGroup()
+        group.animations = [scale, fade]
+        group.duration = 1.6
+        group.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        group.repeatCount = .infinity
+        ring.add(group, forKey: "pulse")
+    }
+}
+
+extension DesignColor {
+    var color: NSColor { .hex(hex) }
 }

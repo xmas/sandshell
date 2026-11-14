@@ -42,6 +42,42 @@ struct Folder: Identifiable, Codable, Hashable {
     }
 }
 
+/// A design session's color: its sidebar mark, its strip and its board's,
+/// the seam between them. A short list that stands out on the sidebar's
+/// browns; picked from the row's menu.
+enum DesignColor: String, Codable, CaseIterable, Sendable {
+    case teal, violet, blue, pink, green
+
+    var title: String { rawValue.capitalized }
+
+    /// sRGB, as `#RRGGBB`.
+    var hex: String {
+        switch self {
+        case .teal: "#3FC1B0"
+        case .violet: "#B08CFF"
+        case .blue: "#5AA8FF"
+        case .pink: "#FF7EB6"
+        case .green: "#7ED67E"
+        }
+    }
+
+    /// The one a new design session gets: the least used among `taken`, the
+    /// list's order breaking ties.
+    static func next(after taken: [DesignColor]) -> DesignColor {
+        allCases.min { a, b in
+            let ca = taken.filter { $0 == a }.count, cb = taken.filter { $0 == b }.count
+            return ca != cb ? ca < cb : allCases.firstIndex(of: a)! < allCases.firstIndex(of: b)!
+        } ?? .teal
+    }
+
+    /// A board made before colors (no `designColor`): one from its id, so it
+    /// keeps the same one.
+    static func fallback(for id: UUID) -> DesignColor {
+        let sum = id.uuidString.unicodeScalars.reduce(0) { $0 + Int($1.value) }
+        return allCases[sum % allCases.count]
+    }
+}
+
 /// A session: an agent terminal run via `sbx exec -w <folder> <agent>`.
 struct Session: Identifiable, Codable, Hashable {
     var id: UUID
@@ -101,6 +137,17 @@ struct Session: Identifiable, Codable, Hashable {
     /// A design session's Canvas board (its folder, relative to the workspace
     /// root): it opens beside the chat, and the agent is told to work on it.
     var board: String?
+    /// A design session's color (nil: not a design session, or one from
+    /// before colors — `designTint` picks one).
+    var designColor: DesignColor?
+    /// Its board is put away: selecting the session doesn't open it beside
+    /// the chat (the composer's Design chip shows it again).
+    var boardHidden = false
+
+    /// A design session: it has a board.
+    var isDesign: Bool { board != nil }
+    /// A design session's color, whatever it was made with.
+    var designTint: DesignColor? { board == nil ? nil : designColor ?? DesignColor.fallback(for: id) }
 
     /// The agent whose container this session runs in: the override when present,
     /// otherwise the session's own agent.
@@ -241,7 +288,7 @@ struct Session: Identifiable, Codable, Hashable {
 
     enum CodingKeys: String, CodingKey {
         case id, folderID, agent, name, order, workdir, transcriptID, createdAt, lastActiveAt, containerAgent
-        case transcriptWorkdir, forkedFrom, forkedAt, firstPrompt, recentPrompts, generatedName, board
+        case transcriptWorkdir, forkedFrom, forkedAt, firstPrompt, recentPrompts, generatedName, board, designColor, boardHidden
         case isChat = "chat"
         case isNamedByUser = "namedByUser"
         case isRemote = "remote"
@@ -272,6 +319,8 @@ struct Session: Identifiable, Codable, Hashable {
         recentPrompts = try c.decodeIfPresent([String].self, forKey: .recentPrompts) ?? []
         generatedName = try c.decodeIfPresent(String.self, forKey: .generatedName)
         board = try c.decodeIfPresent(String.self, forKey: .board)
+        designColor = try? c.decodeIfPresent(DesignColor.self, forKey: .designColor)
+        boardHidden = try c.decodeIfPresent(Bool.self, forKey: .boardHidden) ?? false
     }
 
     func encode(to encoder: Encoder) throws {
@@ -296,6 +345,8 @@ struct Session: Identifiable, Codable, Hashable {
         if !recentPrompts.isEmpty { try c.encode(recentPrompts, forKey: .recentPrompts) }
         try c.encodeIfPresent(generatedName, forKey: .generatedName)
         try c.encodeIfPresent(board, forKey: .board)
+        try c.encodeIfPresent(designColor, forKey: .designColor)
+        if boardHidden { try c.encode(true, forKey: .boardHidden) }
     }
 
     /// A workdir once the directory at `from` has moved to `to`: nil unless

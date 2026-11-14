@@ -159,18 +159,34 @@ struct ComposerBarTests {
         return bar
     }
 
-    /// Three controls, whatever the width: `+`, the chooser, the ring. A
-    /// narrow pane shortens the chooser to the model; nothing leaves the bar.
-    @Test(arguments: [(CGFloat(700), "Opus 5.5 · Extra High"), (180, "Opus 5.5")])
-    func threeControlsAndTheChooserShortens(width: CGFloat, title: String) {
+    /// Four controls, whatever the width: `+`, Design, the chooser, the ring.
+    /// A narrow pane shortens the chooser to the model and Design to its
+    /// palette; nothing leaves the bar (a pane is at least 280 pt, its bar ~240).
+    @Test(arguments: [(CGFloat(700), "Opus 5.5 · Extra High"), (200, "Opus 5.5")])
+    func fourControlsAndTheChooserShortens(width: CGFloat, title: String) {
         let bar = claudeBar(width: width)
-        #expect(bar.debugShown == ["chat-attach", "chat-model", "chat-details"])
+        #expect(bar.debugShown == ["chat-attach", "chat-design", "chat-model", "chat-details"])
         #expect(bar.chooserTitle == title)
         #expect(bar.debugShownFrames.allSatisfy { $0.maxX <= width + 0.5 }, "\(bar.debugShownFrames)")
     }
 
+    /// Design: off until the chat has a board; then in its color, held on
+    /// while the board shows; just the palette in a narrow pane.
+    @Test func theDesignChipSaysWhereTheBoardIs() {
+        let bar = claudeBar(width: 700)
+        #expect(bar.designButton.accessibilityValue() as? String == "off")
+        #expect(bar.designButton.title.contains("Design"))
+        bar.design = .on(DesignColor.teal.color, shown: true)
+        #expect(bar.designButton.accessibilityValue() as? String == "board shown")
+        bar.design = .on(DesignColor.teal.color, shown: false)
+        #expect(bar.designButton.accessibilityValue() as? String == "board put away")
+        let narrow = claudeBar(width: 200)
+        #expect(narrow.designButton.title.isEmpty)
+        #expect(narrow.designButton.imagePosition == .imageOnly)
+    }
+
     @Test func aFailingMCPServerShowsOnTheBar() {
-        #expect(claudeBar(width: 700, failing: ["github"]).debugShown == ["chat-attach", "chat-mcp", "chat-model", "chat-details"])
+        #expect(claudeBar(width: 700, failing: ["github"]).debugShown == ["chat-attach", "chat-design", "chat-mcp", "chat-model", "chat-details"])
     }
 
     /// Model, effort and approvals in one menu, each its own section, the current ones checked.

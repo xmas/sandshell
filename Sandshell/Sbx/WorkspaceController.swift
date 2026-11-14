@@ -41,6 +41,13 @@ final class WorkspaceController: ObservableObject {
     @Committed private(set) var subagents: [UUID: [SubagentInfo]] = [:]
     /// Each Claude session's workflows (the Workflow tool's runs), newest last.
     @Committed private(set) var workflows: [UUID: [WorkflowRun]] = [:]
+    /// Design sessions whose agent is drawing now (writing to their board
+    /// during the turn): their marks and seams pulse.
+    @Committed private(set) var drawingSessions: Set<UUID> = []
+    /// A watcher per design session's board (by `Session.board`), and when
+    /// each was last written.
+    private var boardWatchers: [String: FileWatcher] = [:]
+    private var boardWrites: [String: Date] = [:]
     private var subagentPollTask: Task<Void, Never>?
     /// What each sandbox is (kernel, distribution, mount types), asked once.
     @Committed private(set) var sandboxSystems: [String: SandboxSystem] = [:]
@@ -169,6 +176,8 @@ final class WorkspaceController: ObservableObject {
         isClosed = true
         containerPollTask?.cancel()
         subagentPollTask?.cancel()
+        boardWatchers.values.forEach { $0.stop() }
+        boardWatchers = [:]
     }
 
     // MARK: Claude model/effort + status feed
@@ -315,6 +324,7 @@ final class WorkspaceController: ObservableObject {
         for agent in kitDrift.keys { refreshKitDrift(for: agent) }
         // The session list (and anything drawn from config) redraws.
         revision += 1
+        watchBoards()
     }
 
     // Current durable settings (for the Settings UI).
@@ -1032,7 +1042,11 @@ final class WorkspaceController: ObservableObject {
         guard clockCancellable == nil else { return }
         clockCancellable = Timer.publish(every: 1, on: .main, in: .common)
             .autoconnect()
-            .sink { [weak self] date in self?.clockSubject.send(date) }
+            .sink { [weak self] date in
+                self?.clockSubject.send(date)
+                if self?.boardWrites.isEmpty == false { self?.updateDrawing(at: date) }
+            }
+        watchBoards()
     }
 
     /// What to do when an existing container's mounts no longer match the policy.
@@ -1809,6 +1823,7 @@ extension WorkspaceController {
     private func saveState() {
         revision += 1
         writeState()
+        watchBoards()
     }
 
     /// Host URL for a folder (the workspace root itself for the root folder).
@@ -2167,7 +2182,9 @@ extension WorkspaceController {
         guard var s = addSession(folderID: folderID, agent: .claude, name: "New Design", chat: true),
               let index = state.sessions.firstIndex(where: { $0.id == s.id }) else { return nil }
         s.board = relative
+        s.designColor = nextDesignColor()
         state.sessions[index].board = s.board
+        state.sessions[index].designColor = s.designColor
         saveState()
         selection = .session(s.id)
         return s
@@ -2179,12 +2196,82 @@ extension WorkspaceController {
         do {
             let made = try CanvasBoard.create(root: rootURL)
             state.sessions[index].board = made.relative
+            state.sessions[index].designColor = nextDesignColor()
+            state.sessions[index].boardHidden = false
             saveState()
             return made.folder
         } catch {
             lastError = "Couldn’t make a board in .sandshell/canvas: \(error.localizedDescription)"
             return nil
         }
+    }
+
+    /// The color a new design session gets: the one fewest others have.
+    private func nextDesignColor() -> DesignColor {
+        DesignColor.next(after: state.sessions.compactMap(\.designTint))
+    }
+
+    /// Pick a design session's color (the row's menu).
+    func setDesignColor(_ id: UUID, _ color: DesignColor) {
+        guard let index = state.sessions.firstIndex(where: { $0.id == id }), state.sessions[index].isDesign,
+              state.sessions[index].designColor != color else { return }
+        state.sessions[index].designColor = color
+        saveState()
+    }
+
+    /// Put a design session's board away, or bring it back (the composer's
+    /// Design chip; closing its pane). Panes follow (`PaneTreeController`).
+    func setBoardHidden(_ id: UUID, _ hidden: Bool) {
+        guard let index = state.sessions.firstIndex(where: { $0.id == id }), state.sessions[index].isDesign,
+              state.sessions[index].boardHidden != hidden else { return }
+        state.sessions[index].boardHidden = hidden
+        saveState()
+    }
+
+    /// Watch every design session's board: a write there is the agent drawing.
+    private func watchBoards() {
+        guard !isClosed else { return }
+        let boards = Set(state.sessions.compactMap(\.board))
+        for gone in boardWatchers.keys where !boards.contains(gone) {
+            boardWatchers.removeValue(forKey: gone)?.stop()
+            boardWrites[gone] = nil
+        }
+        for board in boards where boardWatchers[board] == nil {
+            let path = rootURL.appending(path: board, directoryHint: .isDirectory).path(percentEncoded: false)
+            guard FileManager.default.fileExists(atPath: path) else { continue }
+            boardWatchers[board] = FileWatcher(path: path, latency: 0.3) { [weak self] in
+                self?.boardWrites[board] = .now
+                self?.updateDrawing()
+            }
+        }
+    }
+
+    /// Who's drawing now (`isDrawing`), for the marks and seams.
+    private func updateDrawing(at now: Date = .now) {
+        var drawing = Set<UUID>()
+        for s in state.sessions {
+            guard let board = s.board, let written = boardWrites[board] else { continue }
+            let rt = runtimes[s.id]
+            let working = rt.map { SessionRowStatus.state(of: $0) == .working } ?? false
+            if Self.isDrawing(written: written, workingSince: rt?.workingSince, working: working, now: now) {
+                drawing.insert(s.id)
+            }
+        }
+        if drawing != drawingSessions { drawingSessions = drawing }
+        // Old writes no one is drawing from: stop ticking for them.
+        boardWrites = boardWrites.filter { now.timeIntervalSince($0.value) < Self.drawingWindow }
+    }
+
+    /// The longest a turn reads as drawing after its last write to the board.
+    nonisolated static let drawingWindow: TimeInterval = 120
+
+    /// A board written moments ago, or written during the turn still running
+    /// (and not too long ago), is being drawn.
+    nonisolated static func isDrawing(written: Date, workingSince: Date?, working: Bool, now: Date) -> Bool {
+        let age = now.timeIntervalSince(written)
+        if age < 3 { return true }
+        guard working, age < drawingWindow, let since = workingSince else { return false }
+        return written >= since
     }
 
     /// A session's board folder (nil without one, or with one that's gone).

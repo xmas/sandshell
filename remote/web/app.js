@@ -279,6 +279,7 @@ function applyPatch(p) {
   }
   if (p.status) state.status = p.status;
   groupTools();
+  artboardStrips();
   renderCards();
   renderStatus();
   if (stick) scrollToBottom();
@@ -299,6 +300,7 @@ function renderAll(scroll) {
   }
   el.transcript.replaceChildren(...nodes);
   groupTools();
+  artboardStrips();
   renderCards();
   renderStatus();
   if (scroll) scrollToBottom();
@@ -1229,6 +1231,108 @@ function configure(c) {
   for (const [name, size] of Object.entries({ small: c.sizes?.small, ui: c.sizes?.ui, read: c.sizes?.reading })) {
     if (size) root.style.setProperty("--t-" + name, size + "px");
   }
+  artboardStrips();
+}
+
+// ---------- In Sandshell's window: what a turn drew on its board ----------
+
+// A design session's board put away (config.artboards: its color): after
+// each turn that wrote pages on it, a strip of those artboards. The Mac says
+// which written files are artboards on this chat's board, and serves their
+// pages; a frame's click shows the board, on that artboard.
+const strips = { nodes: new Map() };
+const boardPage = /\/\.sandshell\/canvas\/[^/]+\/[^/]+\.html?$/i;
+const paletteSVG = '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 2a6 6 0 1 0 0 12c1 0 1.3-.7 1-1.4-.4-.8.1-1.6 1-1.6h1.5A2.5 2.5 0 0 0 14 8.5C14 5 11.3 2 8 2z"/><circle cx="5" cy="7.5" r=".8"/><circle cx="7.3" cy="4.8" r=".8"/><circle cx="10.5" cy="5.4" r=".8"/></svg>';
+
+// Each turn (from one of your messages to the next) that wrote board pages:
+// its first and last items, the pages, and how many writes (a rewrite redraws).
+function turnsWithArtboards() {
+  const turns = [];
+  let turn = null;
+  for (const id of state.order) {
+    const item = state.items.get(id);
+    if (!item) continue;
+    if (item.kind === "user" || !turn) { turn = { first: id, last: id, paths: [], writes: 0 }; turns.push(turn); }
+    turn.last = id;
+    for (const d of item.tool?.diffs || []) {
+      if (!boardPage.test(d.path || "")) continue;
+      turn.writes++;
+      if (!turn.paths.includes(d.path)) turn.paths.push(d.path);
+    }
+  }
+  return turns.filter((t) => t.paths.length);
+}
+
+function artboardStrips() {
+  const want = new Set();
+  if (transcriptOnly && state.config?.artboards) {
+    for (const t of turnsWithArtboards()) {
+      const key = t.first + "|" + t.writes + "|" + t.paths.join("|");
+      want.add(key);
+      let node = strips.nodes.get(key);
+      if (!node) { node = buildStrip(t.paths); strips.nodes.set(key, node); }
+      node.style.setProperty("--strip", state.config.artboards);
+      const after = state.nodes.get(t.last);
+      // Moving a strip reloads its pages: only when it's out of place.
+      if (after && after.isConnected && after.nextSibling !== node) after.after(node);
+    }
+  }
+  for (const [key, node] of strips.nodes) if (!want.has(key)) { node.remove(); strips.nodes.delete(key); }
+}
+
+function buildStrip(paths) {
+  const box = document.createElement("div");
+  box.className = "artboard-strip";
+  box.hidden = true;   // until the Mac says these are artboards
+  const head = document.createElement("div");
+  head.className = "head";
+  const mark = document.createElement("span");
+  mark.className = "mark";
+  mark.innerHTML = paletteSVG;
+  const title = span("title", "Board");
+  const count = span("count", "");
+  const show = actionButton("show", "Show Board ›", "Show the board beside this chat");
+  show.addEventListener("click", () => post("showArtboard", {}));
+  head.append(mark, title, count, show);
+  const frames = document.createElement("div");
+  frames.className = "frames";
+  box.append(head, frames);
+  post("artboards", { paths }).then((r) => {
+    let list = [];
+    try { list = JSON.parse(r.body).artboards || []; } catch { return; }
+    if (!list.length) return;
+    title.textContent = list[0].boardTitle || "Board";
+    count.textContent = list.length + (list.length === 1 ? " artboard" : " artboards");
+    for (const a of list.slice(0, 8)) frames.append(artboardFrame(a));
+    box.hidden = false;
+  }).catch(() => {});
+  return box;
+}
+
+// One artboard, its page drawn small (scaled from its own size), and its title.
+function artboardFrame(a) {
+  const width = 168, scale = width / Math.max(a.width, 1);
+  const b = document.createElement("button");
+  b.type = "button";
+  b.className = "frame";
+  b.title = "Show “" + a.title + "” on the board";
+  const view = document.createElement("div");
+  view.className = "view";
+  view.style.width = width + "px";
+  view.style.height = Math.min(Math.round(a.height * scale), 140) + "px";
+  const page = document.createElement("iframe");
+  page.src = "/board/" + encodeURIComponent(a.board) + "/" + a.file.split("/").map(encodeURIComponent).join("/");
+  page.loading = "lazy";
+  page.tabIndex = -1;
+  page.setAttribute("sandbox", "allow-scripts");
+  page.setAttribute("aria-hidden", "true");
+  page.style.width = a.width + "px";
+  page.style.height = a.height + "px";
+  page.style.transform = "scale(" + scale + ")";
+  view.append(page);
+  b.append(view, span("name", a.title));
+  b.addEventListener("click", () => post("showArtboard", { id: a.id }));
+  return b;
 }
 
 function post(name, fields) {

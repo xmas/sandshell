@@ -167,3 +167,33 @@ struct SavedPaneLayoutTests {
         #expect(try decode(json) == layout)
     }
 }
+
+/// Where a design session's chat meets its board: side by side across a
+/// divider, tops level (one strip line), or not a pair.
+struct DesignSeamTests {
+    let chat = NSRect(x: 0, y: 0, width: 500, height: 700)
+
+    @Test func sideBySideMeetAtTheDivider() throws {
+        let seam = try #require(PaneTreeController.seam(between: chat, and: NSRect(x: 501, y: 0, width: 400, height: 700)))
+        #expect(seam.x == 500.5)
+        #expect(seam.top == 700)
+        #expect(seam.bottom == 0)
+    }
+
+    @Test func theBoardOnTheLeftToo() throws {
+        let board = NSRect(x: 0, y: 0, width: 300, height: 700)
+        let right = NSRect(x: 301, y: 100, width: 500, height: 600)
+        let seam = try #require(PaneTreeController.seam(between: right, and: board))
+        #expect(seam.x == 300.5)
+        #expect(seam.bottom == 100, "the span they share")
+    }
+
+    @Test(arguments: [
+        NSRect(x: 0, y: 701, width: 500, height: 300),   // stacked
+        NSRect(x: 520, y: 0, width: 400, height: 700),   // a pane between
+        NSRect(x: 501, y: 0, width: 400, height: 650),   // tops not level
+    ])
+    func otherwiseNotAPair(board: NSRect) {
+        #expect(PaneTreeController.seam(between: chat, and: board) == nil)
+    }
+}

@@ -94,4 +94,26 @@ struct CanvasBoardLinkTests {
         #expect(CanvasBoard.folder(containing: CanvasBoard.boardsFolder(root: root).appending(path: "missing/a.html"), root: root) == nil,
                 "a folder without board.json isn't a board")
     }
+
+    /// Files a turn wrote → the artboards on the chat's own board, in the
+    /// order written, once each; anything else is left out.
+    @Test func whatATurnWroteOnItsBoard() throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "canvas-written-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let board = CanvasBoard.boardsFolder(root: root).appending(path: "design-5")
+        try FileManager.default.createDirectory(at: board, withIntermediateDirectories: true)
+        try Data("""
+            {"title": "Designer", "artboards": [
+              {"id": "a", "title": "Door", "file": "a.html", "width": 1280, "height": 760},
+              {"id": "b", "title": "Strip", "file": "b.html", "width": 390, "height": 844},
+              {"id": "app", "url": "http://localhost:5173/"}]}
+            """.utf8).write(to: board.appending(path: CanvasBoard.fileName))
+        let path = { (name: String) in board.appending(path: name).path(percentEncoded: false) }
+        let other = CanvasBoard.boardsFolder(root: root).appending(path: "other/a.html").path(percentEncoded: false)
+        let written = CanvasBoard.written([path("b.html"), path("kit.css"), path("a.html"), path("b.html"), other], on: board)
+        #expect(written.map(\.id) == ["b", "a"])
+        #expect(written.first == CanvasBoard.Written(board: "design-5", boardTitle: "Designer", id: "b", title: "Strip",
+                                                      file: "b.html", width: 390, height: 844))
+        #expect(CanvasBoard.written([path("a.html")], on: root).isEmpty, "not a board")
+    }
 }

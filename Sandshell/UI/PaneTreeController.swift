@@ -88,6 +88,8 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
         container.onDrop = { [weak self] info in self?.performDrop(info) ?? false }
         container.registerForDraggedTypes([.sandshellSession])
         dropOverlay.isHidden = true
+        container.onLayout = { [weak self] in self?.updatePairsSoon() }
+        seamHost.autoresizingMask = [.width, .height]
         view = container
 
         surfaces.paneShowing = { [weak self] id in self?.panes.first { $0.shownSession == id } }
@@ -115,6 +117,13 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
     override func viewDidLoad() {
         super.viewDidLoad()
         controller.$selection.sink { [weak self] sel in self?.selectionChanged(sel) }.store(in: &cancellables)
+        // A board put away (here or in another window), a color picked: panes follow.
+        controller.$revision.dropFirst().sink { [weak self] _ in
+            self?.closeHiddenBoards()
+            self?.updatePairs()
+        }.store(in: &cancellables)
+        controller.$drawingSessions.dropFirst().removeDuplicates().sink { [weak self] _ in self?.updatePairs() }
+            .store(in: &cancellables)
         // Clicking anywhere in a pane focuses it.
         clickMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
             guard let self, let window = self.view.window, event.window === window else { return event }
@@ -143,7 +152,9 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
         pane.onStatusChange = { [weak self, weak pane] text, working in
             if let self, pane === self.toolbarPane { self.onStatusChange?(text, working) }
         }
-        pane.onClosePane = { [weak self, weak pane] in if let pane { self?.close(pane) } }
+        pane.onClosePane = { [weak self, weak pane] in if let pane { self?.closeFromUser(pane) } }
+        pane.onToggleBoard = { [weak self] id in self?.toggleBoard(ofSession: id) }
+        pane.onShowArtboard = { [weak self] folder, artboard in self?.showArtboard(folder, artboard) }
         pane.onToggleSidebar = { [weak self] in self?.onToggleSidebar?() }
         pane.onToggleFiles = { [weak self] in self?.onToggleFiles?() }
         pane.onShowBoard = { [weak self] id in self?.openBoard(ofSession: id) }
@@ -272,6 +283,7 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
         focused.show(id)
         focused.reemitChrome()
         showBoardBeside(id)
+        updatePairs()
         scheduleSave()
     }
 
@@ -303,7 +315,7 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
 
     /// A design session's board, in a pane beside it (unless one shows it).
     private func showBoardBeside(_ id: UUID) {
-        guard let session = controller.session(id: id), let folder = controller.boardFolder(of: session),
+        guard let session = controller.session(id: id), !session.boardHidden, let folder = controller.boardFolder(of: session),
               !panes.contains(where: { $0.shownBoard?.standardizedFileURL == folder.standardizedFileURL }),
               let chatPane = focused else { return }
         openBoard(folder, beside: chatPane)
@@ -382,7 +394,7 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
         scheduleSave()
     }
 
-    func closeFocused() { if let focused { close(focused) } }
+    func closeFocused() { if let focused { closeFromUser(focused) } }
 
     /// Move focus (and the keys) to the next/previous pane in reading order.
     func focusAdjacent(_ delta: Int) {
@@ -412,11 +424,14 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
         // Building splits fires divider-tagged resizes from AppKit's own layout;
         // ignore them until our positions are applied.
         applyingFractions = true
-        view.subviews.filter { $0 !== dropOverlay }.forEach { $0.removeFromSuperview() }
+        view.subviews.filter { $0 !== dropOverlay && $0 !== seamHost }.forEach { $0.removeFromSuperview() }
         let top = build(root)
         top.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(top, positioned: .below, relativeTo: dropOverlay.superview === view ? dropOverlay : nil)
         if dropOverlay.superview !== view { view.addSubview(dropOverlay) }
+        // The seams sit over the panes, under a drop's highlight.
+        seamHost.frame = view.bounds
+        view.addSubview(seamHost, positioned: .below, relativeTo: dropOverlay)
         NSLayoutConstraint.activate([
             // To the window's top: the panes' strips are its title bar.
             top.topAnchor.constraint(equalTo: view.topAnchor),
@@ -440,6 +455,7 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
             self.applyFractions(self.root)
             self.applyingFractions = false
             self.panes.forEach { $0.redrawSurface() }
+            self.updatePairs()
         }
         return keys
     }
@@ -538,6 +554,7 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
 
     /// Remember divider positions as fractions (survive window resizes, relaunch).
     func splitViewDidResizeSubviews(_ notification: Notification) {
+        updatePairsSoon()   // a seam moves with its divider
         // Only real divider drags (AppKit tags them with the divider index) —
         // not the resizes from building splits or our own positioning.
         guard !applyingFractions, notification.userInfo?["NSSplitViewDividerIndex"] != nil,
@@ -675,6 +692,7 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
     /// open, else beside the session, made the first time.
     func openBoard(ofSession id: UUID) {
         guard let session = controller.session(id: id) else { return }
+        controller.setBoardHidden(id, false)
         let existing = controller.boardFolder(of: session)
         guard let folder = existing ?? controller.addBoard(to: id) else { return }
         if existing == nil {
@@ -694,14 +712,171 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
         if focused.shownSession != nil { openBoard(folder, beside: focused) } else { openBoard(folder) }
     }
 
-    /// Show a board: focus the pane already showing it, else in the focused pane.
+    /// Show a board: focus the pane already showing it, else in the focused
+    /// pane. A design's board shown is no longer put away.
     func openBoard(_ folder: URL) {
+        if let id = controller.designSession(forBoard: folder) { controller.setBoardHidden(id, false) }
         if let holder = panes.first(where: { $0.shownBoard?.standardizedFileURL == folder.standardizedFileURL }) {
             return focus(holder)
         }
         focused.showBoard(folder)
         focused.reemitChrome()
+        updatePairs()
         scheduleSave()
+    }
+
+    // MARK: Design pairs
+
+    /// A design session's chat beside its own board: one band over both
+    /// strips, a knob on their seam (`DesignSeamView`).
+    struct DesignPair {
+        let session: UUID
+        let chat: TerminalStackController
+        let board: TerminalStackController
+        let color: NSColor
+    }
+
+    private let seamHost = SeamHostView()
+    private var seams: [UUID: DesignSeamView] = [:]
+
+    #if DEBUG
+    /// Self-test: each pair's seam, by session: whether it shows drawing.
+    var debugSeams: [UUID: Bool] { seams.mapValues(\.isDrawing) }
+    #endif
+
+    /// The design pairs on screen: a design session's pane and its board's,
+    /// side by side with their tops level (so their strips make one line).
+    func designPairs() -> [DesignPair] {
+        guard isViewLoaded, root != nil else { return [] }
+        return panes.compactMap { chat in
+            guard let id = chat.shownSession, let session = controller.session(id: id), let tint = session.designTint,
+                  let folder = controller.boardFolder(of: session),
+                  let board = panes.first(where: { $0.shownBoard?.standardizedFileURL == folder.standardizedFileURL }),
+                  Self.seam(between: frame(of: chat), and: frame(of: board)) != nil else { return nil }
+            return DesignPair(session: id, chat: chat, board: board, color: tint.color)
+        }
+    }
+
+    private func frame(of pane: TerminalStackController) -> NSRect { pane.view.convert(pane.view.bounds, to: view) }
+
+    /// Where two panes meet side by side (x, and the span they share, top
+    /// down), or nil when they don't: not touching across a divider, or
+    /// their tops not level.
+    nonisolated static func seam(between a: NSRect, and b: NSRect) -> (x: CGFloat, top: CGFloat, bottom: CGFloat)? {
+        let (left, right) = a.minX <= b.minX ? (a, b) : (b, a)
+        let gap = right.minX - left.maxX
+        let top = min(a.maxY, b.maxY), bottom = max(a.minY, b.minY)
+        guard gap >= -0.5, gap <= 4, abs(a.maxY - b.maxY) < 1, top - bottom > 60 else { return nil }
+        return ((left.maxX + right.minX) / 2, top, bottom)
+    }
+
+    private var pairsUpdateQueued = false
+
+    /// `updatePairs` once the layout pass under way is done (frames settled,
+    /// and no view changes from inside it).
+    private func updatePairsSoon() {
+        guard !pairsUpdateQueued else { return }
+        pairsUpdateQueued = true
+        DispatchQueue.main.async { [weak self] in
+            self?.pairsUpdateQueued = false
+            self?.updatePairs()
+        }
+    }
+
+    /// Mark the pairs' panes, and put a seam where each pair meets.
+    func updatePairs() {
+        guard isViewLoaded, root != nil else { return }
+        let pairs = designPairs()
+        let paired = Set(pairs.flatMap { [ObjectIdentifier($0.chat), ObjectIdentifier($0.board)] })
+        for p in panes { p.isInDesignPair = paired.contains(ObjectIdentifier(p)) }
+        var sides: [ObjectIdentifier: PaneStripView.SeamSide] = [:]
+        for pair in pairs {
+            let chatFirst = frame(of: pair.chat).minX < frame(of: pair.board).minX
+            sides[ObjectIdentifier(pair.chat)] = chatFirst ? .trailing : .leading
+            sides[ObjectIdentifier(pair.board)] = chatFirst ? .leading : .trailing
+        }
+        for p in panes { p.seamSide = sides[ObjectIdentifier(p)] }
+        seamHost.frame = view.bounds
+        var kept = Set<UUID>()
+        for pair in pairs {
+            guard let at = Self.seam(between: frame(of: pair.chat), and: frame(of: pair.board)) else { continue }
+            kept.insert(pair.session)
+            let seam = seams[pair.session] ?? {
+                let v = DesignSeamView()
+                seamHost.addSubview(v)
+                seams[pair.session] = v
+                return v
+            }()
+            seam.frame = NSRect(x: (at.x - DesignSeamView.width / 2).rounded(), y: at.bottom,
+                                width: DesignSeamView.width, height: at.top - at.bottom)
+            seam.base = controller.theme.colors.stripFill
+            seam.color = pair.color
+            seam.isDrawing = controller.drawingSessions.contains(pair.session)
+            seam.needsLayout = true
+        }
+        for (id, seam) in seams where !kept.contains(id) {
+            seam.removeFromSuperview()
+            seams[id] = nil
+        }
+    }
+
+    /// The composer's Design chip: the first time, a board of its own beside
+    /// the chat (the chat is told); after that, show the board, or put it away.
+    func toggleBoard(ofSession id: UUID) {
+        guard let session = controller.session(id: id) else { return }
+        let shown = controller.boardFolder(of: session).map(isShowingBoard) ?? false
+        if session.isDesign, !session.boardHidden, shown {
+            controller.setBoardHidden(id, true)   // its panes close (`closeHiddenBoards`)
+        } else {
+            openBoard(ofSession: id)
+        }
+    }
+
+    private func isShowingBoard(_ folder: URL) -> Bool {
+        panes.contains { $0.shownBoard?.standardizedFileURL == folder.standardizedFileURL }
+    }
+
+    /// Boards put away aren't shown: their panes close (the last pane shows
+    /// its chat instead).
+    private func closeHiddenBoards() {
+        for pane in panes {
+            guard let folder = pane.shownBoard, let id = controller.designSession(forBoard: folder),
+                  controller.session(id: id)?.boardHidden == true else { continue }
+            if panes.count > 1 { close(pane) } else { pane.show(id) }
+        }
+    }
+
+    /// Close from the strip's ✕ or ⌥⌘W. A design pair closes as one (with no
+    /// other pane to keep, its board is put away); a design's board closed on
+    /// its own is put away, so selecting its chat doesn't bring it back.
+    func closeFromUser(_ pane: TerminalStackController) {
+        if let pair = designPairs().first(where: { $0.chat === pane || $0.board === pane }) {
+            if panes.count > 2 {
+                close(pair.board)
+                close(pair.chat)
+            } else {
+                controller.setBoardHidden(pair.session, true)
+            }
+            return
+        }
+        if let folder = pane.shownBoard, let id = controller.designSession(forBoard: folder) {
+            controller.setBoardHidden(id, true)
+            if !panes.contains(where: { $0 === pane }) { return }   // `closeHiddenBoards` closed it
+        }
+        close(pane)
+    }
+
+    /// A frame in a chat's artboard strip: its board, beside its chat, on that artboard.
+    func showArtboard(_ folder: URL, _ artboard: String?) {
+        if let id = controller.designSession(forBoard: folder) {
+            controller.setBoardHidden(id, false)
+            if let chat = panes.first(where: { $0.shownSession == id }) { openBoard(folder, beside: chat) } else { presentBoard(folder) }
+        } else {
+            presentBoard(folder)
+        }
+        if let artboard, let holder = panes.first(where: { $0.shownBoard?.standardizedFileURL == folder.standardizedFileURL }) {
+            holder.revealArtboard(artboard)
+        }
     }
 
     // MARK: Window API (forwarded to the focused pane)
@@ -751,6 +926,12 @@ final class PaneSplitView: NSSplitView {
 
 /// The detail area's root view: accepts sessions dragged from the sidebar.
 final class PaneDropContainer: NSView {
+    /// After each layout (the window resized): the seams follow.
+    var onLayout: (() -> Void)?
+    override func layout() {
+        super.layout()
+        onLayout?()
+    }
     var onDragUpdate: ((NSDraggingInfo) -> NSDragOperation)?
     var onDragEnd: (() -> Void)?
     var onDrop: ((NSDraggingInfo) -> Bool)?
@@ -845,5 +1026,103 @@ struct SavedPaneLayout: Codable, Equatable {
             if total > 0 { shares = survivors.map { $0 / total } }
         }
         return SavedPaneLayout(axis: axis, children: kept.map(\.1), fractions: shares)
+    }
+}
+
+/// Holds the design seams over the panes; clicks go through to them.
+final class SeamHostView: NSView {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
+/// Where a design session's chat meets its board: a link knob on the seam,
+/// level with their strips. While its agent draws, the knob pulses and a
+/// light runs down the seam (held still with Reduce Motion).
+final class DesignSeamView: NSView {
+    static let width: CGFloat = 30
+    private static let knobSide: CGFloat = 26
+
+    var color: NSColor = .systemTeal { didSet { if color != oldValue { restyle() } } }
+    /// The strips' fill: the knob's, so it sits in their band.
+    var base: NSColor = .windowBackgroundColor { didSet { if base != oldValue { restyle() } } }
+    var isDrawing = false { didSet { if isDrawing != oldValue { restyle() } } }
+
+    private let knob = NSView()
+    private let icon = NSImageView()
+    private let ring = CAShapeLayer()
+    private let flow = CAGradientLayer()
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        knob.wantsLayer = true
+        knob.layer?.cornerRadius = Self.knobSide / 2
+        knob.layer?.borderWidth = 1
+        icon.image = NSImage(systemSymbolName: "link", accessibilityDescription: nil)?
+            .withSymbolConfiguration(.init(pointSize: 11, weight: .semibold))
+        knob.addSubview(icon)
+        addSubview(knob)
+        ring.fillColor = nil
+        ring.lineWidth = 2
+        layer?.addSublayer(ring)
+        flow.startPoint = CGPoint(x: 0.5, y: 1)   // top down
+        flow.endPoint = CGPoint(x: 0.5, y: 0)
+        layer?.insertSublayer(flow, at: 0)
+        setAccessibilityElement(false)
+        restyle()
+    }
+
+    @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func layout() {
+        super.layout()
+        let side = Self.knobSide
+        let knobFrame = NSRect(x: ((bounds.width - side) / 2).rounded(),
+                               y: (bounds.height - PaneStripView.height / 2 - side / 2).rounded(), width: side, height: side)
+        knob.frame = knobFrame
+        icon.frame = knob.bounds.insetBy(dx: 6, dy: 6)
+        ring.frame = knobFrame
+        ring.path = CGPath(ellipseIn: CGRect(origin: .zero, size: knobFrame.size).insetBy(dx: -1, dy: -1), transform: nil)
+        flow.frame = NSRect(x: bounds.width / 2 - 1, y: 0, width: 2, height: max(bounds.height - PaneStripView.height, 0))
+    }
+
+    private func restyle() {
+        knob.layer?.backgroundColor = base.blended(withFraction: 0.1, of: color)?.cgColor
+        knob.layer?.borderColor = color.withAlphaComponent(0.6).cgColor
+        icon.contentTintColor = color
+        ring.strokeColor = color.cgColor
+        flow.colors = [NSColor.clear.cgColor, color.cgColor, NSColor.clear.cgColor]
+        ring.removeAllAnimations()
+        flow.removeAllAnimations()
+        ring.isHidden = !isDrawing
+        flow.isHidden = !isDrawing
+        guard isDrawing else { return }
+        if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            ring.opacity = 0.7
+            flow.locations = [0, 0.5, 1]
+            flow.opacity = 0.5
+            return
+        }
+        ring.opacity = 0
+        let scale = CABasicAnimation(keyPath: "transform.scale")
+        scale.fromValue = 0.9
+        scale.toValue = 1.5
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.fromValue = 0.9
+        fade.toValue = 0
+        let pulse = CAAnimationGroup()
+        pulse.animations = [scale, fade]
+        pulse.duration = 1.6
+        pulse.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        pulse.repeatCount = .infinity
+        ring.add(pulse, forKey: "pulse")
+        flow.opacity = 1
+        let run = CABasicAnimation(keyPath: "locations")
+        run.fromValue = [-0.3, -0.15, 0]
+        run.toValue = [1, 1.15, 1.3]
+        run.duration = 1.8
+        run.repeatCount = .infinity
+        flow.add(run, forKey: "flow")
     }
 }

@@ -114,6 +114,11 @@ final class PaneStripView: NSView {
     /// and Files' (top-right strip).
     private let sidebarButton = StripIconButton()
     private let filesButton = StripIconButton()
+    /// A design session's mark (chat side), or its board's palette.
+    private let designBadge = AgentBadgeView(side: 18, fontSize: 8, radius: 5)
+    private let boardGlyph = NSImageView()
+    /// The design color's band along the strip's top.
+    private let designLine = CALayer()
     /// Remote Control's state (nil: not a chat).
     private(set) var remoteState: Bool?
     /// The session's Stop / Restart (nil: none — no session, or a chat's,
@@ -161,6 +166,23 @@ final class PaneStripView: NSView {
         didSet { if showsBoardWindowButton != oldValue { boardWindowButton.isHidden = !showsBoardWindowButton; needsLayout = true } }
     }
 
+    /// A design session's pane, or its board's: the strip takes the session's
+    /// color — a band along its top, a wash of it — and a mark before the
+    /// name. Side by side, the two strips read as one.
+    enum Design: Equatable {
+        case chat(NSColor, AgentKind)
+        case board(NSColor)
+        var color: NSColor { switch self { case .chat(let c, _), .board(let c): c } }
+    }
+    var design: Design? { didSet { if design != oldValue { applyDesign() } } }
+
+    /// The edge where a design pair's seam (and its link knob) meets this
+    /// strip: the controls or the mark keep clear of it.
+    enum SeamSide { case leading, trailing }
+    var seamSide: SeamSide? { didSet { if seamSide != oldValue { needsLayout = true } } }
+    /// Room the seam's knob takes from the strip's edge, past the usual padding.
+    static let seamRoom: CGFloat = 16
+
     override init(frame: NSRect) {
         super.init(frame: frame)
         wantsLayer = true
@@ -195,6 +217,14 @@ final class PaneStripView: NSView {
         filesButton.isHidden = true
         content.addSubview(remoteButton)
         remoteButton.isHidden = true
+        designBadge.translatesAutoresizingMaskIntoConstraints = true
+        boardGlyph.image = NSImage(systemSymbolName: "paintpalette", accessibilityDescription: "Board")?
+            .withSymbolConfiguration(.init(pointSize: Self.controlSymbol, weight: .medium))
+        boardGlyph.imageScaling = .scaleProportionallyUpOrDown
+        for v in [designBadge, boardGlyph] as [NSView] { v.isHidden = true; content.addSubview(v) }
+        designLine.zPosition = 10
+        designLine.isHidden = true
+        layer?.addSublayer(designLine)
         restyleRemote()
         // Commits and edits happen behind our back: re-read the branch now and then.
         gitTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
@@ -297,7 +327,28 @@ final class PaneStripView: NSView {
     }
 
     private func restyleName() {
-        nameCrumb.label.textColor = colors.stripName
+        // A design's board names itself quietly: the chat beside it is the subject.
+        if case .board? = design { nameCrumb.label.textColor = colors.stripCrumb } else { nameCrumb.label.textColor = colors.stripName }
+    }
+
+    private func applyDesign() {
+        designBadge.isHidden = true
+        boardGlyph.isHidden = true
+        switch design {
+        case .chat(let color, let agent)?:
+            designBadge.configureDesign(color, agent: agent)
+            designBadge.isHidden = false
+        case .board(let color)?:
+            boardGlyph.contentTintColor = color
+            boardGlyph.isHidden = false
+        case nil:
+            break
+        }
+        designLine.isHidden = design == nil
+        designLine.backgroundColor = design?.color.cgColor
+        restyleName()
+        updateEmphasis()
+        needsLayout = true
     }
 
     /// What VoiceOver hears for the branch crumb: its name, and the lines
@@ -330,7 +381,8 @@ final class PaneStripView: NSView {
     }
 
     private func updateEmphasis() {
-        layer?.backgroundColor = (isFocusedPane ? colors.stripFill : colors.termBg).cgColor
+        let fill = isFocusedPane ? colors.stripFill : colors.termBg
+        layer?.backgroundColor = (design.flatMap { fill.blended(withFraction: 0.1, of: $0.color) } ?? fill).cgColor
         content.alphaValue = dimsUnfocused && !isFocusedPane && !hovering ? 0.4 : 1
     }
 
@@ -357,7 +409,7 @@ final class PaneStripView: NSView {
 
         // Controls, right to left: fixed, whatever the crumbs need.
         let y = ((height - Self.controlSize) / 2).rounded()
-        var x = width - Self.sidePadding
+        var x = width - Self.sidePadding - (seamSide == .trailing ? Self.seamRoom : 0)
         func place(_ button: NSView) {
             x -= Self.controlSize
             button.frame = NSRect(x: x, y: y, width: Self.controlSize, height: Self.controlSize)
@@ -377,10 +429,18 @@ final class PaneStripView: NSView {
         }
 
         // The traffic lights and the sidebar's toggle, at the window's top-left.
-        var leading = Self.sidePadding
+        var leading = Self.sidePadding + (seamSide == .leading ? Self.seamRoom : 0)
         if isWindowLeading {
             sidebarButton.frame = NSRect(x: Self.trafficLightsWidth, y: y, width: Self.controlSize, height: Self.controlSize)
             leading = Self.trafficLightsWidth + Self.controlSize + 6
+        }
+        // A design's mark, before the name.
+        designLine.frame = NSRect(x: 0, y: height - 3, width: width, height: 3)
+        let mark: NSView? = design == nil ? nil : designBadge.isHidden ? boardGlyph as NSView : designBadge as NSView
+        if let mark {
+            let side: CGFloat = mark === designBadge ? 18 : 15
+            mark.frame = NSRect(x: leading + 2, y: ((height - side) / 2).rounded(), width: side, height: side)
+            leading += side + 9
         }
         // The name, then the branch chip while there's room; the chip gives way first.
         let crumbsWidth = max(x - Self.crumbsGap - leading, 0)

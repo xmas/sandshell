@@ -33,6 +33,19 @@ final class ChatWebTranscript: NSView {
     /// Where Copy puts things (self-tests use their own, not the clipboard).
     var pasteboard = NSPasteboard.general
 
+    /// A design session's board, put away: after each turn that drew on it,
+    /// the transcript shows what it drew (a strip of the artboards, in the
+    /// session's color). Nil: no strip.
+    struct ArtboardStrip: Equatable {
+        let color: NSColor
+        let board: URL
+    }
+    var artboardStrip: ArtboardStrip? { didSet { if artboardStrip != oldValue { sendConfig() } } }
+    /// The workspace's root: the boards the strip shows are under it.
+    var boardRoot: URL?
+    /// A frame in the artboard strip was clicked: its board, and the artboard.
+    var onShowArtboard: ((URL, String?) -> Void)?
+
     init(source: any ChatFeedSource) {
         self.source = source
         super.init(frame: .zero)
@@ -105,6 +118,8 @@ final class ChatWebTranscript: NSView {
     struct Config: Encodable {
         let canFork: Bool
         let canUndo: Bool
+        /// The artboard strip's color (`#RRGGBB`); nil: no strip.
+        let artboards: String?
         let replyFont: String
         let messageFont: String
         /// The type scale's three sizes, in points (the page's px; zoom is the view's).
@@ -124,6 +139,7 @@ final class ChatWebTranscript: NSView {
     /// What this transcript offers, its fonts and sizes.
     private func sendConfig() {
         send("config", Config(canFork: onFork != nil, canUndo: onUndo != nil,
+                              artboards: artboardStrip.map { "#" + $0.color.hexString },
                               replyFont: Self.cssFamily(ChatFonts.reply), messageFont: Self.cssFamily(ChatFonts.message),
                               sizes: .app))
     }
@@ -210,6 +226,15 @@ final class ChatWebTranscript: NSView {
             if let text = body["text"] as? String { onFork?(text) }
         case "undo":
             if let turn = body["turn"] as? String { onUndo?(turn) }
+        case "artboards":
+            // Files a turn wrote → the artboards they are, on this chat's board.
+            guard let strip = artboardStrip, let paths = body["paths"] as? [String] else {
+                return ok(["artboards": [CanvasBoard.Written]()])
+            }
+            return ok(["artboards": CanvasBoard.written(Array(paths.prefix(64)), on: strip.board)])
+        case "showArtboard":
+            guard let strip = artboardStrip else { break }
+            onShowArtboard?(strip.board, body["id"] as? String)
         default:
             return (nil, "Not a command: \(name)")
         }
@@ -221,6 +246,16 @@ final class ChatWebTranscript: NSView {
         let parts = url.path(percentEncoded: false).split(separator: "/").map(String.init)
         if parts.count == 6, parts[0] == "api", parts[1] == "sessions", parts[3] == "images", let index = Int(parts[5]) {
             return RemoteWire.image(in: source.items, item: parts[4], index: index).map { ($0, "application/octet-stream") }
+        }
+        // The artboard strip's pages (and what they load beside them): this
+        // chat's board's folder, nothing outside it.
+        if parts.count >= 3, parts[0] == "board", let board = artboardStrip?.board.standardizedFileURL,
+           parts[1] == board.lastPathComponent {
+            let file = board.appending(path: parts.dropFirst(2).joined(separator: "/")).standardizedFileURL
+            let base = board.path(percentEncoded: false)
+            guard file.path(percentEncoded: false).hasPrefix(base.hasSuffix("/") ? base : base + "/"),
+                  let data = try? Data(contentsOf: file) else { return nil }
+            return (data, RemoteRoutes.contentType(file.pathExtension))
         }
         guard let root = RemoteRoutes.webRoot?.standardizedFileURL else { return nil }
         let name = parts.isEmpty || parts.first == "s" ? "index.html" : parts.joined(separator: "/")
@@ -274,8 +309,13 @@ final class ChatWebTranscript: NSView {
 
         func webViewWebContentProcessDidTerminate(_ webView: WKWebView) { owner?.pageDied() }
 
-        /// Only the page itself loads here; a link goes to the browser.
+        /// Only the page itself loads here; a link goes to the browser. An
+        /// artboard in the strip (a frame) stays on its board's pages.
         func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction) async -> WKNavigationActionPolicy {
+            if action.targetFrame?.isMainFrame == false {
+                return action.request.url?.scheme == ChatWebTranscript.scheme || action.request.url?.scheme == "about"
+                    ? .allow : .cancel
+            }
             guard let url = action.request.url, url.scheme != ChatWebTranscript.scheme else { return .allow }
             if ["http", "https", "mailto"].contains(url.scheme?.lowercased() ?? "") { NSWorkspace.shared.open(url) }
             return .cancel
@@ -283,7 +323,9 @@ final class ChatWebTranscript: NSView {
 
         func userContentController(_ controller: WKUserContentController,
                                    didReceive message: WKScriptMessage) async -> (Any?, String?) {
-            guard let owner, let body = message.body as? [String: Any], let name = body["name"] as? String else {
+            // Only the transcript's own page: an artboard's (a frame in the strip) is the agent's.
+            guard message.frameInfo.isMainFrame, let owner, let body = message.body as? [String: Any],
+                  let name = body["name"] as? String else {
                 return (nil, "Not a command")
             }
             // Its fields: in `body` as JSON (as a device's POST), or alongside the name.

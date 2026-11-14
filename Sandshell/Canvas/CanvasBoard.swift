@@ -61,6 +61,35 @@ struct CanvasBoard: Equatable, Sendable {
         return FileManager.default.fileExists(atPath: folder.appending(path: fileName).path(percentEncoded: false)) ? folder : nil
     }
 
+    /// An artboard a chat's turn wrote, for the transcript's artboard strip.
+    struct Written: Codable, Equatable, Sendable {
+        /// Its board's folder name (`.sandshell/canvas/<board>`).
+        let board: String
+        let boardTitle: String
+        let id: String
+        let title: String
+        /// Its page, relative to the board's folder.
+        let file: String
+        let width: Double
+        let height: Double
+    }
+
+    /// The artboards that `paths` (files a turn wrote) are, on the board in
+    /// `folder` only, in the order written, each once; files that aren't one
+    /// of its artboards' pages are left out.
+    static func written(_ paths: [String], on folder: URL) -> [Written] {
+        guard case .success(let board) = load(folder: folder) else { return [] }
+        var out: [Written] = []
+        for path in paths {
+            let url = URL(filePath: path).standardizedFileURL
+            guard let artboard = board.artboards.first(where: { board.fileURL(of: $0)?.standardizedFileURL == url }),
+                  let file = artboard.file, !out.contains(where: { $0.id == artboard.id }) else { continue }
+            out.append(Written(board: folder.lastPathComponent, boardTitle: board.title, id: artboard.id,
+                               title: artboard.title, file: file, width: artboard.width, height: artboard.height))
+        }
+        return out
+    }
+
     /// The workspace's boards (folders with a board.json), by name.
     static func list(root: URL) -> [URL] {
         let dir = boardsFolder(root: root)

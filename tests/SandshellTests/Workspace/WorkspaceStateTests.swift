@@ -1279,3 +1279,53 @@ struct WorkspaceBootstrapTests {
         #expect(WorkspaceStateFixture.directoryExists(at: root) == false)
     }
 }
+
+/// A design session's color and its board's visibility, in state.json.
+struct DesignSessionStateTests {
+    @Test func aNewDesignGetsTheLeastUsedColor() {
+        #expect(DesignColor.next(after: []) == .teal)
+        #expect(DesignColor.next(after: [.teal]) == .violet)
+        #expect(DesignColor.next(after: [.teal, .violet, .blue]) == .pink)
+        #expect(DesignColor.next(after: DesignColor.allCases + [.teal, .blue]) == .violet,
+                "past one each: the fewest again, in the list's order")
+    }
+
+    @Test func aBoardFromBeforeColorsKeepsTheSameOne() {
+        var session = Session(folderID: UUID(), agent: .claude, name: "", order: 0, workdir: "")
+        #expect(session.designTint == nil, "no board: not a design")
+        session.board = ".sandshell/canvas/design"
+        let tint = session.designTint
+        #expect(tint != nil)
+        #expect(session.designTint == tint, "stable")
+        session.designColor = .pink
+        #expect(session.designTint == .pink, "a picked color wins")
+    }
+
+    @Test func roundTripsItsColorAndAHiddenBoard() throws {
+        var session = Session(folderID: UUID(), agent: .claude, name: "", order: 0, workdir: "",
+                              createdAt: WorkspaceStateFixture.referenceDate)
+        session.board = ".sandshell/canvas/design-2"
+        session.designColor = .violet
+        session.boardHidden = true
+        let data = try WorkspaceStateJSON.encode(session)
+        let json = try WorkspaceStateJSON.object(data)
+        #expect(json["designColor"] as? String == "violet")
+        #expect(json["boardHidden"] as? Bool == true)
+        #expect(try WorkspaceStateJSON.roundTrip(session) == session)
+    }
+
+    @Test func aShownBoardAndNoColorWriteNothing() throws {
+        let session = Session(folderID: UUID(), agent: .claude, name: "", order: 0, workdir: "")
+        let json = try WorkspaceStateJSON.object(WorkspaceStateJSON.encode(session))
+        #expect(json["designColor"] == nil)
+        #expect(json["boardHidden"] == nil)
+    }
+
+    @Test(.tags(.workspaceStateEdgeCase))
+    func anUnknownColorReadsAsNone() throws {
+        let session = try WorkspaceStateJSON.decode(Session.self, from: #"{"agent":"claude","board":"b","designColor":"mauve"}"#)
+        #expect(session.designColor == nil, "a newer app's color doesn't lose the session")
+        #expect(session.designTint != nil)
+        #expect(session.boardHidden == false)
+    }
+}

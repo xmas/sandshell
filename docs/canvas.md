@@ -61,10 +61,38 @@ don't read: their `CLAUDE_CONFIG_DIR` is the host's). `/sandshell:canvas`
 starts a board from the chat. A link to a board's file in a reply opens the
 board beside the chat.
 
-Any session can have a board: the palette icon on its sidebar row and title
-strip opens it, made the first time. A chat already running is told with your
-next message (`ChatSession.noteBoard`); a design session and a relaunched chat
-at launch. Terminal sessions get the board but no word to the agent.
+Any session can have a board: the composer's **Design** chip (or Open
+Designer in the row's menu and the pane's ⋯) makes one the first time. A chat
+already running is told with your next message (`ChatSession.noteBoard`); a
+design session and a relaunched chat at launch. Terminal sessions get the
+board but no word to the agent.
+
+## Design sessions
+
+A session with a board (`Session.board`) is a design session, and it gets a
+color (`DesignColor`: teal, violet, blue, pink, green — the least used, or
+picked from its row's Board Color menu). Designs from
+`.sandshell/canvas/design-5` (the Chosen row):
+
+- **Sidebar**: its mark is a palette in its color, in place of its agent's;
+  it pulses while the agent draws — a write to the board moments ago, or
+  during the turn still running (`WorkspaceController.drawingSessions`, a
+  `FileWatcher` per board). Hovering the row shows **Board ↗**.
+- **Panes**: its pane's strip and its board's take the color (a band along
+  the top, a wash). Side by side, tops level, they're a pair
+  (`PaneTreeController.designPairs`): a link knob sits on their seam, pulsing
+  with a light running down it while the agent draws (`DesignSeamView`); the
+  board's ✕ closes both (the chat's goes), or puts the board away when
+  they're the only panes.
+- **Design chip**: once a chat is a design it stays one; the chip then shows
+  the board beside it or puts it away (`Session.boardHidden`: selecting the
+  chat doesn't bring it back). Closing a design's board on its own puts it
+  away too.
+- **Artboard strip**: with the board put away, the transcript shows, after
+  each turn that wrote pages on it, a strip of those artboards — the pages
+  drawn small (frames served from the board's folder only, and kept from the
+  page's commands) — and a click shows the board on that artboard
+  (`CanvasBoard.written`, `ChatWebTranscript.artboardStrip`).
 
 ## Notes back to the agent
 
