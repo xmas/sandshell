@@ -803,3 +803,34 @@ struct LocalCommandTests {
         #expect(session.items.isEmpty, "nothing ran, nothing shown")
     }
 }
+
+/// `ACPConnection` hears its process exit even when something it started
+/// still holds its pipes (sbx's daemon, started by an `sbx exec`).
+struct ACPConnectionExitTests {
+    @Test func anExitIsHeardThoughAChildHoldsThePipes() async throws {
+        // The background sleep keeps stdout and stderr open after the shell exits.
+        let conn = ACPConnection(executable: "/bin/sh", arguments: ["-c", "echo '{\"jsonrpc\":\"2.0\",\"method\":\"hi\"}'; sleep 8 & exit 3"])
+        try conn.start()
+        let started = Date.now
+        var saw: [String] = []
+        var status: Int32?
+        for await event in conn.incoming {
+            switch event {
+            case .notification(let method, _): saw.append(method)
+            case .closed(let s): status = s
+            default: break
+            }
+        }
+        #expect(status == 3)
+        #expect(saw == ["hi"], "what it wrote before exiting still arrives")
+        #expect(Date.now.timeIntervalSince(started) < 5, "not after the child lets go (8 s)")
+    }
+
+    @Test func aRequestFailsWhenTheProcessExitsUnderAHeldPipe() async throws {
+        let conn = ACPConnection(executable: "/bin/sh", arguments: ["-c", "sleep 8 & sleep 0.3; exit 0"])
+        try conn.start()
+        await #expect(throws: ACPConnection.RPCError.self) {
+            _ = try await conn.request("initialize", [:])
+        }
+    }
+}

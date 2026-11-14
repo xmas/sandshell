@@ -38,6 +38,8 @@ final class ACPConnection: @unchecked Sendable {
     private var nextID = 0
     private var pending: [Int: CheckedContinuation<JSONValue, Error>] = [:]
     private var isClosed = false
+    /// The process has exited (its pipes may still be held open by another).
+    private var hasExited = false
 
     init(executable: String, arguments: [String]) {
         (incoming, yield) = AsyncStream.makeStream(of: Incoming.self)
@@ -52,6 +54,10 @@ final class ACPConnection: @unchecked Sendable {
         // A write after the agent exited (an Allow click as it dies) must fail,
         // not SIGPIPE the app.
         _ = fcntl(stdinPipe.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1)
+        process.terminationHandler = { [weak self] _ in
+            guard let self else { return }
+            self.lock.lock(); self.hasExited = true; self.lock.unlock()
+        }
         try process.run()
         let out = stdoutPipe.fileHandleForReading.fileDescriptor
         let err = stderrPipe.fileHandleForReading.fileDescriptor
@@ -59,15 +65,24 @@ final class ACPConnection: @unchecked Sendable {
         // The readers keep the connection (and so its pipes and fds) alive
         // until they're done; close reports only after stderr is drained too,
         // so its last line (often the reason it exited) isn't lost.
+        // A reader stops at EOF, or once the process has exited and its pipe
+        // has nothing more: a process it started (sbx's daemon, started by
+        // this `sbx exec`) can hold the pipe open for good, and waiting for
+        // EOF left the chat never hearing its agent had gone.
         let stderrDone = DispatchSemaphore(value: 0)
+        let exited = { [weak self] () -> Bool in
+            guard let self else { return true }
+            self.lock.lock(); defer { self.lock.unlock() }
+            return self.hasExited
+        }
         Thread.detachNewThread {
-            Self.readLines(fd: out) { self.handleLine($0) }
+            Self.readLines(fd: out, until: exited) { self.handleLine($0) }
             self.process.waitUntilExit()
             _ = stderrDone.wait(timeout: .now() + 2)
             self.didClose(status: self.process.terminationStatus)
         }
         Thread.detachNewThread {
-            Self.readLines(fd: err) { line in
+            Self.readLines(fd: err, until: exited) { line in
                 self.yield.yield(.stderr(String(decoding: line, as: UTF8.self)))
             }
             stderrDone.signal()
@@ -160,11 +175,19 @@ final class ACPConnection: @unchecked Sendable {
         yield.finish()
     }
 
-    /// Blocking newline-delimited reader; returns at EOF.
-    private static func readLines(fd: Int32, _ onLine: (Data) -> Void) {
+    /// Newline-delimited reader; returns at EOF, or when `done()` and nothing
+    /// arrived for a moment (it's asked twice a second while the pipe's quiet).
+    static func readLines(fd: Int32, until done: () -> Bool = { false }, _ onLine: (Data) -> Void) {
         var buffer = Data()
         var chunk = [UInt8](repeating: 0, count: 64 * 1024)
         while true {
+            var ready = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
+            let polled = poll(&ready, 1, 500)
+            if polled < 0, errno == EINTR { continue }
+            if polled == 0 {
+                if done() { break }
+                continue
+            }
             let n = read(fd, &chunk, chunk.count)
             if n < 0, errno == EINTR { continue }
             guard n > 0 else { break }
