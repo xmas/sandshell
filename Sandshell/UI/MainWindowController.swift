@@ -301,15 +301,18 @@ final class MainWindowController: NSWindowController {
         guard let host = window?.contentViewController else { return }
         let model = MountConfigModel(
             home: controller.home, root: controller.workspace.rootURL, policy: controller.policy)
-        var sheet: NSViewController?
+        // Weak, both: the sheet's own closures hold them, and a strong `sheet`
+        // (sheet → its view → these closures → sheet) kept the sheet, and the
+        // workspace's controller with its 1 Hz polls, alive after the window closed.
+        weak var sheet: NSViewController?
         let view = MountConfigView(
             model: model,
             confirmTitle: "Create Workspace",
             confirmInfo: "Creates this workspace’s sandbox container with the selected mounts. "
                 + "You can change mounts later in Settings ▸ Mounts.",
-            onConfirm: { policy in
+            onConfirm: { [weak controller] policy in
                 sheet?.dismiss(nil)
-                controller.applyConfiguration(policy: policy)
+                controller?.applyConfiguration(policy: policy)
             },
             onCancel: { sheet?.dismiss(nil) }
         )

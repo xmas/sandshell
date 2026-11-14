@@ -176,6 +176,10 @@ final class WorkspaceController: ObservableObject {
         isClosed = true
         containerPollTask?.cancel()
         subagentPollTask?.cancel()
+        // Its 1 Hz polls too: one left running takes the folder's agent notes
+        // from the next window on it.
+        statusFeedCancellable = nil
+        clockCancellable = nil
         boardWatchers.values.forEach { $0.stop() }
         boardWatchers = [:]
     }
@@ -222,7 +226,7 @@ final class WorkspaceController: ObservableObject {
     /// vnode DispatchSource: cheaper to reason about under strict concurrency,
     /// and status reports arrive at most once per assistant message.)
     private func startStatusFeedPolling() {
-        guard statusFeedCancellable == nil else { return }
+        guard statusFeedCancellable == nil, !isClosed else { return }
         statusFeedCancellable = Timer.publish(every: 1, on: .main, in: .common)
             .autoconnect()
             .sink { [weak self] _ in
@@ -1039,7 +1043,7 @@ final class WorkspaceController: ObservableObject {
 
     /// Start the shared 1-second clock that drives all work-timer displays.
     private func startClock() {
-        guard clockCancellable == nil else { return }
+        guard clockCancellable == nil, !isClosed else { return }
         clockCancellable = Timer.publish(every: 1, on: .main, in: .common)
             .autoconnect()
             .sink { [weak self] date in
