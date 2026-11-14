@@ -45,7 +45,7 @@ enum AgentNotes {
             let claimed = dir.appending(path: ".claimed-\(UUID().uuidString)")
             guard (try? fm.moveItem(at: file, to: claimed)) != nil else { continue }
             defer { try? fm.removeItem(at: claimed) }
-            guard let data = try? Data(contentsOf: claimed),
+            guard let data = SandboxFile.read(claimed),
                   var note = try? decoder.decode(AgentNote.self, from: data) else { continue }
             note.message = note.message.trimmingCharacters(in: .whitespacesAndNewlines)
             if let at = note.at, now.timeIntervalSince(at) > staleAfter { continue }
@@ -54,5 +54,28 @@ enum AgentNotes {
         }
         // Names start with the time they were left (ms since 1970).
         return notes.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }.map(\.note)
+    }
+}
+
+extension AgentNotes {
+    /// The most a note (or a status report) may be.
+    static let fileLimit = 64 * 1024
+}
+
+/// Files a sandbox writes into the workspace (notes, status reports, boards).
+enum SandboxFile {
+    /// A small regular file, read without following a link or blocking: the
+    /// folder is the agent's to write, and `Data(contentsOf:)` on a link to
+    /// `/dev/zero` (or a FIFO, or a huge file on the Mac) hung the main thread
+    /// reading it. Anything else is nil.
+    nonisolated static func read(_ url: URL, limit: Int = AgentNotes.fileLimit) -> Data? {
+        let fd = Darwin.open(url.path(percentEncoded: false), O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
+        guard fd >= 0 else { return nil }
+        defer { Darwin.close(fd) }
+        var info = stat()
+        guard fstat(fd, &info) == 0, info.st_mode & S_IFMT == S_IFREG, info.st_size <= limit else { return nil }
+        let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: false)
+        guard let data = try? handle.read(upToCount: limit + 1) else { return Data() }   // nil: empty
+        return data.count <= limit ? data : nil
     }
 }

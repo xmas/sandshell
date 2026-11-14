@@ -112,7 +112,8 @@ struct CanvasBoard: Equatable, Sendable {
 
     static func load(folder: URL) -> Result<CanvasBoard, LoadError> {
         let url = folder.appending(path: fileName)
-        guard let data = try? Data(contentsOf: url) else { return .failure(.missing) }
+        // The agent writes it (a link, a FIFO or a huge file isn't read: it hung the window).
+        guard let data = SandboxFile.read(url, limit: 4 * 1024 * 1024) else { return .failure(.missing) }
         return parse(data, folder: folder)
     }
 

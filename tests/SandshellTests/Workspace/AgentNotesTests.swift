@@ -62,4 +62,28 @@ struct AgentNotesTests {
     @Test func theFolderIsTheWorkspaces() {
         #expect(AgentNotes.directory(root: URL(filePath: "/ws")).path(percentEncoded: false) == "/ws/.sandshell/notify/")
     }
+
+    /// The folder is the sandbox's to write: a link to a device or a file on
+    /// the Mac, a FIFO or a huge file isn't read (it hung the main thread).
+    @Test func onlySmallRegularFilesAreRead() throws {
+        let dir = try folder()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let fm = FileManager.default
+        try fm.createSymbolicLink(at: dir.appending(path: "1-zero.json"), withDestinationURL: URL(filePath: "/dev/zero"))
+        try leave(#"{"message":"real"}"#, as: "2-real.json", in: dir)
+        try fm.createSymbolicLink(at: dir.appending(path: "3-link.json"), withDestinationURL: dir.appending(path: "2-real.json"))
+        #expect(mkfifo(dir.appending(path: "4-fifo.json").path(percentEncoded: false), 0o600) == 0)
+        try Data(count: AgentNotes.fileLimit + 1).write(to: dir.appending(path: "5-huge.json"))
+        let notes = AgentNotes.take(from: dir, now: .now)
+        #expect(notes.map(\.message) == ["real"], "the regular file only")
+        #expect(try fm.contentsOfDirectory(atPath: dir.path).isEmpty, "the rest removed too")
+    }
+
+    @Test func anEmptyFileIsReadAsEmpty() throws {
+        let dir = try folder()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let file = dir.appending(path: "empty.json")
+        try Data().write(to: file)
+        #expect(SandboxFile.read(file) == Data())
+    }
 }

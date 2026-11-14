@@ -278,7 +278,7 @@ final class WorkspaceController: ObservableObject {
         let decoder = JSONDecoder()
         for name in names where name.hasSuffix(".json") {
             guard let id = UUID(uuidString: String(name.dropLast(5))), session(id: id) != nil,
-                  let data = try? Data(contentsOf: dir.appending(path: name)),
+                  let data = SandboxFile.read(dir.appending(path: name)),   // the sandbox writes these
                   let status = try? decoder.decode(ClaudeSessionStatus.self, from: data) else { continue }
             var rt = runtimes[id] ?? SessionRuntime()
             if rt.claudeStatus != status {
