@@ -14,12 +14,28 @@ final class WorkflowWindowController: NSWindowController, NSWindowDelegate {
                      stop: (() async -> Bool)?) {
         let controller = open[run.id] ?? WorkflowWindowController(run, sessionID: sessionID, workspace: workspace, stop: stop)
         open[run.id] = controller
+        // Kept from a workspace window since closed (or another on the folder):
+        // its model followed that window's polls, frozen now. Follow this one's.
+        if !controller.model.follows(workspace) {
+            controller.bind(WorkflowWindowModel(run: run, sessionID: sessionID, workspace: workspace, stop: stop))
+        }
         controller.showWindow(nil)
         controller.window?.makeKeyAndOrderFront(nil)
     }
 
+    private var model: WorkflowWindowModel
+
+    private func bind(_ model: WorkflowWindowModel) {
+        self.model = model
+        guard let window else { return }
+        let frame = window.frame   // a new content controller would size the window to itself
+        window.contentViewController = NSHostingController(rootView: WorkflowRunView(model: model))
+        window.setFrame(frame, display: true)
+    }
+
     private init(_ run: WorkflowRun, sessionID: UUID, workspace: WorkspaceController, stop: (() async -> Bool)?) {
         let model = WorkflowWindowModel(run: run, sessionID: sessionID, workspace: workspace, stop: stop)
+        self.model = model
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 520, height: 640),
                               styleMask: [.titled, .closable, .resizable, .miniaturizable], backing: .buffered, defer: true)
         window.title = run.name
@@ -51,6 +67,9 @@ final class WorkflowWindowModel {
     @ObservationIgnored private weak var workspace: WorkspaceController?
     @ObservationIgnored let stop: (() async -> Bool)?
     @ObservationIgnored private var bag: Set<AnyCancellable> = []
+
+    /// It follows `workspace`'s polls (its own went when its window closed).
+    func follows(_ workspace: WorkspaceController) -> Bool { self.workspace === workspace }
 
     init(run: WorkflowRun, sessionID: UUID, workspace: WorkspaceController, stop: (() async -> Bool)?) {
         self.run = run
