@@ -426,7 +426,7 @@ struct ChatWebTranscriptTests {
               && getComputedStyle(document.querySelector('#chat-pane > .bar')).display === 'none'
             """) == true)
         // Chat commands aren't the transcript's to send.
-        #expect(await web.debugRun("return (await post('cancel', {})).status === 200") != true)
+        #expect(await web.debugRun("return (await tellMac('cancel', {})).status === 200") != true)
     }
 
     /// Copy, Fork and Undo reach the window; a file link opens the file.
@@ -451,7 +451,7 @@ struct ChatWebTranscriptTests {
             _ = await web.debugRun("document.querySelector('.act-undo')?.click(); return true")
             #expect(await until { undone == "turn-1" })
         }
-        _ = await web.debugRun("return (await post('openFile', {path: '/tmp/x.swift', line: 7})).status === 200")
+        _ = await web.debugRun("return (await tellMac('openFile', {path: '/tmp/x.swift', line: 7})).status === 200")
         #expect(await until { opened?.0 == URL(filePath: "/tmp/x.swift") && opened?.1 == 7 })
     }
 
