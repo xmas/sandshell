@@ -276,12 +276,16 @@ function applyPatch(p) {
     const keep = new Set(p.order);
     for (const id of [...state.items.keys()]) if (!keep.has(id)) { state.items.delete(id); state.nodes.get(id)?.remove(); state.nodes.delete(id); }
   }
-  // Put every node in order (cheap: only moves what's out of place).
+  // Put every node in order (cheap: only moves what's out of place). A turn's
+  // artboard strip, after its last item, is stepped over, not displaced: the
+  // next item went in before it, the strip was moved back, and moving it
+  // reloaded its pages on every patch.
   let prev = el.transcript.querySelector(".omitted");
   for (const id of state.order) {
     let node = state.nodes.get(id);
     if (!node) { const item = state.items.get(id); if (!item) continue; node = renderItem(item); state.nodes.set(id, node); }
-    const want = prev ? prev.nextSibling : el.transcript.firstChild;
+    let want = prev ? prev.nextSibling : el.transcript.firstChild;
+    while (want?.classList?.contains("artboard-strip")) want = want.nextSibling;
     if (node !== want) el.transcript.insertBefore(node, want);
     prev = node;
   }
