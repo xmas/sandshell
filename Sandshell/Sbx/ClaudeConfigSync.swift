@@ -187,11 +187,14 @@ enum ClaudeConfigSync {
                           "-a", user, "-w"]
         let pipe = Pipe()
         proc.standardOutput = pipe
-        proc.standardError = Pipe()
+        proc.standardError = FileHandle.nullDevice
         guard (try? proc.run()) != nil else { return nil }
+        // Read first, then wait: waiting first deadlocked on credentials past
+        // the pipe's 64 KB (many MCP sign-ins), and the sandbox's bring-up with it.
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
         proc.waitUntilExit()
         guard proc.terminationStatus == 0 else { return nil }
-        let out = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
+        let out = String(data: data, encoding: .utf8)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return out.flatMap { $0.isEmpty ? nil : $0 }
     }
