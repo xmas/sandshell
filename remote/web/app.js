@@ -35,6 +35,7 @@ const state = {
   rev: null,              // the revision shown (state and patches carry one)
   openGroups: new Set(),  // runs of tool calls opened (by their first call's id)
   openMessages: new Set(), // long messages of yours opened (More)
+  openDetails: new Set(),  // tools and thinking opened: each update rebuilds the item, and they stay open
   resyncing: false,
   listeners: new Set(),   // (event, data) => void, for /check
 };
@@ -87,7 +88,10 @@ function open(id, keep = false) {
     setConn(closed ? "off" : "connecting");
     // Refused (unpaired, or revoked on the Mac): pair. Otherwise try again soon.
     if (closed && state.stream === stream) {
-      checkPaired().then((ok) => { if (ok && state.stream === stream) setTimeout(() => open(state.current), 3000); });
+      checkPaired().then((ok) => {
+        // Still this stream's turn when the wait's over (not a chat opened since).
+        if (ok && state.stream === stream) setTimeout(() => { if (state.stream === stream) open(state.current); }, 3000);
+      });
     }
   };
   for (const name of ["hello", "sessions", "state", "patch", "gone", "alert"]) {
@@ -248,6 +252,7 @@ function resetTranscript() {
   state.omitted = 0;
   el.transcript.replaceChildren();
   el.cards.replaceChildren();
+  delete el.cards.dataset.key;   // emptied: the same card must be drawn again
   renderStatus();
 }
 
@@ -382,6 +387,7 @@ function buildItem(item) {
       body.className = "body";
       body.textContent = item.text || "";
       d.append(s, body);
+      keepOpen(d, item.id);
       div.append(d);
       break;
     }
@@ -459,7 +465,17 @@ function renderTool(item) {
     }
     d.append(body);
   }, { once: false });
+  keepOpen(d, item.id);
   return d;
+}
+
+// A details someone opened stays open through the updates that rebuild its
+// item (a running tool, streaming thinking) — they used to snap shut.
+function keepOpen(d, id) {
+  if (state.openDetails.has(id)) d.open = true;
+  d.addEventListener("toggle", () => {
+    if (d.open) state.openDetails.add(id); else state.openDetails.delete(id);
+  });
 }
 
 function renderDiff(diff) {
@@ -600,14 +616,20 @@ function blocks(text) {
 
 // ---------- Cards: permission and question ----------
 
+// A URL's host, or the URL: one Foundation took but the page's URL won't
+// ("http://") threw, and every state after it.
+function urlHost(url) {
+  try { return new URL(url).host || url; } catch { return url; }
+}
+
 function renderCards() {
   const s = state.status;
+  // Keep a card someone is typing in.
+  const key = JSON.stringify([state.current, s?.permission?.id, s?.question?.id]);
+  if (el.cards.dataset.key === key) return;
   const cards = [];
   if (s?.permission) cards.push(permissionCard(s.permission));
   if (s?.question) cards.push(questionCard(s.question));
-  // Keep a card someone is typing in.
-  const key = JSON.stringify([s?.permission?.id, s?.question?.id]);
-  if (el.cards.dataset.key === key) return;
   el.cards.dataset.key = key;
   el.cards.replaceChildren(...cards);
 }
@@ -643,7 +665,7 @@ function questionCard(q) {
   if (q.url) {
     const a = document.createElement("a");
     a.href = q.url; a.target = "_blank"; a.rel = "noopener noreferrer";
-    a.textContent = "Open " + new URL(q.url).host;
+    a.textContent = "Open " + urlHost(q.url);
     const p = document.createElement("p");
     p.className = "hint";
     p.textContent = "Opens on this device — the agent waits until you say you're done.";
