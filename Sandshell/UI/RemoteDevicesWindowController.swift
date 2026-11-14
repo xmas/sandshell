@@ -31,6 +31,46 @@ final class RemoteDevicesWindowController: NSWindowController {
         showWindow(nil)
         window?.makeKeyAndOrderFront(nil)
     }
+
+    /// The AirDrop being sent. A sharing service has to outlive `perform`: one
+    /// let go straight after leaves its transfer at "Waiting…" and never says
+    /// how it ended.
+    private var airDrop: NSSharingService?
+
+    /// AirDrop the pairing link, from this window's sheet.
+    func airDrop(_ url: URL) {
+        guard let service = NSSharingService(named: .sendViaAirDrop) else {
+            Alerts.inform("AirDrop isn't available", "Turn on AirDrop in Control Center, or scan the code instead.",
+                          style: .warning, in: window)
+            return
+        }
+        guard service.canPerform(withItems: [url]) else {
+            Alerts.inform("Can't AirDrop the link", "Turn on AirDrop in Control Center, or scan the code instead.",
+                          style: .warning, in: window)
+            return
+        }
+        airDrop = service
+        service.delegate = self
+        service.perform(withItems: [url])
+    }
+}
+
+extension RemoteDevicesWindowController: NSSharingServiceDelegate {
+    func sharingService(_ sharingService: NSSharingService, sourceWindowForShareItems items: [Any],
+                        sharingContentScope: UnsafeMutablePointer<NSSharingService.SharingContentScope>) -> NSWindow? {
+        window
+    }
+
+    func sharingService(_ sharingService: NSSharingService, didShareItems items: [Any]) {
+        if airDrop === sharingService { airDrop = nil }
+    }
+
+    func sharingService(_ sharingService: NSSharingService, didFailToShareItems items: [Any], error: any Error) {
+        if airDrop === sharingService { airDrop = nil }
+        let error = error as NSError
+        guard !(error.domain == NSCocoaErrorDomain && error.code == NSUserCancelledError) else { return }
+        Alerts.inform("The link wasn't sent", error.localizedDescription, style: .warning, in: window)
+    }
 }
 
 struct RemoteDevicesView: View {
@@ -153,7 +193,7 @@ struct RemoteDevicesView: View {
             HStack(spacing: 8) {
                 if let link, let url = URL(string: link) {
                     Button("Send with AirDrop") {
-                        NSSharingService(named: .sendViaAirDrop)?.perform(withItems: [url])
+                        RemoteDevicesWindowController.shared.airDrop(url)
                     }
                     .help("AirDrop the one-time pairing link to your iPhone or another Mac")
                 }
