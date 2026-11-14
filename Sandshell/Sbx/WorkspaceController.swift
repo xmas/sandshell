@@ -180,6 +180,10 @@ final class WorkspaceController: ObservableObject {
         // from the next window on it.
         statusFeedCancellable = nil
         clockCancellable = nil
+        // Kit start-up followers held the controller (and ran sbx exec) for up
+        // to 5 minutes after its window closed.
+        kitStartupTasks.values.forEach { $0.cancel() }
+        kitStartupTasks = [:]
         boardWatchers.values.forEach { $0.stop() }
         boardWatchers = [:]
     }

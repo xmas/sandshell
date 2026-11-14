@@ -22,6 +22,7 @@ extension WorkspaceController {
     /// Polls every few seconds until the dispatcher logs completion or aborts.
     func refreshKitStartup(for agent: AgentKind) {
         kitStartupTasks[agent]?.cancel()
+        guard !isClosed else { return }
         let name = containerName(for: agent)
         let kitRefs = kits(for: agent, from: resolvedKits())
         kitStartupTasks[agent] = Task { @MainActor [weak self] in
