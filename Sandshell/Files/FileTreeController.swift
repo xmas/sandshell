@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import Synchronization
 
 /// The Files pane's tree: the session's folder with Finder icons and git
 /// status, live-refreshed as files change. A filter field above it narrows to
@@ -487,7 +488,8 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
             return
         }
         if query.hasPrefix("?") {
-            searchContents(String(query.dropFirst()).trimmingCharacters(in: .whitespaces), in: root)
+            searchContents(String(query.dropFirst()).trimmingCharacters(in: .whitespaces), in: root,
+                           refreshing: keepingSelection)
             return
         }
         if searchGroups != nil {
@@ -510,9 +512,18 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
         }
     }
 
+    /// The content search running, and its `grep` (stopped by the next one).
+    private var contentSearch: (query: String, task: Task<Void, Never>)?
+
     /// `?query`: search file contents (git grep incl. untracked in a repo,
     /// grep otherwise), case-insensitive, fixed string; grouped by file.
-    private func searchContents(_ query: String, in root: URL) {
+    /// Typing waits for a pause, and a new search stops the one before:
+    /// each keystroke, and each refresh while files changed, started another
+    /// whole-tree grep, none stopped. A refresh while one's running lets it be.
+    private func searchContents(_ query: String, in root: URL, refreshing: Bool = false) {
+        if refreshing, contentSearch?.query == query { return }
+        contentSearch?.task.cancel()
+        contentSearch = nil
         filterResults = nil
         searchQuery = query
         movesSinceReload = []   // no files listed to follow
@@ -523,28 +534,43 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
             return
         }
         let inRepo = git.repoRoot != nil
-        Task { [weak self] in
-            let output: String = await Task.detached(priority: .userInitiated) {
-                if inRepo {
-                    return GitStatus.git(["-C", root.path, "grep", "-n", "-z", "-I", "-i", "-F", "--untracked",
-                                          "--no-color", "-e", query, "--", "."]) ?? ""
-                }
-                let p = Process()
-                p.executableURL = URL(filePath: "/usr/bin/grep")
-                p.currentDirectoryURL = root
-                p.arguments = ["-rnIiF", "--null", "--exclude-dir=.git", "--exclude-dir=node_modules", "--exclude-dir=build",
-                               "--exclude-dir=.build", "--exclude-dir=DerivedData", "-e", query, "."]
-                let out = Pipe()
-                p.standardOutput = out
-                p.standardError = FileHandle.nullDevice
-                guard (try? p.run()) != nil else { return "" }
-                let data: Data
-                do { data = try out.fileHandleForReading.readToEnd() ?? Data() }   // nil: no matches
-                catch { p.terminate(); p.waitUntilExit(); return "" }   // unread, grep could block on a full pipe
-                p.waitUntilExit()
-                return String(decoding: data, as: UTF8.self)
-            }.value
-            guard let self, self.filter.stringValue.trimmingCharacters(in: .whitespaces) == "?" + query
+        let task = Task { [weak self] in
+            if !refreshing { try? await Task.sleep(for: .milliseconds(250)) }
+            guard !Task.isCancelled else { return }
+            let running = Mutex<Process?>(nil)
+            let output: String = await withTaskCancellationHandler {
+                await Task.detached(priority: .userInitiated) {
+                    let p = Process()
+                    if inRepo {
+                        p.executableURL = URL(filePath: "/usr/bin/git")
+                        p.environment = ProcessInfo.processInfo.environment.merging(["GIT_OPTIONAL_LOCKS": "0"]) { _, b in b }
+                        p.arguments = ["-C", root.path, "grep", "-n", "-z", "-I", "-i", "-F", "--untracked",
+                                       "--no-color", "-e", query, "--", "."]
+                    } else {
+                        p.executableURL = URL(filePath: "/usr/bin/grep")
+                        p.currentDirectoryURL = root
+                        p.arguments = ["-rnIiF", "--null", "--exclude-dir=.git", "--exclude-dir=node_modules",
+                                       "--exclude-dir=build", "--exclude-dir=.build", "--exclude-dir=DerivedData",
+                                       "-e", query, "."]
+                    }
+                    let out = Pipe()
+                    p.standardOutput = out
+                    p.standardError = FileHandle.nullDevice
+                    guard !Task.isCancelled, (try? p.run()) != nil else { return "" }
+                    running.withLock { $0 = p }
+                    let data: Data
+                    do { data = try out.fileHandleForReading.readToEnd() ?? Data() }   // nil: no matches
+                    catch { p.terminate(); p.waitUntilExit(); return "" }   // unread, grep could block on a full pipe
+                    p.waitUntilExit()
+                    running.withLock { $0 = nil }
+                    return String(decoding: data, as: UTF8.self)
+                }.value
+            } onCancel: {
+                running.withLock { $0?.terminate() }   // its output ends: the read above returns
+            }
+            guard let self, !Task.isCancelled else { return }
+            if self.contentSearch?.query == query { self.contentSearch = nil }
+            guard self.filter.stringValue.trimmingCharacters(in: .whitespaces) == "?" + query
                     || self.filter.stringValue.trimmingCharacters(in: .whitespaces) == "? " + query else { return }
             var groups: [String: SearchGroup] = [:]
             var order: [String] = []
@@ -574,6 +600,7 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
             self.outline.expandItem(nil, expandChildren: true)
             self.updateBranchLabel()
         }
+        contentSearch = (query, task)
     }
 
     /// ↓ from the filter moves into the results; Return opens the first.
