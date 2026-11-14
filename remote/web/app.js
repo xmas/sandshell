@@ -1103,6 +1103,7 @@ async function pair(answer) {
     el.pairError.textContent = body.error || "The Mac said no (" + r.status + ")";
     el.pairCode.select();
   } catch {
+    showPairing();
     el.pairError.textContent = "Couldn’t reach the Mac";
   } finally {
     pairing = false;
@@ -1292,12 +1293,12 @@ function buildStrip(paths) {
   const title = span("title", "Board");
   const count = span("count", "");
   const show = actionButton("show", "Show Board ›", "Show the board beside this chat");
-  show.addEventListener("click", () => post("showArtboard", {}));
+  show.addEventListener("click", () => tellMac("showArtboard", {}));
   head.append(mark, title, count, show);
   const frames = document.createElement("div");
   frames.className = "frames";
   box.append(head, frames);
-  post("artboards", { paths }).then((r) => {
+  tellMac("artboards", { paths }).then((r) => {
     let list = [];
     try { list = JSON.parse(r.body).artboards || []; } catch { return; }
     if (!list.length) return;
@@ -1331,11 +1332,13 @@ function artboardFrame(a) {
   page.style.transform = "scale(" + scale + ")";
   view.append(page);
   b.append(view, span("name", a.title));
-  b.addEventListener("click", () => post("showArtboard", { id: a.id }));
+  b.addEventListener("click", () => tellMac("showArtboard", { id: a.id }));
   return b;
 }
 
-function post(name, fields) {
+// The Mac's own window (WKWebView): a message to it. Not `post`, the HTTP one:
+// a second top-level function of one name replaces the first everywhere.
+function tellMac(name, fields) {
   return native.postMessage({ name, body: JSON.stringify(fields ?? {}) });
 }
 
@@ -1398,7 +1401,7 @@ async function askFileLinks(id) {
   fileLinks.asked.set(id, text);
   const code = [...node.querySelectorAll("code")].filter((c) => !c.closest("pre")).map((c) => c.textContent);
   let links;
-  try { links = JSON.parse((await post("fileLinks", { text, code })).body).links || []; } catch { return; }
+  try { links = JSON.parse((await tellMac("fileLinks", { text, code })).body).links || []; } catch { return; }
   fileLinks.byItem.set(id, links);
   const now = state.nodes.get(id);
   if (now && links.length) wrapFileLinks(now, links);
@@ -1451,21 +1454,21 @@ function onTranscriptClick(e) {
   const item = node && state.items.get(node.dataset.id);
   if (target.matches("a.file")) {
     e.preventDefault();
-    post("openFile", { path: target.dataset.path, line: target.dataset.line ? +target.dataset.line : null });
+    tellMac("openFile", { path: target.dataset.path, line: target.dataset.line ? +target.dataset.line : null });
   } else if (target.matches("a[href]")) {
     e.preventDefault();
-    post("openURL", { url: target.href });
+    tellMac("openURL", { url: target.href });
   } else if (target.matches(".act-copy") && item) {
     const html = shownText(node);
-    post("copy", { text: item.text || "", html: item.kind === "text" ? html.innerHTML : "" });
+    tellMac("copy", { text: item.text || "", html: item.kind === "text" ? html.innerHTML : "" });
     copied(target);
   } else if (target.matches(".act-fork") && item) {
-    post("fork", { text: item.text || "" });
+    tellMac("fork", { text: item.text || "" });
   } else if (target.matches(".copy-code")) {
-    post("copy", { text: target.parentElement.querySelector("pre").textContent });
+    tellMac("copy", { text: target.parentElement.querySelector("pre").textContent });
     copied(target);
   } else if (target.matches(".act-undo")) {
-    post("undo", { turn: target.dataset.turn });
+    tellMac("undo", { turn: target.dataset.turn });
   }
 }
 
@@ -1532,10 +1535,10 @@ function setUpTranscript() {
 (async () => {
   if (transcriptOnly) setUpTranscript();
   if (native) { route(); return; }
-  // A pairing link (QR code, AirDrop): /pair#<secret>.
-  if (location.pathname === "/pair" && location.hash.length > 1) {
+  // A pairing link (QR code, AirDrop): /#<secret> (/pair#<secret> before 0.2.63).
+  if ((location.pathname === "/" || location.pathname === "/pair") && location.hash.length > 1) {
     const secret = decodeURIComponent(location.hash.slice(1));
-    history.replaceState(null, "", "/pair");   // don't keep the secret in history
+    history.replaceState(null, "", "/");   // the address, and no secret in history
     el.pairName.value = deviceName();
     await pair({ secret });
     return;

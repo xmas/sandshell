@@ -58,7 +58,7 @@ gets a revocable token (an HttpOnly cookie). A hosted relay and public tunnels
   device's open streams.
 - **Pairing** (`RemotePairing`): Remote Control Devices… (or the popover's
   Pair a Device…) opens a 5-minute, one-device offer: a 6-digit code to type,
-  and a link — `/pair#<secret>`, the secret in the fragment so it never
+  and a link — the address with `#<secret>` (`/pair#<secret>` still works), the secret in the fragment so it never
   reaches logs or history — as a QR code or by AirDrop. Five wrong codes end it.
 - **Home network** (the popover's switch, `remoteHomeNetwork`): the server
   listens beyond loopback, advertises `_sandshell._tcp` (once macOS's Local

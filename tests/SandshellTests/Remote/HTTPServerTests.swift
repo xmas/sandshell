@@ -112,3 +112,30 @@ struct RemoteRoutesTests {
         #expect(r.status == 404)
     }
 }
+
+/// The web client's source (`remote/web/app.js`, no build step to catch this).
+struct RemoteWebPageTests {
+    private static let appJS = URL(filePath: #filePath)
+        .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        .appending(path: "remote/web/app.js")
+
+    /// A second top-level function of one name silently replaces the first
+    /// everywhere: the Mac window's `post` once took over the HTTP one, and no
+    /// device could pair or send.
+    @Test func eachTopLevelFunctionIsDeclaredOnce() throws {
+        let source = try String(contentsOf: Self.appJS, encoding: .utf8)
+        let names = source.split(separator: "\n").compactMap { line in
+            line.firstMatch(of: /^(?:async\s+)?function\*?\s+([A-Za-z_$][\w$]*)/).map { String($0.1) }
+        }
+        #expect(names.count > 20, "read the page's functions")
+        let repeated = Dictionary(grouping: names, by: { $0 }).filter { $0.value.count > 1 }.keys.sorted()
+        #expect(repeated.isEmpty, "declared more than once: \(repeated)")
+    }
+
+    /// The HTTP `post` is the only one: the Mac window's messages go by `tellMac`.
+    @Test func postIsTheHTTPOne() throws {
+        let source = try String(contentsOf: Self.appJS, encoding: .utf8)
+        #expect(source.contains("function post(url, body) {\n  return fetch(url"))
+        #expect(!source.contains("function post(name"))
+    }
+}

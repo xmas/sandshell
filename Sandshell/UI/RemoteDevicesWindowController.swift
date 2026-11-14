@@ -165,7 +165,8 @@ struct RemoteDevicesView: View {
     }
 
     private func offerView(_ offer: RemotePairing.Offer, now: Date) -> some View {
-        let link = pairBase.map { $0.appending(path: "pair").absoluteString + "#" + offer.secret }
+        // The address itself, the secret after `#` (it never reaches the server).
+        let link = pairBase.map { $0.absoluteString + "#" + offer.secret }
         let left = max(0, Int(offer.expires.timeIntervalSince(now)))
         return VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top, spacing: 16) {
