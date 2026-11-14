@@ -110,6 +110,20 @@ final class HTTPServer {
 
     private var listener: NWListener?
     private var streams: [ObjectIdentifier: EventStream] = [:]
+    /// Connections whose request hasn't all arrived: dropped after `idleLimit`
+    /// without a byte (a device that opens one and sends nothing, or stops
+    /// halfway, held it open forever), and by `stop()`.
+    private var pending: [ObjectIdentifier: Pending] = [:]
+    var idleLimit: TimeInterval = 20
+
+    /// One connection's request so far (a class: appending to a captured
+    /// `Data` copied the whole of it on every chunk).
+    @MainActor private final class Pending {
+        let connection: NWConnection
+        var buffer = Data()
+        var idle: DispatchWorkItem?
+        init(_ connection: NWConnection) { self.connection = connection }
+    }
     private var pingTimer: Timer?
     private let handler: (Request) -> Reply
     /// Accept connections only from this Mac.
@@ -187,6 +201,8 @@ final class HTTPServer {
         port = nil
         for stream in streams.values { stream.close() }
         streams = [:]
+        for request in pending.values { request.idle?.cancel(); request.connection.cancel() }
+        pending = [:]
     }
 
     // MARK: Connections
@@ -200,27 +216,53 @@ final class HTTPServer {
             return
         }
         connection.start(queue: .main)
-        receive(connection, peer: peer, local: local, buffer: Data())
+        let request = Pending(connection)
+        pending[ObjectIdentifier(request)] = request
+        receive(request, peer: peer, local: local)
     }
 
-    private func receive(_ connection: NWConnection, peer: String, local: Bool, buffer: Data) {
-        connection.receive(minimumIncompleteLength: 1, maximumLength: 256 * 1024) { [weak self] data, _, isComplete, error in
+    private func receive(_ request: Pending, peer: String, local: Bool) {
+        waitForMore(request)
+        request.connection.receive(minimumIncompleteLength: 1, maximumLength: 256 * 1024) { [weak self] data, _, isComplete, error in
             MainActor.assumeIsolated {
-                guard let self else { return connection.cancel() }
-                var buffer = buffer
-                if let data { buffer.append(data) }
-                switch Self.parse(buffer, peer: peer, peerIsLoopback: local) {
+                guard let self, self.pending[ObjectIdentifier(request)] != nil else { return request.connection.cancel() }
+                if let data { request.buffer.append(data) }
+                switch Self.parse(request.buffer, peer: peer, peerIsLoopback: local) {
                 case .incomplete where isComplete || error != nil:
-                    connection.cancel()
+                    self.drop(request)
+                    request.connection.cancel()
                 case .incomplete:
-                    self.receive(connection, peer: peer, local: local, buffer: buffer)
+                    self.receive(request, peer: peer, local: local)
                 case .invalid(let status):
-                    self.respond(connection, .error(status, "Bad request"))
-                case .request(let request):
-                    self.handle(request, on: connection)
+                    self.drop(request)
+                    self.respond(request.connection, .error(status, "Bad request"))
+                case .request(let parsed):
+                    self.drop(request)
+                    self.handle(parsed, on: request.connection)
                 }
             }
         }
+    }
+
+    /// (Re)start the request's idle clock: each chunk that arrives restarts it.
+    private func waitForMore(_ request: Pending) {
+        request.idle?.cancel()
+        let idle = DispatchWorkItem { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, self.pending[ObjectIdentifier(request)] != nil else { return }
+                self.drop(request)
+                request.connection.cancel()
+            }
+        }
+        request.idle = idle
+        DispatchQueue.main.asyncAfter(deadline: .now() + idleLimit, execute: idle)
+    }
+
+    /// The request's in (or given up on): no more clock, not pending.
+    private func drop(_ request: Pending) {
+        request.idle?.cancel()
+        request.idle = nil
+        pending[ObjectIdentifier(request)] = nil
     }
 
     private func handle(_ request: Request, on connection: NWConnection) {

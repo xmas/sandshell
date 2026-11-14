@@ -139,3 +139,73 @@ struct RemoteWebPageTests {
         #expect(!source.contains("function post(name"))
     }
 }
+
+/// A live server on loopback: what happens to a connection that sends nothing.
+@MainActor
+struct HTTPServerConnectionTests {
+    /// Connect, send `text` (if any), and read until the server hangs up.
+    private func exchange(port: UInt16, sending text: String?, within seconds: Double = 5) async -> (closed: Bool, reply: String) {
+        let connection = NWConnection(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: port)!, using: .tcp)
+        connection.start(queue: .main)
+        if let text { connection.send(content: Data(text.utf8), completion: .contentProcessed { _ in }) }
+        return await withCheckedContinuation { cont in
+            nonisolated(unsafe) var reply = Data()
+            nonisolated(unsafe) var done = false
+            func finish(_ closed: Bool) {
+                guard !done else { return }
+                done = true
+                connection.cancel()
+                cont.resume(returning: (closed, String(decoding: reply, as: UTF8.self)))
+            }
+            func read() {
+                connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { data, _, isComplete, error in
+                    if let data { reply.append(data) }
+                    if isComplete || error != nil { finish(true) } else { read() }
+                }
+            }
+            read()
+            DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { finish(false) }
+        }
+    }
+
+    private func server() async throws -> (HTTPServer, UInt16) {
+        let server = HTTPServer(loopbackOnly: true) { _ in .response(.text("hi", status: 200)) }
+        server.idleLimit = 0.3
+        return (server, try await server.start(port: 0))
+    }
+
+    @Test func aConnectionThatSendsNothingIsDropped() async throws {
+        let (server, port) = try await server()
+        defer { server.stop() }
+        let result = await exchange(port: port, sending: nil)
+        #expect(result.closed, "the server hung up on an idle connection")
+        #expect(result.reply.isEmpty)
+    }
+
+    @Test func aRequestThatStopsHalfwayIsDropped() async throws {
+        let (server, port) = try await server()
+        defer { server.stop() }
+        let result = await exchange(port: port, sending: "POST /x HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 100\r\n\r\nabc")
+        #expect(result.closed)
+        #expect(result.reply.isEmpty, "no reply to half a request")
+    }
+
+    @Test func aWholeRequestIsAnswered() async throws {
+        let (server, port) = try await server()
+        defer { server.stop() }
+        let result = await exchange(port: port, sending: "GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+        #expect(result.closed)
+        #expect(result.reply.hasPrefix("HTTP/1.1 200"))
+        #expect(result.reply.hasSuffix("hi"))
+    }
+
+    @Test func stopHangsUpOnARequestStillArriving() async throws {
+        let (server, port) = try await server()
+        server.idleLimit = 60
+        let pending = Task { await exchange(port: port, sending: "GET / HTTP/1.1\r\n") }
+        try await Task.sleep(for: .milliseconds(300))
+        server.stop()
+        let result = await pending.value
+        #expect(result.closed, "stop() cancels a connection mid-request")
+    }
+}
