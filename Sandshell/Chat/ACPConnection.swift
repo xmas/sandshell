@@ -40,6 +40,13 @@ final class ACPConnection: @unchecked Sendable {
     private var isClosed = false
     /// The process has exited (its pipes may still be held open by another).
     private var hasExited = false
+    /// Writes to the agent's stdin, in order, off the caller's thread: a
+    /// prompt with pasted images is megabytes, and a blocking write on the
+    /// main thread, under `lock`, beachballed the app while sbx exec relayed it
+    /// (for good if it stalled), and kept the reader from resolving anything.
+    private let writer = DispatchQueue(label: "ACPConnection.stdin")
+    /// stdin closed (only touched on `writer`).
+    nonisolated(unsafe) private var stdinClosed = false
 
     init(executable: String, arguments: [String]) {
         (incoming, yield) = AsyncStream.makeStream(of: Incoming.self)
@@ -70,7 +77,7 @@ final class ACPConnection: @unchecked Sendable {
         // this `sbx exec`) can hold the pipe open for good, and waiting for
         // EOF left the chat never hearing its agent had gone.
         let stderrDone = DispatchSemaphore(value: 0)
-        let exited = { [weak self] () -> Bool in
+        let exited: @Sendable () -> Bool = { [weak self] in
             guard let self else { return true }
             self.lock.lock(); defer { self.lock.unlock() }
             return self.hasExited
@@ -125,7 +132,12 @@ final class ACPConnection: @unchecked Sendable {
     }
 
     func terminate() {
-        try? stdinPipe.fileHandleForWriting.close()
+        // Closed after what's queued is written (and never under a write):
+        // ending the process unblocks one stuck on a full pipe.
+        writer.async { [self] in
+            stdinClosed = true
+            try? stdinPipe.fileHandleForWriting.close()
+        }
         if process.isRunning { process.terminate() }
     }
 
@@ -134,9 +146,15 @@ final class ACPConnection: @unchecked Sendable {
     private func write(_ message: JSONValue) {
         guard var data = try? JSONEncoder().encode(message) else { return }
         data.append(0x0A)
-        lock.lock(); defer { lock.unlock() }
-        guard !isClosed else { return }
-        try? stdinPipe.fileHandleForWriting.write(contentsOf: data)
+        lock.lock()
+        let closed = isClosed
+        lock.unlock()
+        guard !closed else { return }
+        let line = data
+        writer.async { [self] in
+            guard !stdinClosed else { return }
+            try? stdinPipe.fileHandleForWriting.write(contentsOf: line)
+        }
     }
 
     private func handleLine(_ line: Data) {
