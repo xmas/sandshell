@@ -11,6 +11,9 @@ final class SandboxInspectWindowController: NSWindowController, NSWindowDelegate
     static func show(sandbox: String, agent: AgentKind, workspace: WorkspaceController, near parent: NSWindow?) {
         let controller = open[sandbox] ?? SandboxInspectWindowController(sandbox: sandbox, agent: agent, workspace: workspace)
         open[sandbox] = controller
+        // The window may outlive the workspace window that opened it (its
+        // workspace weak, gone): Keep as Kit and Rebuild act on this one.
+        controller.model.workspace = workspace
         if let parent, controller.window?.isVisible != true, let window = controller.window {
             window.setFrameTopLeftPoint(NSPoint(x: parent.frame.midX - window.frame.width / 2, y: parent.frame.maxY - 60))
         }
@@ -50,7 +53,7 @@ final class SandboxInspectWindowController: NSWindowController, NSWindowDelegate
 final class SandboxInspectModel: ObservableObject {
     let sandbox: String
     let agent: AgentKind
-    private weak var workspace: WorkspaceController?
+    weak var workspace: WorkspaceController?
 
     @Published private(set) var details: SandboxInspection?
     @Published private(set) var changes: SandboxChanges?
