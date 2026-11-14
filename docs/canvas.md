@@ -61,8 +61,8 @@ don't read: their `CLAUDE_CONFIG_DIR` is the host's). `/sandshell:canvas`
 starts a board from the chat. A link to a board's file in a reply opens the
 board beside the chat.
 
-Any session can have a board: the composer's **Design** chip (or Open
-Designer in the row's menu and the pane's ⋯) makes one the first time. A chat
+Any session can have a board: the **Design** button in its pane's strip (or
+Open Designer in the row's menu and the pane's ⋯) makes one the first time. A chat
 already running is told with your next message (`ChatSession.noteBoard`); a
 design session and a relaunched chat at launch. Terminal sessions get the
 board but no word to the agent.
@@ -78,13 +78,15 @@ picked from its row's Board Color menu). Designs from
   it pulses while the agent draws — a write to the board moments ago, or
   during the turn still running (`WorkspaceController.drawingSessions`, a
   `FileWatcher` per board). Hovering the row shows **Board ↗**.
-- **Panes**: its pane's strip and its board's take the color (a band along
-  the top, a wash). Side by side, tops level, they're a pair
+- **Panes**: its pane's strip and its board's carry its mark (the badge; the
+  board's palette). Side by side, tops level, they're a pair, their strips
+  one slight shade
   (`PaneTreeController.designPairs`): a link knob sits on their seam, pulsing
   with a light running down it while the agent draws (`DesignSeamView`); the
   board's ✕ closes both (the chat's goes), or puts the board away when
   they're the only panes.
-- **Design chip**: once a chat is a design it stays one; the chip then shows
+- **Design button** (the strip, left of Chat | Terminal): once a session is
+  a design it stays one; the button then shows
   the board beside it or puts it away (`Session.boardHidden`: selecting the
   chat doesn't bring it back). Closing a design's board on its own puts it
   away too.

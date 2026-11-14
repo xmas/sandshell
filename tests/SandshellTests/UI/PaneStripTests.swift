@@ -197,3 +197,23 @@ struct DesignSeamTests {
         #expect(PaneTreeController.seam(between: chat, and: board) == nil)
     }
 }
+
+/// The strip's Design button: none on a board's pane; grey until the
+/// session is a design; then its color, held while the board shows.
+@MainActor
+struct DesignToggleTests {
+    @Test func saysWhereTheBoardIs() {
+        let strip = PaneStripView()
+        #expect(strip.designButton.isHidden, "no session, no button")
+        strip.designToggle = .off
+        #expect(!strip.designButton.isHidden)
+        #expect(strip.designButton.accessibilityValue() as? String == "off")
+        strip.designToggle = .on(DesignColor.teal.color, shown: true)
+        #expect(strip.designButton.accessibilityValue() as? String == "board shown")
+        #expect(strip.designButton.contentTintColor == DesignColor.teal.color)
+        strip.designToggle = .on(DesignColor.teal.color, shown: false)
+        #expect(strip.designButton.accessibilityValue() as? String == "board put away")
+        strip.designToggle = nil
+        #expect(strip.designButton.isHidden)
+    }
+}

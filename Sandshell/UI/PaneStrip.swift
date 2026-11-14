@@ -42,6 +42,11 @@ extension ThemeColors {
     }
     /// The focused pane's strip.
     var stripFill: NSColor { termMix(termIsDark ? 0.06 : 0.04) }
+    /// A design pair's two strips (and the knob on their seam): `fill` a
+    /// touch darker, or lighter in the dark.
+    func stripPairShade(of fill: NSColor) -> NSColor {
+        fill.blended(withFraction: termIsDark ? 0.05 : 0.035, of: termIsDark ? .white : .black) ?? fill
+    }
     var stripCrumb: NSColor { termMix(0.7) }
     var stripName: NSColor { termText }
     var stripSeparator: NSColor { termMix(0.38) }
@@ -94,6 +99,8 @@ final class PaneStripView: NSView {
     var onBoardWindow: (() -> Void)?
     /// A session's Open Designer (its board).
     var onShowBoard: (() -> Void)?
+    /// The Design button: turn design on, then show or put away the board.
+    var onToggleDesign: (() -> Void)?
     /// The window's sidebar and Files toggles, on the strips at its corners.
     var onToggleSidebar: (() -> Void)?
     var onToggleFiles: (() -> Void)?
@@ -114,11 +121,11 @@ final class PaneStripView: NSView {
     /// and Files' (top-right strip).
     private let sidebarButton = StripIconButton()
     private let filesButton = StripIconButton()
+    /// Design: a board beside the session, then show it or put it away.
+    let designButton = StripIconButton()
     /// A design session's mark (chat side), or its board's palette.
     private let designBadge = AgentBadgeView(side: 18, fontSize: 8, radius: 5)
     private let boardGlyph = NSImageView()
-    /// The design color's band along the strip's top.
-    private let designLine = CALayer()
     /// Remote Control's state (nil: not a chat).
     private(set) var remoteState: Bool?
     /// The session's Stop / Restart (nil: none — no session, or a chat's,
@@ -166,9 +173,9 @@ final class PaneStripView: NSView {
         didSet { if showsBoardWindowButton != oldValue { boardWindowButton.isHidden = !showsBoardWindowButton; needsLayout = true } }
     }
 
-    /// A design session's pane, or its board's: the strip takes the session's
-    /// color — a band along its top, a wash of it — and a mark before the
-    /// name. Side by side, the two strips read as one.
+    /// A design session's pane, or its board's: a mark before the name in
+    /// the session's color (its badge; the board's palette). Side by side
+    /// (`seamSide`), the two strips share a slight shade and read as one.
     enum Design: Equatable {
         case chat(NSColor, AgentKind)
         case board(NSColor)
@@ -179,7 +186,16 @@ final class PaneStripView: NSView {
     /// The edge where a design pair's seam (and its link knob) meets this
     /// strip: the controls or the mark keep clear of it.
     enum SeamSide { case leading, trailing }
-    var seamSide: SeamSide? { didSet { if seamSide != oldValue { needsLayout = true } } }
+    var seamSide: SeamSide? { didSet { if seamSide != oldValue { needsLayout = true; updateEmphasis() } } }
+
+    /// The Design button's state (nil: no button — a board's pane, or no session).
+    enum DesignToggle: Equatable {
+        /// Not a design yet.
+        case off
+        /// A design, in its color; its board showing, or put away.
+        case on(NSColor, shown: Bool)
+    }
+    var designToggle: DesignToggle? { didSet { if designToggle != oldValue { restyleDesignToggle() } } }
     /// Room the seam's knob takes from the strip's edge, past the usual padding.
     static let seamRoom: CGFloat = 16
 
@@ -204,6 +220,7 @@ final class PaneStripView: NSView {
             (closeButton, "xmark", "Close Pane (⌥⌘W)", #selector(closeClicked), "pane-close"),
             (boardWindowButton, "arrow.up.left.and.arrow.down.right", "Open in Full Screen Window",
              #selector(boardWindowClicked), "pane-board-window"),
+            (designButton, "paintpalette", "Design", #selector(designClicked), "pane-design"),
             (sidebarButton, "sidebar.left", "Show Sidebar (⌃⌘S)", #selector(sidebarClicked), "window-show-sidebar"),
             (filesButton, "sidebar.right", "Show or Hide Files (⇧⌥⌘0)", #selector(filesClicked), "window-files"),
         ] {
@@ -213,6 +230,8 @@ final class PaneStripView: NSView {
         }
         closeButton.isHidden = true
         boardWindowButton.isHidden = true
+        designButton.isHidden = true
+        designButton.setAccessibilityLabel("Design")
         sidebarButton.isHidden = true
         filesButton.isHidden = true
         content.addSubview(remoteButton)
@@ -222,9 +241,7 @@ final class PaneStripView: NSView {
             .withSymbolConfiguration(.init(pointSize: Self.controlSymbol, weight: .medium))
         boardGlyph.imageScaling = .scaleProportionallyUpOrDown
         for v in [designBadge, boardGlyph] as [NSView] { v.isHidden = true; content.addSubview(v) }
-        designLine.zPosition = 10
-        designLine.isHidden = true
-        layer?.addSublayer(designLine)
+
         restyleRemote()
         // Commits and edits happen behind our back: re-read the branch now and then.
         gitTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
@@ -344,8 +361,6 @@ final class PaneStripView: NSView {
         case nil:
             break
         }
-        designLine.isHidden = design == nil
-        designLine.backgroundColor = design?.color.cgColor
         restyleName()
         updateEmphasis()
         needsLayout = true
@@ -368,10 +383,11 @@ final class PaneStripView: NSView {
             crumb.hoverColor = c.stripHover
         }
         branchCrumb.restingColor = c.stripTrack
-        for b in [moreButton, closeButton, remoteButton, boardWindowButton, sidebarButton, filesButton] {
+        for b in [moreButton, closeButton, remoteButton, boardWindowButton, designButton, sidebarButton, filesButton] {
             b.contentTintColor = c.stripCrumb
             b.hoverColor = c.stripHover
         }
+        restyleDesignToggle()
         restyleRemote()
         restyleFiles()
         viewSwitch.applyTheme(c)
@@ -382,7 +398,8 @@ final class PaneStripView: NSView {
 
     private func updateEmphasis() {
         let fill = isFocusedPane ? colors.stripFill : colors.termBg
-        layer?.backgroundColor = (design.flatMap { fill.blended(withFraction: 0.1, of: $0.color) } ?? fill).cgColor
+        // A pair's two strips: one slight shade, a touch off the rest.
+        layer?.backgroundColor = (seamSide == nil ? fill : colors.stripPairShade(of: fill)).cgColor
         content.alphaValue = dimsUnfocused && !isFocusedPane && !hovering ? 0.4 : 1
     }
 
@@ -427,6 +444,11 @@ final class PaneStripView: NSView {
             viewSwitch.frame = NSRect(origin: NSPoint(x: x, y: ((height - ViewModeSwitch.size.height) / 2).rounded()),
                                       size: ViewModeSwitch.size)
         }
+        // Design, left of Chat | Terminal.
+        if !designButton.isHidden {
+            x -= 6 + Self.controlSize
+            designButton.frame = NSRect(x: x, y: y, width: Self.controlSize, height: Self.controlSize)
+        }
 
         // The traffic lights and the sidebar's toggle, at the window's top-left.
         var leading = Self.sidePadding + (seamSide == .leading ? Self.seamRoom : 0)
@@ -435,7 +457,6 @@ final class PaneStripView: NSView {
             leading = Self.trafficLightsWidth + Self.controlSize + 6
         }
         // A design's mark, before the name.
-        designLine.frame = NSRect(x: 0, y: height - 3, width: width, height: 3)
         let mark: NSView? = design == nil ? nil : designBadge.isHidden ? boardGlyph as NSView : designBadge as NSView
         if let mark {
             let side: CGFloat = mark === designBadge ? 18 : 15
@@ -483,6 +504,26 @@ final class PaneStripView: NSView {
     @objc private func closeClicked() { onClose?() }
     @objc private func remoteClicked() { onRemote?(remoteButton) }
     @objc private func boardWindowClicked() { onBoardWindow?() }
+    @objc private func designClicked() { onToggleDesign?() }
+
+    /// Design: the strip's grey until the session is a design; then its
+    /// color, held (a faint fill of it) while the board shows.
+    private func restyleDesignToggle() {
+        let hidden = designToggle == nil
+        if designButton.isHidden != hidden { designButton.isHidden = hidden; needsLayout = true }
+        switch designToggle {
+        case .on(let color, let shown)?:
+            designButton.contentTintColor = color
+            designButton.restingColor = shown ? color.withAlphaComponent(0.16) : nil
+            designButton.toolTip = shown ? "Put the Board Away" : "Show the Board"
+            designButton.setAccessibilityValue(shown ? "board shown" : "board put away")
+        default:
+            designButton.contentTintColor = colors.stripCrumb
+            designButton.restingColor = nil
+            designButton.toolTip = "Design: Claude draws on a board beside this session"
+            designButton.setAccessibilityValue("off")
+        }
+    }
     @objc private func sidebarClicked() { onToggleSidebar?() }
     @objc private func filesClicked() { onToggleFiles?() }
 
@@ -777,6 +818,8 @@ final class StripCrumb: NSView {
 @MainActor
 final class StripIconButton: NSButton {
     var hoverColor: NSColor = .clear
+    /// Its fill while the pointer's away (a toggle held on); nil: none.
+    var restingColor: NSColor? { didSet { updateHover() } }
     private var hovering = false { didSet { updateHover() } }
 
     override init(frame: NSRect) {
@@ -801,7 +844,7 @@ final class StripIconButton: NSButton {
 
     override func mouseEntered(with event: NSEvent) { hovering = isEnabled }
     override func mouseExited(with event: NSEvent) { hovering = false }
-    private func updateHover() { layer?.backgroundColor = hovering ? hoverColor.cgColor : nil }
+    private func updateHover() { layer?.backgroundColor = hovering ? hoverColor.cgColor : restingColor?.cgColor }
 }
 
 /// Chat | Terminal: two 26×20 segments on a track, the selected one raised.

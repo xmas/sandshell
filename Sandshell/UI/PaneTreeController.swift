@@ -809,7 +809,7 @@ final class PaneTreeController: NSViewController, NSSplitViewDelegate {
             }()
             seam.frame = NSRect(x: (at.x - DesignSeamView.width / 2).rounded(), y: at.bottom,
                                 width: DesignSeamView.width, height: at.top - at.bottom)
-            seam.base = controller.theme.colors.stripFill
+            seam.base = controller.theme.colors.stripPairShade(of: controller.theme.colors.stripFill)
             seam.color = pair.color
             seam.isDrawing = controller.drawingSessions.contains(pair.session)
             seam.needsLayout = true
@@ -1088,8 +1088,8 @@ final class DesignSeamView: NSView {
     }
 
     private func restyle() {
-        knob.layer?.backgroundColor = base.blended(withFraction: 0.1, of: color)?.cgColor
-        knob.layer?.borderColor = color.withAlphaComponent(0.6).cgColor
+        knob.layer?.backgroundColor = base.cgColor
+        knob.layer?.borderColor = NSColor.separatorColor.cgColor
         icon.contentTintColor = color
         ring.strokeColor = color.cgColor
         flow.colors = [NSColor.clear.cgColor, color.cgColor, NSColor.clear.cgColor]

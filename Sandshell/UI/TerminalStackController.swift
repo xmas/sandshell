@@ -550,7 +550,7 @@ final class TerminalStackController: NSViewController {
 
     /// The title strip's Show Board, for this session.
     var onShowBoard: ((UUID) -> Void)?
-    /// The composer's Design chip: turn design on, then show or put away the board.
+    /// The strip's Design button: turn design on, then show or put away the board.
     var onToggleBoard: ((UUID) -> Void)?
     /// A board in the transcript's artboard strip was clicked: show it, on that artboard.
     var onShowArtboard: ((URL, String?) -> Void)?
@@ -563,22 +563,25 @@ final class TerminalStackController: NSViewController {
         set { titleStrip.seamSide = newValue }
     }
 
-    /// A design session's color on the strip (its chat's pane, or its
-    /// board's), Close on the board's side of a pair, and the chat's Design
-    /// chip and artboard strip.
+    /// A design session's mark on the strip (its pane, or its board's), the
+    /// strip's Design button, Close on the board's side of a pair, and the
+    /// chat's artboard strip.
     func updateDesign() {
         guard isViewLoaded else { return }
         var design: PaneStripView.Design?
+        var toggle: PaneStripView.DesignToggle?
         if let board = shownBoard {
             if let id = controller.designSession(forBoard: board), let tint = controller.session(id: id)?.designTint {
                 design = .board(tint.color)
             }
         } else if let id = shownSession, let session = controller.session(id: id) {
             if let tint = session.designTint { design = .chat(tint.color, session.agent) }
-            chats[id]?.setDesign(session.designTint.map { .on($0.color, shown: !session.boardHidden) } ?? .off,
-                                 board: session.boardHidden ? controller.boardFolder(of: session) : nil)
+            toggle = session.designTint.map { .on($0.color, shown: !session.boardHidden) } ?? .off
+            chats[id]?.setArtboardStrip(color: session.designTint?.color,
+                                        board: session.boardHidden ? controller.boardFolder(of: session) : nil)
         }
         titleStrip.design = design
+        titleStrip.designToggle = toggle
         titleStrip.canClose = showsFocusRing && !(isInDesignPair && shownBoard == nil)
     }
     /// The sidebar's "+ New Session" menu (an empty pane's New Session).
@@ -894,6 +897,9 @@ final class TerminalStackController: NSViewController {
         titleStrip.onClose = { [weak self] in self?.onClosePane?() }
         titleStrip.onToggleSidebar = { [weak self] in self?.onToggleSidebar?() }
         titleStrip.onToggleFiles = { [weak self] in self?.onToggleFiles?() }
+        titleStrip.onToggleDesign = { [weak self] in
+            if let id = self?.shownSession, self?.shownBoard == nil { self?.onToggleBoard?(id) }
+        }
         titleStrip.onShowBoard = { [weak self] in
             if let id = self?.activeSessionID { self?.onShowBoard?(id) }
         }
@@ -1787,7 +1793,6 @@ final class TerminalStackController: NSViewController {
             view.onOpenFile = { [weak surfaces = self.surfaces] url, line in
                 surfaces?.paneShowing(id)?.onOpenFileInFiles?(url, line)
             }
-            view.onDesign = { [weak surfaces = self.surfaces] in surfaces?.paneShowing(id)?.onToggleBoard?(id) }
             view.onShowArtboard = { [weak surfaces = self.surfaces] board, artboard in
                 surfaces?.paneShowing(id)?.onShowArtboard?(board, artboard)
             }
