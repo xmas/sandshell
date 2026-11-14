@@ -53,6 +53,13 @@ final class BackgroundTaskMonitor {
     /// `isAlive`/`isVisible` ask) may be gone by then.
     private func tick() async {
         let home = controller.home
+        // Closed sessions: their tasks ended with them (and their parsers go).
+        let open = Set(controller.orderedSessions.map(\.id))
+        for id in watches.keys where !open.contains(id) {
+            guard var watch = watches.removeValue(forKey: id) else { continue }
+            watch.parser.endAll()
+            controller.setBackgroundTasks(id, watch.parser.tasks)
+        }
         for session in controller.orderedSessions where session.agent == .claude {
             let id = session.id
             guard isAlive(id) else {

@@ -68,6 +68,9 @@ private final class TerminalRuntimeController {
     }
 
     func terminalRemoved(_ id: UUID) {
+        // Gone mid-turn, it won't say it stopped (as a closed chat doesn't): left
+        // working, it kept KeepAwake holding the Mac awake.
+        if controller.runtime(id)?.status == .working { _ = controller.reportActivity(id, working: false, at: .now) }
         controller.setLive(id, false)
         controller.clearClaudeStatus(id)
         releaseTranscript(id)

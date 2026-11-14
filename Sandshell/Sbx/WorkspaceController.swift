@@ -1604,9 +1604,12 @@ extension WorkspaceController {
     }
 
     /// A turn is running here, or a background task is.
+    /// Only sessions still on the list: a closed one's runtime and tasks may
+    /// not have heard it stop.
     var isAgentWorking: Bool {
-        runtimes.values.contains { SessionRowStatus.state(of: $0) == .working }
-            || backgroundTasks.values.contains { $0.contains(where: \.isRunning) }
+        let open = Set(state.sessions.map(\.id))
+        return runtimes.contains { open.contains($0.key) && SessionRowStatus.state(of: $0.value) == .working }
+            || backgroundTasks.contains { open.contains($0.key) && $0.value.contains(where: \.isRunning) }
     }
 
     func backgroundTasks(_ id: UUID) -> [BackgroundTask] { backgroundTasks[id] ?? [] }
