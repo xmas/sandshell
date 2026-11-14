@@ -378,6 +378,8 @@ final class TerminalSession {
     /// Remove the launch script and kill this launch's processes in the
     /// sandbox (they outlive the host-side `sbx exec` when the PTY closes).
     func cleanup() {
+        if let zoomObserver { NotificationCenter.default.removeObserver(zoomObserver) }   // a block observer stays until removed
+        zoomObserver = nil
         try? FileManager.default.removeItem(at: scriptURL)
         SbxClient.reapSessionProcesses(container: containerName, match: tag.pairs[1])
     }

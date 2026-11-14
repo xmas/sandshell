@@ -113,6 +113,8 @@ final class HostTerminalWindowController: NSWindowController, NSWindowDelegate {
     }
 
     func windowWillClose(_ notification: Notification) {
+        if let zoomObserver { NotificationCenter.default.removeObserver(zoomObserver) }   // a block observer stays until removed
+        zoomObserver = nil
         try? FileManager.default.removeItem(at: scriptURL)
         onClose?()
     }
