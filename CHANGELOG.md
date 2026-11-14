@@ -2,6 +2,9 @@
 
 A running log of what changed, newest first. Yes, we actually write these.
 
+## v0.2.62 — "Safe Click"
+- **Terminal links can't run anything on your Mac.** ⌘-clicking a file in a terminal now opens it in the Files editor beside it, the way a chat's file links do, instead of in its default app. A link's text doesn't have to match where it goes, so an agent could print "README.md" pointing at a script it wrote, and the click would have run that script outside the sandbox. Folders and apps are shown in Finder, and web links still open in your browser. A selected path's Open does the same; Open With… still lets you pick an app yourself.
+
 ## v0.2.61 — "Clear Sign"
 - **A workspace's own Claude account, explained properly.** When sbx's Claude credential for every sandbox overrides the account's own sign-in, the setting and the chat now say exactly what to do: give that sandbox its own Anthropic API key (with the command to run), or remove the shared credential so `/login` in the sandbox counts. Before, they gave the command but not what to paste into it.
 - **Send with AirDrop finishes what it starts.** Remote Control ▸ Devices no longer leaves a pairing link stuck at "Waiting…": it follows the transfer to the end, says why a send failed, and tells you when AirDrop is off instead of doing nothing.
