@@ -1716,7 +1716,9 @@ extension WorkspaceController {
         guard rt.isLive != live else { return }
         rt.isLive = live
         runtimes[id] = rt
-        if session(id: id)?.isRemote == true { RemoteHub.shared.setNeedsRefresh() }
+        // A remote session, or one just deleted (gone from the list before its
+        // chat closes): Remote Control lets go of its chat and stops listing it.
+        if session(id: id)?.isRemote != false { RemoteHub.shared.setNeedsRefresh() }
         // A live terminal means sbx exec succeeded → container is running.
         // (The sandbox it runs in: a shell in Claude's sandbox is Claude's.)
         if live, let kind = session(id: id)?.containerAgentKind,
