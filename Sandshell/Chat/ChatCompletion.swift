@@ -176,8 +176,14 @@ actor WorkspaceFileIndex {
                                             ".venv", "venv", "dist", ".sandshell", ".beads", "__pycache__", ".next",
                                             "target", "Pods", ".gradle", ".idea", ".hatch", ".sbx"]
 
+    /// How long a folder's list is good for.
+    static let freshFor: TimeInterval = 30
+
     func files(under root: String) -> [String] {
-        if let hit = cache[root], Date.now.timeIntervalSince(hit.at) < 30 { return hit.files }
+        if let hit = cache[root], Date.now.timeIntervalSince(hit.at) < Self.freshFor { return hit.files }
+        // Lists gone stale are dropped, not kept for good: up to 20,000 paths
+        // for every folder searched in the app's life.
+        cache = cache.filter { Date.now.timeIntervalSince($0.value.at) < Self.freshFor }
         var out: [String] = []
         let base = URL(filePath: root, directoryHint: .isDirectory)
         // The enumerator may hand back the real path (/tmp → /private/tmp).
