@@ -1,6 +1,7 @@
 import AppKit
 import Combine
 import Foundation
+import Synchronization
 
 /// One transcript entry, transport-agnostic: an ACP adapter (or any future
 /// engine) is folded into these, and the transcript view only renders these.
@@ -296,6 +297,8 @@ final class ChatSession: ObservableObject, ChatFeedSource {
 
     /// Following the transcript for turns another app writes (Claude only).
     private var follower: Task<Void, Never>?
+    /// `!` / `&` commands running, by card id: ended with the chat.
+    private var runningCommands: [String: Process] = [:]
     private var followURL: URL?
     private var followOffset: UInt64 = 0
     /// Our own turn just ended; its last lines are still landing in the file.
@@ -665,6 +668,10 @@ final class ChatSession: ObservableObject, ChatFeedSource {
         onClosed = nil; onUnexpectedExit = nil; onOtherAppIdle = nil; onNeedsInput = nil; onWaitingChange = nil
         queue = PromptQueue()
         stopFollowing()
+        // `!` and `&` commands still running go with their chat (`& npm run dev`
+        // kept running after the window, and the app, had closed).
+        for process in runningCommands.values where process.isRunning { process.terminate() }
+        runningCommands = [:]
         pumpTask?.cancel()
         let wasRunning = connection != nil
         connection?.terminate()
@@ -1864,16 +1871,25 @@ extension ChatSession {
         let started = Date.now
         let logged: [String: JSONValue] = ["id": .string(id), "session": .string(ownSessionID.uuidString),
                                            "conversation": sessionID.map { .string($0) } ?? .null]
-        // Output as it comes; the card keeps the first 200 KB.
-        pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
+        // Output as it comes, gathered and handed to the card at most ten
+        // times a second; the card keeps the first 200 KB, and past that it's
+        // read and dropped (a Task per chunk, forever, from `! yes` flooded
+        // the main thread).
+        let output = CommandOutputBuffer(limit: Self.commandOutputLimit)
+        let show = { @MainActor [weak self] in
+            let text = output.take()
+            guard !text.isEmpty, let self,
+                  case .tool(var c)? = self.items.first(where: { $0.id == itemID }) else { return }
+            c.output += text
+            self.upsert(.tool(c))
+        }
+        pipe.fileHandleForReading.readabilityHandler = { handle in
             let data = handle.availableData
             guard !data.isEmpty else { handle.readabilityHandler = nil; return }
-            let text = String(decoding: data, as: UTF8.self)
-            Task { @MainActor [weak self] in
-                guard let self, case .tool(var c)? = self.items.first(where: { $0.id == itemID }) else { return }
-                guard c.output.count < Self.commandOutputLimit else { return }
-                c.output += text
-                self.upsert(.tool(c))
+            guard output.add(data) else { return }
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(100))
+                show()
             }
         }
         process.terminationHandler = { [weak self] p in
@@ -1881,6 +1897,8 @@ extension ChatSession {
             Task { @MainActor [weak self] in
                 // Let the last of the output land first.
                 try? await Task.sleep(for: .milliseconds(150))
+                show()
+                self?.runningCommands[id] = nil
                 guard let self, case .tool(var c)? = self.items.first(where: { $0.id == itemID }) else { return }
                 c.status = status == 0 ? "completed" : "failed"
                 if status != 0 { c.output += (c.output.isEmpty || c.output.hasSuffix("\n") ? "" : "\n") + "exit \(status)" }
@@ -1898,6 +1916,7 @@ extension ChatSession {
             ["event": "ran", "sigil": .string(command.sigil), "command": .string(command.command)]) { $1 })
         do {
             try process.run()
+            if process.isRunning { runningCommands[id] = process }
         } catch {
             call.status = "failed"
             call.output = "Couldn’t run it: \(error.localizedDescription)"
@@ -1905,5 +1924,39 @@ extension ChatSession {
             commandLog.record(logged.merging(["event": "failed", "error": .string(error.localizedDescription)]) { $1 })
         }
         return true
+    }
+}
+
+/// A `!` / `&` command's output on its way to its card: gathered off the main
+/// thread, handed over in one piece per flush, and only up to `limit` bytes
+/// (the rest is read and dropped, so the command never blocks on a full pipe).
+final class CommandOutputBuffer: Sendable {
+    private struct State { var pending = Data(); var total = 0; var flushing = false }
+    private let state = Mutex(State())
+    let limit: Int
+
+    init(limit: Int) { self.limit = limit }
+
+    /// Keep what fits; true when the caller should schedule a flush (none is).
+    func add(_ data: Data) -> Bool {
+        state.withLock { s in
+            guard s.total < limit else { return false }
+            let kept = data.prefix(limit - s.total)
+            s.pending.append(kept)
+            s.total += kept.count
+            guard !s.flushing else { return false }
+            s.flushing = true
+            return true
+        }
+    }
+
+    /// What's gathered since the last take.
+    func take() -> String {
+        let data = state.withLock { s in
+            s.flushing = false
+            defer { s.pending = Data() }
+            return s.pending
+        }
+        return String(decoding: data, as: UTF8.self)
     }
 }

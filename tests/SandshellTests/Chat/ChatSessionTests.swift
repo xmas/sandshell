@@ -775,6 +775,45 @@ struct LocalCommandTests {
         #expect(session.commandLog.entries().isEmpty, "nothing ran, nothing to audit")
     }
 
+    /// A `&` command run in a temp folder, its card watched until `done`.
+    private func runOnMac(_ command: String, until done: (ChatItem.ToolCall) -> Bool,
+                          then act: ((ChatSession) -> Void)? = nil) async throws -> ChatItem.ToolCall {
+        let dir = URL.temporaryDirectory.appending(path: "sandshell-commands-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let session = ChatSession(title: "Claude", containerName: "test-sandbox", workdir: "/nonexistent/work",
+                                  home: "/nonexistent/home")
+        session.commandLog = CommandLog(url: dir.appending(path: "commands.log"))
+        session.macFolder = dir.path(percentEncoded: false)
+        #expect(session.run(.mac(command)))
+        act?(session)
+        let end = Date.now.addingTimeInterval(10)
+        while Date.now < end {
+            if case .tool(let card)? = session.items.last, done(card) { return card }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        Issue.record("timed out waiting on the card")
+        throw CancellationError()
+    }
+
+    /// A flood of output fills the card to its limit, no more, and the command
+    /// still finishes (the rest read and dropped, not left in a full pipe).
+    @Test func aFloodOfOutputStopsAtTheLimit() async throws {
+        let card = try await runOnMac("head -c 3000000 /dev/zero | tr '\\0' y", until: { $0.status != "in_progress" })
+        #expect(card.status == "completed")
+        #expect(card.output.utf8.count == ChatSession.commandOutputLimit)
+    }
+
+    /// Closing the chat ends a command still running (`& npm run dev`).
+    @Test func closingTheChatEndsItsCommands() async throws {
+        let started = Date.now
+        let card = try await runOnMac("sleep 30", until: { $0.status != "in_progress" }) { session in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { session.close() }
+        }
+        #expect(card.status == "failed", "terminated")
+        #expect(Date.now.timeIntervalSince(started) < 5)
+    }
+
     @Test func theCommandLogKeepsOneLineAnEntryForYouAlone() throws {
         let dir = URL.temporaryDirectory.appending(path: "sandshell-commands-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: dir) }
