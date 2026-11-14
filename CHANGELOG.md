@@ -2,6 +2,10 @@
 
 A running log of what changed, newest first. Yes, we actually write these.
 
+## v0.2.61 — "Clear Sign"
+- **A workspace's own Claude account, explained properly.** When sbx's Claude credential for every sandbox overrides the account's own sign-in, the setting and the chat now say exactly what to do: give that sandbox its own Anthropic API key (with the command to run), or remove the shared credential so `/login` in the sandbox counts. Before, they gave the command but not what to paste into it.
+- **Send with AirDrop finishes what it starts.** Remote Control ▸ Devices no longer leaves a pairing link stuck at "Waiting…": it follows the transfer to the end, says why a send failed, and tells you when AirDrop is off instead of doing nothing.
+
 ## v0.2.60 — "Quiet Pair"
 - **Design is in the title bar.** The palette button next to Chat | Terminal turns a session into a design, then shows or puts away its board — up with the pane's other controls instead of under the composer. It's grey until the session is a design, then in its color, lightly filled while the board shows.
 - **A chat and its board, more quietly.** Side by side, their title bars now share a slight shade instead of a colored band. Color stays in the small marks: the session's palette, the board's, and the link between them.
