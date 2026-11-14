@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 
 /// GUI apps launched from Finder/Spotlight inherit a minimal PATH
 /// (`/usr/bin:/bin:/usr/sbin:/sbin`), so `sbx`, `docker`, and `brew` aren't
@@ -62,16 +63,40 @@ enum PathFixer {
         proc.arguments = [flag, envProbeScript]
         let pipe = Pipe()
         proc.standardOutput = pipe
-        proc.standardError = Pipe()
-        do {
-            try proc.run()
-            proc.waitUntilExit()
-        } catch {
-            return nil
+        // Not a pipe nobody reads: an rc file's chatter past its buffer blocked
+        // the shell, and launch with it.
+        proc.standardError = FileHandle.nullDevice
+        proc.standardInput = FileHandle.nullDevice
+        do { try proc.run() } catch { return nil }
+        // Read as it comes, up to the PATH line, for at most `probeTimeout`:
+        // waiting for the shell to exit first deadlocked on output past the
+        // pipe's buffer, and reading to EOF never ended when an rc file left
+        // a background job holding stdout. Launch waits on this.
+        let output = Mutex(Data())
+        let done = DispatchSemaphore(value: 0)
+        let handle = pipe.fileHandleForReading
+        handle.readabilityHandler = { h in
+            let chunk = h.availableData
+            let finished = output.withLock { data in
+                data.append(chunk)
+                return chunk.isEmpty || probeIsComplete(String(decoding: data, as: UTF8.self))
+            }
+            if finished { h.readabilityHandler = nil; done.signal() }
         }
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        guard let raw = String(data: data, encoding: .utf8) else { return nil }
-        return parseEnvProbe(raw)
+        if done.wait(timeout: .now() + probeTimeout) == .timedOut {
+            Log.error(.app, "login shell PATH probe gave up after \(Int(probeTimeout)) s")
+        }
+        handle.readabilityHandler = nil
+        if proc.isRunning { proc.terminate() }
+        return parseEnvProbe(output.withLock { String(decoding: $0, as: UTF8.self) })
+    }
+
+    static let probeTimeout: TimeInterval = 5
+
+    /// The probe's PATH line is all in (its marker, then a whole line).
+    static func probeIsComplete(_ raw: String) -> Bool {
+        guard let marker = raw.range(of: "\n\(envMarker)\n", options: .backwards) else { return false }
+        return raw[marker.upperBound...].contains("\n")
     }
 
     /// PATH from `envProbeScript`'s output: the line after its marker,

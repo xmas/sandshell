@@ -8,6 +8,20 @@ import Testing
 struct PathFixerEnvProbeTests {
     private let marker = "\n\(PathFixer.envMarker)\n"
 
+    /// Reading stops at the PATH line, not at EOF (an rc file's background
+    /// job can hold stdout open for good).
+    @Test(arguments: [
+        ("", false),
+        ("banner\n", false),
+        ("\n\(PathFixer.envMarker)\n", false),
+        ("\n\(PathFixer.envMarker)\n/usr/bin:/b", false),
+        ("\n\(PathFixer.envMarker)\n/usr/bin:/bin\n", true),
+        ("hi\n\(PathFixer.envMarker)\n/usr/bin\nbye\n", true),
+    ])
+    func probeIsCompleteOnceItsPathLineIsIn(raw: String, complete: Bool) {
+        #expect(PathFixer.probeIsComplete(raw) == complete)
+    }
+
     @Test func probeOutputGivesPath() throws {
         let path = try #require(PathFixer.parseEnvProbe(marker + "/opt/homebrew/bin:/usr/bin\n"))
         #expect(path == "/opt/homebrew/bin:/usr/bin")
