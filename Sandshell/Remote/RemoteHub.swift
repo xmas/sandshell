@@ -480,6 +480,16 @@ final class RemoteHub: ObservableObject {
         if tailscaleOn, tailscale == nil { refreshTailscale() }
         for candidate in candidates {
             let server = HTTPServer(loopbackOnly: !wide, bonjourName: lan ? Self.hostName : nil) { routes.handle($0) }
+            // Failed once up (after sleep, on a network change): Remote Control
+            // was dead until switched off and on. Start another, in a moment.
+            server.onFailed = { [weak self, weak server] in
+                guard let self, let server, self.server === server else { return }
+                self.stopServer()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+                    guard let self else { return }
+                    self.setServing(self.servingWanted)
+                }
+            }
             do {
                 let port = try await server.start(port: candidate)
                 self.server = server

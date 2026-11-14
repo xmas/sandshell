@@ -133,6 +133,11 @@ final class HTTPServer {
     let bonjourName: String?
     /// The port it listens on, once it's up.
     private(set) var port: UInt16?
+    /// The listener failed after it was up (sleep, a network change): it serves
+    /// nothing more, so whoever started it starts another.
+    var onFailed: (() -> Void)?
+    /// How long a listener may take to be ready (one left `.waiting` never was).
+    nonisolated static let startLimit: TimeInterval = 5
 
     static let bonjourType = "_sandshell._tcp"
 
@@ -168,7 +173,10 @@ final class HTTPServer {
             listener.stateUpdateHandler = { state in
                 MainActor.assumeIsolated {
                     if case .waiting(let error) = state { Log.info(.app, "remote: listener waiting: \(error)") }
-                    if resumed, case .failed(let error) = state { Log.error(.app, "remote: listener failed: \(error)") }
+                    if resumed, case .failed(let error) = state {
+                        Log.error(.app, "remote: listener failed: \(error)")
+                        self.onFailed?()
+                    }
                     guard !resumed else { return }
                     switch state {
                     case .ready:
@@ -185,6 +193,15 @@ final class HTTPServer {
                 }
             }
             listener.start(queue: .main)
+            // Not ready in time (left waiting): give up on it, and the caller
+            // tries another port. Its cancel resumes this with an error.
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.startLimit) {
+                MainActor.assumeIsolated {
+                    guard !resumed else { return }
+                    Log.info(.app, "remote: listener not ready after \(Int(Self.startLimit)) s")
+                    listener.cancel()
+                }
+            }
         }
         self.port = ready
         pingTimer = Timer.scheduledTimer(withTimeInterval: 20, repeats: true) { [weak self] _ in
