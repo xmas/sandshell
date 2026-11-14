@@ -134,16 +134,19 @@ final class RemoteHub: ObservableObject {
             sources[id]?.chat.feed.stopListening(self)
             for sub in subscribers.values where sub.session == id { sub.stream.send("gone", ["session": id]) }
         }
-        var restarted: [UUID] = []
+        var started: [UUID] = []
         for (id, source) in found where sources[id]?.chat !== source.chat {
             sources[id]?.chat.feed.stopListening(self)
             // What changed, to the devices following it (`ChatFeed`).
             source.chat.feed.listen(self) { hub, event in hub.forward(event, of: id) }
-            if sources[id] != nil { restarted.append(id) }
+            started.append(id)
         }
         sources = found
-        // The session's chat was relaunched (a new one): its followers start over.
-        for id in restarted {
+        // The session's chat was relaunched (a new one), or is shared again (or
+        // for the first time, to a device that opened it before: it was told
+        // "gone", and patches alone left it a transcript with no history):
+        // its followers start over.
+        for id in started {
             guard let source = sources[id] else { continue }
             let first = state(id, source)
             for sub in subscribers.values where sub.session == id { sub.stream.send("state", first) }

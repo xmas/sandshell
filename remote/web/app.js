@@ -161,6 +161,8 @@ function receive(name, data) {
       if (data.session !== state.current) return;
       if (state.resyncing) return;   // the state on its way covers it
       if (data.base != null && state.rev != null && data.base !== state.rev) { resync(); return; }
+      // Patches with nothing under them (no state yet) would show fragments.
+      if (data.base != null && state.rev == null) { resync(); return; }
       applyPatch(data);
       if (data.rev != null) state.rev = data.rev;
       break;
@@ -172,6 +174,7 @@ function receive(name, data) {
       break;
     case "gone":
       if (data.session === state.current) {
+        state.resyncing = false;   // no state is coming: the next patch may ask again
         state.status = { ...(state.status || {}), phase: "closed", closedReason: "Remote Control is off for this chat on the Mac, or it closed." };
         renderStatus();
       }
