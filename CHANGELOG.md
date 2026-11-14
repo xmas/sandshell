@@ -2,6 +2,10 @@
 
 A running log of what changed, newest first. Yes, we actually write these.
 
+## v0.2.63 — "Paired Up"
+- **Remote Control devices can pair again.** Pairing a phone or another computer failed with "Couldn't reach the Mac" — by code, QR code or AirDrop — and a device paired before couldn't send a message, stop a turn or answer a permission. A mix-up in the web page sent its requests nowhere; they reach the Mac again.
+- **The pairing link opens the Mac's address.** A QR code or AirDropped link now lands on the plain address (like `http://your-mac.local:47820/`), not on `/pair`, and pairs from there.
+
 ## v0.2.62 — "Safe Click"
 - **Terminal links can't run anything on your Mac.** ⌘-clicking a file in a terminal now opens it in the Files editor beside it, the way a chat's file links do, instead of in its default app. A link's text doesn't have to match where it goes, so an agent could print "README.md" pointing at a script it wrote, and the click would have run that script outside the sandbox. Folders and apps are shown in Finder, and web links still open in your browser. A selected path's Open does the same; Open With… still lets you pick an app yourself.
 
