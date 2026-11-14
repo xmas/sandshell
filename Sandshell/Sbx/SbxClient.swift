@@ -484,7 +484,12 @@ actor SbxClient {
         p.standardOutput = FileHandle.nullDevice
         p.standardError = FileHandle.nullDevice
         do { try p.run() } catch { return nil }
-        reaps.withLock { $0.append(p) }
+        // Finished ones go as new ones come: kept to the quit, the list held
+        // every reap of the app's life.
+        reaps.withLock { list in
+            list.removeAll { !$0.isRunning }
+            list.append(p)
+        }
         return p
     }
 
