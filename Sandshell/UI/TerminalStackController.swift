@@ -667,6 +667,7 @@ final class TerminalStackController: NSViewController {
     func show(_ id: UUID?) {
         shownSession = id
         if id != nil { shownBoard = nil }
+        emptyCanvasIfPutAway()
         refresh()
     }
 
@@ -677,13 +678,23 @@ final class TerminalStackController: NSViewController {
     private lazy var canvas: CanvasView = {
         let view = CanvasView()
         addTerminalView(view)
+        madeCanvas = view
         return view
     }()
+    /// The canvas, once there is one (reading `canvas` would make it).
+    private var madeCanvas: CanvasView?
+
+    /// A board put away leaves nothing running: hidden, the canvas kept its
+    /// folder watcher and a web view per artboard, reloading as the agent drew.
+    private func emptyCanvasIfPutAway() {
+        if shownBoard == nil { madeCanvas?.show(nil) }
+    }
 
     /// Show a board's folder in this pane (it replaces the session shown).
     func showBoard(_ folder: URL?) {
         shownBoard = folder
         if folder != nil { shownSession = nil }
+        emptyCanvasIfPutAway()
         refresh()
     }
 
