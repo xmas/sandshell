@@ -2,6 +2,13 @@
 
 A running log of what changed, newest first. Yes, we actually write these.
 
+## v0.2.59 — "Side by Side"
+- **Design sessions wear a color.** A chat with a board gets its own color — teal, violet, blue, pink or green — and its sidebar icon becomes a palette in that color. Change it from the row's menu (Board Color). Other sessions keep their agent's icon: no more palette on every row.
+- **You can see Claude drawing.** While Claude writes to a board, its palette pulses in the sidebar.
+- **A chat and its board read as one.** Side by side, their title bars share the session's color, and a link sits where they meet; it pulses, with a light running down the divider, while Claude draws. The board's ✕ closes both.
+- **Design, from the composer.** The new Design button next to + gives a chat a board of its own, beside it. After that it shows or puts away the board, and a board you put away stays away when you come back to the chat. Hover a design session in the sidebar for Board ↗ to jump to it.
+- **The board, in the chat.** With the board put away, each turn that drew on it shows a strip of those artboards in the chat. Click one to open the board on it.
+
 ## v0.2.58 — "Your Turn"
 - **Run a command yourself from the chat.** Start a line with `!` to run it in the session's sandbox, or with `&` to run it on your Mac, in the session's folder, as you. The output appears in the chat as it runs, and the agent sees it with your next message. `&` asks once before its first use, and works only in Sandshell's window, never from Remote Control.
 - **A log of what you ran.** Help ▸ Show Command Log lists every `!` and `&` command: when, where, in which folder, and how it ended. It's kept on the Mac, out of reach of every sandbox.
