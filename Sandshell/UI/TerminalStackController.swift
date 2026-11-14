@@ -1585,6 +1585,10 @@ final class TerminalStackController: NSViewController {
                                           terminal: terminal)
             }
             terminal.onProcessExit = { [weak surfaces = self.surfaces] in surfaces?.runtime.terminalDidExit(id) }
+            // A file link opens in Files, as a chat's do — never in its default app.
+            terminal.onOpenFile = { [weak surfaces = self.surfaces] url in
+                surfaces?.paneShowing(id)?.onOpenFileInFiles?(url, nil)
+            }
             addTerminalView(terminal.view)
             terminals[id] = terminal
             runtime.terminalStarted(id)

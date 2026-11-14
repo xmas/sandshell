@@ -3,11 +3,65 @@ import Combine
 import GhosttyTerminal
 import UniformTypeIdentifiers
 
+/// What a terminal link opens on this Mac. A sandbox terminal's text is the
+/// agent's, and so is what it writes to the read-write workspace (no
+/// quarantine, so Gatekeeper never asks), and an OSC 8 link's text needn't be
+/// its target: a ⌘-click on "README.md" can point at `x.command`. So nothing
+/// opens in its default app (which would run a script, app or installer here,
+/// outside the sandbox): a file opens in Sandshell's editor, as a chat's file
+/// links do, and a folder — an app bundle is one — is shown in Finder.
+enum TerminalLink: Equatable {
+    /// http, https or mailto: the browser / mail app.
+    case web(URL)
+    /// An existing file: Sandshell's editor.
+    case file(URL)
+    /// An existing folder or bundle: shown in Finder, never opened.
+    case folder(URL)
+
+    /// The link a terminal handed over: a web or mail URL, a `file://` URL, or
+    /// a bare `/absolute` or `~/` path, to something that exists. Nil otherwise.
+    static func resolve(_ link: String, home: String = NSHomeDirectory()) -> TerminalLink? {
+        let path: String
+        if let url = URL(string: link), let scheme = url.scheme?.lowercased() {
+            if ["http", "https", "mailto"].contains(scheme) { return .web(url) }
+            guard scheme == "file", url.isFileURL else { return nil }
+            path = url.path(percentEncoded: false)
+        } else if link.hasPrefix("~/") {
+            path = (home as NSString).appendingPathComponent(String(link.dropFirst(2)))
+        } else if link.hasPrefix("/") {
+            path = link
+        } else {
+            return nil
+        }
+        var isFolder: ObjCBool = false
+        guard !path.isEmpty, FileManager.default.fileExists(atPath: path, isDirectory: &isFolder) else { return nil }
+        let url = URL(filePath: path, directoryHint: isFolder.boolValue ? .isDirectory : .notDirectory)
+        return isFolder.boolValue ? .folder(url) : .file(url)
+    }
+
+    /// Open it: the browser, `openFile` (Sandshell's editor), or Finder.
+    @MainActor
+    func open(file openFile: ((URL) -> Void)?) {
+        switch self {
+        case .web(let url): NSWorkspace.shared.open(url)
+        case .file(let url) where openFile != nil: openFile?(url)
+        case .file(let url), .folder(let url): NSWorkspace.shared.activateFileViewerSelecting([url])
+        }
+    }
+}
+
 /// Adds the host-side affordance for Ghostty-recognized terminal links.
-/// Normal clicks still go to the PTY; command-click opens the hovered link.
+/// Normal clicks still go to the PTY; command-click opens the hovered link
+/// (`TerminalLink`: never in its default app).
 @MainActor
 final class LinkOpeningTerminalView: AppTerminalView {
-    var onOpenURL: (@MainActor (String) -> Void)?
+    /// Open a file in Sandshell's editor (the pane's Files); without it, Finder.
+    var onOpenFile: ((URL) -> Void)?
+
+    /// Open a link the terminal handed over (⌘-click, or Ghostty's own request).
+    func openLink(_ link: String) {
+        TerminalLink.resolve(link)?.open(file: onOpenFile)
+    }
 
     private var hoveredLink: String?
     private var pushedLinkCursor = false
@@ -33,7 +87,7 @@ final class LinkOpeningTerminalView: AppTerminalView {
 
     override func mouseUp(with event: NSEvent) {
         if event.modifierFlags.contains(.command), let hoveredLink {
-            onOpenURL?(hoveredLink)
+            openLink(hoveredLink)
             return
         }
         super.mouseUp(with: event)
@@ -64,9 +118,11 @@ final class LinkOpeningTerminalView: AppTerminalView {
               let url = fileURL(fromSelection: text) else { return base }
 
         let menu = NSMenu()
+        // "Open" is Sandshell's editor, not the default app (`TerminalLink`);
+        // Open With… is the user's own pick of an app.
         for (title, action) in [
             ("Reveal in Finder", #selector(revealInFinder(_:))),
-            ("Open", #selector(openInDefaultApp(_:))),
+            ("Open", #selector(openInSandshell(_:))),
             ("Open With…", #selector(openWithChooser(_:))),
         ] {
             menu.addItem(NSMenuItem(title, action: action, target: self, object: url))
@@ -115,9 +171,10 @@ final class LinkOpeningTerminalView: AppTerminalView {
         NSWorkspace.shared.activateFileViewerSelecting([url])
     }
 
-    @objc private func openInDefaultApp(_ sender: NSMenuItem) {
-        guard let url = sender.representedObject as? URL else { return }
-        NSWorkspace.shared.open(url)
+    @objc private func openInSandshell(_ sender: NSMenuItem) {
+        guard let url = sender.representedObject as? URL,
+              let link = TerminalLink.resolve(url.path(percentEncoded: false)) else { return }
+        link.open(file: onOpenFile)
     }
 
     @objc private func openWithChooser(_ sender: NSMenuItem) {
@@ -193,7 +250,6 @@ final class TerminalSession {
         controller.setColorScheme(theme.terminalIsDark ? .dark : .light)
 
         let v = LinkOpeningTerminalView(frame: NSRect(x: 0, y: 0, width: 800, height: 480))
-        v.onOpenURL = Self.openURL
         v.controller = controller
         v.configuration = TerminalSurfaceOptions(backend: .exec, workingDirectory: workdir)
         self.view = v
@@ -336,22 +392,13 @@ extension TerminalSession: TerminalSurfaceCloseDelegate {
 
 extension TerminalSession: TerminalSurfaceOpenURLDelegate {
     func terminalDidRequestOpenURL(_ url: String, kind: TerminalOpenURLKind) {
-        TerminalSession.openURL(url)
+        (view as? LinkOpeningTerminalView)?.openLink(url)
     }
 
-    /// Open a URL or bare file path from a terminal link activation.
-    static func openURL(_ url: String) {
-        // Scheme-qualified URLs (http/https/mailto/file/…)
-        if let u = URL(string: url), let scheme = u.scheme?.lowercased() {
-            if ["http", "https", "mailto", "file"].contains(scheme) {
-                NSWorkspace.shared.open(u)
-                return
-            }
-        }
-        // Bare file path: /absolute or ~/home-relative
-        guard url.hasPrefix("/") || url.hasPrefix("~/") else { return }
-        let path = url.hasPrefix("~/") ? NSHomeDirectory() + "/" + String(url.dropFirst(2)) : url
-        NSWorkspace.shared.open(URL(filePath: path, directoryHint: .checkFileSystem))
+    /// Open a file in Sandshell's editor (the pane's Files); without it, Finder.
+    var onOpenFile: ((URL) -> Void)? {
+        get { (view as? LinkOpeningTerminalView)?.onOpenFile }
+        set { (view as? LinkOpeningTerminalView)?.onOpenFile = newValue }
     }
 }
 

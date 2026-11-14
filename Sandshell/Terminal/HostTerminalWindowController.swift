@@ -42,7 +42,6 @@ final class HostTerminalWindowController: NSWindowController, NSWindowDelegate {
         term.setColorScheme(theme.terminalIsDark ? .dark : .light)
 
         let v = LinkOpeningTerminalView(frame: NSRect(x: 0, y: 0, width: 760, height: 460))
-        v.onOpenURL = TerminalSession.openURL
         v.controller = term
         v.configuration = TerminalSurfaceOptions(backend: .exec, workingDirectory: workingDirectory)
 
@@ -128,7 +127,8 @@ extension HostTerminalWindowController: TerminalSurfaceCloseDelegate {
 
 extension HostTerminalWindowController: TerminalSurfaceOpenURLDelegate {
     func terminalDidRequestOpenURL(_ url: String, kind: TerminalOpenURLKind) {
-        TerminalSession.openURL(url)
+        // No editor here: a file is shown in Finder, never opened (`TerminalLink`).
+        (window?.contentView as? LinkOpeningTerminalView)?.openLink(url)
     }
 }
 

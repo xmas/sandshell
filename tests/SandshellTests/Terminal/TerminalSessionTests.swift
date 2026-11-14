@@ -157,3 +157,51 @@ struct ReleasedMenuKeysTests {
         #expect(try ghosttyBinds([shortcut], with: sandshellTerminals)[shortcut] == false)
     }
 }
+
+/// What a terminal link opens (`TerminalLink`): a web or mail link in the
+/// browser, an existing file in Sandshell's editor, a folder or bundle in
+/// Finder — never anything in its default app, where an agent-planted script
+/// would run on the Mac. Files are made in a temp dir, removed after.
+struct TerminalLinkTests {
+    private let dir: URL
+
+    init() throws {
+        dir = URL.temporaryDirectory.appending(path: "SandshellTerminalLink-\(UUID().uuidString)", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: dir.appending(path: "Evil.app/Contents"), withIntermediateDirectories: true)
+        try Data("echo hi".utf8).write(to: dir.appending(path: "x.command"))
+        try Data("# hi".utf8).write(to: dir.appending(path: "README.md"))
+    }
+
+    private func path(_ name: String) -> String { dir.appending(path: name).path(percentEncoded: false) }
+
+    @Test(arguments: ["https://example.com/a", "http://localhost:3000", "mailto:a@example.com"])
+    func webAndMailLinksGoToTheBrowser(link: String) throws {
+        defer { try? FileManager.default.removeItem(at: dir) }
+        #expect(TerminalLink.resolve(link) == .web(try #require(URL(string: link))))
+    }
+
+    @Test(arguments: ["x.command", "README.md"])
+    func aFileOpensInTheEditorWhateverItIs(name: String) {
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let expected = TerminalLink.file(URL(filePath: path(name), directoryHint: .notDirectory))
+        #expect(TerminalLink.resolve(path(name)) == expected, "a bare path")
+        #expect(TerminalLink.resolve(URL(filePath: path(name)).absoluteString) == expected, "a file:// link")
+    }
+
+    @Test func aHomePathIsUnderHome() {
+        defer { try? FileManager.default.removeItem(at: dir) }
+        #expect(TerminalLink.resolve("~/README.md", home: dir.path(percentEncoded: false))
+                == .file(URL(filePath: path("README.md"), directoryHint: .notDirectory)))
+    }
+
+    @Test func aBundleIsShownInFinderNotOpened() {
+        defer { try? FileManager.default.removeItem(at: dir) }
+        #expect(TerminalLink.resolve(path("Evil.app")) == .folder(URL(filePath: path("Evil.app"), directoryHint: .isDirectory)))
+    }
+
+    @Test(arguments: ["ssh://host/x", "vnc://host", "javascript:alert(1)", "relative/path", "", "/no/such/file-\(UUID())"])
+    func anythingElseOpensNothing(link: String) {
+        defer { try? FileManager.default.removeItem(at: dir) }
+        #expect(TerminalLink.resolve(link) == nil)
+    }
+}
