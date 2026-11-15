@@ -39,6 +39,9 @@ View ▸ Open Board in Sandshell (say so when you make a new one).
 - `x`/`y` (optional): canvas position. Leave them out and artboards line up
   left to right in order; add them to make rows (a row per flow, an area per
   topic: see below).
+- The list's order is the order the user steps through them (the canvas's
+  ‹ › buttons, ⌘[ ⌘], ← →): keep it the order to read them in — a topic's
+  heading, then its options, A before B, a reference (`0`) first.
 - Keep keys you don't know about: the user's tools may add them.
 - Write the whole file each time (it's read as soon as it changes); add the
   artboard's page first, then its entry.
