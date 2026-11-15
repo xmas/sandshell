@@ -59,6 +59,22 @@ Make variants as sibling artboards (`hero`, `hero-b`, `hero-c`) with titles
 that say how they differ, so the user compares them side by side. Keep the
 one they pick; remove the rest when they say so.
 
+Give every option a label the user can say back to you, and show it
+everywhere they might look:
+
+- A letter per option (A, B, C…), or a number when there are many (1–12).
+  When an option has several screens, number them within it: A1, A2, B1.
+- Put the label first in the artboard's title (`"B · Bolder hero"`), in its
+  id (`hero-b`, `signup-b2`), and on the page itself — a small, quiet tag in
+  a corner (it shows in screenshots and Canvas notes).
+- A reference artboard of how things are now gets `0` or `Now`, never a
+  letter an option would use.
+- Labels stick: adding options takes the next letter, removing one doesn't
+  reletter the rest, and a combination says where it came from
+  (`"G + H · Steps beside the log"`).
+- Refer to options by their labels when you describe or recommend them, and
+  when the user picks one, say which label you're building.
+
 ## Canvas notes
 
 The user can point at an artboard and send a note. It arrives as a message
