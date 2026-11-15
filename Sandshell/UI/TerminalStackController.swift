@@ -1057,13 +1057,14 @@ final class TerminalStackController: NSViewController {
             statusStack.widthAnchor.constraint(lessThanOrEqualTo: frameView.widthAnchor, constant: -48),
             statusLabel.widthAnchor.constraint(lessThanOrEqualToConstant: 560),
             statusStack.centerYAnchor.constraint(equalTo: container.centerYAnchor),
-            // As big as the pane allows, up to 640×260 (the stack keeps it inside).
-            buildLogView.heightAnchor.constraint(lessThanOrEqualTo: frameView.heightAnchor, multiplier: 0.5),
+            // As big as the pane allows, up to 880×440 (the stack keeps it inside):
+            // the steps beside sbx's log.
+            buildLogView.heightAnchor.constraint(lessThanOrEqualTo: frameView.heightAnchor, multiplier: 0.62),
         ])
         // Below windowSizeStayPut: the log fills what the pane has, never
         // holds the window (or a split) open.
-        for size in [buildLogView.widthAnchor.constraint(equalToConstant: 640),
-                     buildLogView.heightAnchor.constraint(equalToConstant: 260)] {
+        for size in [buildLogView.widthAnchor.constraint(equalToConstant: 880),
+                     buildLogView.heightAnchor.constraint(equalToConstant: 440)] {
             size.priority = NSLayoutConstraint.Priority(NSLayoutConstraint.Priority.windowSizeStayPut.rawValue - 10)
             size.isActive = true
         }

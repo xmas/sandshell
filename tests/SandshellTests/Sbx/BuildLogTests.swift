@@ -105,3 +105,82 @@ struct BuildLogTests {
         #expect(try #require(log.lines.last) == "layer \(BuildLog.limit + 2)")
     }
 }
+
+/// `BuildProgress`: sbx's sections as the steps of a build.
+struct BuildProgressTests {
+    private var lines: [String] { BuildLogTests.createOutput.split(separator: "\n", omittingEmptySubsequences: false).map(String.init) }
+
+    @Test func aFinishedBuildIsEveryStepDone() {
+        let p = BuildProgress(lines)
+        #expect(p.created)
+        #expect(p.steps.map(\.heading) == ["SANDBOX", "IMAGE", "AGENT"])
+        #expect(p.steps.map(\.title) == ["Settings", "Image", "Install"])
+        #expect(p.steps.allSatisfy { $0.state == .done })
+        #expect(p.steps[1].layers == 2)
+        #expect(p.steps[1].detail == "2 layers")
+    }
+
+    @Test func midPullTheImageIsUnderWayAndInstallIsToCome() {
+        let cut = Array(lines.prefix { !$0.contains("image — ready") })
+        let p = BuildProgress(cut)
+        #expect(!p.created)
+        #expect(p.steps.map(\.state) == [.done, .current, .waiting])
+        #expect(p.steps.last?.title == "Install")
+    }
+
+    @Test func aFailedStepStopsThere() {
+        let p = BuildProgress(["SANDBOX", "  Name:   x", "IMAGE", "  ✗ image — pull failed: unauthorized"])
+        #expect(p.steps.map(\.state) == [.done, .failed])
+    }
+
+    @Test func linesBeforeAnyHeadingAreTheirOwnStep() {
+        let p = BuildProgress(["Removing old sandbox agate…", "", "SANDBOX", "  Name: agate"])
+        #expect(p.steps.first?.title == "Starting")
+        #expect(p.steps.first?.state == .done)
+        #expect(p.steps[1].state == .current)
+    }
+
+    @Test(arguments: [("IMAGE", true), ("AGENT", true), ("  IMAGE", false), ("Image", false), ("OK", false),
+                      ("4DF3940045ED", false)])
+    func headings(line: String, isHeading: Bool) {
+        // A digest in capitals has digits: headings are letters and spaces.
+        #expect(BuildProgress.isHeading(line) == isHeading)
+    }
+
+    @Test func theLatestLayersSize() {
+        #expect(BuildProgress.size("      3a1ff53c2c55 downloaded  360.5 MB") == "360.5 MB")
+        #expect(BuildProgress.size("      3a1ff53c2c55 already present") == nil)
+    }
+}
+
+/// `BuildLogTypesetter`: sbx's lines set to be read, every word kept.
+struct BuildLogTypesetterTests {
+    @Test func valuesLineUpDigestsShortenHomeIsTilde() {
+        let digest = "4df3940045ede4e8c55c8dc24d1b434467ddc6f5b71e8a8ca5b6659caac50509"
+        let pieces = BuildLogTypesetter.pieces([
+            "  CPU:        11",
+            "  Image:      docker.io/sbx/claude@sha256:\(digest)",
+            "    Source:   \(NSHomeDirectory())/Library/x",
+        ])
+        #expect(pieces[0] == .pair(key: "CPU", value: "11", indent: 2, full: nil))
+        guard case .pair(let key, let value, _, let full) = pieces[1] else { Issue.record("a pair"); return }
+        #expect(key == "Image")
+        #expect(value == "docker.io/sbx/claude@sha256:4df39400…c50509")
+        #expect(full?.contains(digest) == true, "the whole digest on hover")
+        guard case .pair(_, let source, let indent, _) = pieces[2] else { Issue.record("a pair"); return }
+        #expect(source == "~/Library/x" && indent == 4)
+    }
+
+    @Test func aRunOfLayersIsOneLine() {
+        let pieces = BuildLogTypesetter.pieces([
+            "  ○ image — pulling…",
+            "      4df3940045ed downloaded",
+            "      fb0060493627 downloaded",
+            "      3a1ff53c2c55 downloaded  360.5 MB",
+            "  ✓ image — ready",
+        ])
+        #expect(pieces.count == 3)
+        #expect(pieces[1] == .layers(count: 3, latest: "3a1ff53c2c55 downloaded  360.5 MB", indent: 6))
+        #expect(pieces[2] == .text("✓ image — ready", indent: 2, full: nil))
+    }
+}
