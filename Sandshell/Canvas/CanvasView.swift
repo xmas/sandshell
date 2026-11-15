@@ -33,6 +33,13 @@ final class CanvasView: NSView {
     /// Empty space around the artboards.
     static let margin: CGFloat = 120
 
+    /// Stepping through the artboards in the board's order: ‹ › and Fit, and
+    /// the one shown ("3 of 25 · its title").
+    private let stepper = NSStackView()
+    private let stepLabel = NSTextField(labelWithString: "")
+    /// The artboard last stepped to (nil: none yet, or the whole board).
+    private(set) var stepIndex: Int?
+
     override init(frame: NSRect) {
         super.init(frame: frame)
         wantsLayer = true
@@ -82,6 +89,38 @@ final class CanvasView: NSView {
         commentButton.setAccessibilityIdentifier("canvas-comment")
         commentButton.translatesAutoresizingMaskIntoConstraints = false
         addSubview(commentButton)
+        let previous = NSButton.symbol("chevron.left", label: "Previous Artboard (⌘[)", pointSize: 13, tint: .labelColor,
+                                       size: NSSize(width: 26, height: 24), target: self, action: #selector(previousArtboard),
+                                       id: "canvas-previous")
+        let next = NSButton.symbol("chevron.right", label: "Next Artboard (⌘])", pointSize: 13, tint: .labelColor,
+                                   size: NSSize(width: 26, height: 24), target: self, action: #selector(nextArtboard),
+                                   id: "canvas-next")
+        let fit = NSButton.symbol("arrow.up.left.and.down.right.magnifyingglass", label: "Show the Whole Canvas",
+                                  pointSize: 13, tint: .labelColor, size: NSSize(width: 26, height: 24),
+                                  target: self, action: #selector(showWholeBoard), id: "canvas-fit")
+        stepLabel.font = .role(.meta)
+        stepLabel.textColor = .secondaryLabelColor
+        stepLabel.lineBreakMode = .byTruncatingTail
+        stepLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        stepLabel.setAccessibilityIdentifier("canvas-step")
+        stepper.setViews([previous, stepLabel, next, fit], in: .leading)
+        stepper.orientation = .horizontal
+        stepper.spacing = 4
+        stepper.edgeInsets = NSEdgeInsets(top: 4, left: 6, bottom: 4, right: 6)
+        stepper.wantsLayer = true
+        stepper.layer?.cornerRadius = 9
+        stepper.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
+        stepper.layer?.borderWidth = 1
+        stepper.layer?.borderColor = NSColor.separatorColor.cgColor
+        stepper.translatesAutoresizingMaskIntoConstraints = false
+        stepper.isHidden = true
+        addSubview(stepper)
+        NSLayoutConstraint.activate([
+            stepper.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
+            stepper.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -16),
+            stepper.trailingAnchor.constraint(lessThanOrEqualTo: commentButton.leadingAnchor, constant: -12),
+            stepLabel.widthAnchor.constraint(lessThanOrEqualToConstant: 360),
+        ])
         NSLayoutConstraint.activate([
             commentButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
             commentButton.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -16),
@@ -109,6 +148,7 @@ final class CanvasView: NSView {
         self.folder = folder
         watcher = nil
         zoomedToFit = false
+        stepIndex = nil
         pendingReveal = nil
         clearNotes()
         for view in artboardViews.values { view.removeFromSuperview() }
@@ -136,6 +176,7 @@ final class CanvasView: NSView {
             showMessage(loaded.artboards.isEmpty ? "Nothing on this board yet. Describe what to design in the chat beside it." : nil)
             layoutArtboards(loaded)
         }
+        updateStepper()
         onLoad?()
     }
 
@@ -207,6 +248,74 @@ final class CanvasView: NSView {
         let visible = scrollView.contentView.bounds.size
         scrollView.contentView.scroll(to: NSPoint(x: frame.midX - visible.width / 2, y: frame.midY - visible.height / 2))
         scrollView.reflectScrolledClipView(scrollView.contentView)
+    }
+
+    // MARK: Stepping through
+
+    /// The artboard after the one shown (the first, from the whole board), in
+    /// the board's order — the order the agent made them in, topic by topic.
+    @objc func nextArtboard() { step(by: 1) }
+    @objc func previousArtboard() { step(by: -1) }
+
+    @objc func showWholeBoard() {
+        stepIndex = nil
+        zoomToFit()
+        updateStepper()
+    }
+
+    func step(by delta: Int) {
+        guard let ids = board?.artboards.map(\.id), !ids.isEmpty else { return }
+        let next: Int = switch stepIndex {
+        case nil: delta > 0 ? 0 : ids.count - 1
+        case let i?: min(max(i + delta, 0), ids.count - 1)
+        }
+        stepIndex = next
+        reveal(ids[next])
+        updateStepper()
+        // The buttons don't take focus: the canvas does, so the arrows go on from here.
+        if window?.firstResponder !== self { window?.makeFirstResponder(self) }
+    }
+
+    /// "3 of 25 · Strip · 2 · The seam puts it away"; the whole board: its count.
+    private func updateStepper() {
+        let artboards = board?.artboards ?? []
+        stepper.isHidden = artboards.isEmpty
+        if let i = stepIndex, artboards.indices.contains(i) {
+            stepLabel.stringValue = "\(i + 1) of \(artboards.count) · \(artboards[i].title)"
+            stepLabel.toolTip = artboards[i].title
+        } else {
+            stepIndex = nil
+            stepLabel.stringValue = "\(artboards.count) artboard\(artboards.count == 1 ? "" : "s")"
+            stepLabel.toolTip = nil
+        }
+    }
+
+    override var acceptsFirstResponder: Bool { true }
+
+    /// ← → (and Space, ⇧Space) step while the canvas itself has focus — a
+    /// page in it may want its arrows.
+    override func keyDown(with event: NSEvent) {
+        let flags = event.modifierFlags.intersection([.command, .option, .control])
+        guard flags.isEmpty else { return super.keyDown(with: event) }
+        switch event.specialKey {
+        case .rightArrow?, .downArrow?: return step(by: 1)
+        case .leftArrow?, .upArrow?: return step(by: -1)
+        default: break
+        }
+        if event.charactersIgnoringModifiers == " " { return step(by: event.modifierFlags.contains(.shift) ? -1 : 1) }
+        super.keyDown(with: event)
+    }
+
+    /// ⌘] ⌘[ step while anything in the canvas has focus, a page in it too.
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        guard event.modifierFlags.intersection([.command, .option, .control, .shift]) == .command,
+              let responder = window?.firstResponder as? NSView, responder === self || responder.isDescendant(of: self)
+        else { return super.performKeyEquivalent(with: event) }
+        switch event.charactersIgnoringModifiers {
+        case "]": step(by: 1); return true
+        case "[": step(by: -1); return true
+        default: return super.performKeyEquivalent(with: event)
+        }
     }
 
     /// Everything on screen at once (never larger than 100 %), centered.
@@ -411,6 +520,8 @@ private final class CanvasDocumentView: NSView {
     private var originAtStart: NSPoint = .zero
 
     override func mouseDown(with event: NSEvent) {
+        // A click on the board's space gives the canvas the keys (← → step).
+        if let canvas = enclosingScrollView?.superview as? CanvasView { window?.makeFirstResponder(canvas) }
         guard let clip = enclosingScrollView?.contentView else { return super.mouseDown(with: event) }
         dragStart = event.locationInWindow
         originAtStart = clip.bounds.origin

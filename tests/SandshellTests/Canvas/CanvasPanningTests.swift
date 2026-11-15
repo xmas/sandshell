@@ -328,3 +328,73 @@ struct SessionBoardTests {
     }
 }
 
+
+/// Stepping through a board's artboards in order (‹ ›, ⌘[ ⌘], ← →).
+@MainActor
+struct CanvasSteppingTests {
+    private func canvas() throws -> (CanvasView, NSWindow, URL) {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "sandshell-step-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let artboards = (1...3).map { #"{"id": "a\#($0)", "title": "Option \#($0)", "file": "a.html", "width": 400, "height": 300, "x": \#($0 * 600), "y": 0}"# }
+        try Data(#"{"title": "Steps", "artboards": [\#(artboards.joined(separator: ","))]}"#.utf8)
+            .write(to: folder.appending(path: CanvasBoard.fileName))
+        try Data("<body>x</body>".utf8).write(to: folder.appending(path: "a.html"))
+        let window = NSWindow(contentRect: NSRect(x: -6000, y: 0, width: 800, height: 600), styleMask: [.titled],
+                              backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let canvas = CanvasView(frame: window.contentView!.bounds)
+        canvas.autoresizingMask = [.width, .height]
+        window.contentView!.addSubview(canvas)
+        window.orderFrontRegardless()
+        canvas.show(folder)
+        canvas.layoutSubtreeIfNeeded()
+        return (canvas, window, folder)
+    }
+
+    private func label(_ view: NSView) -> String? {
+        if let t = view as? NSTextField, t.accessibilityIdentifier() == "canvas-step" { return t.stringValue }
+        return view.subviews.lazy.compactMap(label).first
+    }
+
+    @Test func stepsGoInTheBoardsOrderAndStopAtTheEnds() throws {
+        let (canvas, window, folder) = try canvas()
+        defer { canvas.show(nil); window.orderOut(nil); window.close(); try? FileManager.default.removeItem(at: folder) }
+        #expect(canvas.stepIndex == nil)
+        #expect(label(canvas) == "3 artboards")
+        canvas.nextArtboard()
+        #expect(canvas.stepIndex == 0)
+        #expect(label(canvas) == "1 of 3 · Option 1")
+        canvas.nextArtboard(); canvas.nextArtboard(); canvas.nextArtboard()
+        #expect(canvas.stepIndex == 2, "stays on the last")
+        canvas.previousArtboard()
+        #expect(label(canvas) == "2 of 3 · Option 2")
+        canvas.showWholeBoard()
+        #expect(canvas.stepIndex == nil)
+        canvas.previousArtboard()
+        #expect(canvas.stepIndex == 2, "from the whole board, back starts at the end")
+    }
+
+    @Test func theArrowKeysStepWhileTheCanvasHasFocus() throws {
+        let (canvas, window, folder) = try canvas()
+        defer { canvas.show(nil); window.orderOut(nil); window.close(); try? FileManager.default.removeItem(at: folder) }
+        func key(_ code: UInt16, _ chars: String, _ flags: NSEvent.ModifierFlags = []) -> NSEvent {
+            NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags, timestamp: 0, windowNumber: window.windowNumber,
+                             context: nil, characters: chars, charactersIgnoringModifiers: chars, isARepeat: false, keyCode: code)!
+        }
+        window.makeFirstResponder(canvas)
+        canvas.keyDown(with: key(124, String(UnicodeScalar(NSRightArrowFunctionKey)!)))
+        #expect(canvas.stepIndex == 0)
+        #expect(canvas.performKeyEquivalent(with: key(30, "]", .command)))
+        #expect(canvas.stepIndex == 1)
+        #expect(canvas.performKeyEquivalent(with: key(33, "[", .command)))
+        #expect(canvas.stepIndex == 0)
+    }
+
+    @Test func anEmptyBoardHasNoStepper() throws {
+        let (canvas, window, folder) = try canvas()
+        defer { canvas.show(nil); window.orderOut(nil); window.close(); try? FileManager.default.removeItem(at: folder) }
+        canvas.show(nil)
+        canvas.nextArtboard()
+        #expect(canvas.stepIndex == nil)
+    }
+}
