@@ -1034,36 +1034,25 @@ final class SeamHostView: NSView {
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
-/// Where a design session's chat meets its board: a link knob on the seam,
-/// level with their strips. While its agent draws, the knob pulses and a
-/// light runs down the seam (held still with Reduce Motion).
+/// Where a design session's chat meets its canvas. In the title band it
+/// bridges the divider in the strips' shade, so the two strips read as one
+/// title (no knob: the canvas's half has Hide Canvas); below, while its agent
+/// draws, a light runs down the seam (held still with Reduce Motion).
 final class DesignSeamView: NSView {
     static let width: CGFloat = 30
-    private static let knobSide: CGFloat = 26
 
     var color: NSColor = .systemTeal { didSet { if color != oldValue { restyle() } } }
-    /// The strips' fill: the knob's, so it sits in their band.
+    /// The strips' shade: the bridge's, so the band runs on unbroken.
     var base: NSColor = .windowBackgroundColor { didSet { if base != oldValue { restyle() } } }
     var isDrawing = false { didSet { if isDrawing != oldValue { restyle() } } }
 
-    private let knob = NSView()
-    private let icon = NSImageView()
-    private let ring = CAShapeLayer()
+    private let bridge = CALayer()
     private let flow = CAGradientLayer()
 
     override init(frame: NSRect) {
         super.init(frame: frame)
         wantsLayer = true
-        knob.wantsLayer = true
-        knob.layer?.cornerRadius = Self.knobSide / 2
-        knob.layer?.borderWidth = 1
-        icon.image = NSImage(systemSymbolName: "link", accessibilityDescription: nil)?
-            .withSymbolConfiguration(.init(pointSize: 11, weight: .semibold))
-        knob.addSubview(icon)
-        addSubview(knob)
-        ring.fillColor = nil
-        ring.lineWidth = 2
-        layer?.addSublayer(ring)
+        layer?.addSublayer(bridge)
         flow.startPoint = CGPoint(x: 0.5, y: 1)   // top down
         flow.endPoint = CGPoint(x: 0.5, y: 0)
         layer?.insertSublayer(flow, at: 0)
@@ -1077,46 +1066,26 @@ final class DesignSeamView: NSView {
 
     override func layout() {
         super.layout()
-        let side = Self.knobSide
-        let knobFrame = NSRect(x: ((bounds.width - side) / 2).rounded(),
-                               y: (bounds.height - PaneStripView.height / 2 - side / 2).rounded(), width: side, height: side)
-        knob.frame = knobFrame
-        icon.frame = knob.bounds.insetBy(dx: 6, dy: 6)
-        ring.frame = knobFrame
-        ring.path = CGPath(ellipseIn: CGRect(origin: .zero, size: knobFrame.size).insetBy(dx: -1, dy: -1), transform: nil)
+        // Over the divider only (a few points): the strips keep their edges clear anyway.
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        bridge.frame = NSRect(x: (bounds.width / 2 - 2).rounded(), y: bounds.height - PaneStripView.height,
+                              width: 4, height: PaneStripView.height)
         flow.frame = NSRect(x: bounds.width / 2 - 1, y: 0, width: 2, height: max(bounds.height - PaneStripView.height, 0))
+        CATransaction.commit()
     }
 
     private func restyle() {
-        knob.layer?.backgroundColor = base.cgColor
-        knob.layer?.borderColor = NSColor.separatorColor.cgColor
-        icon.contentTintColor = color
-        ring.strokeColor = color.cgColor
+        bridge.backgroundColor = base.cgColor
         flow.colors = [NSColor.clear.cgColor, color.cgColor, NSColor.clear.cgColor]
-        ring.removeAllAnimations()
         flow.removeAllAnimations()
-        ring.isHidden = !isDrawing
         flow.isHidden = !isDrawing
         guard isDrawing else { return }
         if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
-            ring.opacity = 0.7
             flow.locations = [0, 0.5, 1]
             flow.opacity = 0.5
             return
         }
-        ring.opacity = 0
-        let scale = CABasicAnimation(keyPath: "transform.scale")
-        scale.fromValue = 0.9
-        scale.toValue = 1.5
-        let fade = CABasicAnimation(keyPath: "opacity")
-        fade.fromValue = 0.9
-        fade.toValue = 0
-        let pulse = CAAnimationGroup()
-        pulse.animations = [scale, fade]
-        pulse.duration = 1.6
-        pulse.timingFunction = CAMediaTimingFunction(name: .easeOut)
-        pulse.repeatCount = .infinity
-        ring.add(pulse, forKey: "pulse")
         flow.opacity = 1
         let run = CABasicAnimation(keyPath: "locations")
         run.fromValue = [-0.3, -0.15, 0]

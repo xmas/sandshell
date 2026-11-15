@@ -580,9 +580,12 @@ final class TerminalStackController: NSViewController {
         } else if let id = shownSession, let session = controller.session(id: id) {
             if let tint = session.designTint { design = .chat(tint.color, session.agent) }
             toggle = session.designTint.map { .on($0.color, shown: !session.boardHidden) } ?? .off
+            // Beside its canvas, the pair's one title has Hide Canvas (the canvas's half).
+            if isInDesignPair { toggle = nil }
             chats[id]?.setArtboardStrip(color: session.designTint?.color,
                                         board: session.boardHidden ? controller.boardFolder(of: session) : nil)
         }
+        titleStrip.pairedCanvas = isInDesignPair && shownBoard != nil ? (madeCanvas?.board?.artboards.count ?? 0) : nil
         titleStrip.design = design
         titleStrip.designToggle = toggle
         titleStrip.canClose = showsFocusRing && !(isInDesignPair && shownBoard == nil)
@@ -681,6 +684,11 @@ final class TerminalStackController: NSViewController {
     private lazy var canvas: CanvasView = {
         let view = CanvasView()
         addTerminalView(view)
+        // Its artboards came or went: the strip counts them, and names the board.
+        view.onLoad = { [weak self] in
+            self?.updateStripName()
+            self?.updateDesign()
+        }
         madeCanvas = view
         return view
     }()
@@ -909,6 +917,11 @@ final class TerminalStackController: NSViewController {
         titleStrip.onSplitRight = { [weak self] in self?.onSplit?(.trailing) }
         titleStrip.onSplitDown = { [weak self] in self?.onSplit?(.bottom) }
         titleStrip.onClose = { [weak self] in self?.onClosePane?() }
+        // Only the canvas goes: the pane's ✕ in a pair closed both.
+        titleStrip.onHideCanvas = { [weak self] in
+            guard let self, let board = self.shownBoard, let id = self.controller.designSession(forBoard: board) else { return }
+            self.controller.setBoardHidden(id, true)
+        }
         titleStrip.onToggleSidebar = { [weak self] in self?.onToggleSidebar?() }
         titleStrip.onToggleFiles = { [weak self] in self?.onToggleFiles?() }
         titleStrip.onToggleDesign = { [weak self] in

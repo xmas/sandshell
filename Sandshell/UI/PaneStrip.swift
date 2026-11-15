@@ -101,6 +101,8 @@ final class PaneStripView: NSView {
     var onShowBoard: (() -> Void)?
     /// The Design button: turn design on, then show or put away the board.
     var onToggleDesign: (() -> Void)?
+    /// A chat's canvas beside it: Hide Canvas (it's put away; the chat stays).
+    var onHideCanvas: (() -> Void)?
     /// The window's sidebar and Files toggles, on the strips at its corners.
     var onToggleSidebar: (() -> Void)?
     var onToggleFiles: (() -> Void)?
@@ -126,6 +128,11 @@ final class PaneStripView: NSView {
     /// A design session's mark (chat side), or its board's palette.
     private let designBadge = AgentBadgeView(side: 18, fontSize: 8, radius: 5)
     private let boardGlyph = NSImageView()
+    /// A chat's canvas beside it (`pairedCanvas`): what's on it, and its two
+    /// actions spelled out.
+    private let canvasLabel = NSTextField(labelWithString: "Canvas")
+    private let fullscreenCanvasButton = StripIconButton()
+    private let hideCanvasButton = StripIconButton()
     /// Remote Control's state (nil: not a chat).
     private(set) var remoteState: Bool?
     /// The session's Stop / Restart (nil: none — no session, or a chat's,
@@ -196,8 +203,15 @@ final class PaneStripView: NSView {
         case on(NSColor, shown: Bool)
     }
     var designToggle: DesignToggle? { didSet { if designToggle != oldValue { restyleDesignToggle() } } }
-    /// Room the seam's knob takes from the strip's edge, past the usual padding.
+    /// Room kept clear at the strip's edge on a pair's seam, past the usual padding.
     static let seamRoom: CGFloat = 16
+
+    /// A chat's canvas beside its chat: the pair reads as one title strip,
+    /// the chat's strip naming the session (its name, branch and controls)
+    /// and this one, the canvas's half, carrying only the canvas's controls —
+    /// "Canvas · N artboards", ⋯, Fullscreen Canvas and Hide Canvas — with no
+    /// name, branch or mark of its own. The number of artboards; nil: not that.
+    var pairedCanvas: Int? { didSet { if pairedCanvas != oldValue { applyPairedCanvas() } } }
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -236,6 +250,32 @@ final class PaneStripView: NSView {
         filesButton.isHidden = true
         content.addSubview(remoteButton)
         remoteButton.isHidden = true
+        for (button, title, symbol, tip, action, id) in [
+            (fullscreenCanvasButton, "Fullscreen Canvas", "arrow.up.left.and.arrow.down.right",
+             "Show the canvas in its own full-screen window", #selector(boardWindowClicked), "pane-canvas-fullscreen"),
+            (hideCanvasButton, "Hide Canvas", "rectangle.righthalf.inset.filled.arrow.right",
+             "Put the canvas away (the chat stays; its Design button brings it back)", #selector(hideCanvasClicked),
+             "pane-canvas-hide"),
+        ] {
+            button.isBordered = false
+            button.title = title
+            button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?
+                .withSymbolConfiguration(.init(pointSize: Self.controlSymbol - 2, weight: .regular))
+            button.imagePosition = .imageLeading
+            button.imageHugsTitle = true
+            button.target = self
+            button.action = action
+            button.toolTip = tip
+            button.setAccessibilityLabel(title)
+            button.setAccessibilityIdentifier(id)
+            button.isHidden = true
+            content.addSubview(button)
+        }
+        canvasLabel.font = .role(.meta)
+        canvasLabel.lineBreakMode = .byTruncatingTail
+        canvasLabel.isHidden = true
+        canvasLabel.setAccessibilityIdentifier("pane-canvas-label")
+        content.addSubview(canvasLabel)
         designBadge.translatesAutoresizingMaskIntoConstraints = true
         boardGlyph.image = NSImage(systemSymbolName: "paintpalette", accessibilityDescription: "Board")?
             .withSymbolConfiguration(.init(pointSize: Self.controlSymbol, weight: .medium))
@@ -348,6 +388,27 @@ final class PaneStripView: NSView {
         if case .board? = design { nameCrumb.label.textColor = colors.stripCrumb } else { nameCrumb.label.textColor = colors.stripName }
     }
 
+    private func applyPairedCanvas() {
+        let on = pairedCanvas != nil
+        for v in [canvasLabel, fullscreenCanvasButton, hideCanvasButton] as [NSView] { v.isHidden = !on }
+        crumbs.isHidden = on
+        if let n = pairedCanvas {
+            canvasLabel.stringValue = n == 0 ? "Canvas" : "Canvas · \(n) artboard\(n == 1 ? "" : "s")"
+        }
+        applyDesign()
+    }
+
+    private func restyleCanvasButtons() {
+        canvasLabel.textColor = colors.stripCrumb
+        for button in [fullscreenCanvasButton, hideCanvasButton] {
+            button.attributedTitle = NSAttributedString(string: button.title, attributes: [
+                .font: NSFont.role(.meta, weight: .medium), .foregroundColor: colors.stripName])
+            button.contentTintColor = colors.stripName
+            button.hoverColor = colors.stripHover
+            button.restingColor = colors.stripTrack
+        }
+    }
+
     private func applyDesign() {
         designBadge.isHidden = true
         boardGlyph.isHidden = true
@@ -357,7 +418,7 @@ final class PaneStripView: NSView {
             designBadge.isHidden = false
         case .board(let color)?:
             boardGlyph.contentTintColor = color
-            boardGlyph.isHidden = false
+            boardGlyph.isHidden = pairedCanvas != nil   // its chat's strip has the mark
         case nil:
             break
         }
@@ -390,6 +451,7 @@ final class PaneStripView: NSView {
         restyleDesignToggle()
         restyleRemote()
         restyleFiles()
+        restyleCanvasButtons()
         viewSwitch.applyTheme(c)
         restyleName()
         if hasBranch { restyleBranch() }
@@ -397,9 +459,15 @@ final class PaneStripView: NSView {
     }
 
     private func updateEmphasis() {
+        // A pair's two strips are one title: one slight shade, a touch off
+        // the rest, and neither dimmed for the other half having focus.
+        if seamSide != nil {
+            layer?.backgroundColor = colors.stripPairShade(of: colors.stripFill).cgColor
+            content.alphaValue = 1
+            return
+        }
         let fill = isFocusedPane ? colors.stripFill : colors.termBg
-        // A pair's two strips: one slight shade, a touch off the rest.
-        layer?.backgroundColor = (seamSide == nil ? fill : colors.stripPairShade(of: fill)).cgColor
+        layer?.backgroundColor = fill.cgColor
         content.alphaValue = dimsUnfocused && !isFocusedPane && !hovering ? 0.4 : 1
     }
 
@@ -434,6 +502,7 @@ final class PaneStripView: NSView {
         }
         // The window's Files toggle, at its far end.
         if !filesButton.isHidden { place(filesButton); x -= 4 }
+        if pairedCanvas != nil { return layoutPairedCanvas(right: x, y: y, height: height) }
         if !closeButton.isHidden { place(closeButton) }
         place(moreButton)
         if !remoteButton.isHidden { place(remoteButton) }
@@ -483,6 +552,41 @@ final class PaneStripView: NSView {
         }
     }
 
+    /// A paired canvas's half of the title: Hide Canvas and Fullscreen Canvas
+    /// at the end, ⋯, then "Canvas · N artboards"; the rest is the strip
+    /// (it drags the window). Short of room the buttons drop their words
+    /// (their tooltips keep them), then the label goes.
+    private func layoutPairedCanvas(right: CGFloat, y: CGFloat, height: CGFloat) {
+        for b in [closeButton, boardWindowButton, remoteButton, designButton] { b.frame = .zero }
+        viewSwitch.frame = .zero
+        let leading = Self.sidePadding + (seamSide == .leading ? Self.seamRoom : 0)
+            + (isWindowLeading ? Self.trafficLightsWidth + Self.controlSize + 6 : 0)
+        if isWindowLeading {
+            sidebarButton.frame = NSRect(x: Self.trafficLightsWidth, y: y, width: Self.controlSize, height: Self.controlSize)
+        }
+        let buttons = [hideCanvasButton, fullscreenCanvasButton]
+        func width(_ b: NSButton) -> CGFloat { b.imagePosition == .imageOnly ? Self.controlSize : (b.fittingSize.width + 14).rounded() }
+        let label = min(canvasLabel.fittingSize.width.rounded(.up), 220)
+        for b in buttons { b.imagePosition = .imageLeading }
+        let worded = buttons.map(width).reduce(0, +) + 2 * Self.controlGap + Self.controlSize
+        if right - leading < worded + 12 + label { for b in buttons { b.imagePosition = .imageOnly } }
+        var x = right
+        for b in buttons {
+            let w = width(b)
+            x -= w
+            b.frame = NSRect(x: x, y: y, width: w, height: Self.controlSize)
+            x -= Self.controlGap
+        }
+        x -= Self.controlSize
+        moreButton.frame = NSRect(x: x, y: y, width: Self.controlSize, height: Self.controlSize)
+        x -= 8
+        let room = x - leading
+        canvasLabel.isHidden = room < 50
+        let w = min(label, max(room, 0))
+        let labelHeight = canvasLabel.fittingSize.height
+        canvasLabel.frame = NSRect(x: x - w, y: ((height - labelHeight) / 2).rounded(), width: w, height: labelHeight)
+    }
+
     /// The crumbs' widths in `room`: each its natural width while they fit;
     /// when they don't, the least specific gives way first (the crumbs are in
     /// priority order, lowest first), each down to its minimum. Whatever still
@@ -505,6 +609,7 @@ final class PaneStripView: NSView {
     @objc private func remoteClicked() { onRemote?(remoteButton) }
     @objc private func boardWindowClicked() { onBoardWindow?() }
     @objc private func designClicked() { onToggleDesign?() }
+    @objc private func hideCanvasClicked() { onHideCanvas?() }
 
     /// Design: the strip's grey until the session is a design; then its
     /// color, held (a faint fill of it) while the board shows.

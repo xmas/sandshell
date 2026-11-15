@@ -101,6 +101,9 @@ final class CanvasView: NSView {
     @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
 
     /// Show the board in `folder` (nil = nothing), watching it for changes.
+    /// The board was read (again): its artboards may have changed.
+    var onLoad: (() -> Void)?
+
     func show(_ folder: URL?) {
         guard folder != self.folder else { return }
         self.folder = folder
@@ -133,6 +136,7 @@ final class CanvasView: NSView {
             showMessage(loaded.artboards.isEmpty ? "Nothing on this board yet. Describe what to design in the chat beside it." : nil)
             layoutArtboards(loaded)
         }
+        onLoad?()
     }
 
     private func showMessage(_ text: String?) {
