@@ -50,6 +50,9 @@ final class CanvasView: NSView {
     /// page wouldn't look any different that small.
     static let picturesBelow: CGFloat = 0.3
     private var loadScheduled = false
+    /// The board has been zoomed to fit once it opened: until then what's
+    /// "in view" is the corner it starts at, not what will show.
+    private var placed = false
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -169,6 +172,7 @@ final class CanvasView: NSView {
         self.folder = folder
         watcher = nil
         zoomedToFit = false
+        placed = false
         stepIndex = nil
         pendingReveal = nil
         clearNotes()
@@ -254,6 +258,8 @@ final class CanvasView: NSView {
             DispatchQueue.main.async { [weak self] in
                 self?.zoomToFit()
                 if let id = self?.pendingReveal { self?.reveal(id) }
+                self?.placed = true
+                self?.loadVisibleSoon()
             }
         } else if let id = pendingReveal {
             DispatchQueue.main.async { [weak self] in self?.reveal(id) }
@@ -277,6 +283,7 @@ final class CanvasView: NSView {
     /// first, a few at a time: a board of forty opened all forty at once.
     /// Zoomed far out, an artboard with a picture stays a picture.
     private func loadVisible() {
+        guard placed else { return }
         let visible = scrollView.contentView.bounds
         guard visible.width > 0, visible.height > 0 else { return }
         let near = visible.insetBy(dx: -visible.width / 2, dy: -visible.height / 2)

@@ -352,7 +352,7 @@ struct CanvasSteppingTests {
     }
 
     private func label(_ view: NSView) -> String? {
-        if let t = view as? NSTextField, t.accessibilityIdentifier() == "canvas-step" { return t.stringValue }
+        if let b = view as? NSButton, b.accessibilityIdentifier() == "canvas-step" { return b.title }
         return view.subviews.lazy.compactMap(label).first
     }
 
@@ -390,11 +390,66 @@ struct CanvasSteppingTests {
         #expect(canvas.stepIndex == 0)
     }
 
+    @Test func theMenuListsEveryArtboardTheShownOneTicked() throws {
+        let (canvas, window, folder) = try canvas()
+        defer { canvas.show(nil); window.orderOut(nil); window.close(); try? FileManager.default.removeItem(at: folder) }
+        canvas.go(to: 1)
+        let items = canvas.artboardMenu().items.filter { !$0.isSeparatorItem }
+        #expect(items.map(\.title) == ["Whole Canvas", "Option 1", "Option 2", "Option 3"])
+        #expect(items.filter { $0.state == .on }.map(\.title) == ["Option 2"])
+        #expect(CanvasView.target(in: window) === canvas, "the window's canvas, for View ▸ Next Artboard")
+    }
+
     @Test func anEmptyBoardHasNoStepper() throws {
         let (canvas, window, folder) = try canvas()
         defer { canvas.show(nil); window.orderOut(nil); window.close(); try? FileManager.default.removeItem(at: folder) }
         canvas.show(nil)
         canvas.nextArtboard()
         #expect(canvas.stepIndex == nil)
+    }
+}
+
+/// A big board loads only the pages in view, a few at a time.
+@MainActor
+struct CanvasLoadingTests {
+    @Test func onlyThePagesInViewLoad() async throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "sandshell-lazy-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        // Two near each other, two so far off to the right that even zoomed
+        // all the way out (it opens zoomed to fit) neither pair is in view.
+        let xs = [0, 500, 60_000, 60_500]
+        let artboards = xs.enumerated().map { #"{"id": "a\#($0.offset)", "file": "p\#($0.offset).html", "width": 400, "height": 300, "x": \#($0.element), "y": 0}"# }
+        try Data(#"{"title": "Lazy", "artboards": [\#(artboards.joined(separator: ","))]}"#.utf8).write(to: folder.appending(path: CanvasBoard.fileName))
+        for i in xs.indices { try Data("<body>\(i)</body>".utf8).write(to: folder.appending(path: "p\(i).html")) }
+        let window = NSWindow(contentRect: NSRect(x: -6000, y: 0, width: 800, height: 600), styleMask: [.titled],
+                              backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let canvas = CanvasView(frame: window.contentView!.bounds)
+        canvas.autoresizingMask = [.width, .height]
+        window.contentView!.addSubview(canvas)
+        window.orderFrontRegardless()
+        defer { canvas.show(nil); window.orderOut(nil); window.close() }
+        canvas.show(folder)
+        canvas.layoutSubtreeIfNeeded()
+        try await Task.sleep(for: .milliseconds(300))   // its zoom to fit
+        #expect(canvas.debugLoadedCount == 0, "nothing in view yet")
+        canvas.go(to: 0)   // the first two in view, at a size that loads pages
+        let end = Date().addingTimeInterval(15)
+        while canvas.debugLoadedCount < 2, Date() < end { try await Task.sleep(for: .milliseconds(50)) }
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(canvas.debugLoadedCount == 2, "the two in view, not the two far off")
+        canvas.go(to: 3)
+        let later = Date().addingTimeInterval(15)
+        while canvas.debugLoadedCount < 4, Date() < later { try await Task.sleep(for: .milliseconds(50)) }
+        #expect(canvas.debugLoadedCount == 4, "going there loads them")
+    }
+
+    @Test func aPicturesNameIsTheFileAndWhenItChanged() {
+        let file = URL(filePath: "/tmp/board/a.html")
+        let a = ArtboardPictures.key(file, stamp: Date(timeIntervalSince1970: 1))
+        #expect(a != nil && a == ArtboardPictures.key(file, stamp: Date(timeIntervalSince1970: 1)))
+        #expect(a != ArtboardPictures.key(file, stamp: Date(timeIntervalSince1970: 2)), "a new version, a new picture")
+        #expect(ArtboardPictures.key(URL(string: "http://localhost:5173/")!, stamp: .now) == nil, "a server's page: none")
     }
 }
