@@ -816,6 +816,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// View ▸ Open Board: the active window's Canvas boards, listed as the menu opens.
     @MainActor static let boardsMenu = BoardsMenu()
 
+    /// View ▸ Next / Previous Artboard, Go to Artboard: the canvas in focus,
+    /// or the one showing in the window (`CanvasView.target`).
+    @MainActor static let artboardsMenu = ArtboardsMenu()
+
+    @MainActor @objc func showNextArtboard(_ sender: Any?) { CanvasView.target(in: NSApp.keyWindow)?.step(by: 1) }
+    @MainActor @objc func showPreviousArtboard(_ sender: Any?) { CanvasView.target(in: NSApp.keyWindow)?.step(by: -1) }
+
+    @MainActor final class ArtboardsMenu: NSObject, NSMenuDelegate {
+        func menuNeedsUpdate(_ menu: NSMenu) {
+            menu.removeAllItems()
+            guard let canvas = CanvasView.target(in: NSApp.keyWindow) else {
+                menu.addItem(withTitle: "No Canvas Showing", action: nil, keyEquivalent: "")
+                return
+            }
+            for item in canvas.artboardMenu().items {
+                item.menu?.removeItem(item)
+                menu.addItem(item)
+            }
+        }
+    }
+
     @MainActor final class BoardsMenu: NSObject, NSMenuDelegate {
         func menuNeedsUpdate(_ menu: NSMenu) {
             menu.removeAllItems()
@@ -1086,6 +1107,8 @@ extension AppDelegate: NSMenuItemValidation {
     @MainActor func validateMenuItem(_ item: NSMenuItem) -> Bool {
         let controller = activeController
         switch item.action {
+        case #selector(showNextArtboard(_:)), #selector(showPreviousArtboard(_:)):
+            return CanvasView.target(in: NSApp.keyWindow) != nil
         case #selector(openRemoteControl(_:)):
             return RemoteHub.shared.localURL != nil
         case #selector(showRemoteDevices(_:)):

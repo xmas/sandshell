@@ -1,4 +1,5 @@
 import AppKit
+import CryptoKit
 import SwiftUI
 import WebKit
 
@@ -36,9 +37,19 @@ final class CanvasView: NSView {
     /// Stepping through the artboards in the board's order: ‹ › and Fit, and
     /// the one shown ("3 of 25 · its title").
     private let stepper = NSStackView()
-    private let stepLabel = NSTextField(labelWithString: "")
+    /// Which artboard is shown; click for every artboard, to go to one.
+    private let stepLabel = NSButton(title: "", target: nil, action: nil)
     /// The artboard last stepped to (nil: none yet, or the whole board).
     private(set) var stepIndex: Int?
+
+    /// The artboards' web storage, one for the canvas (not one each).
+    private let dataStore = WKWebsiteDataStore.nonPersistent()
+    /// Pages loading at once, at most: the rest wait their turn.
+    static let loadingAtOnce = 4
+    /// Zoomed out past this, an artboard that has a picture keeps it: the
+    /// page wouldn't look any different that small.
+    static let picturesBelow: CGFloat = 0.3
+    private var loadScheduled = false
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -57,6 +68,10 @@ final class CanvasView: NSView {
         scrollView.backgroundColor = .underPageBackgroundColor
         scrollView.documentView = document
         addSubview(scrollView)
+        // Scrolled or zoomed: what came into view loads.
+        scrollView.contentView.postsBoundsChangedNotifications = true
+        NotificationCenter.default.addObserver(self, selector: #selector(visibleAreaChanged),
+                                               name: NSView.boundsDidChangeNotification, object: scrollView.contentView)
         messageLabel.translatesAutoresizingMaskIntoConstraints = false
         messageLabel.alignment = .center
         messageLabel.textColor = .secondaryLabelColor
@@ -98,9 +113,16 @@ final class CanvasView: NSView {
         let fit = NSButton.symbol("arrow.up.left.and.down.right.magnifyingglass", label: "Show the Whole Canvas",
                                   pointSize: 13, tint: .labelColor, size: NSSize(width: 26, height: 24),
                                   target: self, action: #selector(showWholeBoard), id: "canvas-fit")
+        stepLabel.isBordered = false
         stepLabel.font = .role(.meta)
-        stepLabel.textColor = .secondaryLabelColor
         stepLabel.lineBreakMode = .byTruncatingTail
+        stepLabel.imagePosition = .imageTrailing
+        stepLabel.image = NSImage(systemSymbolName: "chevron.up.chevron.down", accessibilityDescription: nil)?
+            .withSymbolConfiguration(.init(pointSize: 9, weight: .semibold))
+        stepLabel.target = self
+        stepLabel.action = #selector(stepLabelClicked)
+        stepLabel.toolTip = "Go to an artboard"
+        stepLabel.refusesFirstResponder = true
         stepLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         stepLabel.setAccessibilityIdentifier("canvas-step")
         stepper.setViews([previous, stepLabel, next, fit], in: .leading)
@@ -109,9 +131,7 @@ final class CanvasView: NSView {
         stepper.edgeInsets = NSEdgeInsets(top: 4, left: 6, bottom: 4, right: 6)
         stepper.wantsLayer = true
         stepper.layer?.cornerRadius = 9
-        stepper.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
         stepper.layer?.borderWidth = 1
-        stepper.layer?.borderColor = NSColor.separatorColor.cgColor
         stepper.translatesAutoresizingMaskIntoConstraints = false
         stepper.isHidden = true
         addSubview(stepper)
@@ -121,6 +141,7 @@ final class CanvasView: NSView {
             stepper.trailingAnchor.constraint(lessThanOrEqualTo: commentButton.leadingAnchor, constant: -12),
             stepLabel.widthAnchor.constraint(lessThanOrEqualToConstant: 360),
         ])
+        restyleBars()
         NSLayoutConstraint.activate([
             commentButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
             commentButton.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -16),
@@ -156,6 +177,7 @@ final class CanvasView: NSView {
         modified = [:]
         board = nil
         guard let folder else { return reload() }
+        ArtboardPictures.prune()
         watcher = FileWatcher(path: folder.path(percentEncoded: false), latency: 0.2) { [weak self] in self?.reload() }
         reload()
     }
@@ -199,9 +221,11 @@ final class CanvasView: NSView {
         for artboard in board.artboards {
             guard let frame = frames[artboard.id] else { continue }
             let view = artboardViews[artboard.id] ?? {
-                let v = ArtboardView()
+                let v = ArtboardView(dataStore: dataStore)
                 let id = artboard.id
                 v.onNote = { [weak self] point, area in self?.beginNote(on: id, at: point, area: area) }
+                v.onSettled = { [weak self] in self?.loadVisibleSoon() }
+                v.onWanted = { [weak v] in v?.startLoad() }
                 v.isCommenting = isCommenting
                 document.addSubview(v)
                 artboardViews[artboard.id] = v
@@ -215,12 +239,13 @@ final class CanvasView: NSView {
                 (try? $0.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
             }
             if view.source != source {
-                view.load(source, readAccess: board.folder)
+                view.prepare(source, readAccess: board.folder, stamp: stamp)
             } else if let stamp, stamp != modified[artboard.id] {
-                view.reloadPage()
+                view.changed(stamp: stamp)
             }
             modified[artboard.id] = stamp
         }
+        loadVisibleSoon()
         let size = bounds.isNull ? .zero : bounds.size
         document.setFrameSize(NSSize(width: size.width + 2 * Self.margin,
                                      height: size.height + 2 * Self.margin + ArtboardView.titleHeight))
@@ -232,6 +257,38 @@ final class CanvasView: NSView {
             }
         } else if let id = pendingReveal {
             DispatchQueue.main.async { [weak self] in self?.reveal(id) }
+        }
+    }
+
+    // MARK: Loading what's in view
+
+    @objc private func visibleAreaChanged() { loadVisibleSoon() }
+
+    func loadVisibleSoon() {
+        guard !loadScheduled else { return }
+        loadScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            self?.loadScheduled = false
+            self?.loadVisible()
+        }
+    }
+
+    /// Load the pages in view (and a little around it), nearest the middle
+    /// first, a few at a time: a board of forty opened all forty at once.
+    /// Zoomed far out, an artboard with a picture stays a picture.
+    private func loadVisible() {
+        let visible = scrollView.contentView.bounds
+        guard visible.width > 0, visible.height > 0 else { return }
+        let near = visible.insetBy(dx: -visible.width / 2, dy: -visible.height / 2)
+        let center = CGPoint(x: visible.midX, y: visible.midY)
+        let tiny = scrollView.magnification < Self.picturesBelow
+        var loading = artboardViews.values.count(where: \.isLoading)
+        let waiting = artboardViews.values
+            .filter { $0.pending != nil && $0.frame.intersects(near) && !(tiny && $0.hasPicture) }
+            .sorted { hypot($0.frame.midX - center.x, $0.frame.midY - center.y) < hypot($1.frame.midX - center.x, $1.frame.midY - center.y) }
+        for view in waiting where loading < Self.loadingAtOnce {
+            view.startLoad()
+            loading += 1
         }
     }
 
@@ -264,16 +321,9 @@ final class CanvasView: NSView {
     }
 
     func step(by delta: Int) {
-        guard let ids = board?.artboards.map(\.id), !ids.isEmpty else { return }
-        let next: Int = switch stepIndex {
-        case nil: delta > 0 ? 0 : ids.count - 1
-        case let i?: min(max(i + delta, 0), ids.count - 1)
-        }
-        stepIndex = next
-        reveal(ids[next])
-        updateStepper()
-        // The buttons don't take focus: the canvas does, so the arrows go on from here.
-        if window?.firstResponder !== self { window?.makeFirstResponder(self) }
+        guard let count = board?.artboards.count, count > 0 else { return }
+        // The buttons don't take focus: the canvas does (in `go`), so the arrows go on from here.
+        go(to: stepIndex.map { min(max($0 + delta, 0), count - 1) } ?? (delta > 0 ? 0 : count - 1))
     }
 
     /// "3 of 25 · Strip · 2 · The seam puts it away"; the whole board: its count.
@@ -281,13 +331,78 @@ final class CanvasView: NSView {
         let artboards = board?.artboards ?? []
         stepper.isHidden = artboards.isEmpty
         if let i = stepIndex, artboards.indices.contains(i) {
-            stepLabel.stringValue = "\(i + 1) of \(artboards.count) · \(artboards[i].title)"
-            stepLabel.toolTip = artboards[i].title
+            stepLabel.title = "\(i + 1) of \(artboards.count) · \(artboards[i].title)"
         } else {
             stepIndex = nil
-            stepLabel.stringValue = "\(artboards.count) artboard\(artboards.count == 1 ? "" : "s")"
-            stepLabel.toolTip = nil
+            stepLabel.title = "\(artboards.count) artboard\(artboards.count == 1 ? "" : "s")"
         }
+        stepLabel.setAccessibilityLabel(stepLabel.title)
+        restyleBars()
+    }
+
+    /// The step label's text and the bars' fill, in the canvas's own appearance:
+    /// set once as a fixed color, the bar was white over a dark canvas, its
+    /// buttons white on it.
+    private func restyleBars() {
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            for bar in [stepper, notesBar] {
+                bar.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
+                bar.layer?.borderColor = NSColor.separatorColor.cgColor
+            }
+            stepLabel.contentTintColor = .secondaryLabelColor
+            stepLabel.attributedTitle = NSAttributedString(string: stepLabel.title, attributes: [
+                .font: NSFont.role(.meta), .foregroundColor: NSColor.secondaryLabelColor])
+        }
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        restyleBars()
+    }
+
+    /// Every artboard, in order, to go to one (the step label's menu, and
+    /// View ▸ Go to Artboard): the one shown ticked.
+    func artboardMenu() -> NSMenu {
+        let menu = NSMenu()
+        menu.addItem(NSMenuItem("Whole Canvas") { [weak self] in self?.showWholeBoard() })
+        menu.items.last?.state = stepIndex == nil ? .on : .off
+        menu.addItem(.separator())
+        for (i, artboard) in (board?.artboards ?? []).enumerated() {
+            let item = NSMenuItem(artboard.title) { [weak self] in self?.go(to: i) }
+            item.state = stepIndex == i ? .on : .off
+            menu.addItem(item)
+        }
+        return menu
+    }
+
+    /// Show the artboard at `index` in the board's order.
+    func go(to index: Int) {
+        guard let ids = board?.artboards.map(\.id), ids.indices.contains(index) else { return }
+        stepIndex = index
+        reveal(ids[index])
+        updateStepper()
+        if window?.firstResponder !== self { window?.makeFirstResponder(self) }
+    }
+
+    @objc private func stepLabelClicked() {
+        artboardMenu().popUp(positioning: nil, at: NSPoint(x: 0, y: stepLabel.bounds.height + 4), in: stepLabel)
+    }
+
+    /// The canvas the View menu's artboard commands act on: the one with
+    /// focus (or holding it, a page in it), else the one showing in the window.
+    static func target(in window: NSWindow?) -> CanvasView? {
+        var view = window?.firstResponder as? NSView
+        while let v = view {
+            if let canvas = v as? CanvasView, canvas.board?.artboards.isEmpty == false { return canvas }
+            view = v.superview
+        }
+        func find(_ v: NSView) -> CanvasView? {
+            if let canvas = v as? CanvasView, !canvas.isHiddenOrHasHiddenAncestor, canvas.board?.artboards.isEmpty == false {
+                return canvas
+            }
+            return v.subviews.lazy.compactMap(find).first
+        }
+        return window?.contentView.flatMap(find)
     }
 
     override var acceptsFirstResponder: Bool { true }
@@ -689,6 +804,22 @@ private final class ArtboardView: NSView, WKNavigationDelegate {
     private(set) var source: URL?
     private(set) var hasLoaded = false
     private(set) var reloads = 0
+    /// Waiting for its turn to load (`CanvasView.loadVisible`): its page, and
+    /// what the page may read.
+    private(set) var pending: (url: URL?, readAccess: URL)?
+    /// Asked to load, not finished yet.
+    private(set) var isLoading = false
+    /// Its last picture, over the page until the page is in: shown at once
+    /// when the board opens, so a big board doesn't wait on its pages.
+    private let picture = ArtboardPicture()
+    /// The cached picture's name: the page's file and when it changed.
+    private var pictureKey: String?
+    /// It has a picture (a board zoomed far out needn't load the page).
+    var hasPicture: Bool { picture.image != nil }
+    /// Loaded or failed: the canvas loads the next.
+    var onSettled: (() -> Void)?
+    /// Clicked before its page was in: load it now.
+    var onWanted: (() -> Void)?
 
     var title: String {
         get { titleLabel.stringValue }
@@ -697,9 +828,11 @@ private final class ArtboardView: NSView, WKNavigationDelegate {
 
     override var isFlipped: Bool { true }
 
-    init() {
+    /// `dataStore`: the canvas's, shared by its artboards (one each started a
+    /// WebKit session per artboard: a big board was slow to open).
+    init(dataStore: WKWebsiteDataStore) {
         let config = WKWebViewConfiguration()
-        config.websiteDataStore = .nonPersistent()
+        config.websiteDataStore = dataStore
         webView = ArtboardWebView(frame: .zero, configuration: config)
         super.init(frame: .zero)
         titleLabel.font = .role(.body)
@@ -717,6 +850,12 @@ private final class ArtboardView: NSView, WKNavigationDelegate {
         webView.layer?.borderWidth = 1
         webView.layer?.borderColor = NSColor.separatorColor.cgColor
         addSubview(webView)
+        picture.wantsLayer = true
+        picture.layer?.cornerRadius = 6
+        picture.layer?.masksToBounds = true
+        picture.imageScaling = .scaleAxesIndependently
+        picture.onClick = { [weak self] in self?.onWanted?() }
+        addSubview(picture)
         addSubview(overlay)
     }
 
@@ -727,12 +866,47 @@ private final class ArtboardView: NSView, WKNavigationDelegate {
         titleLabel.frame = NSRect(x: 0, y: 4, width: bounds.width, height: 18)
         webView.frame = NSRect(x: 0, y: Self.titleHeight, width: bounds.width,
                                height: max(bounds.height - Self.titleHeight, 0))
+        picture.frame = webView.frame
         overlay.frame = webView.frame
+    }
+
+    /// Its page, to load when the canvas gets to it; its last picture until then.
+    func prepare(_ url: URL?, readAccess: URL, stamp: Date?) {
+        source = url
+        hasLoaded = false
+        isLoading = false
+        pending = (url, readAccess)
+        pictureKey = url.flatMap { ArtboardPictures.key($0, stamp: stamp) }
+        picture.image = nil
+        picture.isHidden = false
+        if let key = pictureKey {
+            Task { [weak self] in
+                let image = await ArtboardPictures.image(key)
+                guard let self, self.pictureKey == key, !self.hasLoaded else { return }
+                self.picture.image = image
+            }
+        }
+    }
+
+    /// Load the page it was prepared with (now its turn).
+    func startLoad() {
+        guard let pending else { return }
+        self.pending = nil
+        load(pending.url, readAccess: pending.readAccess)
+    }
+
+    /// Its file changed: a page that's in reloads; one not yet in will load
+    /// the new file (its old picture is no picture of it).
+    func changed(stamp: Date?) {
+        pictureKey = source.flatMap { ArtboardPictures.key($0, stamp: stamp) }
+        if pending != nil { picture.image = nil; return }
+        reloadPage()
     }
 
     func load(_ url: URL?, readAccess: URL) {
         source = url
         hasLoaded = false
+        isLoading = url != nil
         guard let url else {
             webView.loadHTMLString("", baseURL: nil)
             return
@@ -748,6 +922,7 @@ private final class ArtboardView: NSView, WKNavigationDelegate {
     func reloadPage() {
         reloads += 1
         hasLoaded = false
+        isLoading = true
         webView.reloadFromOrigin()
     }
 
@@ -806,18 +981,93 @@ private final class ArtboardView: NSView, WKNavigationDelegate {
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         hasLoaded = true
+        isLoading = false
+        onSettled?()
+        // A moment for it to draw, then the page shows and its picture is kept for next time.
+        let key = pictureKey
+        Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(250))
+            guard let self, self.hasLoaded else { return }
+            self.picture.isHidden = true
+            guard let key, let image = try? await self.webView.takeSnapshot(configuration: Self.pictureSnapshot()) else { return }
+            ArtboardPictures.save(image, key: key)
+        }
+    }
+
+    /// Pictures are small: a board's thumbnail, not the page at full size.
+    private static func pictureSnapshot() -> WKSnapshotConfiguration {
+        let config = WKSnapshotConfiguration()
+        config.snapshotWidth = 640
+        return config
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: any Error) {
         Log.error(.app, "canvas: \(source?.lastPathComponent ?? "-") didn't load: \(error.localizedDescription)")
+        settleFailed()
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: any Error) {
         Log.error(.app, "canvas: \(source?.lastPathComponent ?? "-") didn't load: \(error.localizedDescription)")
+        settleFailed()
+    }
+
+    private func settleFailed() {
+        isLoading = false
+        picture.isHidden = true   // what the page shows of its failure
+        onSettled?()
     }
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         Log.error(.app, "canvas: \(source?.lastPathComponent ?? "-")'s page process ended; reloading")
         webView.reload()
+    }
+}
+
+/// An artboard's last picture, over its page until the page is in. A click
+/// on it asks for the page (comments, links need it).
+@MainActor
+private final class ArtboardPicture: NSImageView {
+    var onClick: (() -> Void)?
+    override func mouseDown(with event: NSEvent) { onClick?() }
+}
+
+/// Pictures of artboards, kept in Caches by their file and its date, so a
+/// board opens with every artboard showing at once. Old ones go after 30 days.
+enum ArtboardPictures {
+    nonisolated static var folder: URL { URL.cachesDirectory.appending(path: "Sandshell/Canvas Pictures", directoryHint: .isDirectory) }
+
+    /// A file's picture name for this version of it (none for a URL: a server's page changes on its own).
+    nonisolated static func key(_ url: URL, stamp: Date?) -> String? {
+        guard url.isFileURL, let stamp else { return nil }
+        let text = "\(url.resolvingSymlinksInPath().path(percentEncoded: false))|\(stamp.timeIntervalSince1970)"
+        return SHA256.hash(data: Data(text.utf8)).prefix(16).map { String(format: "%02x", $0) }.joined()
+    }
+
+    static func image(_ key: String) async -> NSImage? {
+        let file = folder.appending(path: key + ".png")
+        let data = await Task.detached(priority: .userInitiated) { try? Data(contentsOf: file) }.value
+        return data.flatMap(NSImage.init(data:))
+    }
+
+    static func save(_ image: NSImage, key: String) {
+        guard let tiff = image.tiffRepresentation else { return }
+        let file = folder.appending(path: key + ".png")
+        Task.detached(priority: .utility) {
+            guard let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) else { return }
+            try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            try? png.write(to: file, options: .atomic)
+        }
+    }
+
+    /// Pictures not written in 30 days go (boards change; old versions pile up).
+    static func prune() {
+        Task.detached(priority: .background) {
+            let fm = FileManager.default
+            let old = Date.now.addingTimeInterval(-30 * 86_400)
+            for file in (try? fm.contentsOfDirectory(at: folder, includingPropertiesForKeys: [.contentModificationDateKey])) ?? [] {
+                let date = (try? file.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+                if let date, date < old { try? fm.removeItem(at: file) }
+            }
+        }
     }
 }

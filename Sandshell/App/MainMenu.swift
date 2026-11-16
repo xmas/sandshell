@@ -200,6 +200,13 @@ enum MainMenu {
         boards.submenu = NSMenu(title: "Open Board")
         boards.submenu?.delegate = AppDelegate.boardsMenu
         viewMenu.addItem(boards)
+        // The canvas in focus, or showing: its artboards in order.
+        viewMenu.addItem(withTitle: "Next Artboard", action: #selector(AppDelegate.showNextArtboard(_:)), keyEquivalent: "]")
+        viewMenu.addItem(withTitle: "Previous Artboard", action: #selector(AppDelegate.showPreviousArtboard(_:)), keyEquivalent: "[")
+        let goTo = NSMenuItem(title: "Go to Artboard", action: nil, keyEquivalent: "")
+        goTo.submenu = NSMenu(title: "Go to Artboard")
+        goTo.submenu?.delegate = AppDelegate.artboardsMenu
+        viewMenu.addItem(goTo)
         viewMenu.addItem(.separator())
         viewMenu.addItem(withTitle: "Split Right", action: #selector(AppDelegate.splitRight(_:)), keyEquivalent: "d")
         let splitDown = viewMenu.addItem(withTitle: "Split Down", action: #selector(AppDelegate.splitDown(_:)), keyEquivalent: "d")
