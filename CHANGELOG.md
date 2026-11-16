@@ -2,6 +2,10 @@
 
 A running log of what changed, newest first. Yes, we actually write these.
 
+## v0.2.64 — "Light Canvas"
+- **Big canvases open quickly, and stay steady.** A canvas with dozens of artboards used to load every page at once, a separate web session each, which was slow and could bring Sandshell down. Now only the artboards you can see load, a few at a time, and each one leaves a small picture so the canvas shows everything at once the next time you open it. Zoomed far out, artboards stay pictures until you zoom in or click one.
+- **Find your way around a canvas.** The bar at the canvas's bottom left (blank white before — fixed) steps through the artboards with ‹ and ›, and its label is a menu of every artboard. The View menu has Next Artboard (⌘]), Previous Artboard (⌘[) and Go to Artboard ▸ for the canvas you're looking at.
+
 ## v0.2.63 — "Paired Up"
 - **A chat and its canvas share one title bar.** Side by side, the canvas's half says "Canvas · 3 artboards" and has two plain buttons: **Fullscreen Canvas** and **Hide Canvas**, which puts away just the canvas (the old ✕ could close both). No more second name like "Design 6", no repeated branch, no link knob between them.
 - **Step through a canvas.** ‹ and › at the canvas's bottom left go through the artboards in order, saying which one you're on; ⌘[ and ⌘] do it from the keyboard (← and → too once you've clicked the canvas). The magnifier shows the whole canvas again.
