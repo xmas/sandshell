@@ -2,6 +2,14 @@
 
 A running log of what changed, newest first. Yes, we actually write these.
 
+## v0.2.66 — "Pages"
+- **A canvas has pages.** A canvas is now organized as Canvas › Page › Design › Screen: a page for each question you're working on, a design for each option (A, B, C…), and each design's states or steps as its screens (A1, A2…). You see one page at a time: its name on top, each design of several screens in a row of its own under a heading. Beside the chat, the canvas's title says which page (**Canvas · Connections ▾**); click it for the others, or All Pages.
+- **Get around a canvas.** ‹ › and ⌘] ⌘[ step through a page's screens, ↑ ↓ jump from design to design, ⌥⌘] ⌥⌘[ change page, and ⌘↑ shows All Pages: a card of pictures for each page, opening instantly. The menu at the canvas's bottom left lists this page's designs and screens and the other pages; View ▸ Go To has every page, design and screen.
+- **Your canvases are ready for it.** Claude now designs on pages. Canvases made before open as pages too, sorted by their titles, and keep their layout.
+- **Quieter when you're not looking.** Sandshell does much less in the background: open chats no longer re-run git every few seconds; the Files pane only refreshes what changed (and nothing while it's hidden); terminals, title bars and sandbox checks ask less often, and less still while Sandshell isn't in front.
+- **Smoother chats.** A long chat no longer re-reads its whole conversation for the cost readout on every update, chats you can't see don't redraw while they stream, and long tool output and images arrive without stalling.
+- **Lighter canvases.** Artboards scrolled out of view stop drawing (an animated page kept the Mac busy), and only reload when you come back to them.
+
 ## v0.2.65 — "Open Wide"
 - **Big canvases open right away.** Opening a canvas with dozens of artboards could freeze Sandshell for minutes. Every artboard started its own web page engine as soon as the canvas opened, even the ones out of view. Now an artboard starts one only when its page loads, and every canvas and chat in Sandshell shares a single engine.
 - **A canvas waits until it's placed.** Opening a canvas no longer loads pages for the corner it starts at before it zooms to fit; only the artboards you end up seeing load.
