@@ -564,6 +564,9 @@ final class RemoteTestDevice {
         case "patch":
             guard let p = try? decoder.decode(RemoteWire.Patch.self, from: data) else { return }
             patches += 1
+            for added in p.appends ?? [] {
+                if let i = items.firstIndex(where: { $0.id == added.id }) { items[i].text = (items[i].text ?? "") + added.text }
+            }
             for item in p.upserts {
                 if let i = items.firstIndex(where: { $0.id == item.id }) { items[i] = item } else { items.append(item) }
             }

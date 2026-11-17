@@ -190,10 +190,20 @@ struct RemoteWireFeedTests {
         let patchResult = feed.patch([Self.text("a", "Hi"), Self.tool("t1", "completed"), Self.text("b", "Hello")],
                                             status: Wire.status())
         let patch = try #require(patchResult)
-        #expect(patch.upserts == [Wire.text("text-b", "Hello")])
+        #expect(patch.upserts.isEmpty)
+        #expect(patch.appends == [.init(id: "text-b", text: "lo")], "only what the reply grew by")
         #expect(patch.order == nil)
         #expect(patch.base == 1)
         #expect(patch.rev == 2)
+    }
+
+    @Test(arguments: [("Hello", "Help"), ("Hello", "Hell")])
+    func aReplyThatChangedOtherwiseGoesWhole(was: String, now: String) throws {
+        var feed = started([Self.text("b", was)])
+        let patchResult = feed.patch([Self.text("b", now)], status: Wire.status())
+        let patch = try #require(patchResult)
+        #expect(patch.appends == nil)
+        #expect(patch.upserts == [Wire.text("text-b", now)])
     }
 
     @Test func aToolUpdateAndANewItemGoTogether() throws {
@@ -249,7 +259,7 @@ struct RemoteWireFeedTests {
         let nextResult = feed.patch([Self.text("m", "Before"), Self.tool("t1", "completed"), Self.text("m", "After")],
                                            status: Wire.status())
         let next = try #require(nextResult)
-        #expect(next.upserts == [Wire.text("text-m~2", "After")], "The repeat keeps its id as it streams")
+        #expect(next.appends == [.init(id: "text-m~2", text: "er")], "The repeat keeps its id as it streams")
     }
 
     @Test func theStatusAloneCanGoWhileItemsAreHeld() throws {

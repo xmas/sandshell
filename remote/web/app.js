@@ -163,7 +163,7 @@ function receive(name, data) {
       if (data.base != null && state.rev != null && data.base !== state.rev) { resync(); return; }
       // Patches with nothing under them (no state yet) would show fragments.
       if (data.base != null && state.rev == null) { resync(); return; }
-      applyPatch(data);
+      if (applyPatch(data) === false) return;
       if (data.rev != null) state.rev = data.rev;
       break;
     case "alert":
@@ -260,7 +260,18 @@ function resetTranscript() {
 }
 
 function applyPatch(p) {
+  // Text added to items the page has: one it doesn't have means it's lost its place.
+  if ((p.appends || []).some((a) => !state.items.has(a.id))) { resync(); return false; }
   const stick = nearBottom();
+  for (const a of p.appends || []) {
+    const item = { ...state.items.get(a.id) };
+    item.text = (item.text || "") + a.text;
+    state.items.set(a.id, item);
+    const old = state.nodes.get(a.id);
+    const node = renderItem(item);
+    state.nodes.set(a.id, node);
+    if (old) old.replaceWith(node);
+  }
   for (const item of p.upserts) {
     if (!state.items.has(item.id) && !p.order) state.order.push(item.id);
     state.items.set(item.id, item);

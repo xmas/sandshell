@@ -39,6 +39,7 @@ struct ChatFeedTests {
                 patches += 1
                 if patch.base != rev { outOfStep += 1 }
                 rev = patch.rev
+                for added in patch.appends ?? [] { items[added.id, default: ""] += added.text }
                 for item in patch.upserts {
                     if items[item.id] == nil, patch.order == nil { order.append(item.id) }
                     items[item.id] = item.text ?? ""

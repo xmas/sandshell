@@ -163,6 +163,14 @@ enum RemoteWire {
         /// device that isn't at `base` missed something and asks for the state.
         var base: Int?
         var rev: Int?
+        /// Items whose text only grew (a streaming reply, a thought): what
+        /// was added, not the whole text again (it was, every 80 ms).
+        var appends: [Append]?
+    }
+
+    struct Append: Codable, Equatable, Sendable {
+        let id: String
+        let text: String
     }
 
     /// The patch that takes a device from `old` to `new` (nil: nothing changed).
@@ -232,9 +240,19 @@ enum RemoteWire {
                 }
             }
             var order: [String]?
+            var appends: [Append] = []
             if inPlace {
-                for i in changed { items[i] = convert(new[i], id: items[i].id) }
-                changed += Array(old.count..<new.count)
+                var upserted: [Int] = []
+                for i in changed {
+                    let fresh = convert(new[i], id: items[i].id)
+                    if let added = Self.added(from: items[i], to: fresh) {
+                        appends.append(Append(id: fresh.id, text: added))
+                    } else {
+                        upserted.append(i)
+                    }
+                    items[i] = fresh
+                }
+                changed = upserted + Array(old.count..<new.count)
                 for item in new[old.count...] { items.append(convertUnique(item)) }
                 chat = new
             } else {
@@ -246,11 +264,23 @@ enum RemoteWire {
             }
             let statusChanged = status != newStatus
             status = newStatus
-            guard !changed.isEmpty || order != nil || statusChanged else { return nil }
+            guard !changed.isEmpty || !appends.isEmpty || order != nil || statusChanged else { return nil }
             let base = rev
             rev += 1
             return Patch(session: session, upserts: changed.map { items[$0] }, order: order,
-                         status: statusChanged ? newStatus : nil, base: base, rev: rev)
+                         status: statusChanged ? newStatus : nil, base: base, rev: rev,
+                         appends: appends.isEmpty ? nil : appends)
+        }
+
+        /// What was added to an item whose text only grew (and nothing else
+        /// about it changed); nil if it changed some other way.
+        static func added(from old: Item, to new: Item) -> String? {
+            guard [.text, .thought].contains(new.kind), let was = old.text, let now = new.text,
+                  now.utf8.count > was.utf8.count, now.utf8.starts(with: was.utf8) else { return nil }
+            var probe = new
+            probe.text = was
+            guard probe == old else { return nil }
+            return String(decoding: now.utf8.dropFirst(was.utf8.count), as: UTF8.self)
         }
 
         /// The status alone (the items held back meanwhile).
