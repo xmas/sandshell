@@ -304,6 +304,42 @@ struct ChatWebTranscriptTests {
         #expect(try await transcript(web, contains: "And then some more"), "A patch")
     }
 
+    @Test func aRunsLineStaysPutUntilItSaysSomethingElse() async throws {
+        session.debugApply(chunk("Looking around", messageID: "m1"))
+        session.debugApply(["sessionUpdate": "tool_call", "toolCallId": "t1", "title": "git status", "kind": "execute",
+                            "status": "in_progress"])
+        let (web, window) = try await showing()
+        defer { window.orderOut(nil); window.close() }
+        func line() async throws -> String? {
+            try await web.webView.evaluateJavaScript(
+                "(() => { const l = document.querySelector('.tool-group'); return l ? (l.dataset.mark || '') + '|' + l.textContent : null })()") as? String
+        }
+        let end = Date().addingTimeInterval(5)
+        while try await line() == nil, Date() < end { try await Task.sleep(for: .milliseconds(50)) }
+        _ = try await web.webView.evaluateJavaScript("document.querySelector('.tool-group').dataset.mark = 'same'; true")
+        session.debugApply(chunk("Still going", messageID: "m2"))
+        #expect(try await transcript(web, contains: "Still going"))
+        #expect(try await line()?.hasPrefix("same|Running") == true, "a patch elsewhere leaves the line as it was")
+        session.debugApply(["sessionUpdate": "tool_call_update", "toolCallId": "t1", "status": "completed"])
+        let later = Date().addingTimeInterval(5)
+        while try await line()?.hasPrefix("same|") == true, Date() < later { try await Task.sleep(for: .milliseconds(50)) }
+        #expect(try await line()?.hasPrefix("|Ran") == true, "the call finished: a new line that says so")
+        #expect(try await web.webView.evaluateJavaScript("document.querySelectorAll('.tool-group').length") as? Int == 1)
+    }
+
+    @Test func aHiddenChatSkipsUpdatesAndCatchesUpWhenShown() async throws {
+        let (web, window) = try await showing()
+        defer { window.orderOut(nil); window.close() }
+        web.isHidden = true
+        session.debugApply(chunk("Written while hidden", messageID: "m3"))
+        try await Task.sleep(for: .milliseconds(400))
+        #expect(web.missedUpdates, "not rendered while nobody could see it")
+        #expect(!(await web.debugTranscriptText().contains("Written while hidden")))
+        web.isHidden = false
+        #expect(try await transcript(web, contains: "Written while hidden"), "shown again: it catches up")
+        #expect(!web.missedUpdates)
+    }
+
     /// The page's items: id and text (a thought's body, a tool's title).
     private func pageItems(_ web: ChatWebTranscript) async throws -> [String] {
         let js = """

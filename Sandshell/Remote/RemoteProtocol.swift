@@ -332,7 +332,8 @@ enum RemoteWire {
     }
 
     static func clip(_ text: String) -> String {
-        text.count <= textLimit ? text : String(text.prefix(textLimit)) + "\n… (cut short)"
+        // Bytes first: counting characters walks the whole text (a tool's output can be megabytes).
+        text.utf8.count <= textLimit || text.count <= textLimit ? text : String(text.prefix(textLimit)) + "\n… (cut short)"
     }
 
     static func permission(_ p: PendingPermission?) -> Permission? {

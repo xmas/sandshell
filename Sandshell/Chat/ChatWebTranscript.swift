@@ -68,6 +68,9 @@ final class ChatWebTranscript: NSView {
         addSubview(webView)
         webView.load(URLRequest(url: URL(string: "\(Self.scheme)://app/s/\(source.feedID.uuidString)")!))
         source.feed.listen(self) { view, event in
+            // A chat nobody can see (another pane's session, a closed
+            // window's) doesn't render each update: it catches up when shown.
+            guard view.isShowing else { view.missedUpdates = true; return }
             switch event {
             case .state(let now): view.send(now)
             case .patch(let patch): view.send("patch", patch)
@@ -78,6 +81,27 @@ final class ChatWebTranscript: NSView {
     }
 
     @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
+
+    /// Updates skipped while it wasn't showing.
+    private(set) var missedUpdates = false
+    private var isShowing: Bool { window != nil && !isHiddenOrHasHiddenAncestor }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        catchUp()
+    }
+
+    override func viewDidUnhide() {
+        super.viewDidUnhide()
+        catchUp()
+    }
+
+    /// Shown again after updates were skipped: everything, as it is now.
+    private func catchUp() {
+        guard missedUpdates, isShowing else { return }
+        missedUpdates = false
+        sendState()
+    }
 
     @objc private func textChanged() {
         webView.pageZoom = ChatTextZoom.scale
@@ -197,7 +221,7 @@ final class ChatWebTranscript: NSView {
 
     // MARK: From the page
 
-    fileprivate func command(_ name: String, _ body: [String: Any]) -> (Any?, String?) {
+    fileprivate func command(_ name: String, _ body: [String: Any]) async -> (Any?, String?) {
         func ok(_ value: some Encodable) -> (Any?, String?) {
             let data = (try? JSONEncoder().encode(value)) ?? Data("{}".utf8)
             return (["status": 200, "body": String(decoding: data, as: UTF8.self)], nil)
@@ -210,7 +234,9 @@ final class ChatWebTranscript: NSView {
         case "fileLinks":
             guard let workdir, let text = body["text"] as? String else { return ok(["links": [FileLinks.Link]()]) }
             let code = body["code"] as? [String] ?? []
-            return ok(["links": FileLinks.find(in: text, code: code, workdir: workdir)])
+            // Up to 400 stats an item, every item as a long chat opens: not on the main thread.
+            let links = await Task.detached(priority: .userInitiated) { FileLinks.find(in: text, code: code, workdir: workdir) }.value
+            return ok(["links": links])
         case "openFile":
             guard let path = body["path"] as? String, path.hasPrefix("/") else { break }
             onOpenFile?(URL(filePath: path), body["line"] as? Int)
@@ -335,7 +361,7 @@ final class ChatWebTranscript: NSView {
                let decoded = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
                 fields.merge(decoded) { $1 }
             }
-            return owner.command(name, fields)
+            return await owner.command(name, fields)
         }
 
         func webView(_ webView: WKWebView, start task: any WKURLSchemeTask) {

@@ -261,8 +261,6 @@ function resetTranscript() {
 
 function applyPatch(p) {
   const stick = nearBottom();
-  // The runs' lines aren't items: off while the items take their places.
-  for (const h of el.transcript.querySelectorAll(":scope > .tool-group")) h.remove();
   for (const item of p.upserts) {
     if (!state.items.has(item.id) && !p.order) state.order.push(item.id);
     state.items.set(item.id, item);
@@ -285,7 +283,8 @@ function applyPatch(p) {
     let node = state.nodes.get(id);
     if (!node) { const item = state.items.get(id); if (!item) continue; node = renderItem(item); state.nodes.set(id, node); }
     let want = prev ? prev.nextSibling : el.transcript.firstChild;
-    while (want?.classList?.contains("artboard-strip")) want = want.nextSibling;
+    // The runs' lines aren't items: stepped over here, put right by groupTools.
+    while (want?.classList?.contains("artboard-strip") || want?.classList?.contains("tool-group")) want = want.nextSibling;
     if (node !== want) el.transcript.insertBefore(node, want);
     prev = node;
   }
@@ -1194,12 +1193,17 @@ function groupSummary(tools, running) {
     const object = n === 1 ? w[2] : verb === "search" ? n + " times" : n + " " + w[3];
     return (i === 0 ? lead : lead.toLowerCase()) + " " + object;
   });
-  return new Intl.ListFormat("en", { type: "conjunction" }).format(phrases) + (running ? "…" : "");
+  return listFormat.format(phrases) + (running ? "…" : "");
 }
+const listFormat = new Intl.ListFormat("en", { type: "conjunction" });
 
 // Before each run of tool calls, its line; the calls show when it's open.
+// A line that says the same stays where it is (every patch remade every line
+// in the transcript, and each one moved made the whole transcript lay out again).
 function groupTools() {
-  for (const h of el.transcript.querySelectorAll(":scope > .tool-group")) h.remove();
+  const old = new Map();
+  for (const h of el.transcript.querySelectorAll(":scope > .tool-group")) old.set(h.dataset.group, h);
+  const used = new Set();
   let run = [];
   const flush = () => {
     if (!run.length) return;
@@ -1208,7 +1212,17 @@ function groupTools() {
     const running = tools.some((t) => t.status === "pending" || t.status === "in_progress");
     const failed = tools.filter((t) => t.status === "failed").length;
     const open = state.openGroups.has(id);
+    const key = [open, running, failed, ...tools.map((t) => t.kind + "\u0001" + t.title + "\u0001" + t.status)].join("\u0002");
+    const kept = old.get(id);
+    if (kept && kept.dataset.key === key) {
+      if (kept.nextSibling !== run[0]) el.transcript.insertBefore(kept, run[0]);
+      used.add(kept);
+      for (const n of run) n.classList.toggle("collapsed", !open);
+      run = [];
+      return;
+    }
     const line = document.createElement("button");
+    line.dataset.key = key;
     line.type = "button";
     line.className = "tool-group" + (running ? " running" : "");
     line.dataset.group = id;
@@ -1217,13 +1231,16 @@ function groupTools() {
     line.textContent = groupSummary(tools, running) + (open ? "  ⌄" : "  ›");
     if (failed) line.append(span("failed", failed === 1 && tools.length === 1 ? "  · failed" : "  · " + failed + " failed"));
     el.transcript.insertBefore(line, run[0]);
+    used.add(line);
     for (const n of run) n.classList.toggle("collapsed", !open);
     run = [];
   };
   for (const node of [...el.transcript.children]) {
+    if (node.classList.contains("tool-group")) continue;
     if (node.classList.contains("tool")) run.push(node); else flush();
   }
   flush();
+  for (const h of old.values()) if (!used.has(h)) h.remove();
 }
 
 el.transcript.addEventListener("click", (e) => {
