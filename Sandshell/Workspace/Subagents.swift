@@ -50,12 +50,70 @@ extension SubagentInfo.State {
     }
 }
 
+/// What was read from a file, kept while the file is unchanged (the same
+/// size and modification date). The subagent poll looks at every Claude
+/// session's subagents and workflows every 3 s, and nearly all of them are
+/// long finished: it rereads only the files that changed. `sweep` after each
+/// poll drops what it didn't ask for (files gone, sessions closed).
+final class FileReadCache: @unchecked Sendable {
+    private struct Entry {
+        let size: UInt64
+        let modified: Date
+        let value: Any
+        var sweep: Int
+    }
+    private let lock = NSLock()
+    private var entries: [String: Entry] = [:]
+    private var generation = 0
+    #if DEBUG
+    private(set) var reads = 0
+    #endif
+
+    /// `read(url)`, or what it gave the last time while the file's the same.
+    /// `kind` keeps different reads of one file apart.
+    func value<T>(_ url: URL, kind: String, read: (URL) -> T) -> T {
+        let path = url.path(percentEncoded: false)
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: path),
+              let size = (attrs[.size] as? NSNumber)?.uint64Value, let modified = attrs[.modificationDate] as? Date
+        else { return read(url) }
+        let key = kind + "\u{0}" + path
+        let cached: T? = lock.withLock {
+            guard let entry = entries[key], entry.size == size, entry.modified == modified,
+                  let value = entry.value as? T else { return nil }
+            entries[key]?.sweep = generation
+            return value
+        }
+        if let cached { return cached }
+        let value = read(url)
+        lock.withLock {
+            entries[key] = Entry(size: size, modified: modified, value: value, sweep: generation)
+            #if DEBUG
+            reads += 1
+            #endif
+        }
+        return value
+    }
+
+    /// A poll's over: what it didn't ask for goes.
+    func sweep() {
+        lock.withLock {
+            entries = entries.filter { $0.value.sweep == generation }
+            generation += 1
+        }
+    }
+
+    var count: Int { lock.withLock { entries.count } }
+}
+
 enum SubagentScanner {
     /// The session's subagents, oldest first. Blocks: call off main.
     /// `known`: what the background-task monitor already knows (state wins).
     /// `parentWorkingSince`: when the session's current turn began (nil: it isn't working).
+    /// `cache`: what's been read before (a finished subagent's transcript, its
+    /// meta), so an unchanged file isn't read again.
     nonisolated static func scan(sessionID: UUID, transcript: URL, known: [String: BackgroundTask.State] = [:],
-                                 parentWorkingSince: Date? = nil, now: Date = .now) -> [SubagentInfo] {
+                                 parentWorkingSince: Date? = nil, now: Date = .now,
+                                 cache: FileReadCache? = nil) -> [SubagentInfo] {
         let dir = transcript.deletingPathExtension().appending(path: "subagents", directoryHint: .isDirectory)
         let fm = FileManager.default
         guard let names = try? fm.contentsOfDirectory(atPath: dir.path(percentEncoded: false)) else { return [] }
@@ -65,14 +123,11 @@ enum SubagentScanner {
             guard let attrs = try? fm.attributesOfItem(atPath: url.path(percentEncoded: false)) else { return nil }
             let modified = attrs[.modificationDate] as? Date ?? now
             let created = attrs[.creationDate] as? Date ?? modified
-            let meta = (try? Data(contentsOf: dir.appending(path: "agent-\(id).meta.json")))
-                .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]
-            func text(_ key: String) -> String? {
-                (meta[key] as? String).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.flatMap { $0.isEmpty ? nil : $0 }
-            }
-            let description = text("description"), type = text("agentType")
+            let metaURL = dir.appending(path: "agent-\(id).meta.json")
+            let (description, type) = cache?.value(metaURL, kind: "meta", read: Self.meta) ?? Self.meta(metaURL)
             let state = known[id].map { SubagentInfo.State($0) }
-                ?? Self.state(url, lastWrite: modified, parentWorkingSince: parentWorkingSince, now: now)
+                ?? Self.state(url, lastWrite: modified, parentWorkingSince: parentWorkingSince, now: now,
+                              finished: { cache?.value($0, kind: "finished", read: Self.finished) ?? Self.finished($0) })
             return SubagentInfo(id: id, sessionID: sessionID, title: description ?? type ?? "Subagent",
                                 agentType: type, transcript: url, startedAt: created, lastWrite: modified, state: state)
         }
@@ -85,10 +140,19 @@ enum SubagentScanner {
     /// since the turn began: an earlier turn's was cut off), however long it's
     /// quiet; otherwise for 90 s after its last write, then it was stopped.
     nonisolated static func state(_ url: URL, lastWrite: Date, parentWorkingSince: Date?,
-                                  now: Date = .now) -> SubagentInfo.State {
+                                  now: Date = .now, finished: (URL) -> Bool = SubagentScanner.finished) -> SubagentInfo.State {
         if finished(url) { return .done }
         if let since = parentWorkingSince, lastWrite >= since { return .running }
         return now.timeIntervalSince(lastWrite) > 90 ? .stopped : .running
+    }
+
+    /// A subagent's meta file: its description and agent type.
+    nonisolated static func meta(_ url: URL) -> (description: String?, type: String?) {
+        let meta = (try? Data(contentsOf: url)).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]
+        func text(_ key: String) -> String? {
+            (meta[key] as? String).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.flatMap { $0.isEmpty ? nil : $0 }
+        }
+        return (text("description"), text("agentType"))
     }
 
     /// Its turn ended (the subagent is done): its last assistant message

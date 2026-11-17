@@ -88,6 +88,28 @@ extension SubagentsTests {
                                  parentWorkingSince: parentWorkingSince, now: now)
         }
 
+        @Test func aCacheReadsAnUnchangedSubagentOnce() throws {
+            let url = try workspace.addSubagent("a1", lines: [SubagentsFixture.finishedLine],
+                                                meta: SubagentsFixture.meta(["description": "Find it"]))
+            let cache = FileReadCache()
+            func poll() -> [SubagentInfo] {
+                defer { cache.sweep() }
+                return SubagentScanner.scan(sessionID: sessionID, transcript: workspace.transcript, now: SubagentsFixture.epoch,
+                                            cache: cache)
+            }
+            #expect(poll().map(\.state) == [.done])
+            let reads = cache.reads
+            #expect(reads == 2, "its transcript's tail and its meta")
+            #expect(poll().map(\.title) == ["Find it"])
+            #expect(cache.reads == reads, "nothing changed: nothing read again")
+            try Data(SubagentsFixture.jsonl([SubagentsFixture.finishedLine, SubagentsFixture.userLine, SubagentsFixture.unfinishedLine]).utf8).write(to: url)
+            #expect(poll().map(\.state) != [.done], "it changed: read again (and it's working again)")
+            #expect(cache.reads == reads + 1)
+            try FileManager.default.removeItem(at: url)
+            _ = poll()
+            #expect(cache.count == 0, "a poll drops what it didn't ask for")
+        }
+
         @Test func missingSubagentsFolderGivesNoSubagents() {
             #expect(scan().isEmpty)
         }

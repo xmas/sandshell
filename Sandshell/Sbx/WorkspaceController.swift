@@ -49,6 +49,8 @@ final class WorkspaceController: ObservableObject {
     private var boardWatchers: [String: FileWatcher] = [:]
     private var boardWrites: [String: Date] = [:]
     private var subagentPollTask: Task<Void, Never>?
+    /// The subagent poll's reads, kept while their files don't change.
+    let subagentReads = FileReadCache()
     /// What each sandbox is (kernel, distribution, mount types), asked once.
     @Committed private(set) var sandboxSystems: [String: SandboxSystem] = [:]
     private var probingSandboxes: Set<String> = []
@@ -1018,14 +1020,16 @@ final class WorkspaceController: ObservableObject {
             // A foreground subagent runs while the turn that started it does (set only while working).
             targets.append((session.id, url, known, runtimes[session.id]?.workingSince))
         }
+        let cache = subagentReads
         let (found, runs) = await Task.detached(priority: .utility) { () -> ([UUID: [SubagentInfo]], [UUID: [WorkflowRun]]) in
             var out: [UUID: [SubagentInfo]] = [:], runs: [UUID: [WorkflowRun]] = [:]
             for (id, url, known, since) in targets {
-                let list = SubagentScanner.scan(sessionID: id, transcript: url, known: known, parentWorkingSince: since)
+                let list = SubagentScanner.scan(sessionID: id, transcript: url, known: known, parentWorkingSince: since, cache: cache)
                 if !list.isEmpty { out[id] = Array(list.suffix(12)) }
-                let wf = WorkflowScanner.scan(transcript: url)
+                let wf = WorkflowScanner.scan(transcript: url, cache: cache)
                 if !wf.isEmpty { runs[id] = Array(wf.suffix(12)) }
             }
+            cache.sweep()
             return (out, runs)
         }.value
         if found != subagents { subagents = found }

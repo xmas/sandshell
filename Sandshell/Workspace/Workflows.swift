@@ -56,7 +56,9 @@ struct WorkflowRun: Identifiable, Equatable, Sendable {
 
 enum WorkflowScanner {
     /// The runs under a session's transcript, oldest first. Blocks: call off main.
-    nonisolated static func scan(transcript: URL) -> [WorkflowRun] {
+    /// `cache`: journals, scripts and agents' transcripts read before, so an
+    /// unchanged one isn't read again.
+    nonisolated static func scan(transcript: URL, cache: FileReadCache? = nil) -> [WorkflowRun] {
         let sessionDir = transcript.deletingPathExtension()
         let runsDir = sessionDir.appendingPathComponent("subagents/workflows", isDirectory: true)
         guard let runIDs = try? FileManager.default.contentsOfDirectory(atPath: runsDir.path) else { return [] }
@@ -65,17 +67,20 @@ enum WorkflowScanner {
         return runIDs.filter { $0.hasPrefix("wf_") }.compactMap { runID in
             let script = scripts.first { $0.hasSuffix("-\(runID).js") }
                 .map { sessionDir.appendingPathComponent("workflows/scripts/\($0)") }
-            return run(runID, dir: runsDir.appendingPathComponent(runID), script: script)
+            return run(runID, dir: runsDir.appendingPathComponent(runID), script: script, cache: cache)
         }
         .sorted { ($0.startedAt ?? .distantPast) < ($1.startedAt ?? .distantPast) }
     }
 
-    nonisolated static func run(_ runID: String, dir: URL, script: URL?) -> WorkflowRun? {
-        guard let journal = Journal(dir) else { return nil }
-        let meta = script.flatMap { try? String(contentsOf: $0, encoding: .utf8) }.map(parseMeta) ?? Meta()
+    nonisolated static func run(_ runID: String, dir: URL, script: URL?, cache: FileReadCache? = nil) -> WorkflowRun? {
+        let journalURL = dir.appendingPathComponent("journal.jsonl")
+        guard let journal = cache?.value(journalURL, kind: "journal", read: { _ in Journal(dir) }) ?? Journal(dir) else { return nil }
+        func readMeta(_ url: URL) -> Meta { (try? String(contentsOf: url, encoding: .utf8)).map(parseMeta) ?? Meta() }
+        let meta = script.map { cache?.value($0, kind: "script", read: readMeta) ?? readMeta($0) } ?? Meta()
         let agents = journal.order.map { id -> WorkflowRun.Agent in
             let info = journal.started[id]!
-            let t = transcriptFacts(dir.appendingPathComponent("agent-\(id).jsonl"))
+            let url = dir.appendingPathComponent("agent-\(id).jsonl")
+            let t = cache?.value(url, kind: "facts", read: transcriptFacts) ?? transcriptFacts(url)
             return .init(id: id, label: info.label, phase: info.phase, model: t.model, tokens: t.tokens,
                          startedAt: t.first, lastWrite: t.last, state: journal.state(of: id))
         }

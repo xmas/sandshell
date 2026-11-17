@@ -82,6 +82,27 @@ struct WorkflowScannerTests {
         #expect(run.transcript(of: run.agents[1]).lastPathComponent == "agent-a2.jsonl")
     }
 
+    @Test func aCacheRereadsOnlyWhatChanged() throws {
+        let fixture = try WorkflowFixture(script: nil, journal: [
+            #"{"type":"started","agentId":"x","label":"only","phase":"Solo"}"#,
+        ], agents: ["x": [WorkflowFixture.user(at: "2026-10-17T07:00:00.000Z")]])
+        defer { fixture.remove() }
+        let cache = FileReadCache()
+        #expect(WorkflowScanner.scan(transcript: fixture.transcript, cache: cache).first?.agents.map(\.state) == [.running])
+        let reads = cache.reads
+        #expect(reads == 2, "the journal and the agent's transcript")
+        #expect(WorkflowScanner.scan(transcript: fixture.transcript, cache: cache).first?.agents.map(\.state) == [.running])
+        #expect(cache.reads == reads, "nothing changed: nothing read again")
+        let journal = fixture.runDir.appendingPathComponent("journal.jsonl")
+        let handle = try FileHandle(forWritingTo: journal)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data(("\n" + #"{"type":"result","agentId":"x","result":"ok"}"#).utf8))
+        try handle.close()
+        #expect(WorkflowScanner.scan(transcript: fixture.transcript, cache: cache).first?.agents.map(\.state) == [.done],
+                "the journal grew: read again")
+        #expect(cache.reads == reads + 1)
+    }
+
     @Test func withoutAScriptTheRunIdNamesItAndAgentsNameThePhases() throws {
         let fixture = try WorkflowFixture(script: nil, journal: [
             #"{"type":"started","agentId":"x","label":"only","phase":"Solo"}"#,
