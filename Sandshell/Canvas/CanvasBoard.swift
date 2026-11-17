@@ -53,8 +53,14 @@ struct CanvasBoard: Equatable, Sendable {
     let folder: URL
     var title: String
     /// Every screen on the board, page by page, design by design.
-    var artboards: [Artboard]
+    var artboards: [Artboard] { didSet { index = Self.index(artboards) } }
     var pages: [Page]
+    /// Where each artboard is in `artboards`, by id (a page's loops look them up).
+    private var index: [String: Int] = [:]
+
+    private static func index(_ artboards: [Artboard]) -> [String: Int] {
+        Dictionary(artboards.enumerated().map { ($1.id, $0) }, uniquingKeysWith: { a, _ in a })
+    }
 
     /// A board from its artboards alone (board.json without pages): they're
     /// sorted into pages by their titles (`organize`).
@@ -62,6 +68,7 @@ struct CanvasBoard: Equatable, Sendable {
         self.folder = folder
         self.title = title
         (self.artboards, self.pages) = Self.organize(artboards, boardTitle: title)
+        index = Self.index(self.artboards)
     }
 
     init(folder: URL, title: String, artboards: [Artboard], pages: [Page]) {
@@ -69,9 +76,10 @@ struct CanvasBoard: Equatable, Sendable {
         self.title = title
         self.artboards = artboards
         self.pages = pages
+        index = Self.index(artboards)
     }
 
-    func artboard(_ id: String) -> Artboard? { artboards.first { $0.id == id } }
+    func artboard(_ id: String) -> Artboard? { index[id].map { artboards[$0] } }
     func page(_ id: String) -> Page? { pages.first { $0.id == id } }
     /// The page an artboard is on.
     func page(of artboardID: String) -> Page? { artboard(artboardID).flatMap { page($0.page) } }

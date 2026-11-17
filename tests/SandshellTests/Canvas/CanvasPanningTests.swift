@@ -555,6 +555,17 @@ struct CanvasLoadingTests {
         let later = Date().addingTimeInterval(15)
         while canvas.debugLoadedCount < 4, Date() < later { try await Task.sleep(for: .milliseconds(50)) }
         #expect(canvas.debugLoadedCount == 4, "going there loads them")
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(canvas.debugParkedIDs == ["a0", "a1"], "the pages left behind are put away (WebKit stops drawing them)")
+        let reloads = canvas.debugReloads
+        try Data("<body>changed</body>".utf8).write(to: folder.appending(path: "p0.html"))
+        try await Task.sleep(for: .milliseconds(1200))
+        #expect(canvas.debugReloads == reloads, "a page put away doesn't reload while it's away")
+        canvas.go(to: 0)
+        let back = Date().addingTimeInterval(10)
+        while canvas.debugReloads == reloads, Date() < back { try await Task.sleep(for: .milliseconds(50)) }
+        #expect(canvas.debugReloads == reloads + 1, "back in view, it reloads")
+        #expect(!canvas.debugParkedIDs.contains("a0"))
     }
 
     @Test func aPicturesNameIsTheFileAndWhenItChanged() {

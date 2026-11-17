@@ -213,6 +213,9 @@ final class CanvasView: NSView {
             // Keep what's on screen while the agent's rewriting it; say so only when there's nothing.
             if board == nil { showMessage(error.localizedDescription) }
         case .success(let loaded):
+            // The agent touched something that changes nothing here (another
+            // page's file, board.json rewritten the same): leave the views be.
+            if loaded == board, showsAllPages || !pageFilesChanged(loaded) { return }
             board = loaded
             if !showsAllPages {
                 // The page it's on, while it's still there; else the one asked
@@ -229,6 +232,15 @@ final class CanvasView: NSView {
         }
         updateStepper()
         onLoad?()
+    }
+
+    /// Whether a file on the shown page changed since it was laid out.
+    private func pageFilesChanged(_ board: CanvasBoard) -> Bool {
+        guard let page = pageID.flatMap({ board.page($0) }) else { return true }
+        return page.screens.contains { id in
+            guard let artboard = board.artboard(id), let file = board.fileURL(of: artboard) else { return false }
+            return (try? file.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate != modified[id]
+        }
     }
 
     private func showMessage(_ text: String?) {
@@ -471,6 +483,11 @@ final class CanvasView: NSView {
         let near = visible.insetBy(dx: -visible.width / 2, dy: -visible.height / 2)
         let center = CGPoint(x: visible.midX, y: visible.midY)
         let tiny = scrollView.magnification < Self.picturesBelow
+        // A page out of view (or too small to see, with a picture) is hidden:
+        // WebKit stops drawing it. An animated page kept drawing for nobody.
+        for view in artboardViews.values where view.hasWebView {
+            view.setParked(!view.frame.intersects(near) || (tiny && view.hasPicture))
+        }
         var loading = artboardViews.values.count(where: \.isLoading)
         let waiting = artboardViews.values
             .filter { $0.pending != nil && $0.frame.intersects(near) && !(tiny && $0.hasPicture) }
@@ -872,6 +889,8 @@ final class CanvasView: NSView {
     var debugArtboardIDs: [String] { (board?.artboards ?? []).map(\.id).filter { artboardViews[$0] != nil } }
     var debugLoadedCount: Int { artboardViews.values.filter(\.hasLoaded).count }
     var debugReloads: Int { artboardViews.values.reduce(0) { $0 + $1.reloads } }
+    /// Artboards whose page is hidden (out of view).
+    var debugParkedIDs: [String] { artboardViews.filter { $0.value.isParked }.map(\.key).sorted() }
     /// Artboards that have made their web view.
     var debugWebViewCount: Int { artboardViews.values.filter(\.hasWebView).count }
     /// Every web view made is on the app's process pool.
@@ -1270,11 +1289,34 @@ private final class ArtboardView: NSView, WKNavigationDelegate {
     }
 
     /// Its file changed: a page that's in reloads; one not yet in will load
-    /// the new file (its old picture is no picture of it).
+    /// the new file (its old picture is no picture of it); one put away
+    /// reloads when it's back (the agent writing a page nobody's looking at
+    /// reloaded it and took a loading turn from the ones in view).
     func changed(stamp: Date?) {
         pictureKey = source.flatMap { ArtboardPictures.key($0, stamp: stamp) }
         if pending != nil { picture.image = nil; return }
+        if isParked { reloadWhenBack = true; return }
         reloadPage()
+    }
+
+    /// Out of view: its page hidden (WebKit doesn't draw a hidden view), its
+    /// picture showing; back in view, the page again (reloaded, if its file
+    /// changed meanwhile).
+    private(set) var isParked = false
+    private var reloadWhenBack = false
+
+    func setParked(_ parked: Bool) {
+        guard let web, parked != isParked else { return }
+        isParked = parked
+        web.isHidden = parked
+        if parked {
+            picture.isHidden = false
+        } else if reloadWhenBack {
+            reloadWhenBack = false
+            reloadPage()
+        } else if hasLoaded {
+            picture.isHidden = true
+        }
     }
 
     func load(_ url: URL?, readAccess: URL) {
@@ -1319,6 +1361,7 @@ private final class ArtboardView: NSView, WKNavigationDelegate {
 
     func snapshot() async -> NSImage? {
         guard let web else { return picture.image }
+        if isParked, let image = picture.image { return image }
         return try? await web.takeSnapshot(configuration: nil)
     }
 
@@ -1365,10 +1408,11 @@ private final class ArtboardView: NSView, WKNavigationDelegate {
         let key = pictureKey
         Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(250))
-            guard let self, self.hasLoaded else { return }
+            guard let self, self.hasLoaded, !self.isParked else { return }
             self.picture.isHidden = true
-            guard let key, let image = try? await self.webView.takeSnapshot(configuration: Self.pictureSnapshot()) else { return }
-            ArtboardPictures.save(image, key: key)
+            guard let key, let image = try? await self.webView.takeSnapshot(configuration: Self.pictureSnapshot()),
+                  let picture = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return }
+            ArtboardPictures.save(picture, key: key)
         }
     }
 
@@ -1510,17 +1554,28 @@ enum ArtboardPictures {
         return SHA256.hash(data: Data(text.utf8)).prefix(16).map { String(format: "%02x", $0) }.joined()
     }
 
-    static func image(_ key: String) async -> NSImage? {
+    /// Pictures read this run, kept in memory (a board reloads its pictures
+    /// as the agent writes, All Pages a card's worth at a time).
+    @MainActor private static let recent: NSCache<NSString, NSImage> = {
+        let cache = NSCache<NSString, NSImage>()
+        cache.countLimit = 400
+        return cache
+    }()
+
+    @MainActor static func image(_ key: String) async -> NSImage? {
+        if let image = recent.object(forKey: key as NSString) { return image }
         let file = folder.appending(path: key + ".png")
         let data = await Task.detached(priority: .userInitiated) { try? Data(contentsOf: file) }.value
-        return data.flatMap(NSImage.init(data:))
+        guard let image = data.flatMap(NSImage.init(data:)) else { return nil }
+        recent.setObject(image, forKey: key as NSString)
+        return image
     }
 
-    static func save(_ image: NSImage, key: String) {
-        guard let tiff = image.tiffRepresentation else { return }
+    /// Encoded off the main thread (a TIFF of each page, then a PNG, ran on it).
+    static func save(_ image: CGImage, key: String) {
         let file = folder.appending(path: key + ".png")
         Task.detached(priority: .utility) {
-            guard let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) else { return }
+            guard let png = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]) else { return }
             try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
             try? png.write(to: file, options: .atomic)
         }
