@@ -321,7 +321,21 @@ final class ClaudeUsageStore: ObservableObject {
     private var files: [String: FileState] = [:]
     private var priceBook = ClaudePriceBook.fallback
     private var scanTask: Task<Void, Never>?
-    private var sessionFiles: [String: FileState] = [:]
+    private var sessionFiles: [String: SessionScan] = [:]
+
+    /// A running conversation's transcript as read so far: its file, where
+    /// reading stopped (after its last whole line), the replies counted (a
+    /// streamed reply repeats across lines), and the totals. It grows by a
+    /// line at a time: reread whole on every usage update, a long one was
+    /// parsed again and again for the whole turn.
+    struct SessionScan: Sendable {
+        var url: URL
+        var mtime: TimeInterval
+        var size: Int
+        var offset: Int
+        var seen: Set<String>
+        var days: [String: [String: ClaudeUsageTotals]]
+    }
     private var sessionScans: Set<String> = []
     private var sessionRescan: Set<String> = []
     private let home = URL.homeDirectory
@@ -429,23 +443,41 @@ final class ClaudeUsageStore: ObservableObject {
             }
             out[id] = sum
         }
-        sessionTotals = out
+        // Only a change: every chat window's readout follows this.
+        if out != sessionTotals { sessionTotals = out }
     }
 
-    /// `~/.claude/projects/<project>/<id>.jsonl`, parsed unless unchanged from `old`.
-    private nonisolated static func readSession(_ id: String, home: URL, old: FileState?) -> FileState? {
-        let fm = FileManager.default
-        let projects = home.appending(path: ".claude/projects", directoryHint: .isDirectory)
-        guard let dirs = try? fm.contentsOfDirectory(at: projects, includingPropertiesForKeys: nil) else { return nil }
-        for dir in dirs {
-            let url = dir.appending(path: "\(id).jsonl")
-            guard let attrs = try? url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey]),
-                  let mtime = attrs.contentModificationDate?.timeIntervalSince1970,
-                  let size = attrs.fileSize else { continue }
-            if let old, old.mtime == mtime, old.size == size { return old }
-            return FileState(mtime: mtime, size: size, days: parse(url: url, day: dayFormatter()))
+    /// `~/.claude/projects/<project>/<id>.jsonl` (found once), read on from
+    /// where `old` stopped while it only grew; unchanged, `old`.
+    nonisolated static func readSession(_ id: String, home: URL, old: SessionScan?) -> SessionScan? {
+        let url: URL
+        if let old, FileManager.default.fileExists(atPath: old.url.path(percentEncoded: false)) {
+            url = old.url
+        } else {
+            let projects = home.appending(path: ".claude/projects", directoryHint: .isDirectory)
+            let dirs = (try? FileManager.default.contentsOfDirectory(at: projects, includingPropertiesForKeys: nil)) ?? []
+            guard let found = dirs.lazy.map({ $0.appending(path: "\(id).jsonl") })
+                .first(where: { FileManager.default.fileExists(atPath: $0.path(percentEncoded: false)) }) else { return nil }
+            url = found
         }
-        return nil
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: url.path(percentEncoded: false)),
+              let mtime = (attrs[.modificationDate] as? Date)?.timeIntervalSince1970,
+              let size = (attrs[.size] as? NSNumber)?.intValue else { return nil }
+        if let old, old.url == url, old.mtime == mtime, old.size == size { return old }
+        // Grown: read on. Shorter (rewritten), or new: from the start.
+        var scan = old.flatMap { $0.url == url && size >= $0.offset ? $0 : nil }
+            ?? SessionScan(url: url, mtime: 0, size: 0, offset: 0, seen: [], days: [:])
+        guard let fh = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? fh.close() }
+        try? fh.seek(toOffset: UInt64(scan.offset))
+        let data = (try? fh.readToEnd()) ?? Data()
+        // Up to the last whole line: a line being written is read next time.
+        let whole = data.lastIndex(of: 0x0A).map { data[...$0] } ?? Data()
+        parse(whole, day: dayFormatter(), seen: &scan.seen, into: &scan.days)
+        scan.offset += whole.count
+        scan.mtime = mtime
+        scan.size = size
+        return scan
     }
 
     private func persist() {
@@ -529,9 +561,16 @@ final class ClaudeUsageStore: ObservableObject {
     /// the same message id + request id, so count each pair once.
     private nonisolated static func parse(url: URL, day: DateFormatter) -> [String: [String: ClaudeUsageTotals]] {
         guard let data = try? Data(contentsOf: url) else { return [:] }
-        let iso = Date.ISO8601FormatStyle(includingFractionalSeconds: true), isoPlain = Date.ISO8601FormatStyle()
         var days: [String: [String: ClaudeUsageTotals]] = [:]
         var seen = Set<String>()
+        parse(data, day: day, seen: &seen, into: &days)
+        return days
+    }
+
+    /// Lines of a transcript, added into `days` (`seen`: the replies already counted).
+    nonisolated static func parse(_ data: Data, day: DateFormatter, seen: inout Set<String>,
+                                  into days: inout [String: [String: ClaudeUsageTotals]]) {
+        let iso = Date.ISO8601FormatStyle(includingFractionalSeconds: true), isoPlain = Date.ISO8601FormatStyle()
         let text = String(decoding: data, as: UTF8.self)
         for line in text.split(separator: "\n", omittingEmptySubsequences: true) {
             guard line.contains("\"type\":\"assistant\"") else { continue }
@@ -564,6 +603,5 @@ final class ClaudeUsageStore: ObservableObject {
             let date = (try? iso.parse(stamp)) ?? (try? isoPlain.parse(stamp)) ?? Date(timeIntervalSince1970: 0)
             days[day.string(from: date), default: [:]][ClaudePriceBook.normalize(model), default: ClaudeUsageTotals()] += t
         }
-        return days
     }
 }

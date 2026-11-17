@@ -403,8 +403,15 @@ final class ChatSessionView: NSView {
             // The conversation's priced total (the readout's cost), and the
             // price feed behind the model chooser (both throttled).
             ClaudeUsageStore.shared.refresh()
-            ClaudeUsageStore.shared.$sessionTotals.dropFirst()
-                .sink { [weak self] _ in Task { [weak self] in self?.showUsage() } }
+            // Its own conversation's total, when that changed (not every
+            // chat's on any change), shown without asking for another read.
+            ClaudeUsageStore.shared.$sessionTotals
+                .map { [weak self] totals in
+                    MainActor.assumeIsolated { self?.session.claudeStatus.sessionID.flatMap { totals[$0] } }
+                }
+                .removeDuplicates()
+                .dropFirst()
+                .sink { [weak self] _ in Task { [weak self] in self?.showUsage(rereading: false) } }
                 .store(in: &bag)
         }
         showUsage()
@@ -598,7 +605,9 @@ final class ChatSessionView: NSView {
 
     /// The readout (`$0.47 · 38%`) and, for Claude, the model and effort
     /// choosers' titles; an open Session details follows along.
-    private func showUsage() {
+    /// `rereading`: ask the usage store to read the transcript again (a usage
+    /// update); not when it's the store's answer being shown.
+    private func showUsage(rereading: Bool = true) {
         updatePieces()
         let usage = session.usage
         let percent = usage.flatMap { ClaudeReadout.percent(used: $0.used, size: $0.size) }
@@ -606,7 +615,7 @@ final class ChatSessionView: NSView {
         var tip = usage.map { "Context: \($0.used.formatted()) of \($0.size.formatted()) tokens" }
         if session.agent == .claude {
             let status = session.claudeStatus
-            if let id = status.sessionID { ClaudeUsageStore.shared.refreshSession(id) }
+            if rereading, let id = status.sessionID { ClaudeUsageStore.shared.refreshSession(id) }
             let cost = ClaudeReadout.cost(of: status)
             bar.readoutText = ClaudeReadout.text(cost: cost, percent: percent)
             bar.claude.showModel(title: ClaudeReadout.modelTitle(displayedModel), id: displayedModel, color: .labelColor)

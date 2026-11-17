@@ -383,3 +383,40 @@ struct KeepAwakeTests {
     }
 }
 
+
+/// A running conversation's usage, read on from where the last read stopped.
+struct ClaudeUsageSessionScanTests {
+    private func line(_ message: String, request: String = "r1", output: Int = 5) -> String {
+        #"{"type":"assistant","timestamp":"2026-11-17T01:00:00Z","requestId":"\#(request)","message":{"id":"\#(message)","model":"claude-opus-5-5","usage":{"input_tokens":10,"output_tokens":\#(output)}}}"#
+    }
+
+    private func messages(_ scan: ClaudeUsageStore.SessionScan?) -> Int {
+        (scan?.days.values ?? [:].values).flatMap(\.values).reduce(0) { $0 + $1.messages }
+    }
+
+    @Test func itReadsOnlyWhatWasAddedAndCountsAStreamedReplyOnce() throws {
+        let home = FileManager.default.temporaryDirectory.appending(path: "usage-scan-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: home) }
+        let project = home.appending(path: ".claude/projects/-w")
+        try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
+        let file = project.appending(path: "s1.jsonl")
+        try Data((line("m1") + "\n" + line("m2") + "\n").utf8).write(to: file)
+
+        let first = try #require(ClaudeUsageStore.readSession("s1", home: home, old: nil))
+        #expect(messages(first) == 2)
+        #expect(first.offset == (try Data(contentsOf: file)).count)
+
+        // A streamed reply's line again (counted once), a new one, and half a line.
+        let handle = try FileHandle(forWritingTo: file)
+        try handle.seekToEnd()
+        let half = line("m4")
+        try handle.write(contentsOf: Data((line("m2") + "\n" + line("m3") + "\n" + half.prefix(40)).utf8))
+        let second = try #require(ClaudeUsageStore.readSession("s1", home: home, old: first))
+        #expect(messages(second) == 3, "m2 again isn't counted; the half line waits")
+        try handle.write(contentsOf: Data((half.dropFirst(40) + "\n").utf8))
+        try handle.close()
+        let third = try #require(ClaudeUsageStore.readSession("s1", home: home, old: second))
+        #expect(messages(third) == 4, "the rest of the line, read next time")
+        #expect(ClaudeUsageStore.readSession("s1", home: home, old: third)?.offset == third.offset, "unchanged: as it was")
+    }
+}
