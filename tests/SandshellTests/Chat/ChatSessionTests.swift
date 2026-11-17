@@ -352,6 +352,20 @@ struct ChatWebTranscriptTests {
         #expect(same == true, "rendered in pieces as it came, it's what the whole reply renders to")
     }
 
+    @Test func aLongChatStartsAtItsLatestAndShowsTheRestWhenAsked() async throws {
+        let count = ChatWebTranscript.initialItems + 20
+        for i in 0..<count { session.debugApply(chunk("Message \(i) here", messageID: "long\(i)")) }
+        let (web, window) = try await showing()
+        defer { window.orderOut(nil); window.close() }
+        #expect(try await transcript(web, contains: "Message \(count - 1) here"))
+        let first = await web.debugTranscriptText()
+        #expect(!first.contains("Message 0 here"), "the earliest wait")
+        #expect(first.contains("Show 20 Earlier Messages"))
+        _ = try await web.webView.evaluateJavaScript("document.querySelector('.show-earlier').click(); true")
+        #expect(try await transcript(web, contains: "Message 0 here"), "asked for, they come")
+        #expect(web.showsEarlier)
+    }
+
     @Test func aHiddenChatSkipsUpdatesAndCatchesUpWhenShown() async throws {
         let (web, window) = try await showing()
         defer { window.orderOut(nil); window.close() }

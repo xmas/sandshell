@@ -146,6 +146,7 @@ select#mode {
 .transcript > * { max-width: 760px; margin-left: auto; margin-right: auto; }
 .item { margin: 10px auto; overflow-wrap: anywhere; }
 .omitted { text-align: center; color: var(--faint); font-size: var(--t-small); }
+.omitted .show-earlier { font: inherit; color: var(--accent, inherit); background: none; border: 0; cursor: pointer; padding: 4px 8px; }
 .user { display: flex; justify-content: flex-end; }
 .user .bubble {
   background: var(--user); padding: 8px 12px; border-radius: 16px 16px 4px 16px;

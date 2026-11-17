@@ -141,10 +141,23 @@ final class ChatWebTranscript: NSView {
         }
     }
 
+    /// A long chat starts at its latest items (all of them, thousands of
+    /// views, made the page slow to open); Show Earlier Messages, the rest.
+    static let initialItems = RemoteWire.initialItemLimit
+    private(set) var showsEarlier = false
+
     private func send(_ state: ChatFeed.Snapshot) {
         let session = RemoteWire.SessionSummary(id: source.feedID, name: "", agent: "", agentName: "", folder: "",
                                                 phase: state.status.phase, waiting: nil, isCheck: false)
-        send("state", RemoteWire.State(session: session, status: state.status, items: state.items, omitted: 0, rev: state.rev))
+        let shown = showsEarlier ? state.items[...] : state.items.suffix(Self.initialItems)
+        send("state", RemoteWire.State(session: session, status: state.status, items: Array(shown),
+                                       omitted: state.items.count - shown.count, rev: state.rev))
+    }
+
+    /// Every item, not only the latest (the page's Show Earlier Messages).
+    func showEarlier() {
+        showsEarlier = true
+        sendState()
     }
 
     /// Everything, as a new page (or one that lost its place) starts from.
@@ -218,12 +231,24 @@ final class ChatWebTranscript: NSView {
         default: "show"
         }
         if action == "show" { window?.makeFirstResponder(webView) }
+        // Finding searches the whole chat: its earlier messages too.
+        if action == "show", !showsEarlier { showEarlier() }
         webView.evaluateJavaScript("window.sandshellFind?.(\"\(action)\")", completionHandler: nil)
     }
 
     /// File ▸ Print: the whole transcript, paginated.
     func printTranscript() {
         guard let window else { return }
+        // The whole of it: its earlier messages shown first.
+        if !showsEarlier {
+            showEarlier()
+            Task { [weak self] in
+                await self?.outbox?.value
+                try? await Task.sleep(for: .milliseconds(300))   // laid out
+                self?.printTranscript()
+            }
+            return
+        }
         let info = (NSPrintInfo.shared.copy() as? NSPrintInfo) ?? NSPrintInfo()
         info.horizontalPagination = .fit
         info.isVerticallyCentered = false
@@ -245,6 +270,7 @@ final class ChatWebTranscript: NSView {
         case "ready": pageReady()
         // It missed a patch, or one didn't apply: everything again.
         case "resync": sendState()
+        case "showEarlier": showEarlier()
         case "fileLinks":
             guard let workdir, let text = body["text"] as? String else { return ok(["links": [FileLinks.Link]()]) }
             let code = body["code"] as? [String] ?? []

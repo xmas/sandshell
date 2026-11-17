@@ -313,7 +313,17 @@ function renderAll(scroll) {
   if (state.omitted > 0) {
     const o = document.createElement("div");
     o.className = "item omitted";
-    o.textContent = state.omitted + " earlier messages aren’t shown here.";
+    if (transcriptOnly) {
+      // The Mac starts a long chat at its latest; the rest when asked.
+      const more = document.createElement("button");
+      more.type = "button";
+      more.className = "show-earlier";
+      more.textContent = "Show " + state.omitted + " Earlier Message" + (state.omitted === 1 ? "" : "s");
+      more.addEventListener("click", () => { more.disabled = true; native.postMessage({ name: "showEarlier" }); });
+      o.append(more);
+    } else {
+      o.textContent = state.omitted + " earlier messages aren’t shown here.";
+    }
     nodes.push(o);
   }
   for (const id of state.order) {
