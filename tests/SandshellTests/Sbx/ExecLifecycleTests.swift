@@ -276,3 +276,48 @@ struct ExecLifecycleTests {
         }
     }
 }
+
+/// GETs on the sbx socket, in the app rather than through curl.
+struct UnixSocketHTTPTests {
+    @Test(arguments: [false, true])
+    func itReadsTheBody(chunked: Bool) async throws {
+        let path = "/tmp/sbx-test-\(UUID().uuidString.prefix(8)).sock"
+        defer { unlink(path) }
+        let server = socket(AF_UNIX, SOCK_STREAM, 0)
+        try #require(server >= 0)
+        defer { close(server) }
+        var address = sockaddr_un()
+        address.sun_family = sa_family_t(AF_UNIX)
+        withUnsafeMutableBytes(of: &address.sun_path) { buffer in
+            let name = Array(path.utf8)
+            buffer.copyBytes(from: name)
+            buffer[name.count] = 0
+        }
+        address.sun_len = UInt8(MemoryLayout<sockaddr_un>.size)
+        let bound = withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(server, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) }
+        }
+        try #require(bound == 0 && listen(server, 1) == 0)
+        let body = #"{"Running":false,"ExitCode":3}"#
+        let response = chunked
+            ? "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n10\r\n\(body.prefix(16))\r\n\(String(body.count - 16, radix: 16))\r\n\(body.dropFirst(16))\r\n0\r\n\r\n"
+            : "HTTP/1.0 404 Not Found\r\nContent-Type: application/json\r\n\r\n\(body)"
+        let served = Task.detached { () -> String in
+            let client = accept(server, nil, nil)
+            defer { close(client) }
+            var buffer = [UInt8](repeating: 0, count: 4096)
+            let n = read(client, &buffer, buffer.count)
+            let request = String(decoding: buffer[0..<max(n, 0)], as: UTF8.self)
+            let bytes = Array(response.utf8)
+            _ = bytes.withUnsafeBytes { write(client, $0.baseAddress, $0.count) }
+            return request
+        }
+        let got = await Task.detached { UnixSocketHTTP.get("/exec/abc/json", socket: path) }.value
+        #expect(got == body, "the body, whatever the status (as curl gave it)")
+        #expect(await served.value.hasPrefix("GET /exec/abc/json HTTP/1.0\r\n"))
+    }
+
+    @Test func noSocketNoAnswer() {
+        #expect(UnixSocketHTTP.get("/x", socket: "/tmp/no-such-\(UUID().uuidString.prefix(8)).sock") == nil)
+    }
+}

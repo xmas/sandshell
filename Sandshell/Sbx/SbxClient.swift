@@ -39,8 +39,28 @@ actor SbxClient {
         return (allowed.count, denied.count)
     }
 
+    /// The last `sbx ls`: when, and the `changes` count it was read at.
+    private var recentList: (sandboxes: [Sandbox], at: Date, changes: Int)?
+
+    /// `sbx ls`, or one read in the last `age` seconds with no sbx command
+    /// since: every window polls its sandboxes every 5 s, and with their polls
+    /// drifting apart each ran its own `sbx ls`.
+    func list(within age: TimeInterval) async throws -> [Sandbox] {
+        if let recent = recentList, recent.changes == changes, Date.now.timeIntervalSince(recent.at) < age {
+            return recent.sandboxes
+        }
+        return try await list()
+    }
+
     /// `sbx ls --json`
     func list() async throws -> [Sandbox] {
+        let startedAt = changes
+        let sandboxes = try await listNow()
+        if changes == startedAt { recentList = (sandboxes, .now, startedAt) }
+        return sandboxes
+    }
+
+    private func listNow() async throws -> [Sandbox] {
         let out = try await sharedRun(["ls", "--json"])
         guard out.ok else { throw SbxError.command(out.stderr.isEmpty ? out.stdout : out.stderr) }
         // Older CLIs wrap the list (`{"sandboxes": [...]}`); sbx 0.47+ emits a
@@ -756,31 +776,11 @@ actor SbxClient {
     /// of blocking on it, so the actor serves other calls meanwhile, and reads
     /// the response as it arrives, so one bigger than the pipe buffer can't
     /// stall curl.
+    /// A GET on the sbx socket, here in the app (it was a curl process: one
+    /// per terminal per check). The body whatever the status, as curl gave it.
     private func socketGET(path: String, socketPath: String) async -> String? {
         guard FileManager.default.fileExists(atPath: socketPath) else { return nil }
-        let proc = Process()
-        proc.executableURL = URL(filePath: "/usr/bin/curl")
-        proc.arguments = ["-s", "--max-time", "3", "--unix-socket",
-                          socketPath, "http://localhost\(path)"]
-        let pipe = Pipe()
-        proc.standardOutput = pipe
-        proc.standardError = Pipe()
-        let box = DataBox()
-        pipe.fileHandleForReading.readabilityHandler = { h in
-            if !box.drain(h) { h.readabilityHandler = nil }
-        }
-        return await withCheckedContinuation { cont in
-            proc.terminationHandler = { p in
-                pipe.fileHandleForReading.readabilityHandler = nil
-                box.drain(pipe.fileHandleForReading)   // what the pipe still holds at exit
-                cont.resume(returning: p.terminationStatus == 0 ? String(data: box.data, encoding: .utf8) : nil)
-            }
-            do { try proc.run() } catch {
-                pipe.fileHandleForReading.readabilityHandler = nil
-                Log.error(.sbx, "sbx socket GET \(path) failed to spawn: \(error.localizedDescription)")
-                cont.resume(returning: nil)
-            }
-        }
+        return await Task.detached(priority: .utility) { UnixSocketHTTP.get(path, socket: socketPath) }.value
     }
 
     private static func pathComponent(_ value: String) -> String {
@@ -1004,5 +1004,77 @@ enum SbxError: LocalizedError {
         switch self {
         case let .command(m), let .parse(m), let .spawn(m): m
         }
+    }
+}
+
+/// HTTP/1.0 GETs over a Unix socket (the sbx daemon's Docker-style API):
+/// connect, ask, read to the end. Blocks: call off the main thread.
+enum UnixSocketHTTP {
+    nonisolated static func get(_ path: String, socket socketPath: String, timeout: TimeInterval = 3) -> String? {
+        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        guard fd >= 0 else { return nil }
+        defer { close(fd) }
+        var wait = timeval(tv_sec: Int(timeout), tv_usec: 0)
+        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &wait, socklen_t(MemoryLayout<timeval>.size))
+        setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &wait, socklen_t(MemoryLayout<timeval>.size))
+        var noSignal: Int32 = 1
+        setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &noSignal, socklen_t(MemoryLayout<Int32>.size))
+        var address = sockaddr_un()
+        address.sun_family = sa_family_t(AF_UNIX)
+        let name = Array(socketPath.utf8)
+        guard name.count < MemoryLayout.size(ofValue: address.sun_path) else { return nil }
+        withUnsafeMutableBytes(of: &address.sun_path) { buffer in
+            buffer.copyBytes(from: name)
+            buffer[name.count] = 0
+        }
+        address.sun_len = UInt8(MemoryLayout<sockaddr_un>.size)
+        let connected = withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) }
+        }
+        guard connected == 0 else { return nil }
+        let request = Array("GET \(path) HTTP/1.0\r\nHost: localhost\r\nConnection: close\r\n\r\n".utf8)
+        var sent = 0
+        while sent < request.count {
+            let n = request[sent...].withUnsafeBytes { write(fd, $0.baseAddress, $0.count) }
+            guard n > 0 else { return nil }
+            sent += n
+        }
+        let deadline = Date.now.addingTimeInterval(timeout)
+        var response = Data()
+        var chunk = [UInt8](repeating: 0, count: 16 * 1024)
+        while Date.now < deadline {
+            let n = read(fd, &chunk, chunk.count)
+            if n < 0, errno == EINTR { continue }
+            guard n > 0 else { break }
+            response.append(contentsOf: chunk[0..<n])
+            guard response.count < 16 << 20 else { return nil }
+        }
+        return body(of: response)
+    }
+
+    /// The body of an HTTP response (unchunked if it came in chunks); nil if it isn't one.
+    nonisolated static func body(of response: Data) -> String? {
+        guard let split = response.firstRange(of: Data("\r\n\r\n".utf8)) else { return nil }
+        let head = String(decoding: response[..<split.lowerBound], as: UTF8.self)
+        guard head.hasPrefix("HTTP/") else { return nil }
+        var body = Data(response[split.upperBound...])
+        let chunked = head.split(separator: "\r\n").contains {
+            $0.lowercased().hasPrefix("transfer-encoding:") && $0.lowercased().contains("chunked")
+        }
+        if chunked {
+            var out = Data()
+            var rest = body[...]
+            while let lineEnd = rest.firstRange(of: Data("\r\n".utf8)) {
+                let sizeText = String(decoding: rest[..<lineEnd.lowerBound], as: UTF8.self).split(separator: ";").first ?? ""
+                guard let size = Int(sizeText.trimmingCharacters(in: .whitespaces), radix: 16), size > 0 else { break }
+                let start = lineEnd.upperBound
+                guard rest.distance(from: start, to: rest.endIndex) >= size else { break }
+                let end = rest.index(start, offsetBy: size)
+                out.append(rest[start..<end])
+                rest = rest[end...].dropFirst(2)
+            }
+            body = out
+        }
+        return String(data: body, encoding: .utf8)
     }
 }

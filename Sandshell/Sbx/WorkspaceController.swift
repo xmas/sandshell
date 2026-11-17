@@ -566,7 +566,8 @@ final class WorkspaceController: ObservableObject {
         }
         guard !targets.isEmpty else { return }
         // sbx didn't answer this time: that isn't "gone".
-        guard let list = try? await SbxClient.shared.list() else { return }
+        // Another window's answer from the last few seconds will do.
+        guard let list = try? await SbxClient.shared.list(within: Self.containerPollEvery - 1) else { return }
         for (agent, name, started) in targets {
             // No bring-up ran meanwhile, so a building phase is left over.
             guard Self.bringUps[name] == nil, Self.bringUpsStarted[name] == started else { continue }
