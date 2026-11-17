@@ -594,6 +594,20 @@ struct FileModelTests {
         }
     }
 
+    // MARK: - FileIcons
+
+    @MainActor
+    struct Icons {
+        @Test func filesOfAKindShareAnIcon() {
+            let a = FileIcons.icon(URL(filePath: "/nonexistent/a.swift"), isDirectory: false)
+            let b = FileIcons.icon(URL(filePath: "/elsewhere/B.SWIFT"), isDirectory: false)
+            #expect(a === b, "one lookup for every .swift file")
+            #expect(FileIcons.icon(URL(filePath: "/x/notes.md"), isDirectory: false) !== a)
+            #expect(FileIcons.icon(URL(filePath: "/x/Sources"), isDirectory: true)
+                    === FileIcons.icon(URL(filePath: "/y/Tests"), isDirectory: true), "a folder is a folder")
+        }
+    }
+
     // MARK: - FileRefresh
 
     /// What a burst of file-system events asks of the Files pane.

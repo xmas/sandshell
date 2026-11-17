@@ -1,3 +1,4 @@
+import UniformTypeIdentifiers
 import AppKit
 import CoreServices
 
@@ -334,4 +335,30 @@ final class FileWatcher {
     }
 
     isolated deinit { stop() }
+}
+
+/// A file's icon for the Files tree: by its kind, kept (a lookup of its own
+/// for every row on every reload went to LaunchServices and the disk). A
+/// folder that's a package (an app, a project) keeps its own icon.
+@MainActor
+enum FileIcons {
+    private static var byKind: [String: NSImage] = [:]
+    private static var packages: [String: NSImage] = [:]
+
+    static func icon(_ url: URL, isDirectory: Bool) -> NSImage {
+        let ext = url.pathExtension.lowercased()
+        if isDirectory {
+            guard !ext.isEmpty else { return kind("/folder") { NSWorkspace.shared.icon(for: .folder) } }
+            if packages.count > 200 { packages = [:] }
+            return packages[url.path] ?? { let image = NSWorkspace.shared.icon(forFile: url.path); packages[url.path] = image; return image }()
+        }
+        return kind(ext) { NSWorkspace.shared.icon(for: UTType(filenameExtension: ext) ?? .data) }
+    }
+
+    private static func kind(_ key: String, _ make: () -> NSImage) -> NSImage {
+        if let image = byKind[key] { return image }
+        let image = make()
+        byKind[key] = image
+        return image
+    }
 }
