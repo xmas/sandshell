@@ -2,6 +2,10 @@
 
 A running log of what changed, newest first. Yes, we actually write these.
 
+## v0.2.65 — "Open Wide"
+- **Big canvases open right away.** Opening a canvas with dozens of artboards could freeze Sandshell for minutes. Every artboard started its own web page engine as soon as the canvas opened, even the ones out of view. Now an artboard starts one only when its page loads, and every canvas and chat in Sandshell shares a single engine.
+- **A canvas waits until it's placed.** Opening a canvas no longer loads pages for the corner it starts at before it zooms to fit; only the artboards you end up seeing load.
+
 ## v0.2.64 — "Light Canvas"
 - **Big canvases open quickly, and stay steady.** A canvas with dozens of artboards used to load every page at once, a separate web session each, which was slow and could bring Sandshell down. Now only the artboards you can see load, a few at a time, and each one leaves a small picture so the canvas shows everything at once the next time you open it. Zoomed far out, artboards stay pictures until you zoom in or click one.
 - **Find your way around a canvas.** The bar at the canvas's bottom left (blank white before — fixed) steps through the artboards with ‹ and ›, and its label is a menu of every artboard. The View menu has Next Artboard (⌘]), Previous Artboard (⌘[) and Go to Artboard ▸ for the canvas you're looking at.
