@@ -590,18 +590,20 @@ final class ChatSession: ObservableObject, ChatFeedSource {
     static func boardNotice(board: String) -> String {
         """
         [Sandshell: this session now has a Canvas board at \(board), shown beside this chat and reloading \
-        as you write. When asked for a design, put it there as artboards: board.json lists them as \
-        {"title": "…", "artboards": [{"id": "…", "title": "…", "file": "page.html", "width": 390, "height": 844}]}, \
-        with one HTML page per artboard in that folder.]
+        as you write. When asked for a design, put it there, a page per question and a design per option: \
+        board.json is {"title": "…", "pages": [{"id": "…", "title": "…", "designs": [{"id": "…", "title": "…", \
+        "file": "screen.html", "width": 390, "height": 844}]}]} (a design of several screens has "screens": \
+        [{"id", "title", "file"}]), with one HTML file per screen in that folder; the sandshell:canvas skill has the rest.]
         """
     }
 
     static func designInstructions(board: String) -> String {
         """
-        This is a Sandshell design session. Its Canvas board is \(board) (board.json and a page per \
-        artboard there), and Sandshell shows it beside this chat, reloading as you write. Put every \
-        design you make here on that board as artboards, following the sandshell:canvas skill; keep the \
-        board's title fitting what it's become. Make variations as sibling artboards to compare.
+        This is a Sandshell design session. Its Canvas board is \(board) (board.json and an HTML file per \
+        screen there), and Sandshell shows it beside this chat, a page at a time, reloading as you write. Put \
+        every design you make here on that board, following the sandshell:canvas skill: a page per question, \
+        a design per option (A, B, C to compare), its states or steps as screens; keep the board's title \
+        fitting what it's become.
         """
     }
 
