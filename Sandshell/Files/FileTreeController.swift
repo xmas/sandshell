@@ -328,19 +328,21 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
         if renaming { refreshAfterRename = true; return }
         let work = pending
         pending = FileRefresh()
-        var relisted = work.rescan
+        // A folder whose files changed but not what it lists (a file
+        // written over) needs nothing in the tree: just the editor's check.
+        var relisted: [FileNode] = []
         if work.rescan {
             rootNode?.reloadLoaded()
         } else {
             for folder in work.folders {
-                guard let node = listedNode(atRealPath: folder) else { continue }
-                node.loadChildren()
-                relisted = true
+                guard let node = listedNode(atRealPath: folder), node.loadChildren() else { continue }
+                relisted.append(node)
             }
         }
-        if relisted {
-            onFilesChanged?()
-            if !filter.stringValue.isEmpty { applyFilter(keepingSelection: true) } else { reloadOutline() }
+        if work.rescan || !work.folders.isEmpty { onFilesChanged?() }
+        if work.rescan || !relisted.isEmpty {
+            if !filter.stringValue.isEmpty { applyFilter(keepingSelection: true) }
+            else { reloadOutline(only: work.rescan ? nil : relisted) }
         }
         if work.git { refreshGit(history: work.history) }
     }
@@ -362,14 +364,20 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
     /// selected rows, not items, so a file created above would take the
     /// selection (and ⌘⌫ would trash it). A renamed or moved file stays
     /// selected under its new path. `update` changes what's listed first.
-    private func reloadOutline(_ update: () -> Void = {}) {
+    /// `only`: the folders whose listings changed, reloaded alone (with what's
+    /// under them) — the tree, not a list; nil: everything.
+    private func reloadOutline(only folders: [FileNode]? = nil, _ update: () -> Void = {}) {
         let items = outline.selectedRowIndexes.compactMap { outline.item(atRow: $0).map { $0 as AnyObject } }
         let paths = Set(items.compactMap { ($0 as? FileNode)?.url }.map { Self.following($0, through: movesSinceReload).path })
         let others = items.filter { !($0 is FileNode) }
         movesSinceReload = []
         let wasList = filterResults != nil || searchGroups != nil
         update()
-        outline.reloadData()
+        if let folders, filterResults == nil, searchGroups == nil, !folders.contains(where: { $0 === rootNode }) {
+            for folder in folders { outline.reloadItem(folder, reloadChildren: true) }
+        } else {
+            outline.reloadData()
+        }
         // Back to the tree from a list: the outline forgot which folders were
         // open (their nodes weren't in it), so reopen the remembered ones.
         if wasList, filterResults == nil, searchGroups == nil { restoreExpansion() }
@@ -382,6 +390,22 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
             return others.contains { $0 === item as AnyObject }
         }
         outline.selectRowIndexes(IndexSet(rows), byExtendingSelection: false)
+    }
+
+    /// Git's marks changed: only the rows whose mark did are drawn again (a
+    /// whole reload, every row's cell and icon, on every status).
+    private func reloadBadges(from old: GitStatus) {
+        func mark(_ node: FileNode, _ status: GitStatus) -> (GitStatus.Change?, Bool) {
+            let path = node.url.path, real = node.url.realPath
+            return (status.changes[path] ?? status.changes[real],
+                    node.isDirectory && (status.dirtyFolders.contains(path) || status.dirtyFolders.contains(real)))
+        }
+        let rows = (0..<outline.numberOfRows).filter { row in
+            guard let node = outline.item(atRow: row) as? FileNode else { return false }
+            return mark(node, old) != mark(node, git)
+        }
+        guard !rows.isEmpty else { return }
+        outline.reloadData(forRowIndexes: IndexSet(rows), columnIndexes: IndexSet(integer: 0))
     }
 
     /// Where `url` is after `moves` (in order): moved itself, or inside a
@@ -400,10 +424,11 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
         diskGit = status
         let shown = status.with(edited: editedPaths)
         if shown != git {
+            let old = git
             git = shown
-            if renaming { refreshAfterRename = true } else {
-                reloadOutline { if self.changedOnly && self.filter.stringValue.isEmpty { self.showChangedList() } }
-            }
+            if renaming { refreshAfterRename = true }
+            else if changedOnly && filter.stringValue.isEmpty { reloadOutline { self.showChangedList() } }
+            else { reloadBadges(from: old) }
             onGitStatus?(shown)
         }
         updateChangedTitle()

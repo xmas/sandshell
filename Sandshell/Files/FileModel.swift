@@ -247,8 +247,11 @@ final class FileNode: NSObject {
 
     var isLoaded: Bool { children != nil }
 
-    func loadChildren() {
-        guard isDirectory else { return }
+    /// Lists the folder (again); whether what it lists changed.
+    @discardableResult
+    func loadChildren() -> Bool {
+        guard isDirectory else { return false }
+        let before = children
         let fm = FileManager.default
         let urls = (try? fm.contentsOfDirectory(at: url, includingPropertiesForKeys: [.isDirectoryKey],
                                                  options: [])) ?? []
@@ -264,6 +267,8 @@ final class FileNode: NSObject {
                 if a.isDirectory != b.isDirectory { return a.isDirectory }
                 return a.name.localizedStandardCompare(b.name) == .orderedAscending
             }
+        guard let before, let after = children else { return true }
+        return before.count != after.count || zip(before, after).contains { $0 !== $1 }
     }
 
     /// Re-list every folder that's been loaded (after a file-system change).

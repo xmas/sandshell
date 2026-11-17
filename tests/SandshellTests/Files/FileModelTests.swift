@@ -594,6 +594,24 @@ struct FileModelTests {
         }
     }
 
+    // MARK: - Listing again
+
+    @MainActor
+    struct Relisting {
+        @Test func aFolderSaysWhetherWhatItListsChanged() throws {
+            let scratch = try FileModelScratch()
+            try scratch.file("a.txt", "1")
+            let node = FileNode(url: scratch.url, isDirectory: true)
+            #expect(node.loadChildren(), "the first listing")
+            try scratch.file("a.txt", "2")
+            #expect(!node.loadChildren(), "a file written over: the same list (no reload)")
+            try scratch.file("b.txt")
+            #expect(node.loadChildren(), "a new file")
+            try scratch.remove("a.txt")
+            #expect(node.loadChildren(), "a file gone")
+        }
+    }
+
     // MARK: - FileIcons
 
     @MainActor
