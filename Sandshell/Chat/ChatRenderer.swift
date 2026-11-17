@@ -1,4 +1,5 @@
 import AppKit
+import Synchronization
 
 // MARK: - Block backgrounds (TextKit 2)
 
@@ -584,7 +585,7 @@ enum SyntaxHighlighter {
         let hashComments = ["python", "shell", "ruby", "yaml", "toml"].contains(lang)
 
         func paint(_ pattern: String, _ color: NSColor) {
-            guard let re = try? NSRegularExpression(pattern: pattern) else { return }
+            guard let re = compiled(pattern) else { return }
             for m in re.matches(in: source, range: full) { out.addAttribute(.foregroundColor, value: color, range: m.range) }
         }
         paint(#"\b\d+(\.\d+)?\b"#, .systemBlue)
@@ -597,13 +598,25 @@ enum SyntaxHighlighter {
         // apostrophe in a word would otherwise run on into a comment after it.
         let string = #""(\\.|[^"\\\n])*"|"# + singleQuoted(lang) + #"|`(\\.|[^`\\])*`"#
         let comment = (hashComments ? #"#.*$"# : #"//.*$"#) + #"|/\*[\s\S]*?\*/"#
-        if let re = try? NSRegularExpression(pattern: "(?<string>\(string))|\(comment)", options: .anchorsMatchLines) {
+        if let re = compiled("(?<string>\(string))|\(comment)", options: .anchorsMatchLines) {
             for m in re.matches(in: source, range: full) {
                 let isString = m.range(withName: "string").location != NSNotFound
                 out.addAttribute(.foregroundColor, value: isString ? NSColor.systemRed : .secondaryLabelColor, range: m.range)
             }
         }
         return out
+    }
+
+    /// The patterns, compiled once each (the keyword one, a few hundred
+    /// alternatives, was compiled again every time a file was colored).
+    private static let patterns = Mutex<[String: NSRegularExpression]>([:])
+
+    private static func compiled(_ pattern: String, options: NSRegularExpression.Options = []) -> NSRegularExpression? {
+        let key = "\(options.rawValue)|" + pattern
+        if let re = patterns.withLock({ $0[key] }) { return re }
+        guard let re = try? NSRegularExpression(pattern: pattern, options: options) else { return nil }
+        patterns.withLock { $0[key] = re }
+        return re
     }
 
     /// Languages where ' only ever opens a character literal (Swift has no

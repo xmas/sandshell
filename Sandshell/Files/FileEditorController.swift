@@ -220,7 +220,9 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
     private var scope: ChangeScope = .uncommitted
     private var scopeFiles: Set<String> = []
     private var changes = LineChanges()
-    private var highlightPending = false
+    /// The coloring waiting for a pause in the typing, and the text it's for.
+    private var highlightTask: Task<Void, Never>?
+    private var textVersion = 0
     /// The Changes view's hunks (unstaged vs the index, staged vs HEAD) and the
     /// file they belong to, for the per-hunk Stage / Unstage / Revert links.
     private var shownPatches: (file: OpenFile, unstaged: FilePatch, staged: FilePatch)?
@@ -1413,6 +1415,7 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
             updateDiffColumn()   // its hunk actions only work on a saved file
         }
         ruler.lineCountChanged()
+        textVersion += 1
         scheduleHighlight()
         scheduleLiveDiff()
     }
@@ -1429,13 +1432,26 @@ final class FileEditorController: NSViewController, NSTextViewDelegate, NSMenuIt
         }
     }
 
+    /// Colors once typing pauses, worked out off the main thread (the whole
+    /// file, several patterns over it, ran on it every 150 ms while you typed);
+    /// put in only if the text is still what they were worked out for.
     private func scheduleHighlight() {
-        guard !highlightPending else { return }
-        highlightPending = true
-        Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(150))
-            self?.highlightPending = false
-            self?.highlight()
+        highlightTask?.cancel()
+        highlightTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(200))
+            guard !Task.isCancelled, let self, let file = self.current, let storage = self.editor.textStorage,
+                  storage.length < 300_000 else { return }
+            let version = self.textVersion
+            let input = UncheckedSendable((text: storage.string, language: file.language, font: self.editorFont,
+                                           syntax: self.prefs.colorsSyntax))
+            let colored = await Task.detached(priority: .userInitiated) {
+                let i = input.value
+                return UncheckedSendable(i.syntax ? SyntaxHighlighter.highlight(i.text, language: i.language, font: i.font)
+                                                  : NSAttributedString(string: i.text, attributes: [.foregroundColor: NSColor.labelColor]))
+            }.value.value
+            guard !Task.isCancelled, version == self.textVersion, self.current === file,
+                  let storage = self.editor.textStorage, storage.length == colored.length else { return }
+            self.editor.keepingTopLine { EditorRecolor.apply(colored, to: storage) }
         }
     }
 
@@ -1959,4 +1975,11 @@ final class FileMenu: NSMenu, NSMenuDelegate {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
     }
+}
+
+/// A value handed to another thread that's only read there (an attributed
+/// string of colors, built off the main thread and put in on it).
+struct UncheckedSendable<Value>: @unchecked Sendable {
+    let value: Value
+    init(_ value: Value) { self.value = value }
 }
