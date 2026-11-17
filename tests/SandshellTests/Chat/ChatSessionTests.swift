@@ -873,3 +873,30 @@ struct ACPConnectionExitTests {
         }
     }
 }
+
+/// The agent's stdout, read a line at a time (`ACPConnection.readLines`).
+struct ACPLineReaderTests {
+    @Test(.timeLimit(.minutes(1)))
+    func linesComeWholeHoweverTheyArrive() async throws {
+        let pipe = Pipe()
+        let big = String(repeating: "x", count: 300_000)
+        let pieces = ["a\nb", "b\n", String(big.prefix(70_000)), String(big.dropFirst(70_000)), "\n\nlast"]
+        let writer = pipe.fileHandleForWriting
+        let written = Task.detached {
+            for piece in pieces {
+                writer.write(Data(piece.utf8))
+                try? await Task.sleep(for: .milliseconds(20))
+            }
+            try? writer.close()
+        }
+        let fd = pipe.fileHandleForReading.fileDescriptor
+        let lines = await Task.detached { () -> [String] in
+            var out: [String] = []
+            ACPConnection.readLines(fd: fd) { out.append(String(decoding: $0, as: UTF8.self)) }
+            return out
+        }.value
+        await written.value
+        #expect(lines.map(\.count) == [1, 2, 300_000, 4], "split lines joined, the empty one skipped, the last without its newline")
+        #expect(lines.first == "a" && lines.last == "last")
+    }
+}

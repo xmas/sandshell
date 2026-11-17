@@ -210,11 +210,18 @@ final class ACPConnection: @unchecked Sendable {
             if n < 0, errno == EINTR { continue }
             guard n > 0 else { break }
             buffer.append(contentsOf: chunk[0..<n])
-            while let nl = buffer.firstIndex(of: 0x0A) {
-                let line = buffer[buffer.startIndex..<nl]
-                buffer.removeSubrange(buffer.startIndex...nl)
+            // Only what just arrived can hold a newline not seen yet (a line of
+            // megabytes — an image, a big file — was rescanned from its start on
+            // every read), and what's left is moved down once, not per line.
+            var start = buffer.startIndex
+            var from = buffer.endIndex - n
+            while let nl = buffer[from...].firstIndex(of: 0x0A) {
+                let line = buffer[start..<nl]
                 if !line.isEmpty { onLine(Data(line)) }
+                start = nl + 1
+                from = start
             }
+            if start > buffer.startIndex { buffer = buffer.subdata(in: start..<buffer.endIndex) }
         }
         if !buffer.isEmpty { onLine(buffer) }
     }
