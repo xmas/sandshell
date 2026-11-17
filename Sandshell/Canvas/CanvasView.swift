@@ -540,6 +540,12 @@ final class CanvasView: NSView {
     var debugArtboardIDs: [String] { (board?.artboards ?? []).map(\.id).filter { artboardViews[$0] != nil } }
     var debugLoadedCount: Int { artboardViews.values.filter(\.hasLoaded).count }
     var debugReloads: Int { artboardViews.values.reduce(0) { $0 + $1.reloads } }
+    /// Artboards that have made their web view.
+    var debugWebViewCount: Int { artboardViews.values.filter(\.hasWebView).count }
+    /// Every web view made is on the app's process pool.
+    var debugSharesProcessPool: Bool {
+        artboardViews.values.compactMap(\.debugProcessPool).allSatisfy { $0 === WKProcessPool.app }
+    }
     var debugMessage: String? { messageLabel.isHidden ? nil : messageLabel.stringValue }
     var debugMagnification: CGFloat { scrollView.magnification }
     func debugPageText(_ id: String) async -> String? { await artboardViews[id]?.pageText() }
@@ -793,12 +799,27 @@ private struct CanvasNoteEntry: View {
     }
 }
 
+@MainActor
+extension WKProcessPool {
+    /// The app's web views share one. A configuration left without one makes
+    /// its own, and each new one registers with the system for power changes
+    /// on the main thread: a big board's artboards, all at once, hung there.
+    static let app = WKProcessPool()
+}
+
 /// One artboard: its title, then the page in a web view of the artboard's size.
 @MainActor
 private final class ArtboardView: NSView, WKNavigationDelegate {
     static let titleHeight: CGFloat = 28
     private let titleLabel = NSTextField(labelWithString: "")
-    private let webView: ArtboardWebView
+    private let dataStore: WKWebsiteDataStore
+    /// Its page, made when it first loads: an artboard that's never in view
+    /// never starts one (making forty at once, as a big board opened, held
+    /// the window up on WebKit's start-up).
+    private var web: ArtboardWebView?
+    private var webView: ArtboardWebView { web ?? makeWebView() }
+    /// The page has a view (it's loaded, or loading).
+    var hasWebView: Bool { web != nil }
     private var pins: [NSView] = []
     private var areaBoxes: [NSView] = []
     private let overlay = CommentOverlay()
@@ -838,25 +859,14 @@ private final class ArtboardView: NSView, WKNavigationDelegate {
     /// `dataStore`: the canvas's, shared by its artboards (one each started a
     /// WebKit session per artboard: a big board was slow to open).
     init(dataStore: WKWebsiteDataStore) {
-        let config = WKWebViewConfiguration()
-        config.websiteDataStore = dataStore
-        webView = ArtboardWebView(frame: .zero, configuration: config)
+        self.dataStore = dataStore
         super.init(frame: .zero)
         titleLabel.font = .role(.body)
         titleLabel.textColor = .secondaryLabelColor
         titleLabel.lineBreakMode = .byTruncatingTail
         addSubview(titleLabel)
-        webView.navigationDelegate = self
-        webView.onNote = { [weak self] point in self?.onNote?(point, nil) }
         overlay.onComment = { [weak self] point, area in self?.onNote?(point, area) }
         overlay.isHidden = true
-        webView.allowsMagnification = false
-        webView.wantsLayer = true
-        webView.layer?.cornerRadius = 6
-        webView.layer?.masksToBounds = true
-        webView.layer?.borderWidth = 1
-        webView.layer?.borderColor = NSColor.separatorColor.cgColor
-        addSubview(webView)
         picture.wantsLayer = true
         picture.layer?.cornerRadius = 6
         picture.layer?.masksToBounds = true
@@ -871,10 +881,32 @@ private final class ArtboardView: NSView, WKNavigationDelegate {
     override func layout() {
         super.layout()
         titleLabel.frame = NSRect(x: 0, y: 4, width: bounds.width, height: 18)
-        webView.frame = NSRect(x: 0, y: Self.titleHeight, width: bounds.width,
-                               height: max(bounds.height - Self.titleHeight, 0))
-        picture.frame = webView.frame
-        overlay.frame = webView.frame
+        let page = pageFrame
+        web?.frame = page
+        picture.frame = page
+        overlay.frame = page
+    }
+
+    private var pageFrame: NSRect {
+        NSRect(x: 0, y: Self.titleHeight, width: bounds.width, height: max(bounds.height - Self.titleHeight, 0))
+    }
+
+    private func makeWebView() -> ArtboardWebView {
+        let config = WKWebViewConfiguration()
+        config.websiteDataStore = dataStore
+        config.processPool = .app
+        let view = ArtboardWebView(frame: pageFrame, configuration: config)
+        view.navigationDelegate = self
+        view.onNote = { [weak self] point in self?.onNote?(point, nil) }
+        view.allowsMagnification = false
+        view.wantsLayer = true
+        view.layer?.cornerRadius = 6
+        view.layer?.masksToBounds = true
+        view.layer?.borderWidth = 1
+        view.layer?.borderColor = NSColor.separatorColor.cgColor
+        addSubview(view, positioned: .below, relativeTo: picture)
+        web = view
+        return view
     }
 
     /// Its page, to load when the canvas gets to it; its last picture until then.
@@ -935,21 +967,24 @@ private final class ArtboardView: NSView, WKNavigationDelegate {
 
     #if DEBUG
     var debugWebView: WKWebView { webView }
+    var debugProcessPool: WKProcessPool? { web?.configuration.processPool }
     var pinCount: Int { pins.count }
     var debugOverlay: NSView { overlay }
     #endif
 
     /// Where a note's popover points from.
-    var noteAnchor: NSView { webView }
+    var noteAnchor: NSView { web ?? picture }
 
     /// The element at `point`, from the page; nil if it won't say.
     func element(at point: CGPoint, area: CGRect? = nil) async -> CanvasNote.Element? {
-        let json = try? await webView.evaluateJavaScript(CanvasNote.elementScript(at: point, area: area)) as? String
+        guard let web else { return nil }
+        let json = try? await web.evaluateJavaScript(CanvasNote.elementScript(at: point, area: area)) as? String
         return json.flatMap { try? JSONDecoder().decode(CanvasNote.Element.self, from: Data($0.utf8)) }
     }
 
     func snapshot() async -> NSImage? {
-        try? await webView.takeSnapshot(configuration: nil)
+        guard let web else { return picture.image }
+        return try? await web.takeSnapshot(configuration: nil)
     }
 
     /// Numbered pins over the page where its notes point.
@@ -983,7 +1018,8 @@ private final class ArtboardView: NSView, WKNavigationDelegate {
     }
 
     func pageText() async -> String? {
-        try? await webView.evaluateJavaScript("document.body ? document.body.innerText : ''") as? String
+        guard let web else { return nil }
+        return try? await web.evaluateJavaScript("document.body ? document.body.innerText : ''") as? String
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {

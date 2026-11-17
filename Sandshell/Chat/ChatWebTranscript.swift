@@ -51,6 +51,7 @@ final class ChatWebTranscript: NSView {
         super.init(frame: .zero)
         relay.owner = self
         let config = WKWebViewConfiguration()
+        config.processPool = .app
         config.setURLSchemeHandler(relay, forURLScheme: Self.scheme)
         config.userContentController.addScriptMessageHandler(relay, contentWorld: .page, name: "sandshell")
         // Before the page's own script: it's the transcript alone.

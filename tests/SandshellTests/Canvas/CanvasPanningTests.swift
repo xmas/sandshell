@@ -434,11 +434,14 @@ struct CanvasLoadingTests {
         canvas.layoutSubtreeIfNeeded()
         try await Task.sleep(for: .milliseconds(300))   // its zoom to fit
         #expect(canvas.debugLoadedCount == 0, "nothing in view yet")
+        #expect(canvas.debugWebViewCount == 0, "no page started for any of them yet")
         canvas.go(to: 0)   // the first two in view, at a size that loads pages
         let end = Date().addingTimeInterval(15)
         while canvas.debugLoadedCount < 2, Date() < end { try await Task.sleep(for: .milliseconds(50)) }
         try await Task.sleep(for: .milliseconds(300))
         #expect(canvas.debugLoadedCount == 2, "the two in view, not the two far off")
+        #expect(canvas.debugWebViewCount == 2, "web views only for the pages that loaded")
+        #expect(canvas.debugSharesProcessPool, "one process pool for the app, not one each")
         canvas.go(to: 3)
         let later = Date().addingTimeInterval(15)
         while canvas.debugLoadedCount < 4, Date() < later { try await Task.sleep(for: .milliseconds(50)) }
