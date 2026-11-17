@@ -410,9 +410,16 @@ final class SessionSurfaces {
         Log.info(.workspace, "claude hasn't been told to trust \(workdir): the terminal will ask")
         controller.setWaiting(id, true, for: "you to trust this folder", ask: "Trust this folder? Answer in the terminal.")
         Task { [weak self, weak terminal] in
-            while let self, let terminal, self.terminals[id] === terminal,
-                  ClaudeFolderTrust.isTrusted(workdir: workdir, home: home) == false {
+            // Read again (it can be megabytes of JSON) only once it's been written.
+            let record = home.appending(path: ".claude/.claude.json").path(percentEncoded: false)
+            func written() -> Date? { (try? FileManager.default.attributesOfItem(atPath: record))?[.modificationDate] as? Date }
+            var seen = written()
+            while let self, let terminal, self.terminals[id] === terminal {
                 try? await Task.sleep(for: .seconds(1))
+                let now = written()
+                guard now != seen else { continue }
+                seen = now
+                if ClaudeFolderTrust.isTrusted(workdir: workdir, home: home) != false { break }
             }
             self?.controller.setWaiting(id, false)
         }
