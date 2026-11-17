@@ -280,14 +280,22 @@ final class FileNode: NSObject {
 @MainActor
 final class FileWatcher {
     private var stream: FSEventStreamRef?
-    private let onChange: @MainActor () -> Void
+    private let onEvents: @MainActor (_ paths: [String], _ rescan: Bool) -> Void
 
     /// What the stream holds (and releases when it's released): a weak way back,
     /// so a callback that races the watcher's teardown finds nothing.
     private final class Box: @unchecked Sendable { weak var watcher: FileWatcher? }
 
-    init(path: String, latency: TimeInterval = 0.4, onChange: @escaping @MainActor () -> Void) {
-        self.onChange = onChange
+    convenience init(path: String, latency: TimeInterval = 0.4, onChange: @escaping @MainActor () -> Void) {
+        self.init(path: path, latency: latency) { _, _ in onChange() }
+    }
+
+    /// `onEvents`: the paths that changed (real paths: /private/tmp, not /tmp),
+    /// and whether the system lost track (events dropped, a folder to rescan
+    /// whole, the watched folder itself moved): then anything may have changed.
+    init(path: String, latency: TimeInterval = 0.4,
+         onEvents: @escaping @MainActor (_ paths: [String], _ rescan: Bool) -> Void) {
+        self.onEvents = onEvents
         let box = Box()
         box.watcher = self
         let retained = Unmanaged.passRetained(box)
@@ -296,14 +304,19 @@ final class FileWatcher {
                                                if let info { Unmanaged<Box>.fromOpaque(info).release() }
                                            }, copyDescription: nil)
         // Delivered on the main queue (below).
-        let callback: FSEventStreamCallback = { _, info, _, _, _, _ in
+        let callback: FSEventStreamCallback = { _, info, count, eventPaths, eventFlags, _ in
             guard let info else { return }
             let box = Unmanaged<Box>.fromOpaque(info).takeUnretainedValue()
-            MainActor.assumeIsolated { box.watcher?.onChange() }
+            let paths = Unmanaged<CFArray>.fromOpaque(eventPaths).takeUnretainedValue() as? [String] ?? []
+            let lost = FSEventStreamEventFlags(kFSEventStreamEventFlagMustScanSubDirs | kFSEventStreamEventFlagUserDropped
+                                               | kFSEventStreamEventFlagKernelDropped | kFSEventStreamEventFlagRootChanged)
+            let rescan = (0..<count).contains { eventFlags[$0] & lost != 0 }
+            MainActor.assumeIsolated { box.watcher?.onEvents(paths, rescan) }
         }
         stream = FSEventStreamCreate(nil, callback, &context, [path] as CFArray,
                                      FSEventStreamEventId(kFSEventStreamEventIdSinceNow), latency,
-                                     FSEventStreamCreateFlags(kFSEventStreamCreateFlagFileEvents | kFSEventStreamCreateFlagNoDefer))
+                                     FSEventStreamCreateFlags(kFSEventStreamCreateFlagFileEvents | kFSEventStreamCreateFlagNoDefer
+                                                              | kFSEventStreamCreateFlagUseCFTypes))
         if let stream {
             FSEventStreamSetDispatchQueue(stream, .main)
             FSEventStreamStart(stream)

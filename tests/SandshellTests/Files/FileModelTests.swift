@@ -557,6 +557,20 @@ struct FileModelTests {
             #expect(calls.count > 0, "A file written under the watched folder should be reported within 10s")
         }
 
+        @Test(.tags(.fileModelFileSystem), .timeLimit(.minutes(1)))
+        func itSaysWhichPathsChanged() async throws {
+            var seen: Set<String> = []
+            let root = scratch.url.realPath
+            let watcher = FileWatcher(path: root, latency: 0.05) { paths, _ in seen.formUnion(paths) }
+            defer { watcher.stop() }
+            let deadline = ContinuousClock.now.advanced(by: .seconds(10))
+            while !seen.contains(root + "/named.txt"), ContinuousClock.now < deadline {
+                try scratch.file("named.txt", "x \(seen.count)")
+                try await Task.sleep(for: .milliseconds(300))
+            }
+            #expect(seen.contains(root + "/named.txt"), "the file's own path (seen: \(seen))")
+        }
+
         @Test(.tags(.fileModelFileSystem))
         func stoppedWatcherReportsNothing() async throws {
             let calls = FileModelCallCounter()
@@ -577,6 +591,56 @@ struct FileModelTests {
             try scratch.file("after-release.txt", "x")
             try await Task.sleep(for: .milliseconds(500))
             #expect(calls.count == 0, "Nobody holds the watcher, so its stream is gone")
+        }
+    }
+
+    // MARK: - FileRefresh
+
+    /// What a burst of file-system events asks of the Files pane.
+    struct Refreshing {
+        let root = "/w"
+        let git = "/w/.git"
+
+        @Test(arguments: [
+            ("/w/Sources/a.swift", FileRefresh.Kind.tree),
+            ("/w/.sandshell/canvas/d/a.html", .sandshell),
+            ("/w/.sandshell", .sandshell),
+            ("/w/.sandshellx/a", .tree),
+            ("/w/.git/index", .gitState),
+            ("/w/.git/HEAD", .gitRef),
+            ("/w/.git/refs/heads/main", .gitRef),
+            ("/w/.git/packed-refs", .gitRef),
+            ("/w/.git/objects/ab/cdef", .ignored),
+            ("/w/.git/logs/HEAD", .ignored),
+            ("/w/.git/index.lock", .ignored),
+        ])
+        func eachPathMeansSomething(path: String, kind: FileRefresh.Kind) {
+            #expect(FileRefresh.kind(of: path, root: root, gitDir: git) == kind)
+        }
+
+        @Test func anEditRelistsItsFolderAndRunsGitSoonButNotTheCommits() {
+            var r = FileRefresh()
+            r.add(["/w/Sources/a.swift", "/w/Sources/b.swift"], rescan: false, root: root, gitDir: git)
+            #expect(r.folders == ["/w/Sources"])
+            #expect(r.git && r.quick && !r.history)
+        }
+
+        @Test func sandshellsOwnFilesWaitAndGitsObjectsAreNothing() {
+            var r = FileRefresh()
+            r.add(["/w/.sandshell/canvas/d/a.html"], rescan: false, root: root, gitDir: git)
+            #expect(r.git && !r.quick, "its own files: git, but not in a hurry")
+            var objects = FileRefresh()
+            objects.add(["/w/.git/objects/ab/cdef", "/w/.git/logs/HEAD"], rescan: false, root: root, gitDir: git)
+            #expect(objects.isEmpty)
+        }
+
+        @Test func aCommitRefreshesTheCommitsAndLostEventsEverything() {
+            var r = FileRefresh()
+            r.add(["/w/.git/refs/heads/main"], rescan: false, root: root, gitDir: git)
+            #expect(r.history && r.folders.isEmpty)
+            var lost = FileRefresh()
+            lost.add([], rescan: true, root: root, gitDir: git)
+            #expect(lost.rescan && lost.git && lost.history && lost.quick)
         }
     }
 

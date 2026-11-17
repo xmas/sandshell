@@ -536,6 +536,8 @@ final class MainWindowController: NSWindowController {
     }
 
     private func syncFilesRoot() {
+        // Put away, it doesn't watch the folder (shown again, it catches up).
+        filesPane?.tree.isWatching = filesItem?.isCollapsed == false
         guard let workspace, let filesItem, !filesItem.isCollapsed else { return }
         var folder = workspace.rootURL
         var agent = workspace.primaryAgent

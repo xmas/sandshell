@@ -41,8 +41,15 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
     /// checkouts happen there, outside the root's own watch).
     private var gitWatcher: FileWatcher?
     private var gitWatcherPath: String?
-    /// The coalesced refresh waiting to run (file-system bursts join it).
+    /// The coalesced refresh waiting to run (file-system bursts join it), and
+    /// what it has to do; whether it's the quick one.
     private var refreshTask: Task<Void, Never>?
+    private var pending = FileRefresh()
+    private var refreshIsQuick = false
+    /// A git status in flight, and another wanted after it (they don't pile up).
+    private var gitLoading = false
+    private var gitAgain = false
+    private var historyWanted = false
     /// A row's name is being edited in place: refreshes wait (a reload recycles
     /// its cell and ends the edit) and run once it's done.
     private var renaming = false
@@ -245,8 +252,10 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
         rootNode = node
         outline.reloadData()
         restoreExpansion()
-        watcher = FileWatcher(path: url.path) { [weak self] in self?.scheduleRefresh() }
-        refreshGit()
+        if isWatching {
+            watcher = FileWatcher(path: url.path) { [weak self] paths, rescan in self?.filesChanged(paths, rescan: rescan) }
+        }
+        refreshGit(history: true)
     }
 
     /// Expand down to `url` and select it (Open Quickly) — unless a filter is showing.
@@ -266,19 +275,87 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
         outline.scrollRowToVisible(row)
     }
 
-    /// Coalesce file-system bursts into one re-list + git status.
-    private func scheduleRefresh() {
-        guard refreshTask == nil else { return }
-        refreshTask = Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(250))
-            guard let self else { return }
-            self.refreshTask = nil
-            self.onFilesChanged?()
-            if self.renaming { self.refreshAfterRename = true; return }
-            self.rootNode?.reloadLoaded()
-            if !self.filter.stringValue.isEmpty { self.applyFilter(keepingSelection: true) } else { self.reloadOutline() }
-            self.refreshGit()
+    /// Whether it follows the folder: the Files sidebar put away stops its
+    /// file-system watch (an agent's writes ran git status for nobody);
+    /// shown again, it catches up with everything.
+    var isWatching = true {
+        didSet {
+            guard isWatching != oldValue else { return }
+            if isWatching {
+                guard let root else { return }
+                watcher = FileWatcher(path: root.path) { [weak self] paths, rescan in self?.filesChanged(paths, rescan: rescan) }
+                if let path = gitWatcherPath {
+                    gitWatcher = FileWatcher(path: path) { [weak self] paths, rescan in self?.filesChanged(paths, rescan: rescan) }
+                }
+                scheduleRefresh()
+            } else {
+                watcher?.stop()
+                watcher = nil
+                gitWatcher?.stop()
+                gitWatcher = nil
+                refreshTask?.cancel()
+                refreshTask = nil
+            }
         }
+    }
+
+    /// Everything again (after a rename): every listed folder, git, history.
+    private func scheduleRefresh() { filesChanged([], rescan: true) }
+
+    /// Coalesce file-system bursts into one refresh that does what the paths
+    /// need: re-list the listed folders they're in, git status when the work
+    /// tree or the index changed, the commits only when a ref did. Sandshell's
+    /// own files (`.sandshell/`: state, canvases, notes) wait a little longer;
+    /// git's objects and logs are nothing to show.
+    private func filesChanged(_ paths: [String], rescan: Bool) {
+        guard let root else { return }
+        let rootPath = root.realPath
+        pending.add(paths, rescan: rescan, root: rootPath, gitDir: (diskGit.repoRoot ?? rootPath) + "/.git")
+        guard !pending.isEmpty else { return }
+        // A refresh waiting already does, unless this needs it sooner.
+        if refreshTask != nil, refreshIsQuick || !pending.quick { return }
+        refreshTask?.cancel()
+        refreshIsQuick = pending.quick
+        refreshTask = Task { [weak self, quick = pending.quick] in
+            try? await Task.sleep(for: .milliseconds(quick ? 250 : 2000))
+            guard !Task.isCancelled, let self else { return }
+            self.refreshTask = nil
+            self.runRefresh()
+        }
+    }
+
+    private func runRefresh() {
+        if renaming { refreshAfterRename = true; return }
+        let work = pending
+        pending = FileRefresh()
+        var relisted = work.rescan
+        if work.rescan {
+            rootNode?.reloadLoaded()
+        } else {
+            for folder in work.folders {
+                guard let node = listedNode(atRealPath: folder) else { continue }
+                node.loadChildren()
+                relisted = true
+            }
+        }
+        if relisted {
+            onFilesChanged?()
+            if !filter.stringValue.isEmpty { applyFilter(keepingSelection: true) } else { reloadOutline() }
+        }
+        if work.git { refreshGit(history: work.history) }
+    }
+
+    /// The listed (loaded) folder at a real path (as FSEvents gives it).
+    private func listedNode(atRealPath path: String) -> FileNode? {
+        guard let root, var node = rootNode else { return nil }
+        let base = root.realPath
+        guard path != base else { return node.isLoaded ? node : nil }
+        guard path.hasPrefix(base + "/") else { return nil }
+        for name in path.dropFirst(base.count + 1).split(separator: "/") {
+            guard node.isLoaded, let child = node.children?.first(where: { $0.name == name }) else { return nil }
+            node = child
+        }
+        return node.isLoaded ? node : nil
     }
 
     /// Reload the outline with the same files selected: reloadData keeps the
@@ -334,21 +411,37 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
             : "Show only changed files (\(shown.changes.count))"
     }
 
-    private func refreshGit() {
+    /// Git status (and, `history`, the commits). One at a time: asked again
+    /// while one's running, it runs once more after.
+    private func refreshGit(history: Bool) {
         guard let root else { return }
+        historyWanted = historyWanted || history
+        guard !gitLoading else { gitAgain = true; return }
+        gitLoading = true
         Task { [weak self] in
             let status = await GitStatus.load(for: root)
-            guard let self, self.root == root else { return }
+            guard let self else { return }
+            self.gitLoading = false
+            defer { if self.gitAgain { self.gitAgain = false; self.refreshGit(history: false) } }
+            guard self.root == root else { return }
             if let repo = status.repoRoot, repo != root.realPath, self.gitWatcherPath != repo + "/.git" {
                 self.gitWatcher?.stop()
+                self.gitWatcher = nil
                 self.gitWatcherPath = repo + "/.git"
-                self.gitWatcher = FileWatcher(path: repo + "/.git") { [weak self] in self?.scheduleRefresh() }
+                if self.isWatching {
+                    self.gitWatcher = FileWatcher(path: repo + "/.git") { [weak self] paths, rescan in
+                        self?.filesChanged(paths, rescan: rescan)
+                    }
+                }
             }
             self.applyGit(status)
             self.changedButton.imagePosition = .imageLeading
             self.changedButton.isEnabled = status.repoRoot != nil
             self.updateBranchLabel()
-            self.refreshHistory()
+            if self.historyWanted {
+                self.historyWanted = false
+                self.refreshHistory()
+            }
             if let wanted = self.wantsChanges, status.repoRoot != nil { self.showChanges(true, scope: wanted) }
             else if self.changedOnly { self.loadScope() }
         }
@@ -1373,3 +1466,74 @@ extension FileTreeController: NSMenuItemValidation {
     }
 }
 
+
+/// What a burst of file-system events asks of the Files pane (`FileTreeController`).
+struct FileRefresh: Equatable {
+    /// The folders whose listings changed (real paths).
+    var folders: Set<String> = []
+    /// The system lost track: everything again.
+    var rescan = false
+    /// Git status, and the commits (a ref moved).
+    var git = false
+    var history = false
+    /// Something outside Sandshell's own files changed: refresh soon.
+    var quick = false
+
+    var isEmpty: Bool { folders.isEmpty && !rescan && !git }
+
+    enum Kind: Equatable {
+        /// A file or folder in the tree.
+        case tree
+        /// Sandshell's own (`.sandshell/`): its state, canvases, notes.
+        case sandshell
+        /// Git's index and the like: status may have changed.
+        case gitState
+        /// HEAD or a ref: the commits may have too.
+        case gitRef
+        /// Git's objects, logs and lock files: nothing to show.
+        case ignored
+    }
+
+    static func kind(of path: String, root: String, gitDir: String) -> Kind {
+        if path == gitDir { return .gitState }
+        if path.hasPrefix(gitDir + "/") {
+            let rest = path.dropFirst(gitDir.count + 1)
+            if rest.hasPrefix("objects/") || rest.hasPrefix("logs/") || rest.hasSuffix(".lock") { return .ignored }
+            if rest == "HEAD" || rest == "packed-refs" || rest.hasPrefix("refs/") { return .gitRef }
+            return .gitState
+        }
+        let own = root + "/.sandshell"
+        if path == own || path.hasPrefix(own + "/") { return .sandshell }
+        return .tree
+    }
+
+    mutating func add(_ paths: [String], rescan: Bool, root: String, gitDir: String) {
+        if rescan {
+            self.rescan = true
+            git = true
+            history = true
+            quick = true
+        }
+        for path in paths {
+            let parent = (path as NSString).deletingLastPathComponent
+            switch Self.kind(of: path, root: root, gitDir: gitDir) {
+            case .tree:
+                folders.insert(parent)
+                git = true
+                quick = true
+            case .sandshell:
+                folders.insert(parent)
+                git = true
+            case .gitState:
+                git = true
+                quick = true
+            case .gitRef:
+                git = true
+                history = true
+                quick = true
+            case .ignored:
+                break
+            }
+        }
+    }
+}
