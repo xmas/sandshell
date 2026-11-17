@@ -290,10 +290,13 @@ final class PaneStripView: NSView {
         // Commits and edits happen behind our back: re-read the branch now and then.
         gitTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
-                guard let self, self.window != nil, !self.isHiddenOrHasHiddenAncestor else { return }
+                // Not for a window nobody can see (behind others, minimized, another Space).
+                guard let self, let window = self.window, window.occlusionState.contains(.visible),
+                      !self.isHiddenOrHasHiddenAncestor else { return }
                 self.refreshGit()
             }
         }
+        gitTimer?.tolerance = 1
         applyTheme(colors)
     }
 
@@ -351,8 +354,7 @@ final class PaneStripView: NSView {
     func refreshGit() {
         guard let folder, gitTask == nil else { return }
         gitTask = Task(priority: .utility) { [weak self] in
-            let status = await GitStatus.load(for: folder)
-            let numstat = status.repoRoot == nil ? nil : await GitStatus.numstat(for: folder)
+            let (status, numstat) = await Self.gitFacts(for: folder)
             guard let self else { return }
             self.gitTask = nil
             // Moved to another folder meanwhile: this is old news; read that one.
@@ -368,6 +370,20 @@ final class PaneStripView: NSView {
             self.restyleBranch()
             self.needsLayout = true
         }
+    }
+
+    /// A folder's git status and line counts, shared by the strips showing it
+    /// (two panes on one folder ran git twice every 5 s): an answer from the
+    /// last few seconds is still the answer.
+    private static var recentGit: [URL: (at: Date, status: GitStatus, numstat: String?)] = [:]
+
+    private static func gitFacts(for folder: URL) async -> (GitStatus, String?) {
+        if let recent = recentGit[folder], Date.now.timeIntervalSince(recent.at) < 4 { return (recent.status, recent.numstat) }
+        let status = await GitStatus.load(for: folder)
+        let numstat = status.repoRoot == nil ? nil : await GitStatus.numstat(for: folder)
+        recentGit = recentGit.filter { Date.now.timeIntervalSince($0.value.at) < 60 }
+        recentGit[folder] = (.now, status, numstat)
+        return (status, numstat)
     }
 
     private var branchName: String { git.branch ?? "detached" }
