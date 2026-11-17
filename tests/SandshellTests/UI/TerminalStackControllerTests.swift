@@ -166,3 +166,25 @@ struct DroppedFilesTests {
         #expect(failures == 0)
     }
 }
+
+/// How often a terminal asks sbx whether its exec still runs.
+struct ExecPollScheduleTests {
+    let claimed = Date(timeIntervalSince1970: 1_000)
+
+    @Test(arguments: [
+        (5.0, 4.0, true),     // the first half minute: every second
+        (29.0, 28.5, true),
+        (40.0, 38.0, false),  // then every 5 s
+        (40.0, 35.0, true),
+        (100.0, 96.0, false),
+        (100.0, 95.0, true),
+    ])
+    func soonAfterItsFoundThenLessOften(elapsed: Double, lastPolledAt: Double, due: Bool) {
+        #expect(ExecPollSchedule.isDue(claimedAt: claimed, lastPoll: claimed.addingTimeInterval(lastPolledAt),
+                                       now: claimed.addingTimeInterval(elapsed)) == due)
+    }
+
+    @Test func neverAskedIsDue() {
+        #expect(ExecPollSchedule.isDue(claimedAt: claimed, lastPoll: nil, now: claimed.addingTimeInterval(300)))
+    }
+}

@@ -13,6 +13,9 @@ private final class TerminalRuntimeController {
         /// couldn't be listed before the launch).
         var execFinder: LaunchExecFinder?
         var execID: String?
+        /// When its exec was found, and last asked whether it still runs.
+        var execClaimedAt: Date?
+        var execPolledAt: Date?
         /// The log says the terminal's exec wasn't found (once).
         var loggedExecNotFound = false
         var transcriptURL: URL?
@@ -220,6 +223,10 @@ private final class TerminalRuntimeController {
               !exited.contains(id) else { return }
 
         if let execID = watch.execID {
+            // A curl to the sbx socket a terminal a second: soon after, then less often.
+            guard ExecPollSchedule.isDue(claimedAt: watch.execClaimedAt ?? watch.startedAt, lastPoll: watch.execPolledAt)
+            else { return }
+            updateActivityWatch(id) { $0.execPolledAt = .now }
             guard let state = await SbxClient.shared.inspectExecLifecycle(id: execID),
                   !state.running, !Task.isCancelled else { return }
             return execExited(id, execID: execID, state: state)
@@ -240,6 +247,7 @@ private final class TerminalRuntimeController {
         updateActivityWatch(id) {
             $0.execFinder = finder
             $0.execID = claim?.id
+            if claim != nil { $0.execClaimedAt = .now }
         }
         guard let claim else {
             // Its exit then shows only when its PTY closes: say why, once.
@@ -2468,3 +2476,17 @@ extension TerminalStackController {
     var debugStripView: NSView { titleStrip }
 }
 #endif
+
+/// How often a terminal asks whether its sbx exec still runs (a curl to the
+/// sbx socket each time): every second for half a minute after it's found
+/// (a launch that fails, fails then), then every 5 s. Its PTY closing says
+/// it ended too.
+enum ExecPollSchedule {
+    static let quickFor: TimeInterval = 30
+    static let every: TimeInterval = 5
+
+    static func isDue(claimedAt: Date, lastPoll: Date?, now: Date = .now) -> Bool {
+        guard let lastPoll, now.timeIntervalSince(claimedAt) > quickFor else { return true }
+        return now.timeIntervalSince(lastPoll) >= every - 0.5
+    }
+}
