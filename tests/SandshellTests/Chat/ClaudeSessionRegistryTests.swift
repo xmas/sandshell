@@ -633,3 +633,20 @@ struct ClaudeSessionRegistryOtherWriterTests {
         #expect(writer?.procStart == "1000")
     }
 }
+
+/// A process's start time is asked of `ps` once a minute, not every tick.
+struct ProcessStartCacheTests {
+    @Test func aStartIsReadOnceAMinute() {
+        let cache = ClaudeSessionRegistry.ProcessStartCache()
+        let t0 = Date(timeIntervalSince1970: 1_000)
+        var reads = 0
+        let read: (Int32) -> String? = { _ in reads += 1; return "Mon Nov 16 01:00:00 2026" }
+        #expect(cache.start(of: 42, now: t0, read: read) == "Mon Nov 16 01:00:00 2026")
+        #expect(cache.start(of: 42, now: t0.addingTimeInterval(30), read: read) == "Mon Nov 16 01:00:00 2026")
+        #expect(reads == 1)
+        _ = cache.start(of: 42, now: t0.addingTimeInterval(61), read: read)
+        #expect(reads == 2, "a minute on, asked again")
+        _ = cache.start(of: 7, now: t0.addingTimeInterval(61), read: read)
+        #expect(reads == 3, "each pid its own")
+    }
+}

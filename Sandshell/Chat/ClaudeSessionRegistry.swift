@@ -47,7 +47,7 @@ enum ClaudeSessionRegistry {
             // (kill with 0 or a negative pid probes a process group, not a process.)
             guard e.pid > 0, kill(e.pid, 0) == 0 || errno == EPERM else { return false }
             guard let started = e.procStart, !started.isEmpty else { return true }
-            return processStart(e.pid) == started
+            return startCache.start(of: e.pid, read: processStart) == started
         }
         guard let last = e.lastUpdate else { return false }
         return now.timeIntervalSince(last) < (e.isBusy ? 30 * 60 : 6 * 3600)
@@ -93,6 +93,28 @@ enum ClaudeSessionRegistry {
             .filter { !( !$0.isOnThisMac && $0.entrypoint == "sdk-ts") && !gone.contains(key($0)) && isAlive($0) }
             .sorted { ($0.isBusy ? 1 : 0, $0.lastUpdate ?? .distantPast) > ($1.isBusy ? 1 : 0, $1.lastUpdate ?? .distantPast) }
             .first
+    }
+
+    /// When each process started, as `ps` said, for a minute: a chat following
+    /// its conversation asks every 1.5 s whether the writer is still the same
+    /// process, and that was a `ps` each time. (A pid reused within the minute
+    /// is still caught by the kill check failing in between, mostly.)
+    nonisolated static let startCache = ProcessStartCache()
+
+    final class ProcessStartCache: @unchecked Sendable {
+        private let lock = NSLock()
+        private var starts: [Int32: (start: String?, at: Date)] = [:]
+        static let keep: TimeInterval = 60
+
+        func start(of pid: Int32, now: Date = .now, read: (Int32) -> String?) -> String? {
+            if let known = lock.withLock({ starts[pid] }), now.timeIntervalSince(known.at) < Self.keep { return known.start }
+            let start = read(pid)
+            lock.withLock {
+                starts = starts.filter { now.timeIntervalSince($0.value.at) < Self.keep }
+                starts[pid] = (start, now)
+            }
+            return start
+        }
     }
 
     /// `ps -o lstart=` in UTC: how Claude Code records `procStart` on macOS.
