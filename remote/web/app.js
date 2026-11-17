@@ -398,7 +398,21 @@ function buildItem(item) {
       if (item.attachments?.length) {
         const chips = document.createElement("div");
         chips.className = "chips";
-        for (const a of item.attachments) chips.append(span("chip", "📎 " + a));
+        item.attachments.forEach((a, i) => {
+          const chip = span("chip", "📎 " + a);
+          const src = item.thumbs?.[i];
+          if (!src) { chips.append(chip); return; }
+          // An image sent with it: a small picture of it (its name, if the
+          // picture's gone — a conversation reopened keeps only names).
+          const img = document.createElement("img");
+          img.className = "thumb";
+          img.alt = a;
+          img.title = a;
+          img.loading = "lazy";
+          img.src = src;
+          img.addEventListener("error", () => img.replaceWith(chip), { once: true });
+          chips.append(img);
+        });
         bubble.append(chips);
       }
       div.append(bubble);

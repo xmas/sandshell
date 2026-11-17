@@ -420,3 +420,42 @@ struct ClaudeUsageSessionScanTests {
         #expect(ClaudeUsageStore.readSession("s1", home: home, old: third)?.offset == third.offset, "unchanged: as it was")
     }
 }
+
+/// Pasted images (and image files) shown as small pictures: in the composer's
+/// chips, and in the message once it's sent.
+struct ImageThumbnailTests {
+    private func png(width: Int, height: Int) -> Data {
+        let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: width, pixelsHigh: height, bitsPerSample: 8,
+                                   samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
+                                   bytesPerRow: 0, bitsPerPixel: 0)!
+        return rep.representation(using: .png, properties: [:])!
+    }
+
+    @Test func aPastedImageGetsASmallPicture() throws {
+        let pasted = ChatAttachment(kind: .image(data: png(width: 2000, height: 1000), mimeType: "image/png", name: "Pasted image.png"))
+        let picture = try #require(ImageThumbnail.png(pasted).flatMap(NSBitmapImageRep.init(data:)))
+        #expect(picture.pixelsWide == ImageThumbnail.maxPixels && picture.pixelsHigh == ImageThumbnail.maxPixels / 2)
+        #expect(ChatComposerView.thumbnail(pasted) != nil, "its chip is a picture")
+    }
+
+    @Test func anImageFileGetsOneAndOtherFilesDont() throws {
+        let dir = FileManager.default.temporaryDirectory.appending(path: "thumbs-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let image = dir.appending(path: "shot.png"), notes = dir.appending(path: "notes.md")
+        try png(width: 100, height: 100).write(to: image)
+        try Data("# notes".utf8).write(to: notes)
+        #expect(ImageThumbnail.png(ChatAttachment(kind: .file(image))) != nil)
+        #expect(ImageThumbnail.png(ChatAttachment(kind: .file(notes))) == nil)
+        #expect(ChatComposerView.thumbnail(ChatAttachment(kind: .file(notes))) == nil, "a file's chip keeps its name")
+    }
+
+    @Test func aSentMessageSaysWhereItsImagesAre() {
+        let session = UUID(), message = UUID()
+        let item = RemoteWire.item(from: .user(id: message, text: "look", attachments: ["Pasted image.png", "notes.md"]),
+                                   session: session)
+        #expect(item.thumbs == [RemoteWire.imagePath(session: session, item: "user-\(message)", index: 0), ""])
+        let plain = RemoteWire.item(from: .user(id: message, text: "look", attachments: ["notes.md"]), session: session)
+        #expect(plain.thumbs == nil)
+    }
+}

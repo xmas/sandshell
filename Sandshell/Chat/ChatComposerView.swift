@@ -548,12 +548,29 @@ final class ChatComposerView: NSView, NSTextViewDelegate {
         for (i, a) in attachments.enumerated() {
             let name = NSButton(title: a.displayName, target: self, action: #selector(previewChip(_:)))
             name.tag = i
-            name.bezelStyle = .inline
-            name.controlSize = .small
-            name.image = NSImage(systemSymbolName: { if case .image = a.kind { "photo" } else { "doc" } }(),
-                                 accessibilityDescription: nil)
-            name.imagePosition = .imageLeading
             name.toolTip = "Quick Look"
+            if let picture = Self.thumbnail(a) {
+                // An image: a small picture of it, not its name.
+                name.image = picture
+                name.imagePosition = .imageOnly
+                name.isBordered = false
+                name.imageScaling = .scaleProportionallyUpOrDown
+                name.wantsLayer = true
+                name.layer?.cornerRadius = 6
+                name.layer?.masksToBounds = true
+                name.setAccessibilityLabel(a.displayName)
+                name.toolTip = "\(a.displayName) — Quick Look"
+                let size = picture.size
+                let height = Self.thumbnailHeight, width = min(max(height * size.width / max(size.height, 1), 24), height * 2.5)
+                name.translatesAutoresizingMaskIntoConstraints = false
+                name.widthAnchor.constraint(equalToConstant: width).isActive = true
+                name.heightAnchor.constraint(equalToConstant: height).isActive = true
+            } else {
+                name.bezelStyle = .inline
+                name.controlSize = .small
+                name.image = NSImage(systemSymbolName: "doc", accessibilityDescription: nil)
+                name.imagePosition = .imageLeading
+            }
             let remove = NSButton.symbol("xmark.circle.fill", label: "Remove \(a.displayName)",
                                          pointSize: TypeRole.meta.symbolPointSize, weight: .regular,
                                          target: self, action: #selector(removeChip(_:)))
@@ -571,6 +588,14 @@ final class ChatComposerView: NSView, NSTextViewDelegate {
         let (on, off) = attachments.isEmpty ? (scrollTopToPill, scrollTopToChips) : (scrollTopToChips, scrollTopToPill)
         off?.isActive = false
         on?.isActive = true
+    }
+
+    static let thumbnailHeight: CGFloat = 48
+
+    /// An image attachment's picture for its chip (nil: not an image).
+    static func thumbnail(_ attachment: ChatAttachment) -> NSImage? {
+        guard let png = ImageThumbnail.png(attachment), let image = NSImage(data: png) else { return nil }
+        return image
     }
 
     @objc private func previewChip(_ sender: NSButton) {

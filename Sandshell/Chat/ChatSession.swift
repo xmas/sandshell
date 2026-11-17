@@ -1,4 +1,5 @@
 import AppKit
+import ImageIO
 import Combine
 import Foundation
 import Synchronization
@@ -684,6 +685,24 @@ final class ChatSession: ObservableObject, ChatFeedSource {
 
     // MARK: User actions
 
+    /// Small copies of the images sent with each message (by its item's id,
+    /// then the attachment's place), for the transcript to show: the message
+    /// itself keeps only their names.
+    private(set) var sentPictures: [String: [Int: Data]] = [:]
+
+    private func keepPictures(of attachments: [ChatAttachment], for message: UUID) {
+        var pictures: [Int: Data] = [:]
+        for (i, attachment) in attachments.enumerated() {
+            if let picture = ImageThumbnail.png(attachment) { pictures[i] = picture }
+        }
+        if !pictures.isEmpty { sentPictures[ChatItem.user(id: message, text: "", attachments: []).id] = pictures }
+    }
+
+    /// An image a page asks for: one sent with a message, or one in the items.
+    func image(item: String, index: Int) -> Data? {
+        sentPictures[item]?[index] ?? RemoteWire.image(in: items, item: item, index: index)
+    }
+
     func send(text: String, attachments: [ChatAttachment]) {
         guard phase == .ready, let conn = connection, let sid = sessionID else { return }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -697,7 +716,9 @@ final class ChatSession: ObservableObject, ChatFeedSource {
         inExternalRun = false
         suggestedPrompt = nil
         sawOwnTurn = true   // however short the turn, the follower skips past it
-        items.append(.user(id: UUID(), text: trimmed, attachments: attachments.map(\.displayName)))
+        let messageID = UUID()
+        keepPictures(of: attachments, for: messageID)
+        items.append(.user(id: messageID, text: trimmed, attachments: attachments.map(\.displayName)))
         if !trimmed.isEmpty, !retryingTurn { onPrompt?(trimmed) }
         stopped = false
 
@@ -811,6 +832,7 @@ final class ChatSession: ObservableObject, ChatFeedSource {
             return sendWhenReady(text: text, attachments: attachments)
         }
         let id = UUID()
+        keepPictures(of: attachments, for: id)
         items.append(.user(id: id, text: trimmed, attachments: attachments.map(\.displayName)))
         if !trimmed.isEmpty { onPrompt?(trimmed) }
         let params: JSONValue = ["sessionId": .string(sid), "prompt": .array(Self.promptBlocks(trimmed, attachments)),
@@ -917,6 +939,12 @@ final class ChatSession: ObservableObject, ChatFeedSource {
     func debugApply(_ update: JSONValue) { apply(update) }
     /// Tests: a turn starts (`.running`) or ends (`.ready`) without the agent.
     func debugSetPhase(_ phase: Phase) { self.phase = phase }
+    /// A message of yours as sending makes it (its pictures kept), without an agent.
+    func debugAddMessage(_ text: String, attachments: [ChatAttachment]) {
+        let id = UUID()
+        keepPictures(of: attachments, for: id)
+        items.append(.user(id: id, text: text, attachments: attachments.map(\.displayName)))
+    }
     /// Tests: Claude Code reports these MCP servers.
     func debugSetMCPServers(_ servers: [MCPServer]?) { mcpServers = servers }
     /// Tests: Claude Code suggests a next message (as `_claude/sdkMessage` brings it).
@@ -1960,5 +1988,32 @@ final class CommandOutputBuffer: Sendable {
             return s.pending
         }
         return String(decoding: data, as: UTF8.self)
+    }
+}
+
+/// A small copy of an image attachment (pasted, or an image file), to show.
+enum ImageThumbnail {
+    static let maxPixels = 640
+
+    static func png(_ attachment: ChatAttachment) -> Data? {
+        let source: CGImageSource?
+        switch attachment.kind {
+        case .image(let data, _, _): source = CGImageSourceCreateWithData(data as CFData, nil)
+        case .file(let url):
+            guard isImage(attachment.displayName) else { return nil }
+            source = CGImageSourceCreateWithURL(url as CFURL, nil)
+        }
+        guard let source else { return nil }
+        let options: [CFString: Any] = [kCGImageSourceCreateThumbnailFromImageAlways: true,
+                                        kCGImageSourceCreateThumbnailWithTransform: true,
+                                        kCGImageSourceThumbnailMaxPixelSize: maxPixels]
+        guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
+        return NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])
+    }
+
+    /// Whether an attachment's name says it's an image.
+    static func isImage(_ name: String) -> Bool {
+        ["png", "jpg", "jpeg", "gif", "heic", "heif", "webp", "tiff", "tif", "bmp"]
+            .contains((name as NSString).pathExtension.lowercased())
     }
 }

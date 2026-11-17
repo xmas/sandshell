@@ -14,6 +14,12 @@ protocol ChatFeedSource: AnyObject {
     /// Fires before any change (`objectWillChange`).
     var willChange: ObservableObjectPublisher { get }
     var feed: ChatFeed { get }
+    /// An image a page asks for (`RemoteWire.imagePath`).
+    func image(item: String, index: Int) -> Data?
+}
+
+extension ChatFeedSource {
+    func image(item: String, index: Int) -> Data? { RemoteWire.image(in: items, item: item, index: index) }
 }
 
 /// One chat as pages see it (the in-app transcript, Remote Control's devices):

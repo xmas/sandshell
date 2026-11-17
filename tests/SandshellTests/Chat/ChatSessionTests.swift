@@ -366,6 +366,23 @@ struct ChatWebTranscriptTests {
         #expect(web.showsEarlier)
     }
 
+    @Test func aMessagesPastedImageShowsAsAPicture() async throws {
+        let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 300, pixelsHigh: 200, bitsPerSample: 8, samplesPerPixel: 4,
+                                   hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+        let png = try #require(rep.representation(using: .png, properties: [:]))
+        session.debugAddMessage("Look at this", attachments: [ChatAttachment(kind: .image(data: png, mimeType: "image/png", name: "Pasted image.png"))])
+        let (web, window) = try await showing()
+        defer { window.orderOut(nil); window.close() }
+        #expect(try await transcript(web, contains: "Look at this"))
+        let end = Date().addingTimeInterval(5)
+        var width = 0
+        while width == 0, Date() < end {
+            width = try await web.webView.evaluateJavaScript("document.querySelector('.chips .thumb')?.naturalWidth || 0") as? Int ?? 0
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        #expect(width == 300, "the picture, loaded from the chat")
+    }
+
     @Test func aHiddenChatSkipsUpdatesAndCatchesUpWhenShown() async throws {
         let (web, window) = try await showing()
         defer { window.orderOut(nil); window.close() }

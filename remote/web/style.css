@@ -167,6 +167,7 @@ select#mode {
 .item.text, .user .bubble { font-size: var(--t-read); }
 .chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; justify-content: flex-end; }
 .chip { font-size: var(--t-small); background: var(--code-bg); border-radius: 6px; padding: 1px 6px; color: var(--muted); }
+.chips .thumb { display: block; max-height: 140px; max-width: min(240px, 100%); border-radius: 8px; object-fit: contain; background: var(--code-bg); }
 .text p { margin: 0 0 8px; }
 .text > :last-child { margin-bottom: 0; }
 .text h1, .text h2, .text h3, .text h4 { margin: 14px 0 6px; line-height: 1.25; }

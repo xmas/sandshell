@@ -312,7 +312,7 @@ final class ChatWebTranscript: NSView {
     fileprivate func serve(_ url: URL) -> (data: Data, type: String)? {
         let parts = url.path(percentEncoded: false).split(separator: "/").map(String.init)
         if parts.count == 6, parts[0] == "api", parts[1] == "sessions", parts[3] == "images", let index = Int(parts[5]) {
-            return RemoteWire.image(in: source.items, item: parts[4], index: index).map { ($0, "application/octet-stream") }
+            return source.image(item: parts[4], index: index).map { ($0, "application/octet-stream") }
         }
         // The artboard strip's pages (and what they load beside them): this
         // chat's board's folder, nothing outside it.

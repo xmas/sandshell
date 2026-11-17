@@ -342,7 +342,7 @@ final class RemoteHub: ObservableObject {
     }
 
     func image(_ id: UUID, item: String, index: Int) -> Data? {
-        sources[id].flatMap { RemoteWire.image(in: $0.chat.items, item: item, index: index) }
+        sources[id].flatMap { $0.chat.image(item: item, index: index) }
     }
 
     // MARK: Check reports

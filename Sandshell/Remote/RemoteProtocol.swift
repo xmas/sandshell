@@ -54,6 +54,9 @@ enum RemoteWire {
         let kind: Kind
         var text: String?
         var attachments: [String]?
+        /// A message's attachments that are images: each one's address, in
+        /// the attachments' places ("" for one that isn't an image).
+        var thumbs: [String]?
         var isError: Bool?
         var tool: Tool?
         var plan: [PlanEntry]?
@@ -323,7 +326,11 @@ enum RemoteWire {
     static func item(from item: ChatItem, session: UUID) -> Item {
         switch item {
         case .user(_, let text, let attachments):
-            return Item(id: item.id, kind: .user, text: text, attachments: attachments.isEmpty ? nil : attachments)
+            let thumbs = attachments.indices.map {
+                ImageThumbnail.isImage(attachments[$0]) ? imagePath(session: session, item: item.id, index: $0) : ""
+            }
+            return Item(id: item.id, kind: .user, text: text, attachments: attachments.isEmpty ? nil : attachments,
+                        thumbs: thumbs.contains { !$0.isEmpty } ? thumbs : nil)
         case .agentText(_, let text):
             return Item(id: item.id, kind: .text, text: text)
         case .thought(_, let text):
