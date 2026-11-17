@@ -2,6 +2,9 @@
 
 A running log of what changed, newest first. Yes, we actually write these.
 
+## v0.2.68 — "Picture This"
+- **See the images you paste.** An image you paste or drop into a chat shows as a small picture above what you're typing, instead of just its name — click it for Quick Look. Once sent, the message shows its pictures too, here and on Remote Control devices.
+
 ## v0.2.67 — "Light Touch"
 - **Long chats open fast.** A chat opens at its latest 300 messages, with a button to show the earlier ones; Find and Print include them all.
 - **Streaming is lighter.** A reply being written sends and draws only what's new each moment, not the whole reply again.
