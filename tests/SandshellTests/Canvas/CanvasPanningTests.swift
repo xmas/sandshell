@@ -568,6 +568,44 @@ struct CanvasLoadingTests {
         #expect(!canvas.debugParkedIDs.contains("a0"))
     }
 
+    @Test func onlyAFewPagesStayLoadedOutOfView() async throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "sandshell-kept-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let count = CanvasView.pagesKept + 4
+        let artboards = (0..<count).map { #"{"id": "a\#($0)", "file": "p\#($0).html", "width": 400, "height": 300, "x": \#($0 * 30_000), "y": 0}"# }
+        try Data(#"{"title": "Kept", "artboards": [\#(artboards.joined(separator: ","))]}"#.utf8).write(to: folder.appending(path: CanvasBoard.fileName))
+        for i in 0..<count { try Data("<body>\(i)</body>".utf8).write(to: folder.appending(path: "p\(i).html")) }
+        let window = NSWindow(contentRect: NSRect(x: -6000, y: 0, width: 800, height: 600), styleMask: [.titled],
+                              backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let canvas = CanvasView(frame: window.contentView!.bounds)
+        canvas.autoresizingMask = [.width, .height]
+        window.contentView!.addSubview(canvas)
+        window.orderFrontRegardless()
+        defer { canvas.show(nil); window.orderOut(nil); window.close() }
+        canvas.show(folder)
+        canvas.layoutSubtreeIfNeeded()
+        try await Task.sleep(for: .milliseconds(300))
+        for i in 0..<count {
+            canvas.go(to: i)
+            let end = Date().addingTimeInterval(10)
+            while canvas.debugParkedIDs.contains("a\(i)") || canvas.debugLoadedCount == 0, Date() < end {
+                try await Task.sleep(for: .milliseconds(50))
+            }
+            try await Task.sleep(for: .milliseconds(400))
+        }
+        #expect(canvas.debugLoadedViewCount <= CanvasView.pagesKept + 1, "the page in view, and a few put away")
+        canvas.go(to: 0)
+        let back = Date().addingTimeInterval(10)
+        while canvas.debugParkedIDs.contains("a0") || canvas.debugLoadedViewCount > CanvasView.pagesKept + 1, Date() < back {
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        let again = Date().addingTimeInterval(10)
+        while !(await canvas.debugPageText("a0") ?? "").contains("0"), Date() < again { try await Task.sleep(for: .milliseconds(100)) }
+        #expect(await canvas.debugPageText("a0") == "0", "an unloaded page loads again when it's back")
+    }
+
     @Test func aPicturesNameIsTheFileAndWhenItChanged() {
         let file = URL(filePath: "/tmp/board/a.html")
         let a = ArtboardPictures.key(file, stamp: Date(timeIntervalSince1970: 1))

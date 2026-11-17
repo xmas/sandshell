@@ -46,6 +46,8 @@ final class CanvasView: NSView {
     private let dataStore = WKWebsiteDataStore.nonPersistent()
     /// Pages loading at once, at most: the rest wait their turn.
     static let loadingAtOnce = 4
+    /// Pages kept loaded while out of view, at most (the rest unload to their pictures).
+    static let pagesKept = 8
     /// Zoomed out past this, an artboard that has a picture keeps it: the
     /// page wouldn't look any different that small.
     static let picturesBelow: CGFloat = 0.3
@@ -488,6 +490,12 @@ final class CanvasView: NSView {
         for view in artboardViews.values where view.hasWebView {
             view.setParked(!view.frame.intersects(near) || (tiny && view.hasPicture))
         }
+        // Past a few, the pages put away longest go back to their pictures: a
+        // web view each kept every page ever looked at in memory.
+        let parked = artboardViews.values.filter { $0.hasWebView && $0.isParked }
+        if parked.count > Self.pagesKept {
+            for view in parked.sorted(by: { $0.parkedAt < $1.parkedAt }).prefix(parked.count - Self.pagesKept) { view.unload() }
+        }
         var loading = artboardViews.values.count(where: \.isLoading)
         let waiting = artboardViews.values
             .filter { $0.pending != nil && $0.frame.intersects(near) && !(tiny && $0.hasPicture) }
@@ -889,6 +897,8 @@ final class CanvasView: NSView {
     var debugArtboardIDs: [String] { (board?.artboards ?? []).map(\.id).filter { artboardViews[$0] != nil } }
     var debugLoadedCount: Int { artboardViews.values.filter(\.hasLoaded).count }
     var debugReloads: Int { artboardViews.values.reduce(0) { $0 + $1.reloads } }
+    /// Artboards with a live web view (loaded, or loading).
+    var debugLoadedViewCount: Int { artboardViews.values.count(where: \.hasWebView) }
     /// Artboards whose page is hidden (out of view).
     var debugParkedIDs: [String] { artboardViews.filter { $0.value.isParked }.map(\.key).sorted() }
     /// Artboards that have made their web view.
@@ -1305,9 +1315,15 @@ private final class ArtboardView: NSView, WKNavigationDelegate {
     private(set) var isParked = false
     private var reloadWhenBack = false
 
+    /// When it was put away (the longest away unload first).
+    private(set) var parkedAt = Date.distantPast
+    /// What it was loaded with, to load again after `unload`.
+    private var loadedWith: (url: URL?, readAccess: URL)?
+
     func setParked(_ parked: Bool) {
         guard let web, parked != isParked else { return }
         isParked = parked
+        if parked { parkedAt = .now }
         web.isHidden = parked
         if parked {
             picture.isHidden = false
@@ -1319,7 +1335,24 @@ private final class ArtboardView: NSView, WKNavigationDelegate {
         }
     }
 
+    /// Back to its picture, its web view gone (and its page's memory with it):
+    /// it loads again, like any page, when it's in view.
+    func unload() {
+        guard let view = web else { return }
+        view.navigationDelegate = nil
+        view.stopLoading()
+        view.removeFromSuperview()
+        web = nil
+        isParked = false
+        reloadWhenBack = false
+        hasLoaded = false
+        isLoading = false
+        picture.isHidden = false
+        pending = loadedWith
+    }
+
     func load(_ url: URL?, readAccess: URL) {
+        loadedWith = (url, readAccess)
         source = url
         hasLoaded = false
         isLoading = url != nil
