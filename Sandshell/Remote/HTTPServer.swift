@@ -207,6 +207,7 @@ final class HTTPServer {
         pingTimer = Timer.scheduledTimer(withTimeInterval: 20, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.streams.values.forEach { $0.ping() } }
         }
+        pingTimer?.tolerance = 4
         return ready
     }
 

@@ -707,7 +707,7 @@ final class SidebarListController: NSViewController {
             .sink { [weak self] _ in self?.tickWorkingTimers() }
             .store(in: &cancellables)
         // Tick the relative "3m" labels on idle rows. Cheap and low-frequency.
-        Timer.publish(every: 30, on: .main, in: .common).autoconnect()
+        Timer.publish(every: 30, tolerance: 5, on: .main, in: .common).autoconnect()
             .sink { [weak self] _ in self?.refreshRelativeTimes() }
             .store(in: &cancellables)
         // The build-status placeholder tracks activity text directly — it must

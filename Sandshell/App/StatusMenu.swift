@@ -94,6 +94,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { _ in
             MainActor.assumeIsolated { StatusMenuController.shared.refresh() }
         }
+        timer?.tolerance = 0.4
         refresh()
     }
 

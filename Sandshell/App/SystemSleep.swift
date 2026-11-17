@@ -82,6 +82,7 @@ final class KeepAwake {
         timer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { _ in
             MainActor.assumeIsolated { KeepAwake.shared.update() }
         }
+        timer?.tolerance = 3
         update()
     }
 

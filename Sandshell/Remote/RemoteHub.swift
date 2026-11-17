@@ -447,6 +447,7 @@ final class RemoteHub: ObservableObject {
         tailscaleTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.refreshTailscaleQuietly() }
         }
+        tailscaleTimer?.tolerance = 5
     }
 
     private func refreshTailscaleQuietly() {

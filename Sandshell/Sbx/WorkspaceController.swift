@@ -233,7 +233,7 @@ final class WorkspaceController: ObservableObject {
     /// and status reports arrive at most once per assistant message.)
     private func startStatusFeedPolling() {
         guard statusFeedCancellable == nil, !isClosed else { return }
-        statusFeedCancellable = Timer.publish(every: 1, on: .main, in: .common)
+        statusFeedCancellable = Timer.publish(every: 1, tolerance: 0.2, on: .main, in: .common)
             .autoconnect()
             .sink { [weak self] _ in
                 self?.pollStatusFeed()
