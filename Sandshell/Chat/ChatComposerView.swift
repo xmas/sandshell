@@ -424,8 +424,7 @@ final class ChatComposerView: NSView, NSTextViewDelegate {
         } else if token.hasPrefix("@"), let root = fileRoot {
             let q = String(token.dropFirst())
             Task { [weak self] in
-                let files = await WorkspaceFileIndex.shared.files(under: root)
-                let matches = WorkspaceFileIndex.match(files, query: q)
+                let matches = await WorkspaceFileIndex.shared.search(under: root, query: q)
                 guard let self, self.completionGeneration == generation else { return }
                 self.showCompletion(matches.map { rel in
                     CompletionItem(kind: .file(URL(filePath: root).appending(path: rel), relative: rel),

@@ -591,8 +591,7 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
         }
         let base = root.path
         Task { [weak self] in
-            let files = await WorkspaceFileIndex.shared.files(under: base)
-            let matches = WorkspaceFileIndex.match(files, query: query, limit: 200)
+            let matches = await WorkspaceFileIndex.shared.search(under: base, query: query, limit: 200)
             guard let self, self.filter.stringValue.trimmingCharacters(in: .whitespaces) == query else { return }
             self.reloadOutline {
                 self.filterResults = matches.map {
@@ -771,7 +770,7 @@ final class FileTreeController: NSViewController, NSOutlineViewDataSource, NSOut
         let change = scope == .uncommitted || !changedOnly
             ? git.changes[path] ?? git.changes[real] : inScope?.change
         let title = if filterResults != nil, let root { String(path.dropFirst(root.path.count + 1)) } else { node.name }
-        cell.configure(icon: NSWorkspace.shared.icon(forFile: path), title: title, change: change,
+        cell.configure(icon: FileIcons.icon(node.url, isDirectory: node.isDirectory), title: title, change: change,
                        dirtyFolder: node.isDirectory && (git.dirtyFolders.contains(path) || git.dirtyFolders.contains(real)),
                        counts: inScope.map { ($0.added, $0.removed) })
         return cell

@@ -171,7 +171,9 @@ final class MentionAttachment: NSTextAttachment {
 /// with a simple filename-first fuzzy match.
 actor WorkspaceFileIndex {
     static let shared = WorkspaceFileIndex()
-    private var cache: [String: (files: [String], at: Date)] = [:]
+    private var cache: [String: (files: Folded, at: Date)] = [:]
+    /// Folders being walked again (their old list is served meanwhile).
+    private var walking: Set<String> = []
     private static let skip: Set<String> = [".git", "node_modules", ".build", "build", "build-release", "DerivedData",
                                             ".venv", "venv", "dist", ".sandshell", ".beads", "__pycache__", ".next",
                                             "target", "Pods", ".gradle", ".idea", ".hatch", ".sbx"]
@@ -179,11 +181,58 @@ actor WorkspaceFileIndex {
     /// How long a folder's list is good for.
     static let freshFor: TimeInterval = 30
 
-    func files(under root: String) -> [String] {
-        if let hit = cache[root], Date.now.timeIntervalSince(hit.at) < Self.freshFor { return hit.files }
-        // Lists gone stale are dropped, not kept for good: up to 20,000 paths
-        // for every folder searched in the app's life.
-        cache = cache.filter { Date.now.timeIntervalSince($0.value.at) < Self.freshFor }
+    /// Paths with their names and themselves folded once (case, accents,
+    /// width), for matching as you type: two localized comparisons a path, on
+    /// up to 20,000 paths a keystroke, ran on the main thread.
+    struct Folded: Sendable {
+        let paths: [String]
+        let names: [String]
+        let folded: [String]
+
+        init(_ paths: [String]) {
+            self.paths = paths
+            names = paths.map { WorkspaceFileIndex.fold(($0 as NSString).lastPathComponent) }
+            folded = paths.map(WorkspaceFileIndex.fold)
+        }
+    }
+
+    nonisolated static func fold(_ s: String) -> String {
+        s.folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: nil)
+    }
+
+    func files(under root: String) async -> [String] { await index(under: root).paths }
+
+    /// The list folded for matching (Open Quickly matches it as you type).
+    func folded(under root: String) async -> Folded { await index(under: root) }
+
+    /// The best matches for `query` under `root`, worked out here, not on the main thread.
+    func search(under root: String, query: String, limit: Int = 30) async -> [String] {
+        Self.match(await index(under: root), query: query, limit: limit)
+    }
+
+    /// A folder's list: fresh, or (gone stale) the old one while it's walked
+    /// again in the background; walked now only the first time.
+    private func index(under root: String) async -> Folded {
+        if let hit = cache[root] {
+            if Date.now.timeIntervalSince(hit.at) >= Self.freshFor, walking.insert(root).inserted {
+                Task { await self.store(root, Task.detached(priority: .utility) { Folded(Self.walk(root)) }.value) }
+            }
+            return hit.files
+        }
+        let files = await Task.detached(priority: .userInitiated) { Folded(Self.walk(root)) }.value
+        store(root, files)
+        return files
+    }
+
+    private func store(_ root: String, _ files: Folded) {
+        walking.remove(root)
+        // Lists unused for a few minutes go: up to 20,000 paths for every
+        // folder searched in the app's life.
+        cache = cache.filter { Date.now.timeIntervalSince($0.value.at) < 10 * Self.freshFor }
+        cache[root] = (files, .now)
+    }
+
+    private nonisolated static func walk(_ root: String) -> [String] {
         var out: [String] = []
         let base = URL(filePath: root, directoryHint: .isDirectory)
         // The enumerator may hand back the real path (/tmp → /private/tmp).
@@ -193,7 +242,7 @@ actor WorkspaceFileIndex {
                                                   options: [.skipsPackageDescendants]) {
             for case let url as URL in e {
                 let name = url.lastPathComponent
-                if Self.skip.contains(name) || name == ".DS_Store" { e.skipDescendants(); continue }
+                if skip.contains(name) || name == ".DS_Store" { e.skipDescendants(); continue }
                 if e.level > 8 { e.skipDescendants(); continue }
                 if (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true { continue }
                 let path = url.path(percentEncoded: false)
@@ -202,20 +251,24 @@ actor WorkspaceFileIndex {
                 if out.count >= 20_000 { break }
             }
         }
-        cache[root] = (out, Date.now)
         return out
     }
 
     nonisolated static func match(_ files: [String], query: String, limit: Int = 30) -> [String] {
-        guard !query.isEmpty else { return Array(files.sorted { $0.count < $1.count }.prefix(limit)) }
-        let q = query.lowercased()
-        let scored = files.compactMap { path -> (String, Int)? in
-            // As the system searches: case and accents aside ("resume" finds Résumé.md).
-            let name = (path as NSString).lastPathComponent
-            if let r = name.localizedStandardRange(of: query) { return (path, r.lowerBound == name.startIndex ? 0 : 1) }
-            if path.localizedStandardContains(query) { return (path, 2) }
+        match(Folded(files), query: query, limit: limit)
+    }
+
+    nonisolated static func match(_ files: Folded, query: String, limit: Int = 30) -> [String] {
+        guard !query.isEmpty else { return Array(files.paths.sorted { $0.count < $1.count }.prefix(limit)) }
+        // As the system searches: case and accents aside ("resume" finds Résumé.md).
+        let q = fold(query)
+        var scored: [(String, Int)] = []
+        for i in files.paths.indices {
+            let name = files.names[i]
+            if let r = name.range(of: q) { scored.append((files.paths[i], r.lowerBound == name.startIndex ? 0 : 1)) }
+            else if files.folded[i].contains(q) { scored.append((files.paths[i], 2)) }
             // Subsequence match on the filename (e.g. "chtv" → ChatTranscriptView).
-            return Self.isSubsequence(q, of: name.lowercased()) ? (path, 3) : nil
+            else if Self.isSubsequence(q, of: name) { scored.append((files.paths[i], 3)) }
         }
         return scored.sorted { $0.1 != $1.1 ? $0.1 < $1.1 : $0.0.count < $1.0.count }.prefix(limit).map(\.0)
     }

@@ -54,3 +54,16 @@ struct WorkspaceFileIndexTests {
         #expect(Set(files) == ["a.txt", "src/b.swift", "src/deep/My File.md"])
     }
 }
+
+/// The index's search, as the composer and the Files filter ask it (off the main thread).
+struct WorkspaceFileIndexSearchTests {
+    @Test func aSearchListsAndMatchesTheFolder() async throws {
+        let root = URL.temporaryDirectory.appending(path: "file-search-\(UUID().uuidString)", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: root.appending(path: "Docs"), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        for file in ["Docs/Résumé.md", "notes.txt", "Docs/plan.md"] { try Data("x".utf8).write(to: root.appending(path: file)) }
+        let index = WorkspaceFileIndex()
+        #expect(await index.search(under: root.path(percentEncoded: false), query: "resume") == ["Docs/Résumé.md"])
+        #expect(await index.search(under: root.path(percentEncoded: false), query: "MD") == ["Docs/plan.md", "Docs/Résumé.md"])
+    }
+}

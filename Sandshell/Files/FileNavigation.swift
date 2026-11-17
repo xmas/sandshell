@@ -7,7 +7,7 @@ final class OpenQuicklyController: NSViewController, NSSearchFieldDelegate, NSTa
     var onOpen: ((URL) -> Void)?
     var onCancel: (() -> Void)?
     let root: URL
-    private var files: [String] = []
+    private var files = WorkspaceFileIndex.Folded([])
     private(set) var results: [String] = []
     private let field = NSSearchField()
     private let table = NSTableView()
@@ -77,7 +77,7 @@ final class OpenQuicklyController: NSViewController, NSSearchFieldDelegate, NSTa
         super.viewDidLoad()
         let base = root.plainPath
         Task { [weak self] in
-            let files = await WorkspaceFileIndex.shared.files(under: base)
+            let files = await WorkspaceFileIndex.shared.folded(under: base)
             guard let self else { return }
             self.files = files
             self.search(self.field.stringValue)
@@ -91,7 +91,7 @@ final class OpenQuicklyController: NSViewController, NSSearchFieldDelegate, NSTa
         results = WorkspaceFileIndex.match(files, query: q, limit: 60)
         table.reloadData()
         if !results.isEmpty { table.selectRowIndexes([0], byExtendingSelection: false) }
-        empty.stringValue = files.isEmpty ? "No files" : "No matches"
+        empty.stringValue = files.paths.isEmpty ? "No files" : "No matches"
         empty.isHidden = !results.isEmpty
     }
 
