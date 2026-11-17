@@ -2,6 +2,15 @@
 
 A running log of what changed, newest first. Yes, we actually write these.
 
+## v0.2.67 — "Light Touch"
+- **Long chats open fast.** A chat opens at its latest 300 messages, with a button to show the earlier ones; Find and Print include them all.
+- **Streaming is lighter.** A reply being written sends and draws only what's new each moment, not the whole reply again.
+- **Typing in the editor stays smooth.** Code is colored once you pause, without holding up the window, even in big files.
+- **Finding files keeps up.** @ completion, Open Quickly and the Files filter search in the background, and a folder's file list refreshes without making you wait.
+- **The Files sidebar redraws only what changed**, with icons looked up once per kind of file.
+- **Big canvases use less memory.** Only a few pages scrolled out of view stay loaded; the rest show their pictures and load again when you come back.
+- **Fewer background processes.** Windows share one check of your sandboxes, and terminals check on their agent without starting a process each time.
+
 ## v0.2.66 — "Pages"
 - **A canvas has pages.** A canvas is now organized as Canvas › Page › Design › Screen: a page for each question you're working on, a design for each option (A, B, C…), and each design's states or steps as its screens (A1, A2…). You see one page at a time: its name on top, each design of several screens in a row of its own under a heading. Beside the chat, the canvas's title says which page (**Canvas · Connections ▾**); click it for the others, or All Pages.
 - **Get around a canvas.** ‹ › and ⌘] ⌘[ step through a page's screens, ↑ ↓ jump from design to design, ⌥⌘] ⌥⌘[ change page, and ⌘↑ shows All Pages: a card of pictures for each page, opening instantly. The menu at the canvas's bottom left lists this page's designs and screens and the other pages; View ▸ Go To has every page, design and screen.
