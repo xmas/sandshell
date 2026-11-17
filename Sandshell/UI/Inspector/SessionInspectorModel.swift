@@ -106,7 +106,13 @@ final class SessionInspectorModel {
             guard let self, self.tasks.contains(where: \.isRunning) || self.workflows.contains(where: { !$0.agentsSettled }) else { return }
             self.now = tick
         }.store(in: &bag)
-        workspace.$containerPhases.dropFirst().sink { [weak self] _ in self?.loadEnvironment() }.store(in: &bag)
+        // Its own sandbox's phase changed (not another agent's, not a pass that found the same).
+        workspace.$containerPhases
+            .map { [weak workspace] phases in workspace?.session(id: sessionID).flatMap { phases[$0.containerAgentKind] } }
+            .removeDuplicates()
+            .dropFirst()
+            .sink { [weak self] _ in self?.loadEnvironment() }
+            .store(in: &bag)
     }
 
     // MARK: Context

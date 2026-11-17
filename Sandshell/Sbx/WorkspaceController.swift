@@ -571,8 +571,11 @@ final class WorkspaceController: ObservableObject {
             // No bring-up ran meanwhile, so a building phase is left over.
             guard Self.bringUps[name] == nil, Self.bringUpsStarted[name] == started else { continue }
             let sb = list.first { $0.name == name }
-            containers[agent] = sb
-            containerPhases[agent] = sb.map { $0.isRunning ? .running : .stopped } ?? .absent
+            // Set only what changed: each set tells every observer (a chat's
+            // inspector ran git and sbx policy again on every 5 s pass).
+            if containers[agent] != sb { containers[agent] = sb }
+            let phase: ContainerPhase = sb.map { $0.isRunning ? .running : .stopped } ?? .absent
+            if containerPhases[agent] != phase { containerPhases[agent] = phase }
             // A container that (re)started outside our create path (e.g.
             // Settings ▸ Run) re-runs its startup dispatcher — follow it.
             if sb?.isRunning == true { refreshKitStartupIfNeeded(for: agent) }
@@ -1042,17 +1045,35 @@ final class WorkspaceController: ObservableObject {
         guard containerPollTask == nil else { return }
         containerPollTask = Task { @MainActor [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(5))
+                try? await Task.sleep(for: .seconds(Self.containerPollEvery))
                 guard let self else { return }   // the window closed
-                self.syncContainers()
+                // An `sbx ls` a window every 5 s, in the background too: less often there.
+                guard Self.containerPollDue(since: self.lastContainerPoll, appActive: NSApp.isActive) else { continue }
+                self.pollContainers()
             }
         }
+    }
+
+    private var lastContainerPoll = Date.now
+
+    private func pollContainers() {
+        lastContainerPoll = .now
+        syncContainers()
+    }
+
+    nonisolated static let containerPollEvery: TimeInterval = 5
+    nonisolated static let containerPollInBackground: TimeInterval = 30
+
+    /// Whether the container poll asks sbx again: every 5 s while the app's
+    /// in front, every 30 s while it isn't (back in front, at the next tick).
+    nonisolated static func containerPollDue(since last: Date, appActive: Bool, now: Date = .now) -> Bool {
+        now.timeIntervalSince(last) >= (appActive ? containerPollEvery : containerPollInBackground) - 0.5
     }
 
     /// Start the shared 1-second clock that drives all work-timer displays.
     private func startClock() {
         guard clockCancellable == nil, !isClosed else { return }
-        clockCancellable = Timer.publish(every: 1, on: .main, in: .common)
+        clockCancellable = Timer.publish(every: 1, tolerance: 0.1, on: .main, in: .common)
             .autoconnect()
             .sink { [weak self] date in
                 self?.clockSubject.send(date)

@@ -85,3 +85,13 @@ struct ContainerPhaseLabelTests {
         #expect(ContainerPhase.failed(why).displayLabel == "failed: " + String(repeating: "a", count: 60))
     }
 }
+
+/// How often a window asks sbx about its sandboxes (`sbx ls`).
+struct ContainerPollScheduleTests {
+    let last = Date(timeIntervalSince1970: 1_000)
+
+    @Test(arguments: [(5.0, true, true), (4.0, true, false), (5.0, false, false), (29.0, false, false), (30.0, false, true)])
+    func everyFiveSecondsInFrontEveryThirtyBehind(after: Double, active: Bool, due: Bool) {
+        #expect(WorkspaceController.containerPollDue(since: last, appActive: active, now: last.addingTimeInterval(after)) == due)
+    }
+}
