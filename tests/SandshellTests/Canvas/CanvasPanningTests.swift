@@ -360,7 +360,7 @@ struct CanvasSteppingTests {
         let (canvas, window, folder) = try canvas()
         defer { canvas.show(nil); window.orderOut(nil); window.close(); try? FileManager.default.removeItem(at: folder) }
         #expect(canvas.stepIndex == nil)
-        #expect(label(canvas) == "3 artboards")
+        #expect(label(canvas) == "3 screens")
         canvas.nextArtboard()
         #expect(canvas.stepIndex == 0)
         #expect(label(canvas) == "1 of 3 · Option 1")
@@ -394,10 +394,10 @@ struct CanvasSteppingTests {
         let (canvas, window, folder) = try canvas()
         defer { canvas.show(nil); window.orderOut(nil); window.close(); try? FileManager.default.removeItem(at: folder) }
         canvas.go(to: 1)
-        let items = canvas.artboardMenu().items.filter { !$0.isSeparatorItem }
-        #expect(items.map(\.title) == ["Whole Canvas", "Option 1", "Option 2", "Option 3"])
+        let items = canvas.artboardMenu().items.filter { !$0.isSeparatorItem && !$0.isSectionHeader }
+        #expect(items.map(\.title) == ["Option 1", "Option 2", "Option 3"], "one page: its screens, nothing else")
         #expect(items.filter { $0.state == .on }.map(\.title) == ["Option 2"])
-        #expect(CanvasView.target(in: window) === canvas, "the window's canvas, for View ▸ Next Artboard")
+        #expect(CanvasView.target(in: window) === canvas, "the window's canvas, for View ▸ Next Screen")
     }
 
     @Test func anEmptyBoardHasNoStepper() throws {
@@ -406,6 +406,115 @@ struct CanvasSteppingTests {
         canvas.show(nil)
         canvas.nextArtboard()
         #expect(canvas.stepIndex == nil)
+    }
+}
+
+/// A board of pages: one page shown at a time, designs as rows, the menus
+/// and All Pages.
+@MainActor
+struct CanvasPagesTests {
+    private static let json = #"""
+        {"title": "Agate", "pages": [
+          {"id": "people", "title": "People", "designs": [
+            {"id": "p1", "title": "Who is who", "file": "a.html", "width": 400, "height": 300},
+            {"id": "p2", "title": "Keeping up", "file": "a.html", "width": 400, "height": 300}]},
+          {"id": "connections", "title": "Connections", "note": "Ways in to connecting a service", "designs": [
+            {"id": "a", "title": "A connection picked", "width": 400, "height": 300, "screens": [
+              {"id": "a1", "title": "Nothing picked", "file": "a.html"},
+              {"id": "a2", "title": "GitHub", "file": "a.html"},
+              {"id": "a3", "title": "Slack", "file": "a.html"}]},
+            {"id": "b", "title": "A route picked", "width": 400, "height": 300, "screens": [
+              {"id": "b1", "title": "Gmail", "file": "a.html"},
+              {"id": "b2", "title": "Drive", "file": "a.html"}]}]}]}
+        """#
+
+    private func canvas() throws -> (CanvasView, NSWindow, URL) {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "sandshell-pages-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try Data(Self.json.utf8).write(to: folder.appending(path: CanvasBoard.fileName))
+        try Data("<body>x</body>".utf8).write(to: folder.appending(path: "a.html"))
+        let window = NSWindow(contentRect: NSRect(x: -6000, y: 0, width: 800, height: 600), styleMask: [.titled],
+                              backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let canvas = CanvasView(frame: window.contentView!.bounds)
+        canvas.autoresizingMask = [.width, .height]
+        window.contentView!.addSubview(canvas)
+        window.orderFrontRegardless()
+        canvas.show(folder)
+        canvas.layoutSubtreeIfNeeded()
+        return (canvas, window, folder)
+    }
+
+    private func close(_ canvas: CanvasView, _ window: NSWindow, _ folder: URL) {
+        canvas.show(nil)
+        window.orderOut(nil)
+        window.close()
+        try? FileManager.default.removeItem(at: folder)
+    }
+
+    @Test func itShowsOnePageAtATime() throws {
+        let (canvas, window, folder) = try canvas()
+        defer { close(canvas, window, folder) }
+        #expect(canvas.pageID == "people", "the first page")
+        #expect(canvas.debugArtboardIDs == ["p1", "p2"], "only its artboards")
+        #expect(canvas.stripLabel == "Canvas · People")
+        canvas.stepPage(by: 1)
+        #expect(canvas.pageID == "connections")
+        #expect(canvas.debugArtboardIDs == ["a1", "a2", "a3", "b1", "b2"])
+        canvas.stepPage(by: 1)
+        #expect(canvas.pageID == "connections", "stays on the last")
+    }
+
+    @Test func screensStepWithinThePageAndArrowsChangeDesign() throws {
+        let (canvas, window, folder) = try canvas()
+        defer { close(canvas, window, folder) }
+        canvas.showPage("connections")
+        canvas.nextArtboard()
+        #expect(canvas.pageScreens[canvas.stepIndex ?? -1] == "a1")
+        canvas.nextArtboard(); canvas.nextArtboard(); canvas.nextArtboard()
+        #expect(canvas.pageScreens[canvas.stepIndex ?? -1] == "b1", "past A3 it goes on to B1")
+        canvas.stepDesign(by: -1)
+        #expect(canvas.pageScreens[canvas.stepIndex ?? -1] == "a1", "↑: the design before, its first screen")
+        canvas.stepDesign(by: 1)
+        #expect(canvas.pageScreens[canvas.stepIndex ?? -1] == "b1")
+    }
+
+    @Test func revealingAScreenOnAnotherPageGoesThere() throws {
+        let (canvas, window, folder) = try canvas()
+        defer { close(canvas, window, folder) }
+        canvas.goTo("b2")
+        #expect(canvas.pageID == "connections")
+        #expect(canvas.pageScreens[canvas.stepIndex ?? -1] == "b2")
+    }
+
+    @Test func theBarsMenuOpensTheShownDesignAndListsTheOtherPages() throws {
+        let (canvas, window, folder) = try canvas()
+        defer { close(canvas, window, folder) }
+        canvas.goTo("a2")
+        let items = canvas.artboardMenu().items
+        let titles = items.filter { !$0.isSeparatorItem }.map(\.title)
+        #expect(titles == ["Connections", "A · A connection picked", "A1 · Nothing picked", "A2 · GitHub", "A3 · Slack",
+                           "B · A route picked", "Other Pages", "People", "All Pages"])
+        #expect(items.filter { $0.state == .on }.map(\.title) == ["A2 · GitHub"])
+        #expect(items.first { $0.title == "B · A route picked" }?.submenu?.items.map(\.title) == ["B1 · Gmail", "B2 · Drive"],
+                "a design not shown: its screens a submenu away")
+        let goTo = canvas.goToMenu().items
+        #expect(goTo.map(\.title) == ["People", "Connections"])
+        #expect(goTo[1].submenu?.items.map(\.title) == ["A · A connection picked", "B · A route picked"])
+        #expect(goTo[0].submenu?.items.map(\.title) == ["A · Who is who", "B · Keeping up"], "one-screen designs: an item each")
+        #expect(canvas.pagesMenu().items.filter { $0.state == .on }.map(\.title) == ["Connections"])
+    }
+
+    @Test func allPagesShowsACardEachAndOneOpensItsPage() throws {
+        let (canvas, window, folder) = try canvas()
+        defer { close(canvas, window, folder) }
+        canvas.showAllPages()
+        #expect(canvas.showsAllPages)
+        #expect(canvas.debugArtboardIDs.isEmpty, "no pages load on All Pages")
+        #expect(canvas.debugCardTitles == ["People", "Connections"])
+        #expect(canvas.stripLabel == "Canvas · All Pages")
+        canvas.debugOpenCard("Connections")
+        #expect(!canvas.showsAllPages && canvas.pageID == "connections")
     }
 }
 

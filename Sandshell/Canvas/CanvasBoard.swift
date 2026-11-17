@@ -16,12 +16,65 @@ struct CanvasBoard: Equatable, Sendable {
         var y: CGFloat?
         var width: CGFloat
         var height: CGFloat
+        /// Its page and design (ids), and its name in the design: the
+        /// screen's title, or a one-screen design's own.
+        var page = ""
+        var design = ""
+        var name = ""
+        /// Its label: "A6" (a design's sixth screen), "A" (a one-screen
+        /// design); nil: none (a board made before pages).
+        var code: String?
+    }
+
+    /// One question on the board: the designs that answer it. The canvas
+    /// shows a page at a time.
+    struct Page: Equatable, Sendable, Identifiable {
+        var id: String
+        var title: String
+        /// The question in a sentence, or what was chosen.
+        var note: String?
+        var designs: [Design]
+        /// Its artboards' ids, design by design: the order to step through.
+        var screens: [String] { designs.flatMap(\.screens) }
+    }
+
+    /// One answer on a page (an option, A, B…): one screen, or several (its
+    /// states or steps, A1, A2…), in a row.
+    struct Design: Equatable, Sendable, Identifiable {
+        var id: String
+        var title: String
+        /// "A", "B", "0", "G + H"; nil: none.
+        var label: String?
+        /// Its artboards' ids, in order.
+        var screens: [String]
     }
 
     /// The board's folder (holds board.json).
     let folder: URL
     var title: String
+    /// Every screen on the board, page by page, design by design.
     var artboards: [Artboard]
+    var pages: [Page]
+
+    /// A board from its artboards alone (board.json without pages): they're
+    /// sorted into pages by their titles (`organize`).
+    init(folder: URL, title: String, artboards: [Artboard]) {
+        self.folder = folder
+        self.title = title
+        (self.artboards, self.pages) = Self.organize(artboards, boardTitle: title)
+    }
+
+    init(folder: URL, title: String, artboards: [Artboard], pages: [Page]) {
+        self.folder = folder
+        self.title = title
+        self.artboards = artboards
+        self.pages = pages
+    }
+
+    func artboard(_ id: String) -> Artboard? { artboards.first { $0.id == id } }
+    func page(_ id: String) -> Page? { pages.first { $0.id == id } }
+    /// The page an artboard is on.
+    func page(of artboardID: String) -> Page? { artboard(artboardID).flatMap { page($0.page) } }
 
     static let fileName = "board.json"
     static let defaultSize = CGSize(width: 390, height: 844)
@@ -46,7 +99,7 @@ struct CanvasBoard: Equatable, Sendable {
         let folder = boards.appending(path: name, directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let title = n == 1 ? "Design" : "Design \(n)"
-        try Data(#"{"title": "\#(title)", "artboards": []}"#.utf8).write(to: folder.appending(path: fileName))
+        try Data(#"{"title": "\#(title)", "pages": []}"#.utf8).write(to: folder.appending(path: fileName))
         return (folder, ".sandshell/canvas/\(name)")
     }
 
@@ -118,35 +171,235 @@ struct CanvasBoard: Equatable, Sendable {
     }
 
     /// board.json → a board. Lenient: an artboard without an id, file or url
-    /// is skipped; sizes default to a phone's.
+    /// is skipped; sizes default to a phone's. `pages` (pages › designs ›
+    /// screens) if it has them; else `artboards`, sorted into pages by title.
     static func parse(_ data: Data, folder: URL) -> Result<CanvasBoard, LoadError> {
         let object: Any
         do { object = try JSONSerialization.jsonObject(with: data) } catch {
             return .failure(.unreadable("it isn't valid JSON"))
         }
         guard let dict = object as? [String: Any] else { return .failure(.unreadable("it isn't a JSON object")) }
-        let raw = dict["artboards"] as? [[String: Any]] ?? []
-        var seen: Set<String> = []
-        let artboards: [Artboard] = raw.enumerated().compactMap { i, a in
-            let file = (a["file"] as? String).flatMap { $0.isEmpty ? nil : $0 }
-            let url = (a["url"] as? String).flatMap(URL.init(string:)).flatMap { $0.scheme == nil ? nil : $0 }
-            guard file != nil || url != nil else { return nil }
-            var id = (a["id"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? file ?? "artboard-\(i + 1)"
-            while !seen.insert(id).inserted { id += "-\(i + 1)" }
-            func number(_ key: String) -> CGFloat? { (a[key] as? NSNumber).map { CGFloat($0.doubleValue) } }
-            let title = (a["title"] as? String).flatMap { $0.isEmpty ? nil : $0 }
-                ?? file.map { ($0 as NSString).deletingPathExtension } ?? url?.host() ?? id
-            return Artboard(id: id, title: title, file: file, url: url, x: number("x"), y: number("y"),
-                            width: max(number("width") ?? defaultSize.width, 40),
-                            height: max(number("height") ?? defaultSize.height, 40))
-        }
         let title = (dict["title"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? folder.lastPathComponent
+        var seen: Set<String> = []
+        if let rawPages = dict["pages"] as? [[String: Any]] {
+            let (artboards, pages) = parsePages(rawPages, seen: &seen)
+            return .success(CanvasBoard(folder: folder, title: title, artboards: artboards, pages: pages))
+        }
+        let raw = dict["artboards"] as? [[String: Any]] ?? []
+        let artboards = raw.enumerated().compactMap { i, a in artboard(a, fallbackID: "artboard-\(i + 1)", seen: &seen) }
         return .success(CanvasBoard(folder: folder, title: title, artboards: artboards))
+    }
+
+    private static func text(_ dict: [String: Any], _ key: String) -> String? {
+        (dict[key] as? String).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.flatMap { $0.isEmpty ? nil : $0 }
+    }
+
+    /// One artboard's entry (a flat board's, or a screen's), or nil if it has
+    /// nothing to show; `size` is what it inherits (its design's).
+    private static func artboard(_ a: [String: Any], fallbackID: String, size: CGSize? = nil,
+                                 seen: inout Set<String>) -> Artboard? {
+        let file = text(a, "file")
+        let url = text(a, "url").flatMap(URL.init(string:)).flatMap { $0.scheme == nil ? nil : $0 }
+        guard file != nil || url != nil else { return nil }
+        var id = text(a, "id") ?? file ?? fallbackID
+        var n = 2
+        let base = id
+        while !seen.insert(id).inserted { id = "\(base)-\(n)"; n += 1 }
+        func number(_ key: String) -> CGFloat? { (a[key] as? NSNumber).map { CGFloat($0.doubleValue) } }
+        let title = text(a, "title") ?? file.map { ($0 as NSString).deletingPathExtension } ?? url?.host() ?? id
+        return Artboard(id: id, title: title, file: file, url: url, x: number("x"), y: number("y"),
+                        width: max(number("width") ?? size?.width ?? defaultSize.width, 40),
+                        height: max(number("height") ?? size?.height ?? defaultSize.height, 40))
+    }
+
+    /// A design's default label: A, B … Z, then 27, 28 …
+    static func letter(_ index: Int) -> String {
+        index < 26 ? String(UnicodeScalar(UInt8(65 + index))) : "\(index + 1)"
+    }
+
+    /// `pages` → the artboards (every screen, in order) and the pages they're on.
+    private static func parsePages(_ raw: [[String: Any]], seen: inout Set<String>) -> ([Artboard], [Page]) {
+        var artboards: [Artboard] = []
+        var pages: [Page] = []
+        var pageIDs: Set<String> = []
+        for (p, rawPage) in raw.enumerated() {
+            let pageTitle = text(rawPage, "title") ?? "Page \(p + 1)"
+            var pageID = text(rawPage, "id") ?? "page-\(p + 1)"
+            while !pageIDs.insert(pageID).inserted { pageID += "-\(p + 1)" }
+            var designs: [Design] = []
+            for rawDesign in rawPage["designs"] as? [[String: Any]] ?? [] {
+                let label = text(rawDesign, "label") ?? letter(designs.count)
+                let designID = text(rawDesign, "id") ?? "\(pageID)-\(label.lowercased())"
+                let designTitle = text(rawDesign, "title") ?? "Design \(label)"
+                func number(_ key: String) -> CGFloat? { (rawDesign[key] as? NSNumber).map { CGFloat($0.doubleValue) } }
+                let size = CGSize(width: number("width") ?? defaultSize.width, height: number("height") ?? defaultSize.height)
+                // Its screens, or (a design of one) the design itself.
+                let rawScreens = rawDesign["screens"] as? [[String: Any]] ?? [rawDesign]
+                var screens: [Artboard] = rawScreens.enumerated().compactMap { s, rawScreen in
+                    artboard(rawScreen, fallbackID: "\(designID)\(s + 1)", size: size, seen: &seen)
+                }
+                guard !screens.isEmpty else { continue }
+                let single = rawDesign["screens"] == nil
+                for i in screens.indices {
+                    screens[i].page = pageID
+                    screens[i].design = designID
+                    screens[i].name = single ? designTitle : screens[i].title
+                    screens[i].code = single ? label : "\(label)\(i + 1)"
+                    screens[i].title = single ? "\(label) · \(designTitle)" : "\(label)\(i + 1) · \(designTitle) · \(screens[i].name)"
+                }
+                designs.append(Design(id: designID, title: designTitle, label: label, screens: screens.map(\.id)))
+                artboards += screens
+            }
+            pages.append(Page(id: pageID, title: pageTitle, note: text(rawPage, "note"), designs: designs))
+        }
+        return (artboards, pages)
+    }
+
+    /// A board made before pages, sorted into them by its titles: "Page ·
+    /// Design · Screen". The first part is the page (an artboard with no
+    /// " · " joins the next one's, as a topic's heading does); artboards that
+    /// share the second part are one design's screens, named by the rest.
+    /// A board with no " · " in any title is one page of designs.
+    static func organize(_ flat: [Artboard], boardTitle: String) -> ([Artboard], [Page]) {
+        guard !flat.isEmpty else { return ([], []) }
+        let parts = flat.map { $0.title.components(separatedBy: " · ") }
+        // "B · Bolder hero" leads with its option's label, not a page.
+        var pageKeys: [String?] = parts.map { $0.count >= 2 && !isLabel($0[0]) ? $0[0] : nil }
+        if pageKeys.allSatisfy({ $0 == nil }) {
+            pageKeys = flat.map { _ in boardTitle }
+        } else {
+            // A title with no page joins the next page (a heading), else the last.
+            var next: String?
+            for i in pageKeys.indices.reversed() {
+                if let key = pageKeys[i] { next = key } else { pageKeys[i] = next }
+            }
+            var last: String?
+            for i in pageKeys.indices { if let key = pageKeys[i] { last = key } else { pageKeys[i] = last } }
+        }
+        var order: [String] = []
+        var members: [String: [Int]] = [:]
+        for (i, key) in pageKeys.enumerated() {
+            let key = key ?? boardTitle
+            if members[key] == nil { order.append(key) }
+            members[key, default: []].append(i)
+        }
+        var artboards: [Artboard] = []
+        var pages: [Page] = []
+        var pageIDs: Set<String> = []
+        for key in order {
+            var pageID = slug(key)
+            var n = 2
+            while !pageIDs.insert(pageID).inserted { pageID = "\(slug(key))-\(n)"; n += 1 }
+            // Designs by the second part, in order of first appearance.
+            var designKeys: [String] = []
+            var designMembers: [String: [Int]] = [:]
+            for i in members[key] ?? [] {
+                let p = parts[i]
+                let designKey = p.count >= 2 ? p[1] : flat[i].title
+                if designMembers[designKey] == nil { designKeys.append(designKey) }
+                designMembers[designKey, default: []].append(i)
+            }
+            var designs: [Design] = []
+            for (d, designKey) in designKeys.enumerated() {
+                let indices = designMembers[designKey] ?? []
+                let designID = "\(pageID)-\(d + 1)"
+                let single = indices.count == 1
+                var ids: [String] = []
+                for i in indices {
+                    var a = flat[i]
+                    let p = parts[i]
+                    a.page = pageID
+                    a.design = designID
+                    a.name = single
+                        ? (p.count >= 2 && p[0] == key ? p.dropFirst().joined(separator: " · ") : a.title)
+                        : p.dropFirst(2).joined(separator: " · ")
+                    if a.name.isEmpty { a.name = a.title }
+                    artboards.append(a)
+                    ids.append(a.id)
+                }
+                let title = single ? (artboards.last?.name ?? designKey) : designKey
+                designs.append(Design(id: designID, title: title, label: nil, screens: ids))
+            }
+            pages.append(Page(id: pageID, title: key, designs: designs))
+        }
+        return (artboards, pages)
+    }
+
+    /// An option's label, as a title's first part: "B", "12", "A2", "0", "Now", "G + H".
+    static func isLabel(_ part: String) -> Bool {
+        let p = part.replacingOccurrences(of: "✓", with: "").trimmingCharacters(in: .whitespaces)
+        return p == "Now" || p.wholeMatch(of: /[A-Z]{1,2}[0-9]{0,2}|[0-9]{1,3}|[A-Z0-9]{1,3}( ?\+ ?[A-Z0-9]{1,3})+/) != nil
+    }
+
+    /// A page's id from its title: "Workstreams across the app" → "workstreams-across-the-app".
+    static func slug(_ title: String) -> String {
+        let words = title.lowercased().split { !$0.isLetter && !$0.isNumber }
+        return words.isEmpty ? "page" : words.joined(separator: "-")
     }
 
     /// Each artboard's frame on the canvas: placed ones where they say,
     /// the rest in a row to the right of everything placed, top-aligned.
-    func frames() -> [String: CGRect] {
+    func frames() -> [String: CGRect] { Self.frames(artboards) }
+
+    /// Where a page's artboards go, and the headings over its designs.
+    struct PageLayout: Equatable {
+        var frames: [String: CGRect]
+        var headings: [Heading]
+        /// A design of several screens: its row's top (its screens' titles
+        /// and the heading go above it).
+        struct Heading: Equatable {
+            var design: String
+            var top: CGFloat
+        }
+    }
+
+    /// A page laid out: a design of several screens is a row of its own under
+    /// a heading, its screens left to right; designs of one screen share a row
+    /// between them. A page whose artboards say where they go (`x`/`y`, a
+    /// board made before pages) keeps them where they are.
+    func layout(page id: String) -> PageLayout {
+        guard let page = page(id) else { return PageLayout(frames: [:], headings: []) }
+        let members = page.screens.compactMap(artboard)
+        if members.contains(where: { $0.x != nil && $0.y != nil }) {
+            return PageLayout(frames: Self.frames(members), headings: [])
+        }
+        var frames: [String: CGRect] = [:]
+        var headings: [PageLayout.Heading] = []
+        var x: CGFloat = 0, y: CGFloat = 0, rowHeight: CGFloat = 0
+        func endRow() {
+            if rowHeight > 0 { y += rowHeight + Self.gap }
+            x = 0
+            rowHeight = 0
+        }
+        func place(_ a: Artboard) {
+            frames[a.id] = CGRect(x: x, y: y, width: a.width, height: a.height)
+            x += a.width + Self.gap
+            rowHeight = max(rowHeight, a.height)
+        }
+        for design in page.designs {
+            let screens = design.screens.compactMap(artboard)
+            if screens.count > 1 {
+                endRow()
+                y += Self.headingHeight
+                headings.append(.init(design: design.id, top: y))
+                screens.forEach(place)
+                endRow()
+            } else if let one = screens.first {
+                // A long row of them wraps, so a page of options stays a block.
+                if x > 0, x + one.width > Self.rowWidth { endRow() }
+                place(one)
+            }
+        }
+        return PageLayout(frames: frames, headings: headings)
+    }
+
+    /// How wide a row of one-screen designs gets before it wraps: four desktop screens.
+    static let rowWidth: CGFloat = 4 * 1440 + 3 * gap
+
+    /// A design's heading, over its screens' titles.
+    static let headingHeight: CGFloat = 34
+
+    static func frames(_ artboards: [Artboard]) -> [String: CGRect] {
         var out: [String: CGRect] = [:]
         var right: CGFloat = 0
         for a in artboards {

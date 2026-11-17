@@ -30,23 +30,41 @@ you: click an artboard, leave a note ──▶ chat message + screenshot ──�
 
 ## board.json
 
+Canvas › Page › Design › Screen. A page is one question; its designs are
+the options that answer it (lettered A, B… unless a `label` says, `0` for how
+things are now); a design is one screen, or several (its states or steps,
+A1, A2…). Every screen is an artboard (`CanvasBoard.Artboard`: notes, the
+transcript's strip and loading all work on those).
+
 ```json
 {
-  "title": "Onboarding",
-  "artboards": [
-    { "id": "welcome", "title": "Welcome", "file": "welcome.html",
-      "x": 0, "y": 0, "width": 390, "height": 844, "device": "iphone" },
-    { "id": "welcome-b", "title": "Welcome (B)", "file": "welcome-b.html",
-      "x": 450, "y": 0, "width": 390, "height": 844, "device": "iphone" },
-    { "id": "app", "title": "Running app", "url": "http://localhost:5173/",
-      "x": 0, "y": 950, "width": 1280, "height": 800 }
+  "title": "Agate",
+  "pages": [
+    { "id": "connections", "title": "Connections", "note": "Ways in to connecting a service",
+      "designs": [
+        { "id": "a", "title": "A connection picked", "width": 1280, "height": 800, "screens": [
+          { "id": "a1", "title": "Nothing picked", "file": "conn-a1.html" },
+          { "id": "a6", "title": "GitHub", "file": "conn-a6.html" } ] },
+        { "id": "now", "label": "0", "title": "Today", "file": "conn-now.html", "width": 1280, "height": 800 },
+        { "id": "app", "title": "Running app", "url": "http://localhost:5173/", "width": 1280, "height": 800 } ] }
   ]
 }
 ```
 
-`x`/`y` are canvas points; the agent may leave them out and the Canvas lays
-the artboards out in a row. Moving an artboard on the Canvas writes its
-position back. Unknown keys are kept, so the format can grow.
+The canvas shows one page (`CanvasView.pageID`), laid out by
+`CanvasBoard.layout(page:)`: a design of several screens is a row under its
+heading, designs of one share a row. The pane strip beside the chat says
+`Canvas · <page> ▾` (a menu of pages); ‹ › and ⌘[ ⌘] step a page's screens,
+↑ ↓ its designs, ⌥⌘[ ⌥⌘] the pages; ⌘↑ (or All Pages) shows every page as a
+card of pictures (`PageCard`, nothing loads). The step bar's label is a menu
+of the page's designs and screens, then the other pages; View ▸ Go To is
+page › design › screen.
+
+A board made before pages lists `artboards` (with `x`/`y`); it's sorted into
+pages by its titles (`CanvasBoard.organize`: "Page · Design · Screen"; a
+title with no page joins the next one's; a leading label like `B ·` isn't a
+page), and a page whose artboards have `x`/`y` keeps them. Unknown keys are
+kept, so the format can grow.
 
 ## Teaching the agent
 

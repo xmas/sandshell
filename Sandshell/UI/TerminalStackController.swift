@@ -585,7 +585,8 @@ final class TerminalStackController: NSViewController {
             chats[id]?.setArtboardStrip(color: session.designTint?.color,
                                         board: session.boardHidden ? controller.boardFolder(of: session) : nil)
         }
-        titleStrip.pairedCanvas = isInDesignPair && shownBoard != nil ? (madeCanvas?.board?.artboards.count ?? 0) : nil
+        titleStrip.pairedCanvas = isInDesignPair && shownBoard != nil ? (madeCanvas?.stripLabel ?? "Canvas") : nil
+        titleStrip.canvasMenu = { [weak self] in self?.madeCanvas?.pagesMenu() }
         titleStrip.design = design
         titleStrip.designToggle = toggle
         titleStrip.canClose = showsFocusRing && !(isInDesignPair && shownBoard == nil)

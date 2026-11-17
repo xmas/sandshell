@@ -44,6 +44,80 @@ struct CanvasBoardTests {
         }
     }
 
+    @Test func pagesHoldDesignsAndDesignsHoldScreens() throws {
+        let board = try parse("""
+            {"title": "Agate", "pages": [
+              {"id": "connections", "title": "Connections", "note": "Ways in", "designs": [
+                {"title": "A connection picked", "width": 1280, "height": 800, "screens": [
+                  {"id": "a1", "title": "Nothing picked", "file": "a1.html"},
+                  {"id": "a2", "title": "GitHub", "file": "a2.html", "height": 600}]},
+                {"label": "0", "title": "Today", "file": "now.html"}]},
+              {"title": "People", "designs": [{"title": "Who is who", "file": "p.html"}]}]}
+            """)
+        #expect(board.pages.map(\.title) == ["Connections", "People"])
+        #expect(board.pages[0].note == "Ways in")
+        #expect(board.pages[1].id == "page-2", "an id when it has none")
+        #expect(board.artboards.map(\.id) == ["a1", "a2", "now.html", "p.html"], "every screen, page by page")
+        let a2 = try #require(board.artboard("a2"))
+        #expect(a2.code == "A2" && a2.name == "GitHub" && a2.page == "connections")
+        #expect(a2.width == 1280 && a2.height == 600, "the design's size, unless the screen says")
+        #expect(board.pages[0].designs.map(\.label) == ["A", "0"], "lettered in order, unless it says")
+        #expect(board.artboard("now.html")?.code == "0", "a design of one screen is its own")
+        #expect(board.page(of: "p.html")?.title == "People")
+    }
+
+    @Test func aBoardMadeBeforePagesIsSortedIntoPagesByItsTitles() throws {
+        let board = try parse("""
+            {"artboards": [
+              {"id": "topic", "title": "Connections flows", "file": "t.html"},
+              {"id": "c1", "title": "Connections 1 · a connection picked · nothing picked", "file": "c1.html"},
+              {"id": "c2", "title": "Connections 1 · a connection picked · GitHub", "file": "c2.html"},
+              {"id": "s9", "title": "Strip · 9 · One strip across the pair", "file": "s9.html"},
+              {"id": "s10", "title": "Strip · 10 · Quietest", "file": "s10.html"}]}
+            """)
+        #expect(board.pages.map(\.title) == ["Connections 1", "Strip"])
+        #expect(board.pages[0].designs.map(\.title) == ["Connections flows", "a connection picked"],
+                "a heading joins the page after it")
+        #expect(board.pages[0].designs[1].screens == ["c1", "c2"])
+        #expect(board.artboard("c2")?.name == "GitHub")
+        #expect(board.pages[1].designs.map(\.title) == ["9 · One strip across the pair", "10 · Quietest"])
+        #expect(board.pages.flatMap(\.designs).allSatisfy { $0.label == nil }, "no letters it didn't have")
+    }
+
+    @Test(arguments: [["Welcome", "Welcome — bolder"], ["A · Bolder hero", "B · Quiet hero", "G + H · Both"]])
+    func titlesWithoutPagesAreOnePage(titles: [String]) throws {
+        let entries = titles.enumerated().map { #"{"id": "x\#($0.offset)", "title": "\#($0.element)", "file": "x.html"}"# }
+        let board = try parse(#"{"title": "Onboarding", "artboards": [\#(entries.joined(separator: ","))]}"#)
+        #expect(board.pages.count == 1)
+        #expect(board.pages[0].title == "Onboarding")
+        #expect(board.pages[0].designs.count == titles.count, "each its own design")
+    }
+
+    @Test func aPageLaysOutADesignOfSeveralScreensAsARowUnderItsHeading() throws {
+        let board = try parse("""
+            {"pages": [{"id": "p", "title": "P", "designs": [
+              {"title": "One", "file": "o.html", "width": 100, "height": 100},
+              {"title": "Two", "file": "t.html", "width": 100, "height": 200},
+              {"title": "Flow", "width": 100, "height": 50, "screens": [{"id": "f1", "file": "f1.html"}, {"id": "f2", "file": "f2.html"}]}]}]}
+            """)
+        let layout = board.layout(page: "p")
+        let gap = CanvasBoard.gap
+        #expect(layout.frames["o.html"] == CGRect(x: 0, y: 0, width: 100, height: 100))
+        #expect(layout.frames["t.html"] == CGRect(x: 100 + gap, y: 0, width: 100, height: 200), "one-screen designs share a row")
+        let top = 200 + gap + CanvasBoard.headingHeight
+        #expect(layout.headings == [.init(design: "p-c", top: top)])
+        #expect(layout.frames["f1"] == CGRect(x: 0, y: top, width: 100, height: 50))
+        #expect(layout.frames["f2"] == CGRect(x: 100 + gap, y: top, width: 100, height: 50))
+    }
+
+    @Test func aLongRowOfOptionsWraps() throws {
+        let designs = (1...6).map { #"{"title": "Option \#($0)", "file": "o\#($0).html", "width": 1440, "height": 900}"# }
+        let board = try parse(#"{"pages": [{"id": "p", "title": "P", "designs": [\#(designs.joined(separator: ","))]}]}"#)
+        let frames = board.layout(page: "p").frames
+        #expect(frames["o4.html"]?.minY == 0, "four desktop screens to a row")
+        #expect(frames["o5.html"] == CGRect(x: 0, y: 900 + CanvasBoard.gap, width: 1440, height: 900))
+    }
+
     @Test func unplacedArtboardsFollowInARow() throws {
         let board = try parse("""
             {"artboards": [{"id": "a", "file": "a.html", "x": 0, "y": 0, "width": 100, "height": 100},

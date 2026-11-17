@@ -54,6 +54,19 @@ final class CanvasView: NSView {
     /// "in view" is the corner it starts at, not what will show.
     private var placed = false
 
+    /// The page shown (nil: none, an empty board). `showsAllPages`: every
+    /// page instead, as a card each.
+    private(set) var pageID: String?
+    private(set) var showsAllPages = false
+    /// The page each board was last on (this run), to come back to.
+    private static var lastPage: [URL: String] = [:]
+    /// Over the page: its name and note. Over each design of several
+    /// screens: its label and name. All Pages: a card per page.
+    private let pageTitleLabel = NSTextField(wrappingLabelWithString: "")
+    private var headingViews: [NSTextField] = []
+    private var cardViews: [PageCard] = []
+    static let pageHeaderHeight: CGFloat = 64
+
     override init(frame: NSRect) {
         super.init(frame: frame)
         wantsLayer = true
@@ -71,6 +84,8 @@ final class CanvasView: NSView {
         scrollView.backgroundColor = .underPageBackgroundColor
         scrollView.documentView = document
         addSubview(scrollView)
+        pageTitleLabel.isSelectable = false
+        document.addSubview(pageTitleLabel)
         // Scrolled or zoomed: what came into view loads.
         scrollView.contentView.postsBoundsChangedNotifications = true
         NotificationCenter.default.addObserver(self, selector: #selector(visibleAreaChanged),
@@ -129,6 +144,9 @@ final class CanvasView: NSView {
         stepLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         stepLabel.setAccessibilityIdentifier("canvas-step")
         stepper.setViews([previous, stepLabel, next, fit], in: .leading)
+        previous.toolTip = "Previous Screen (⌘[)"
+        next.toolTip = "Next Screen (⌘])"
+        fit.toolTip = "Show the Whole Page"
         stepper.orientation = .horizontal
         stepper.spacing = 4
         stepper.edgeInsets = NSEdgeInsets(top: 4, left: 6, bottom: 4, right: 6)
@@ -171,14 +189,11 @@ final class CanvasView: NSView {
         guard folder != self.folder else { return }
         self.folder = folder
         watcher = nil
-        zoomedToFit = false
-        placed = false
-        stepIndex = nil
         pendingReveal = nil
         clearNotes()
-        for view in artboardViews.values { view.removeFromSuperview() }
-        artboardViews = [:]
-        modified = [:]
+        clearPage()
+        pageID = nil
+        showsAllPages = false
         board = nil
         guard let folder else { return reload() }
         ArtboardPictures.prune()
@@ -199,6 +214,16 @@ final class CanvasView: NSView {
             if board == nil { showMessage(error.localizedDescription) }
         case .success(let loaded):
             board = loaded
+            if !showsAllPages {
+                // The page it's on, while it's still there; else the one asked
+                // for, the one it was on last time, the first.
+                let next = [pageID, pendingReveal.flatMap { loaded.page(of: $0)?.id }, Self.lastPage[folder]]
+                    .compactMap { $0 }.first { loaded.page($0) != nil } ?? loaded.pages.first?.id
+                if next != pageID {
+                    clearPage()
+                    pageID = next
+                }
+            }
             showMessage(loaded.artboards.isEmpty ? "Nothing on this board yet. Describe what to design in the chat beside it." : nil)
             layoutArtboards(loaded)
         }
@@ -212,18 +237,44 @@ final class CanvasView: NSView {
         scrollView.isHidden = text != nil && artboardViews.isEmpty
     }
 
+    /// Everything on the canvas goes: a page changed, or the board did.
+    private func clearPage() {
+        for view in artboardViews.values { view.removeFromSuperview() }
+        artboardViews = [:]
+        modified = [:]
+        for view in headingViews { view.removeFromSuperview() }
+        headingViews = []
+        for view in cardViews { view.removeFromSuperview() }
+        cardViews = []
+        stepIndex = nil
+        zoomedToFit = false
+        placed = false
+    }
+
+    /// The shown page's artboards: a view each, where the page puts them, its
+    /// designs' headings over their rows, its name over it all.
     private func layoutArtboards(_ board: CanvasBoard) {
-        let frames = board.frames()
-        for (id, view) in artboardViews where !board.artboards.contains(where: { $0.id == id }) {
+        if showsAllPages { return layoutAllPages(board) }
+        let page = pageID.flatMap({ board.page($0) })
+        let layout = pageID.map { board.layout(page: $0) } ?? CanvasBoard.PageLayout(frames: [:], headings: [])
+        let frames = layout.frames
+        for (id, view) in artboardViews where frames[id] == nil {
             view.removeFromSuperview()
             artboardViews[id] = nil
             modified[id] = nil
         }
-        let bounds = frames.values.reduce(CGRect.null) { $0.union($1) }
-        let origin = CGPoint(x: Self.margin - (bounds.isNull ? 0 : bounds.minX),
-                             y: Self.margin + ArtboardView.titleHeight - (bounds.isNull ? 0 : bounds.minY))
-        for artboard in board.artboards {
-            guard let frame = frames[artboard.id] else { continue }
+        // What the page covers: its artboards with their titles, its headings.
+        let title = ArtboardView.titleHeight, heading = CanvasBoard.headingHeight
+        var extent = frames.values.reduce(CGRect.null) {
+            $0.union(CGRect(x: $1.minX, y: $1.minY - title, width: $1.width, height: $1.height + title))
+        }
+        for h in layout.headings {
+            extent = extent.union(CGRect(x: extent.isNull ? 0 : extent.minX, y: h.top - title - heading, width: 1, height: heading))
+        }
+        let origin = CGPoint(x: Self.margin - (extent.isNull ? 0 : extent.minX),
+                             y: Self.margin + Self.pageHeaderHeight - (extent.isNull ? 0 : extent.minY))
+        for id in page?.screens ?? [] {
+            guard let artboard = board.artboard(id), let frame = frames[id] else { continue }
             let view = artboardViews[artboard.id] ?? {
                 let v = ArtboardView(dataStore: dataStore)
                 let id = artboard.id
@@ -235,9 +286,9 @@ final class CanvasView: NSView {
                 artboardViews[artboard.id] = v
                 return v
             }()
-            view.frame = CGRect(x: frame.minX + origin.x, y: frame.minY + origin.y - ArtboardView.titleHeight,
-                                width: frame.width, height: frame.height + ArtboardView.titleHeight)
-            view.title = artboard.title
+            view.frame = CGRect(x: frame.minX + origin.x, y: frame.minY + origin.y - title,
+                                width: frame.width, height: frame.height + title)
+            view.title = Self.shortTitle(artboard)
             let source = board.fileURL(of: artboard) ?? artboard.url
             let stamp = board.fileURL(of: artboard).flatMap {
                 (try? $0.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
@@ -249,11 +300,29 @@ final class CanvasView: NSView {
             }
             modified[artboard.id] = stamp
         }
+        for view in headingViews { view.removeFromSuperview() }
+        headingViews = layout.headings.compactMap { h in
+            guard let design = page?.designs.first(where: { $0.id == h.design }) else { return nil }
+            let label = NSTextField(labelWithAttributedString: Self.heading(design))
+            label.lineBreakMode = .byTruncatingTail
+            label.frame = NSRect(x: origin.x, y: h.top + origin.y - title - heading + 6,
+                                 width: max(extent.isNull ? 0 : extent.maxX - extent.minX, 300), height: heading - 10)
+            document.addSubview(label)
+            return label
+        }
+        let size = extent.isNull ? .zero : extent.size
+        showPageHeader(page.map { Self.pageSummary($0, board: board) }, note: page?.note,
+                       at: NSRect(x: Self.margin, y: Self.margin, width: max(size.width, 400), height: Self.pageHeaderHeight - 16))
         loadVisibleSoon()
-        let size = bounds.isNull ? .zero : bounds.size
-        document.setFrameSize(NSSize(width: size.width + 2 * Self.margin,
-                                     height: size.height + 2 * Self.margin + ArtboardView.titleHeight))
-        if !zoomedToFit, !board.artboards.isEmpty {
+        document.setFrameSize(NSSize(width: max(size.width, 400) + 2 * Self.margin,
+                                     height: size.height + 2 * Self.margin + Self.pageHeaderHeight))
+        fitOnce(empty: frames.isEmpty)
+    }
+
+    /// Zoomed to fit once, when there's something to fit; then what's in view
+    /// may load.
+    private func fitOnce(empty: Bool) {
+        if !zoomedToFit, !empty {
             zoomedToFit = true
             DispatchQueue.main.async { [weak self] in
                 self?.zoomToFit()
@@ -264,6 +333,119 @@ final class CanvasView: NSView {
         } else if let id = pendingReveal {
             DispatchQueue.main.async { [weak self] in self?.reveal(id) }
         }
+    }
+
+    private func showPageHeader(_ title: NSAttributedString?, note: String?, at frame: NSRect) {
+        let text = NSMutableAttributedString(attributedString: title ?? NSAttributedString())
+        if let note {
+            text.append(NSAttributedString(string: "\n" + note, attributes: [
+                .font: NSFont.role(.body), .foregroundColor: NSColor.secondaryLabelColor]))
+        }
+        pageTitleLabel.attributedStringValue = text
+        pageTitleLabel.frame = frame
+        pageTitleLabel.isHidden = title == nil
+    }
+
+    /// "Connections   2 designs · 21 screens"
+    static func pageSummary(_ page: CanvasBoard.Page, board: CanvasBoard) -> NSAttributedString {
+        let text = NSMutableAttributedString(string: page.title, attributes: [
+            .font: NSFont.role(.title), .foregroundColor: NSColor.labelColor])
+        text.append(NSAttributedString(string: "   " + count(page), attributes: [
+            .font: NSFont.role(.meta), .foregroundColor: NSColor.secondaryLabelColor]))
+        return text
+    }
+
+    /// "2 designs · 21 screens", or "5 screens" when each design is one.
+    static func count(_ page: CanvasBoard.Page) -> String {
+        let screens = page.screens.count
+        let s = "\(screens) screen\(screens == 1 ? "" : "s")"
+        return page.designs.count == screens ? s : "\(page.designs.count) design\(page.designs.count == 1 ? "" : "s") · \(s)"
+    }
+
+    /// A design's heading: "A  A connection picked  12 screens".
+    static func heading(_ design: CanvasBoard.Design) -> NSAttributedString {
+        let text = NSMutableAttributedString()
+        if let label = design.label {
+            text.append(NSAttributedString(string: label + "  ", attributes: [
+                .font: NSFont.role(.title), .foregroundColor: NSColor.controlAccentColor]))
+        }
+        text.append(NSAttributedString(string: design.title, attributes: [
+            .font: NSFont.role(.title), .foregroundColor: NSColor.labelColor]))
+        text.append(NSAttributedString(string: "   \(design.screens.count) screens", attributes: [
+            .font: NSFont.role(.meta), .foregroundColor: NSColor.secondaryLabelColor]))
+        return text
+    }
+
+    /// An artboard's title on the canvas and in menus: "A6 · GitHub", or a
+    /// board made before pages, its name in its design.
+    static func shortTitle(_ artboard: CanvasBoard.Artboard) -> String {
+        guard !artboard.name.isEmpty else { return artboard.title }
+        return artboard.code.map { "\($0) · \(artboard.name)" } ?? artboard.name
+    }
+
+    // MARK: Pages
+
+    /// The shown page's artboards, in order: what ‹ › step through.
+    var pageScreens: [String] {
+        guard !showsAllPages, let board, let page = pageID.flatMap({ board.page($0) }) else { return [] }
+        return page.screens.filter { board.artboard($0) != nil }
+    }
+
+    /// Show a page (and, when it's there, one of its artboards).
+    func showPage(_ id: String, reveal artboard: String? = nil) {
+        guard let board, board.page(id) != nil else { return }
+        if id != pageID || showsAllPages { clearPage() }
+        pageID = id
+        showsAllPages = false
+        if let folder { Self.lastPage[folder] = id }
+        stepIndex = artboard.flatMap { pageScreens.firstIndex(of: $0) }
+        pendingReveal = artboard
+        layoutArtboards(board)
+        updateStepper()
+        onLoad?()
+    }
+
+    /// The page after the one shown (or before), in the board's order.
+    func stepPage(by delta: Int) {
+        guard let pages = board?.pages, !pages.isEmpty else { return }
+        let i = pageID.flatMap { id in pages.firstIndex { $0.id == id } }
+        let next = i.map { min(max($0 + (showsAllPages ? 0 : delta), 0), pages.count - 1) } ?? (delta > 0 ? 0 : pages.count - 1)
+        if next != i || showsAllPages { showPage(pages[next].id) }
+    }
+
+    /// Every page as a card: a picture of each design's first screens.
+    @objc func showAllPages() {
+        guard let board, !board.pages.isEmpty, !showsAllPages else { return }
+        clearPage()
+        showsAllPages = true
+        layoutArtboards(board)
+        updateStepper()
+        onLoad?()
+    }
+
+    private func layoutAllPages(_ board: CanvasBoard) {
+        for view in cardViews { view.removeFromSuperview() }
+        let columns = max(1, Int(Double(board.pages.count).squareRoot().rounded(.up)))
+        let size = PageCard.size, gap: CGFloat = 40
+        cardViews = board.pages.enumerated().map { i, page in
+            let card = PageCard(page: page, board: board, current: page.id == pageID)
+            card.frame = NSRect(x: Self.margin + CGFloat(i % columns) * (size.width + gap),
+                                y: Self.margin + Self.pageHeaderHeight + CGFloat(i / columns) * (size.height + gap),
+                                width: size.width, height: size.height)
+            card.onOpen = { [weak self] in self?.showPage(page.id) }
+            document.addSubview(card)
+            return card
+        }
+        let rows = (board.pages.count + columns - 1) / columns
+        let width = CGFloat(columns) * (size.width + gap) - gap
+        let height = CGFloat(rows) * (size.height + gap) - gap
+        let screens = board.artboards.count
+        let title = NSMutableAttributedString(string: board.title, attributes: [.font: NSFont.role(.title), .foregroundColor: NSColor.labelColor])
+        title.append(NSAttributedString(string: "   \(board.pages.count) pages · \(screens) screen\(screens == 1 ? "" : "s")",
+                                        attributes: [.font: NSFont.role(.meta), .foregroundColor: NSColor.secondaryLabelColor]))
+        showPageHeader(title, note: nil, at: NSRect(x: Self.margin, y: Self.margin, width: width, height: Self.pageHeaderHeight - 16))
+        document.setFrameSize(NSSize(width: width + 2 * Self.margin, height: height + 2 * Self.margin + Self.pageHeaderHeight))
+        fitOnce(empty: board.pages.isEmpty)
     }
 
     // MARK: Loading what's in view
@@ -302,8 +484,12 @@ final class CanvasView: NSView {
     /// An artboard to bring into view once the board is laid out.
     private var pendingReveal: String?
 
-    /// Bring one artboard into view, centered, as large as fits (never past 100 %).
+    /// Bring one artboard into view, centered, as large as fits (never past
+    /// 100 %); on another page, that page first.
     func reveal(_ id: String) {
+        if let board, let page = board.page(of: id), page.id != pageID || showsAllPages {
+            return showPage(page.id, reveal: id)
+        }
         guard let view = artboardViews[id], scrollView.contentSize.width > 0 else { pendingReveal = id; return }
         pendingReveal = nil
         let frame = view.frame.insetBy(dx: -24, dy: -24)
@@ -316,32 +502,49 @@ final class CanvasView: NSView {
 
     // MARK: Stepping through
 
-    /// The artboard after the one shown (the first, from the whole board), in
-    /// the board's order — the order the agent made them in, topic by topic.
+    /// The screen after the one shown (the first, from the whole page), in
+    /// the page's order: design by design, each one's screens in turn.
     @objc func nextArtboard() { step(by: 1) }
     @objc func previousArtboard() { step(by: -1) }
 
+    /// The whole page (on All Pages: the page it came from).
     @objc func showWholeBoard() {
+        if showsAllPages, let id = pageID ?? board?.pages.first?.id { return showPage(id) }
         stepIndex = nil
         zoomToFit()
         updateStepper()
     }
 
     func step(by delta: Int) {
-        guard let count = board?.artboards.count, count > 0 else { return }
+        let count = pageScreens.count
+        guard count > 0 else { return }
         // The buttons don't take focus: the canvas does (in `go`), so the arrows go on from here.
         go(to: stepIndex.map { min(max($0 + delta, 0), count - 1) } ?? (delta > 0 ? 0 : count - 1))
     }
 
-    /// "3 of 25 · Strip · 2 · The seam puts it away"; the whole board: its count.
+    /// The first screen of the design after the one shown (or before).
+    func stepDesign(by delta: Int) {
+        guard let board, let page = pageID.flatMap({ board.page($0) }), !page.designs.isEmpty, !showsAllPages else { return }
+        let shown = stepIndex.flatMap { pageScreens.indices.contains($0) ? board.artboard(pageScreens[$0])?.design : nil }
+        let i = shown.flatMap { id in page.designs.firstIndex { $0.id == id } }
+        let next = i.map { min(max($0 + delta, 0), page.designs.count - 1) } ?? (delta > 0 ? 0 : page.designs.count - 1)
+        if let first = page.designs[next].screens.first, let index = pageScreens.firstIndex(of: first) { go(to: index) }
+    }
+
+    /// "3 of 21 · A3 · Agate's sandbox"; the whole page: its name and size;
+    /// All Pages: how many.
     private func updateStepper() {
-        let artboards = board?.artboards ?? []
-        stepper.isHidden = artboards.isEmpty
-        if let i = stepIndex, artboards.indices.contains(i) {
-            stepLabel.title = "\(i + 1) of \(artboards.count) · \(artboards[i].title)"
+        let screens = pageScreens
+        stepper.isHidden = board?.artboards.isEmpty ?? true
+        if showsAllPages, let board {
+            stepLabel.title = "\(board.pages.count) pages · \(board.artboards.count) screens"
+        } else if let i = stepIndex, screens.indices.contains(i), let artboard = board?.artboard(screens[i]) {
+            stepLabel.title = "\(i + 1) of \(screens.count) · \(Self.shortTitle(artboard))"
         } else {
             stepIndex = nil
-            stepLabel.title = "\(artboards.count) artboard\(artboards.count == 1 ? "" : "s")"
+            let page = pageID.flatMap { board?.page($0) }
+            let count = page.map(Self.count) ?? "0 screens"
+            stepLabel.title = (board?.pages.count ?? 0) > 1 ? "\(page?.title ?? "") · \(count)" : count
         }
         stepLabel.setAccessibilityLabel(stepLabel.title)
         restyleBars()
@@ -367,24 +570,143 @@ final class CanvasView: NSView {
         restyleBars()
     }
 
-    /// Every artboard, in order, to go to one (the step label's menu, and
-    /// View ▸ Go to Artboard): the one shown ticked.
+    // MARK: Menus
+
+    /// The step label's menu: this page's designs, the shown one open to its
+    /// screens (the others' in a submenu each), then the other pages.
     func artboardMenu() -> NSMenu {
         let menu = NSMenu()
-        menu.addItem(NSMenuItem("Whole Canvas") { [weak self] in self?.showWholeBoard() })
-        menu.items.last?.state = stepIndex == nil ? .on : .off
-        menu.addItem(.separator())
-        for (i, artboard) in (board?.artboards ?? []).enumerated() {
-            let item = NSMenuItem(artboard.title) { [weak self] in self?.go(to: i) }
-            item.state = stepIndex == i ? .on : .off
+        guard let board else { return menu }
+        let shown = stepIndex.flatMap { pageScreens.indices.contains($0) ? pageScreens[$0] : nil }
+        if let page = pageID.flatMap({ board.page($0) }), !showsAllPages {
+            menu.addItem(.sectionHeader(title: page.title))
+            let open = shown.flatMap { board.artboard($0)?.design }
+            for design in page.designs {
+                if design.screens.count > 1 {
+                    let item = NSMenuItem(Self.designTitle(design)) { [weak self] in self?.goTo(design.screens[0]) }
+                    item.badge = NSMenuItemBadge(count: design.screens.count)
+                    if design.id == open {
+                        menu.addItem(item)
+                        for id in design.screens { if let a = board.artboard(id) { menu.addItem(screenItem(a, indent: 1, shown: shown)) } }
+                    } else {
+                        item.submenu = screensMenu(design, board: board, shown: shown)
+                        menu.addItem(item)
+                    }
+                } else if let a = design.screens.first.flatMap(board.artboard) {
+                    menu.addItem(screenItem(a, indent: 0, shown: shown))
+                }
+            }
+        }
+        let others = board.pages.filter { $0.id != pageID || showsAllPages }
+        if !others.isEmpty {
+            menu.addItem(.separator())
+            menu.addItem(.sectionHeader(title: showsAllPages ? "Pages" : "Other Pages"))
+            for page in others {
+                let item = NSMenuItem(page.title) { [weak self] in self?.showPage(page.id) }
+                item.submenu = designsMenu(page, board: board, shown: shown)
+                menu.addItem(item)
+            }
+        }
+        if board.pages.count > 1 {
+            menu.addItem(.separator())
+            let all = NSMenuItem("All Pages") { [weak self] in self?.showAllPages() }
+            all.state = showsAllPages ? .on : .off
+            menu.addItem(all)
+        }
+        return menu
+    }
+
+    /// View ▸ Go To: page › design › screen.
+    func goToMenu() -> NSMenu {
+        let menu = NSMenu()
+        guard let board else { return menu }
+        let shown = stepIndex.flatMap { pageScreens.indices.contains($0) ? pageScreens[$0] : nil }
+        for page in board.pages {
+            let item = NSMenuItem(page.title) { [weak self] in self?.showPage(page.id) }
+            item.state = page.id == pageID && !showsAllPages ? .on : .off
+            item.submenu = designsMenu(page, board: board, shown: shown)
             menu.addItem(item)
         }
         return menu
     }
 
-    /// Show the artboard at `index` in the board's order.
+    /// The strip's menu (the canvas's half beside its chat): the pages.
+    func pagesMenu() -> NSMenu {
+        let menu = NSMenu()
+        guard let board, !board.pages.isEmpty else { return menu }
+        menu.addItem(.sectionHeader(title: "Pages"))
+        for page in board.pages {
+            let item = NSMenuItem(page.title) { [weak self] in self?.showPage(page.id) }
+            item.state = page.id == pageID && !showsAllPages ? .on : .off
+            item.badge = NSMenuItemBadge(string: Self.count(page))
+            menu.addItem(item)
+        }
+        menu.addItem(.separator())
+        let all = NSMenuItem("All Pages") { [weak self] in self?.showAllPages() }
+        all.state = showsAllPages ? .on : .off
+        menu.addItem(all)
+        let next = NSMenuItem("Next Page") { [weak self] in self?.stepPage(by: 1) }
+        next.keyEquivalent = "]"
+        next.keyEquivalentModifierMask = [.command, .option]
+        let previous = NSMenuItem("Previous Page") { [weak self] in self?.stepPage(by: -1) }
+        previous.keyEquivalent = "["
+        previous.keyEquivalentModifierMask = [.command, .option]
+        menu.addItem(next)
+        menu.addItem(previous)
+        return menu
+    }
+
+    /// What the strip says beside its chat: "Canvas · Connections".
+    var stripLabel: String {
+        guard let board, !board.artboards.isEmpty else { return "Canvas" }
+        if showsAllPages { return "Canvas · All Pages" }
+        return pageID.flatMap({ board.page($0) }).map { "Canvas · \($0.title)" } ?? "Canvas"
+    }
+
+    static func designTitle(_ design: CanvasBoard.Design) -> String {
+        design.label.map { "\($0) · \(design.title)" } ?? design.title
+    }
+
+    private func screenItem(_ artboard: CanvasBoard.Artboard, indent: Int, shown: String?) -> NSMenuItem {
+        let item = NSMenuItem(Self.shortTitle(artboard)) { [weak self] in self?.goTo(artboard.id) }
+        item.indentationLevel = indent
+        item.state = artboard.id == shown ? .on : .off
+        return item
+    }
+
+    private func screensMenu(_ design: CanvasBoard.Design, board: CanvasBoard, shown: String?) -> NSMenu {
+        let menu = NSMenu()
+        for id in design.screens { if let a = board.artboard(id) { menu.addItem(screenItem(a, indent: 0, shown: shown)) } }
+        return menu
+    }
+
+    /// A page's designs: one screen, an item; several, a submenu of them.
+    private func designsMenu(_ page: CanvasBoard.Page, board: CanvasBoard, shown: String?) -> NSMenu {
+        let menu = NSMenu()
+        for design in page.designs {
+            if design.screens.count > 1 {
+                let item = NSMenuItem(Self.designTitle(design)) { [weak self] in self?.goTo(design.screens[0]) }
+                item.submenu = screensMenu(design, board: board, shown: shown)
+                item.state = design.screens.contains { $0 == shown } ? .mixed : .off
+                menu.addItem(item)
+            } else if let a = design.screens.first.flatMap(board.artboard) {
+                menu.addItem(screenItem(a, indent: 0, shown: shown))
+            }
+        }
+        return menu
+    }
+
+    /// Show an artboard, on whichever page it is.
+    func goTo(_ id: String) {
+        guard let board, let page = board.page(of: id) else { return }
+        if page.id != pageID || showsAllPages { return showPage(page.id, reveal: id) }
+        if let index = pageScreens.firstIndex(of: id) { go(to: index) }
+    }
+
+    /// Show the artboard at `index` in the page's order.
     func go(to index: Int) {
-        guard let ids = board?.artboards.map(\.id), ids.indices.contains(index) else { return }
+        let ids = pageScreens
+        guard ids.indices.contains(index) else { return }
         stepIndex = index
         reveal(ids[index])
         updateStepper()
@@ -395,7 +717,7 @@ final class CanvasView: NSView {
         artboardMenu().popUp(positioning: nil, at: NSPoint(x: 0, y: stepLabel.bounds.height + 4), in: stepLabel)
     }
 
-    /// The canvas the View menu's artboard commands act on: the one with
+    /// The canvas the View menu's canvas commands act on: the one with
     /// focus (or holding it, a page in it), else the one showing in the window.
     static func target(in window: NSWindow?) -> CanvasView? {
         var view = window?.firstResponder as? NSView
@@ -414,30 +736,40 @@ final class CanvasView: NSView {
 
     override var acceptsFirstResponder: Bool { true }
 
-    /// ← → (and Space, ⇧Space) step while the canvas itself has focus — a
-    /// page in it may want its arrows.
+    /// While the canvas itself has focus (a page in it may want its keys):
+    /// ← → (and Space, ⇧Space) step the screens, ↑ ↓ the designs; on All
+    /// Pages, Return opens the page it came from.
     override func keyDown(with event: NSEvent) {
         let flags = event.modifierFlags.intersection([.command, .option, .control])
         guard flags.isEmpty else { return super.keyDown(with: event) }
         switch event.specialKey {
-        case .rightArrow?, .downArrow?: return step(by: 1)
-        case .leftArrow?, .upArrow?: return step(by: -1)
+        case .rightArrow?: return step(by: 1)
+        case .leftArrow?: return step(by: -1)
+        case .downArrow?: return stepDesign(by: 1)
+        case .upArrow?: return stepDesign(by: -1)
+        case .carriageReturn?, .enter?: if showsAllPages { return showWholeBoard() }
         default: break
         }
         if event.charactersIgnoringModifiers == " " { return step(by: event.modifierFlags.contains(.shift) ? -1 : 1) }
         super.keyDown(with: event)
     }
 
-    /// ⌘] ⌘[ step while anything in the canvas has focus, a page in it too.
+    /// While anything in the canvas has focus, a page in it too: ⌘] ⌘[ step
+    /// the screens, ⌥⌘] ⌥⌘[ the pages, ⌘↑ shows All Pages.
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        guard event.modifierFlags.intersection([.command, .option, .control, .shift]) == .command,
-              let responder = window?.firstResponder as? NSView, responder === self || responder.isDescendant(of: self)
+        let flags = event.modifierFlags.intersection([.command, .option, .control, .shift])
+        guard flags.contains(.command), let responder = window?.firstResponder as? NSView,
+              responder === self || responder.isDescendant(of: self)
         else { return super.performKeyEquivalent(with: event) }
-        switch event.charactersIgnoringModifiers {
-        case "]": step(by: 1); return true
-        case "[": step(by: -1); return true
-        default: return super.performKeyEquivalent(with: event)
+        switch (flags, event.charactersIgnoringModifiers) {
+        case (.command, "]"): step(by: 1); return true
+        case (.command, "["): step(by: -1); return true
+        case ([.command, .option], "]"): stepPage(by: 1); return true
+        case ([.command, .option], "["): stepPage(by: -1); return true
+        default: break
         }
+        if flags == .command, event.specialKey == .upArrow, (board?.pages.count ?? 0) > 1 { showAllPages(); return true }
+        return super.performKeyEquivalent(with: event)
     }
 
     /// Everything on screen at once (never larger than 100 %), centered.
@@ -547,6 +879,9 @@ final class CanvasView: NSView {
         artboardViews.values.compactMap(\.debugProcessPool).allSatisfy { $0 === WKProcessPool.app }
     }
     var debugMessage: String? { messageLabel.isHidden ? nil : messageLabel.stringValue }
+    /// All Pages' cards, by their pages' titles; a click on one.
+    var debugCardTitles: [String] { cardViews.compactMap { $0.accessibilityLabel() } }
+    func debugOpenCard(_ title: String) { _ = cardViews.first { $0.accessibilityLabel() == title }?.accessibilityPerformPress() }
     var debugMagnification: CGFloat { scrollView.magnification }
     func debugPageText(_ id: String) async -> String? { await artboardViews[id]?.pageText() }
     func debugElement(_ id: String, at point: CGPoint) async -> CanvasNote.Element? { await artboardViews[id]?.element(at: point) }
@@ -1072,6 +1407,95 @@ private final class ArtboardView: NSView, WKNavigationDelegate {
 private final class ArtboardPicture: NSImageView {
     var onClick: (() -> Void)?
     override func mouseDown(with event: NSEvent) { onClick?() }
+}
+
+/// All Pages: a page as a card — its name and size, then a row of pictures
+/// per design (its first screens). Nothing loads here: a big board is its
+/// pictures alone. A click opens the page.
+@MainActor
+final class PageCard: NSView {
+    static let size = CGSize(width: 520, height: 300)
+    var onOpen: (() -> Void)?
+    private let current: Bool
+    private var thumbs: [NSImageView] = []
+
+    init(page: CanvasBoard.Page, board: CanvasBoard, current: Bool) {
+        self.current = current
+        super.init(frame: NSRect(origin: .zero, size: Self.size))
+        wantsLayer = true
+        layer?.cornerRadius = 10
+        let title = NSTextField(labelWithAttributedString: CanvasView.pageSummary(page, board: board))
+        title.lineBreakMode = .byTruncatingTail
+        title.frame = NSRect(x: 16, y: 14, width: Self.size.width - 32, height: 20)
+        addSubview(title)
+        let height: CGFloat = 40, rows = 5
+        var y: CGFloat = 48
+        for design in page.designs.prefix(rows) {
+            var x: CGFloat = 16
+            if let label = design.label {
+                let mark = NSTextField(labelWithString: label)
+                mark.font = .role(.meta, weight: .semibold)
+                mark.textColor = .secondaryLabelColor
+                mark.lineBreakMode = .byClipping
+                mark.frame = NSRect(x: x, y: y + 12, width: 22, height: 16)
+                addSubview(mark)
+                x += 26
+            }
+            for id in design.screens {
+                guard let artboard = board.artboard(id) else { continue }
+                let width = min(max(height * artboard.width / artboard.height, 24), 96)
+                guard x + width <= Self.size.width - 16 else { break }
+                let thumb = NSImageView(frame: NSRect(x: x, y: y, width: width, height: height))
+                thumb.imageScaling = .scaleAxesIndependently
+                thumb.wantsLayer = true
+                thumb.layer?.cornerRadius = 3
+                thumb.layer?.masksToBounds = true
+                addSubview(thumb)
+                thumbs.append(thumb)
+                let file = board.fileURL(of: artboard)
+                let stamp = file.flatMap { (try? $0.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate }
+                if let file, let key = ArtboardPictures.key(file, stamp: stamp) {
+                    Task { [weak thumb] in
+                        let image = await ArtboardPictures.image(key)
+                        thumb?.image = image
+                    }
+                }
+                x += width + 6
+            }
+            y += height + 10
+        }
+        if page.designs.count > rows {
+            let more = NSTextField(labelWithString: "+ \(page.designs.count - rows) more designs")
+            more.font = .role(.meta)
+            more.textColor = .tertiaryLabelColor
+            more.sizeToFit()
+            more.frame.origin = NSPoint(x: Self.size.width - 16 - more.frame.width, y: Self.size.height - 14 - more.frame.height)
+            addSubview(more)
+        }
+        setAccessibilityElement(true)
+        setAccessibilityRole(.button)
+        setAccessibilityLabel(page.title)
+        setAccessibilityIdentifier("canvas-page-card")
+    }
+
+    @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
+
+    override var isFlipped: Bool { true }
+    override var wantsUpdateLayer: Bool { true }
+
+    override func updateLayer() {
+        layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
+        layer?.borderWidth = current ? 2 : 1
+        layer?.borderColor = (current ? NSColor.controlAccentColor : NSColor.separatorColor).cgColor
+        for thumb in thumbs {
+            thumb.layer?.backgroundColor = NSColor.quaternaryLabelColor.cgColor
+            thumb.layer?.borderWidth = 1
+            thumb.layer?.borderColor = NSColor.separatorColor.cgColor
+        }
+    }
+
+    override func mouseDown(with event: NSEvent) { onOpen?() }
+    override func accessibilityPerformPress() -> Bool { onOpen?(); return true }
 }
 
 /// Pictures of artboards, kept in Caches by their file and its date, so a

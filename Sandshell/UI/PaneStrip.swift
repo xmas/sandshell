@@ -130,7 +130,7 @@ final class PaneStripView: NSView {
     private let boardGlyph = NSImageView()
     /// A chat's canvas beside it (`pairedCanvas`): what's on it, and its two
     /// actions spelled out.
-    private let canvasLabel = NSTextField(labelWithString: "Canvas")
+    private let canvasLabel = ClickableLabel(labelWithString: "Canvas")
     private let fullscreenCanvasButton = StripIconButton()
     private let hideCanvasButton = StripIconButton()
     /// Remote Control's state (nil: not a chat).
@@ -209,9 +209,12 @@ final class PaneStripView: NSView {
     /// A chat's canvas beside its chat: the pair reads as one title strip,
     /// the chat's strip naming the session (its name, branch and controls)
     /// and this one, the canvas's half, carrying only the canvas's controls —
-    /// "Canvas · N artboards", ⋯, Fullscreen Canvas and Hide Canvas — with no
-    /// name, branch or mark of its own. The number of artboards; nil: not that.
-    var pairedCanvas: Int? { didSet { if pairedCanvas != oldValue { applyPairedCanvas() } } }
+    /// "Canvas · Connections ▾" (its pages' menu), ⋯, Fullscreen Canvas and
+    /// Hide Canvas — with no name, branch or mark of its own. What it says
+    /// ("Canvas · <page>"); nil: not that.
+    var pairedCanvas: String? { didSet { if pairedCanvas != oldValue { applyPairedCanvas() } } }
+    /// The canvas's pages, for a click on its label (nil or empty: no menu).
+    var canvasMenu: (() -> NSMenu?)?
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -275,6 +278,7 @@ final class PaneStripView: NSView {
         canvasLabel.lineBreakMode = .byTruncatingTail
         canvasLabel.isHidden = true
         canvasLabel.setAccessibilityIdentifier("pane-canvas-label")
+        canvasLabel.onClick = { [weak self] in self?.canvasLabelClicked() }
         content.addSubview(canvasLabel)
         designBadge.translatesAutoresizingMaskIntoConstraints = true
         boardGlyph.image = NSImage(systemSymbolName: "paintpalette", accessibilityDescription: "Board")?
@@ -392,14 +396,31 @@ final class PaneStripView: NSView {
         let on = pairedCanvas != nil
         for v in [canvasLabel, fullscreenCanvasButton, hideCanvasButton] as [NSView] { v.isHidden = !on }
         crumbs.isHidden = on
-        if let n = pairedCanvas {
-            canvasLabel.stringValue = n == 0 ? "Canvas" : "Canvas · \(n) artboard\(n == 1 ? "" : "s")"
-        }
+        if let text = pairedCanvas { canvasLabel.stringValue = text }
+        restyleCanvasButtons()
         applyDesign()
+    }
+
+    /// The canvas's pages, under its label.
+    private func canvasLabelClicked() {
+        guard let menu = canvasMenu?(), !menu.items.isEmpty else { return }
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: canvasLabel.isFlipped ? canvasLabel.bounds.height + 4 : -4), in: canvasLabel)
     }
 
     private func restyleCanvasButtons() {
         canvasLabel.textColor = colors.stripCrumb
+        // A menu of its pages: a chevron after the label says so.
+        if let text = pairedCanvas, text != "Canvas" {
+            let title = NSMutableAttributedString(string: text + " ", attributes: [
+                .font: NSFont.role(.meta), .foregroundColor: colors.stripCrumb])
+            if let chevron = NSImage(systemSymbolName: "chevron.down", accessibilityDescription: nil)?
+                .withSymbolConfiguration(.init(pointSize: 8, weight: .semibold)) {
+                let attachment = NSTextAttachment()
+                attachment.image = chevron
+                title.append(NSAttributedString(attachment: attachment))
+            }
+            canvasLabel.attributedStringValue = title
+        }
         for button in [fullscreenCanvasButton, hideCanvasButton] {
             button.attributedTitle = NSAttributedString(string: button.title, attributes: [
                 .font: NSFont.role(.meta, weight: .medium), .foregroundColor: colors.stripName])
@@ -1060,3 +1081,14 @@ extension PaneStripView {
     var debugMoreMenuTitles: [String] { moreMenu().items.map { $0.isSeparatorItem ? "" : $0.title } }
 }
 #endif
+
+/// A label that's a control: a click runs `onClick` (and doesn't drag the
+/// window, as the strip's empty space does).
+final class ClickableLabel: NSTextField {
+    var onClick: (() -> Void)?
+    override var mouseDownCanMoveWindow: Bool { onClick == nil }
+    override func mouseDown(with event: NSEvent) {
+        guard let onClick else { return super.mouseDown(with: event) }
+        onClick()
+    }
+}

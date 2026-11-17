@@ -822,6 +822,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @MainActor @objc func showNextArtboard(_ sender: Any?) { CanvasView.target(in: NSApp.keyWindow)?.step(by: 1) }
     @MainActor @objc func showPreviousArtboard(_ sender: Any?) { CanvasView.target(in: NSApp.keyWindow)?.step(by: -1) }
+    @MainActor @objc func showNextCanvasPage(_ sender: Any?) { CanvasView.target(in: NSApp.keyWindow)?.stepPage(by: 1) }
+    @MainActor @objc func showPreviousCanvasPage(_ sender: Any?) { CanvasView.target(in: NSApp.keyWindow)?.stepPage(by: -1) }
+    @MainActor @objc func showAllCanvasPages(_ sender: Any?) { CanvasView.target(in: NSApp.keyWindow)?.showAllPages() }
 
     @MainActor final class ArtboardsMenu: NSObject, NSMenuDelegate {
         func menuNeedsUpdate(_ menu: NSMenu) {
@@ -830,7 +833,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 menu.addItem(withTitle: "No Canvas Showing", action: nil, keyEquivalent: "")
                 return
             }
-            for item in canvas.artboardMenu().items {
+            for item in canvas.goToMenu().items {
                 item.menu?.removeItem(item)
                 menu.addItem(item)
             }
@@ -1109,6 +1112,12 @@ extension AppDelegate: NSMenuItemValidation {
         switch item.action {
         case #selector(showNextArtboard(_:)), #selector(showPreviousArtboard(_:)):
             return CanvasView.target(in: NSApp.keyWindow) != nil
+        case #selector(showNextCanvasPage(_:)), #selector(showPreviousCanvasPage(_:)):
+            return (CanvasView.target(in: NSApp.keyWindow)?.board?.pages.count ?? 0) > 1
+        case #selector(showAllCanvasPages(_:)):
+            guard let canvas = CanvasView.target(in: NSApp.keyWindow) else { return false }
+            item.state = canvas.showsAllPages ? .on : .off
+            return (canvas.board?.pages.count ?? 0) > 1
         case #selector(openRemoteControl(_:)):
             return RemoteHub.shared.localURL != nil
         case #selector(showRemoteDevices(_:)):

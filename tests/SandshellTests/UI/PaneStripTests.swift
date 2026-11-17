@@ -227,18 +227,18 @@ struct PairedCanvasStripTests {
         return nil
     }
 
-    private func strip(width: CGFloat, artboards: Int?) -> PaneStripView {
+    private func strip(width: CGFloat, canvas: String?) -> PaneStripView {
         let strip = PaneStripView(frame: NSRect(x: 0, y: 0, width: width, height: PaneStripView.height))
         strip.setName("Design 6")
-        strip.pairedCanvas = artboards
+        strip.pairedCanvas = canvas
         strip.layoutSubtreeIfNeeded()
         return strip
     }
 
     @Test func itSaysCanvasAndSpellsOutItsActions() throws {
-        let s = strip(width: 720, artboards: 3)
+        let s = strip(width: 720, canvas: "Canvas · Connections")
         let label: NSTextField = try #require(find("pane-canvas-label", in: s))
-        #expect(label.stringValue == "Canvas · 3 artboards")
+        #expect(label.stringValue.hasPrefix("Canvas · Connections"), "the page it shows, a menu of the pages")
         #expect(!label.isHidden)
         let hide: NSButton = try #require(find("pane-canvas-hide", in: s))
         let full: NSButton = try #require(find("pane-canvas-fullscreen", in: s))
@@ -250,21 +250,20 @@ struct PairedCanvasStripTests {
         #expect(name.isHiddenOrHasHiddenAncestor, "no name of its own: the chat's strip has it")
     }
 
-    @Test(arguments: [(0, "Canvas"), (1, "Canvas · 1 artboard")])
-    func anEmptyOrSingleCanvasReadsRight(count: Int, text: String) throws {
-        let label: NSTextField = try #require(find("pane-canvas-label", in: strip(width: 720, artboards: count)))
-        #expect(label.stringValue == text)
+    @Test func anEmptyCanvasSaysJustCanvas() throws {
+        let label: NSTextField = try #require(find("pane-canvas-label", in: strip(width: 720, canvas: "Canvas")))
+        #expect(label.stringValue == "Canvas", "no pages: no menu, no chevron")
     }
 
     @Test func narrowItKeepsTheButtonsAsIcons() throws {
-        let s = strip(width: 190, artboards: 3)
+        let s = strip(width: 190, canvas: "Canvas · Connections")
         let hide: NSButton = try #require(find("pane-canvas-hide", in: s))
         #expect(!hide.isHidden && hide.imagePosition == .imageOnly)
         #expect(hide.frame.minX >= 0)
     }
 
     @Test func notPairedItsAnOrdinaryStrip() throws {
-        let s = strip(width: 720, artboards: nil)
+        let s = strip(width: 720, canvas: nil)
         let hide: NSButton = try #require(find("pane-canvas-hide", in: s))
         #expect(hide.isHidden)
         let name: NSView = try #require(find("pane-name", in: s))

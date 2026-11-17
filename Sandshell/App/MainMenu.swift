@@ -200,11 +200,17 @@ enum MainMenu {
         boards.submenu = NSMenu(title: "Open Board")
         boards.submenu?.delegate = AppDelegate.boardsMenu
         viewMenu.addItem(boards)
-        // The canvas in focus, or showing: its artboards in order.
-        viewMenu.addItem(withTitle: "Next Artboard", action: #selector(AppDelegate.showNextArtboard(_:)), keyEquivalent: "]")
-        viewMenu.addItem(withTitle: "Previous Artboard", action: #selector(AppDelegate.showPreviousArtboard(_:)), keyEquivalent: "[")
-        let goTo = NSMenuItem(title: "Go to Artboard", action: nil, keyEquivalent: "")
-        goTo.submenu = NSMenu(title: "Go to Artboard")
+        // The canvas in focus, or showing: its page's screens in order, its pages.
+        viewMenu.addItem(withTitle: "Next Screen", action: #selector(AppDelegate.showNextArtboard(_:)), keyEquivalent: "]")
+        viewMenu.addItem(withTitle: "Previous Screen", action: #selector(AppDelegate.showPreviousArtboard(_:)), keyEquivalent: "[")
+        viewMenu.addItem(NSMenuItem("Next Page", action: #selector(AppDelegate.showNextCanvasPage(_:)),
+                                    key: "]", modifiers: [.command, .option]))
+        viewMenu.addItem(NSMenuItem("Previous Page", action: #selector(AppDelegate.showPreviousCanvasPage(_:)),
+                                    key: "[", modifiers: [.command, .option]))
+        // ⌘↑ in the canvas (not here: it would take ⌘↑ from every text view).
+        viewMenu.addItem(NSMenuItem("All Pages", action: #selector(AppDelegate.showAllCanvasPages(_:))))
+        let goTo = NSMenuItem(title: "Go To", action: nil, keyEquivalent: "")
+        goTo.submenu = NSMenu(title: "Go To")
         goTo.submenu?.delegate = AppDelegate.artboardsMenu
         viewMenu.addItem(goTo)
         viewMenu.addItem(.separator())
