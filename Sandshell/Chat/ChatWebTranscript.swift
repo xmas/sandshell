@@ -112,18 +112,32 @@ final class ChatWebTranscript: NSView {
 
     /// `window.sandshellReceive(name, data)`, as an event stream would.
     /// One that doesn't arrive leaves the page behind: it gets everything again.
-    private func send(_ name: String, _ value: some Encodable) {
+    /// Encoded off the main thread (a long chat's state is megabytes of
+    /// JSON), one after another so the page gets them in the order sent.
+    private var outbox: Task<Void, Never>?
+
+    private func send(_ name: String, _ value: some Encodable & Sendable) {
         guard isReady else { return }
-        guard let data = try? JSONEncoder().encode(value), var json = String(data: data, encoding: .utf8) else {
-            Log.error(.app, "chat transcript: couldn't encode the \(name)")
-            resendSoon()
-            return
-        }
-        json = json.replacingOccurrences(of: "\u{2028}", with: "\\u2028").replacingOccurrences(of: "\u{2029}", with: "\\u2029")
-        webView.evaluateJavaScript("window.sandshellReceive(\"\(name)\", \(json))") { [weak self] _, error in
-            guard let error else { return }
-            Log.error(.app, "chat transcript: the page didn't take the \(name): \(error.localizedDescription)")
-            self?.resendSoon()
+        let previous = outbox
+        outbox = Task { [weak self] in
+            await previous?.value
+            let script = await Task.detached(priority: .userInitiated) { () -> String? in
+                guard let data = try? JSONEncoder().encode(value), let json = String(data: data, encoding: .utf8) else { return nil }
+                let safe = json.replacingOccurrences(of: "\u{2028}", with: "\\u2028").replacingOccurrences(of: "\u{2029}", with: "\\u2029")
+                // Ends in a value the async call can return (undefined isn't one).
+                return "window.sandshellReceive(\"\(name)\", \(safe)); true"
+            }.value
+            guard let self, self.isReady else { return }
+            guard let script else {
+                Log.error(.app, "chat transcript: couldn't encode the \(name)")
+                return self.resendSoon()
+            }
+            do {
+                _ = try await self.webView.evaluateJavaScript(script)
+            } catch {
+                Log.error(.app, "chat transcript: the page didn't take the \(name): \(error.localizedDescription)")
+                self.resendSoon()
+            }
         }
     }
 
@@ -140,7 +154,7 @@ final class ChatWebTranscript: NSView {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in self?.sendState() }
     }
 
-    struct Config: Encodable {
+    struct Config: Encodable, Sendable {
         let canFork: Bool
         let canUndo: Bool
         /// The artboard strip's color (`#RRGGBB`); nil: no strip.
@@ -151,7 +165,7 @@ final class ChatWebTranscript: NSView {
         let sizes: Sizes
     }
 
-    struct Sizes: Encodable, Equatable {
+    struct Sizes: Encodable, Equatable, Sendable {
         let small: CGFloat
         let ui: CGFloat
         let reading: CGFloat

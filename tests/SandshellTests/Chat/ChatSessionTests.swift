@@ -327,6 +327,31 @@ struct ChatWebTranscriptTests {
         #expect(try await web.webView.evaluateJavaScript("document.querySelectorAll('.tool-group').length") as? Int == 1)
     }
 
+    @Test func aStreamingReplyRendersTheSameAsAWholeOne() async throws {
+        let (web, window) = try await showing()
+        defer { window.orderOut(nil); window.close() }
+        let reply = "First paragraph.\n\n```swift\nlet a = 1\n\nlet b = 2\n```\n\n1. one\n2. two\n\n> quoted\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\nLast *one*."
+        var rest = Substring(reply)
+        while !rest.isEmpty {
+            session.debugApply(chunk(String(rest.prefix(9)), messageID: "stream"))
+            rest = rest.dropFirst(9)
+            try await Task.sleep(for: .milliseconds(30))
+        }
+        #expect(try await transcript(web, contains: "Last one."))
+        try await Task.sleep(for: .milliseconds(300))
+        let same = try await web.webView.evaluateJavaScript("""
+            (() => {
+              const id = [...state.items.values()].find(i => i.kind === "text" && (i.text || "").includes("Last *one*")).id;
+              const c = state.nodes.get(id).cloneNode(true);
+              c.querySelectorAll('.actions').forEach(b => b.remove());
+              c.querySelectorAll('.code').forEach(w => { w.querySelector('button')?.remove(); w.replaceWith(...w.childNodes); });
+              c.querySelectorAll('a.file').forEach(a => a.replaceWith(...a.childNodes));
+              return c.innerHTML === markdown(state.items.get(id).text);
+            })()
+            """) as? Bool
+        #expect(same == true, "rendered in pieces as it came, it's what the whole reply renders to")
+    }
+
     @Test func aHiddenChatSkipsUpdatesAndCatchesUpWhenShown() async throws {
         let (web, window) = try await showing()
         defer { window.orderOut(nil); window.close() }

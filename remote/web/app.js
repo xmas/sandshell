@@ -272,7 +272,7 @@ function applyPatch(p) {
   if (p.order) {
     state.order = p.order;
     const keep = new Set(p.order);
-    for (const id of [...state.items.keys()]) if (!keep.has(id)) { state.items.delete(id); state.nodes.get(id)?.remove(); state.nodes.delete(id); }
+    for (const id of [...state.items.keys()]) if (!keep.has(id)) { state.items.delete(id); state.nodes.get(id)?.remove(); state.nodes.delete(id); settledReplies.delete(id); }
   }
   // Put every node in order (cheap: only moves what's out of place). A turn's
   // artboard strip, after its last item, is stepped over, not displaced: the
@@ -297,6 +297,7 @@ function applyPatch(p) {
 }
 
 function renderAll(scroll) {
+  settledReplies.clear();
   const nodes = [];
   if (state.omitted > 0) {
     const o = document.createElement("div");
@@ -383,7 +384,7 @@ function buildItem(item) {
       break;
     }
     case "text":
-      div.innerHTML = markdown(item.text || "");
+      div.innerHTML = replyHTML(item);
       break;
     case "thought": {
       const d = document.createElement("details");
@@ -551,6 +552,39 @@ function inline(s) {
   s = s.replace(/(^|[^_\w])_([^_\n]+)_(?!\w)/g, "$1<em>$2</em>");
   s = s.replace(/~~([^~\n]+)~~/g, "<del>$1</del>");
   return s.replace(/\u0000(\d+)\u0000/g, (_, i) => "<code>" + codes[+i] + "</code>");
+}
+
+// A streaming reply grows by a few words every update: its blocks up to the
+// last blank line outside a code fence are settled (a blank line ends every
+// block here), so they're rendered once and kept; only the rest is rendered
+// again. The whole reply was, every 80 ms, for as long as it ran.
+const settledReplies = new Map();   // item id → { text, html }
+
+function replyHTML(item) {
+  const text = item.text || "";
+  let settled = settledReplies.get(item.id);
+  if (!settled || !text.startsWith(settled.text)) settled = { text: "", html: "" };
+  const cut = settledEnd(text, settled.text.length);
+  if (cut > settled.text.length) {
+    settled = { text: text.slice(0, cut), html: settled.html + markdown(text.slice(settled.text.length, cut)) };
+    settledReplies.set(item.id, settled);
+  }
+  return settled.html + markdown(text.slice(settled.text.length));
+}
+
+// Where the text's settled blocks end, looking from `from` (a line start
+// outside a fence): just after its last blank line outside a fence.
+function settledEnd(text, from) {
+  let cut = from, inFence = false, at = from;
+  while (at < text.length) {
+    const nl = text.indexOf("\n", at);
+    if (nl < 0) break;   // the last line isn't finished
+    const line = text.slice(at, nl);
+    if (/^```/.test(line)) inFence = !inFence;
+    else if (!inFence && !line.trim() && at > from) cut = nl + 1;
+    at = nl + 1;
+  }
+  return cut;
 }
 
 function markdown(src) {
